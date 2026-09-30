@@ -189,18 +189,6 @@ const LEGACY_MOCK_INSIGHTS = [
     is_seen: false,
   },
   {
-    id: 'legacy-mock-email-1',
-    module: 'email',
-    severity: 'warn',
-    title: '2 urgent emails pending',
-    body: 'Legacy email mock retained for old module demos only.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-    primary_cta: cta('Open Dashboard', '/dashboard/accounting'),
-    account_id: 'mock-email-acct',
-  },
-  {
     id: 'legacy-mock-ops-1',
     module: 'ops',
     severity: 'info',

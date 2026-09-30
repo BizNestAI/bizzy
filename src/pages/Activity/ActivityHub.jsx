@@ -9,7 +9,7 @@ const PREVIEW_CARDS = [
   },
   {
     title: "Smart Alerts",
-    copy: "Bizzi will bubble up anything that needs your attention—missed emails, overdue invoices, or hot leads.",
+    copy: "Bizzi will bubble up anything that needs your attention—overdue invoices, bookkeeping issues, or hot leads.",
     icon: Bell,
   },
 ];

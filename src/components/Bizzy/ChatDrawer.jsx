@@ -20,7 +20,6 @@ const THREAD_ACCENT = {
   marketing:   ACCENT_HEX,
   tax:         ACCENT_HEX,
   investments: ACCENT_HEX,
-  email:       ACCENT_HEX,
 };
 
 function hexToRgba(hex, alpha = 1) {
@@ -452,7 +451,6 @@ const ChatDrawer = forwardRef(function ChatDrawer({
     if (p.includes('/dashboard/marketing'))    return 'marketing';
     if (p.includes('/dashboard/tax'))          return 'tax';
     if (p.includes('/dashboard/investments'))  return 'investments';
-    if (p.includes('/dashboard/email'))        return 'email';
     return 'bizzy';
   };
 

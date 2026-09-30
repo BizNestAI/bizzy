@@ -2,7 +2,7 @@
 // Uses admin client because this is invoked server-side from controllers/cron.
 import { supabase } from '../../services/supabaseAdmin.js';
 import { addAgendaItem } from '../../services/reviews/reviewsCalendar.service.js';
-import { sendOwnerReplyEmail } from '../../services/reviews/gmail.service.js';
+import { prepareReviewEmail } from '../../services/reviews/reviewEmail.service.js';
 
 /**
  * @typedef {Object} ReviewRequestPayload
@@ -58,14 +58,13 @@ export async function queueReviewRequest(payload /** @type {ReviewRequestPayload
       kind: 'review_request',
       meta: { destination, notes },
     });
-  } catch (_) { /* non-fatal */ }
+  } catch { /* non-fatal */ }
 
   return { data, error };
 }
 
 /**
- * Optional immediate send (stubbed via mailto using gmail.service.js)
- * Updates status if "sent".
+ * Prepares a mailto draft for the separate marketing-review workflow.
  */
 export async function sendReviewRequestNow({ business_id, request_id }) {
   if (!business_id || !request_id) {
@@ -88,11 +87,10 @@ export async function sendReviewRequestNow({ business_id, request_id }) {
 
   const body = `Hi${reqRow.customer_name ? ' ' + reqRow.customer_name : ''},\n\nWe’d love your feedback! Please leave a quick review here:\n${link}\n\nThank you!\n—Your Contractor`;
 
-  const send = await sendOwnerReplyEmail({
+  const send = await prepareReviewEmail({
     toEmail: reqRow.customer_email,
     subject: 'Quick favor: your feedback',
     text: body,
-    tokens: null,
   });
 
   if (send?.ok) {

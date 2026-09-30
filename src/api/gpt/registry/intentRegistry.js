@@ -9,7 +9,6 @@
 // -----------------------------------------------------------------------------
 
 // A) Cross-App / Core
-import * as CALENDAR_SCHEDULE   from '../intents/calendar_schedule.intent.js';
 import * as AFFORDABILITY_CHECK from '../intents/affordability_check.intent.js';
 import * as DOC_SAVE            from '../intents/doc_save.intent.js';
 import * as DOCS_FIND           from '../intents/docs_find.intent.js';
@@ -19,15 +18,6 @@ import * as SETTINGS_UPDATE     from '../intents/settings_update.intent.js';
 import * as AGENDA_RANGE        from '../intents/agenda_range.intent.js';
 import * as NAVIGATE            from '../intents/navigate.intent.js';
 import * as APP_HELP            from '../intents/app_help.intent.js';
-
-// ✉️ Email
-import * as EMAIL_SUMMARIZE from '../intents/email/emailSummarize.intent.js';
-import * as EMAIL_REPLY     from '../intents/email/emailReply.intent.js';
-import * as EMAIL_TEMPLATE  from '../intents/email/emailTemplate.intent.js';
-import * as EMAIL_SEARCH        from '../intents/email/emailSearch.intent.js';
-import * as EMAIL_EXTRACT_TASKS from '../intents/email/emailExtractTasks.intent.js';
-import * as EMAIL_FOLLOWUP      from '../intents/email/emailFollowup.intent.js';
-import * as EMAIL_FIND_CONTACT  from '../intents/email/emailFindContact.intent.js';
 
 // B) Financials
 import * as FIN_VARIANCE_EXPLAIN from '../intents/fin_variance_explain.intent.js';
@@ -58,7 +48,7 @@ import * as CONTRIBUTION_LIMIT    from '../intents/contribution_limit.intent.js'
 import * as REBALANCE_ADVICE      from '../intents/rebalance_advice.intent.js';
 import * as INV_OVERVIEW          from '../intents/inv_overview.intent.js';
 
-// F) Ops / Calendar
+// F) Operations and read-only agenda context
 import * as JOB_STATUS     from '../intents/job_status.intent.js';
 import * as LEAD_FOLLOWUP  from '../intents/lead_followup.intent.js';
 
@@ -67,17 +57,7 @@ import * as LEAD_FOLLOWUP  from '../intents/lead_followup.intent.js';
 // -----------------------------------------------------------------------------
 const INTENTS = [
 
-// Email first (specific comms)
-  EMAIL_SUMMARIZE,
-  EMAIL_REPLY,
-  EMAIL_TEMPLATE,
-  EMAIL_SEARCH,
-  EMAIL_EXTRACT_TASKS,
-  EMAIL_FOLLOWUP,
-  EMAIL_FIND_CONTACT,
-
-  // Scheduling / money
-  CALENDAR_SCHEDULE,
+  // Money
   AFFORDABILITY_CHECK,
 
   // Docs
@@ -118,7 +98,7 @@ const INTENTS = [
   REBALANCE_ADVICE,
   INV_OVERVIEW,
 
-  // Ops / Calendar queries
+  // Operations and read-only agenda queries
   JOB_STATUS,
   LEAD_FOLLOWUP,
   AGENDA_RANGE,
@@ -141,7 +121,7 @@ export function resolveIntent(message) {
   for (const mod of INTENTS) {
     try {
       if (typeof mod.test === 'function' && mod.test(t)) return mod.key;
-    } catch (_e) { /* fail-soft */ }
+    } catch { /* fail-soft */ }
   }
   return 'general';
 }

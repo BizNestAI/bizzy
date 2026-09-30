@@ -85,15 +85,11 @@ export async function attachContext(req, _res, next) {
         supabase,
         message: req.body?.message || '',
         route: req.originalUrl || '',
-        // 💡 lightweight hints for email & others
+        // Lightweight, non-sensitive analytical hints.
         hint: {
-          accountId: req.body?.accountId || null,
           threadId: req.body?.threadId || null,
-          toEmail: req.body?.toEmail || null,
-          fromEmail: req.body?.fromEmail || null,
-          searchQuery: req.body?.searchQuery || null,      // 🔍 for email_search
-          followupDelay: req.body?.followupDelay || null,  // ⏰ for email_followup
-          contactName: req.body?.contactName || null,      // 👤 for email_find_contact
+          metric: req.body?.metric || null,
+          period: req.body?.period || null,
         },
       };
 

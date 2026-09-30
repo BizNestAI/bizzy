@@ -9,12 +9,10 @@ const SAVE_INTENT_RE = /\b(save (this|it)?|save to docs|add to docs|put this in 
 const NAV_INTENT_RE = /\b(open|go to|navigate|take me to|show me)\b.*\b(forecast|forecasts|report|reports|jobs|tax|taxes|invoices?|unpaid|receivables|accounts receivable)\b/i;
 const WHERE_TO_SEE_RE = /\bwhere (can|do) i (see|view)\b/i;
 const PNL_RE = /\b(p&l|pnl|profit and loss|profit & loss|income statement|financial report|report pdf|p and l)\b/i;
-const INVOICE_RE = /\b(invoice|invoices|ar|accounts receivable|unpaid|overdue|who owes|payment due)\b/i;
 
 const detectSaveIntent = (text = '') => SAVE_INTENT_RE.test(text);
 const detectNavigationIntent = (text = '') => NAV_INTENT_RE.test(text) || WHERE_TO_SEE_RE.test(text);
 const detectPnlContext = (text = '') => PNL_RE.test(text);
-const detectInvoiceContext = (text = '') => INVOICE_RE.test(text);
 
 const normalizeDocSuggestion = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -134,11 +132,6 @@ export const useBizzyChat = (user_id) => {
           new CustomEvent('bizzy:navigate', { detail: { ...action } })
         );
       }
-      if (action.type === 'show_checklist' && action.checklistId) {
-        window.dispatchEvent(
-          new CustomEvent('bizzy:show-checklist', { detail: { ...action } })
-        );
-      }
     });
   }, []);
 
@@ -150,7 +143,6 @@ export const useBizzyChat = (user_id) => {
     const lastUserText = lastUserMessageRef.current || '';
     const textForHeuristics = `${assistantText} ${lastUserText}`.toLowerCase();
     const maybePnl = detectPnlContext(textForHeuristics);
-    const maybeInvoice = detectInvoiceContext(textForHeuristics);
 
     const mapped = allowed
       .map((a) => ({
@@ -164,7 +156,6 @@ export const useBizzyChat = (user_id) => {
 
     const filtered = mapped.filter((a) => {
       if (a.type === 'pnl_pdf') return maybePnl || detectPnlContext(lastUserText);
-      if (a.type === 'invoice') return maybeInvoice || detectInvoiceContext(lastUserText);
       return false;
     });
 

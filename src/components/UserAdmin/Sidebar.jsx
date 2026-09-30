@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { ChevronRight, MessageSquare } from 'lucide-react';
 import {
   Brain, DollarSign, Rocket, FileText, TrendingUp,
-  Calendar as CalendarIcon, Briefcase, BookOpen, Settings, Mail,
+  Calendar as CalendarIcon, Briefcase, BookOpen, Settings,
   Activity as ActivityIcon, Landmark,
 } from 'lucide-react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
@@ -19,10 +19,9 @@ const tabs = [
   { label: 'Financials', path: '/dashboard/accounting/bookkeeping' },
   { label: 'Jobs', path: '/dashboard/leads-jobs/job-costing' },
   { label: 'Tax', path: '/dashboard/tax' },
-  // Temporarily hidden modules: Growth/Marketing, Calendar, Email
+  // Temporarily hidden modules: Growth/Marketing and Calendar
   // { label: 'Growth', path: '/dashboard/marketing' },
   // { label: 'Scheduling', path: '/dashboard/calendar' },
-  // { label: 'Email', path: '/dashboard/email' },
   { label: 'Activity', path: '/dashboard/activity', tooltip: 'Activity: Coming Soon!', disableNavigate: true },
   { label: 'Docs', path: '/dashboard/bizzi-docs' },
   { label: 'Settings/Sync', path: '/dashboard/settings' },
@@ -35,7 +34,6 @@ const accentHexMap = {
   marketing:   ACCENT_HEX,
   tax:         ACCENT_HEX,
   investments: ACCENT_HEX,
-  email:       ACCENT_HEX,
   calendar:    ACCENT_HEX,
   scheduling:  ACCENT_HEX,
   activity:    ACCENT_HEX,
@@ -53,7 +51,6 @@ function moduleKeyFromLabel(label) {
   if (k === 'growth') return 'marketing';
   if (k === 'tax') return 'tax';
   if (k === 'investments') return 'investments';
-  if (k === 'email') return 'email';
   if (k === 'bizzi docs' || k === 'docs') return 'docs';
   if (k === 'meet bizzi') return 'companion';
   if (k === 'settings/sync' || k === 'settings' || k === 'sync') return 'settings';
@@ -70,7 +67,6 @@ function moduleKeyFromPath(pathname = '') {
   if (seg === 'growth') return 'marketing';
   if (seg === 'tax') return 'tax';
   if (seg === 'investments') return 'investments';
-  if (seg === 'email' || seg === 'inbox') return 'email';
   if (seg === 'scheduling' || seg === 'sch') return 'calendar';
   if (seg === 'activity') return 'activity';
   if (seg === 'leads-jobs' || seg === 'jobs') return 'ops';
@@ -83,7 +79,7 @@ function moduleKeyFromPath(pathname = '') {
 
 /* -------- unread key normalization -------- */
 function normalizeUnreadMap(raw = {}) {
-  const ALIAS = { inbox: 'email', sch: 'calendar', jobs: 'ops' };
+  const ALIAS = { sch: 'calendar', jobs: 'ops' };
   const totals = {};
   for (const [key, val] of Object.entries(raw)) {
     const [base] = key.split(':'); // drop :business suffixes
@@ -129,7 +125,6 @@ function renderIcon(label, size, colorHex, options = {}) {
   const dim = Math.max(14, size - 2); // slightly smaller icons for a tighter rail
   switch (label) {
     case 'Bizzi':         return <Brain size={dim} className={`${marginClass} transition-colors`} style={style} />;
-    case 'Email':         return <Mail size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Scheduling':    return <CalendarIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Financials':    return <DollarSign size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Growth':        return <Rocket size={dim} className={`${marginClass} transition-colors`} style={style} />;
@@ -542,7 +537,6 @@ export default function SidebarContainer(props) {
     if (prev && prev !== currentModule && !isChatHome) {
       markModuleAsRead(prev);
       const alias =
-        prev === "email"     ? "inbox" :
         prev === "calendar"  ? "sch"   :
         prev === "ops"       ? "jobs"  : null;
       if (alias) markModuleAsRead(alias);

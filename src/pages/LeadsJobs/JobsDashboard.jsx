@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { generateCollectionDraft } from "../../services/ar/collectionMessageDraft.js";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, Image as ImageIcon, Link2, Mic, Plus, RefreshCcw, Trash2, Upload, UploadCloud, Wand2, X } from "lucide-react";
@@ -214,18 +215,16 @@ function buildFollowupRounds(row) {
   const followups = row.followups || {};
   const existing = Array.isArray(followups.rounds) ? followups.rounds : [];
   const days = getDaysOverdue(row);
-  const sentCount = Number(followups.sent_count || 0);
   const draftCount = Number(followups.draft_count || 0);
   const offsets = [1, 7, 14];
   return offsets.map((offset, idx) => {
     const roundNumber = idx + 1;
     const stored = existing.find((item) => Number(item.round) === roundNumber) || existing[idx] || null;
-    let status = stored?.status || "upcoming";
+    let status = stored?.status === "drafted" || stored?.status === "draft" ? "drafted" : "upcoming";
     if (!stored) {
-      if (sentCount >= roundNumber) status = "sent";
-      else if (draftCount >= roundNumber) status = "drafted";
+      if (draftCount >= roundNumber) status = "drafted";
       else if (days >= offset) status = "draft due";
-      else status = "scheduled";
+      else status = "upcoming";
     }
     return {
       round: roundNumber,
@@ -234,32 +233,8 @@ function buildFollowupRounds(row) {
       subject: stored?.subject || null,
       body: stored?.body || null,
       drafted_at: stored?.drafted_at || (roundNumber <= draftCount ? followups.last_drafted_at : null),
-      sent_at: stored?.sent_at || (roundNumber <= sentCount ? followups.last_sent_at : null),
-      scheduled_for: stored?.scheduled_for || (roundNumber === sentCount + draftCount + 1 ? followups.next_scheduled_at : null),
     };
   });
-}
-
-function buildEmailCopy(row, roundNumber) {
-  const customerName = getCustomerName(row);
-  const invoiceNumber = getInvoiceNumber(row);
-  const amount = money.format(row.amount_due ?? row.balance ?? 0);
-  const dueDate = formatDate(row.due_date);
-  const copy = {
-    1: {
-      subject: `Quick reminder: invoice ${invoiceNumber}`,
-      body: `Hi ${customerName},\n\nI wanted to send a quick reminder that invoice ${invoiceNumber} for ${amount} was due on ${dueDate}.\n\nWhen you have a moment, please let us know when we can expect payment. If it has already been sent, thank you, and please disregard this note.\n\nBest,`,
-    },
-    2: {
-      subject: `Following up on invoice ${invoiceNumber}`,
-      body: `Hi ${customerName},\n\nI am following up on invoice ${invoiceNumber}. Our records still show an open balance of ${amount}, originally due on ${dueDate}.\n\nCould you confirm the payment status or let us know if anything is needed on our side to get this cleared up?\n\nThank you,`,
-    },
-    3: {
-      subject: `Action requested: overdue invoice ${invoiceNumber}`,
-      body: `Hi ${customerName},\n\nI am checking in again on invoice ${invoiceNumber}, which still shows an outstanding balance of ${amount} from ${dueDate}.\n\nPlease reply with an expected payment date, or let us know today if there is an issue we should review.\n\nThank you,`,
-    },
-  };
-  return copy[roundNumber] || copy[1];
 }
 
 function mergeFollowupState(base = {}, override = {}) {
@@ -482,7 +457,7 @@ function OutstandingInvoices({ rows }) {
   );
 }
 
-function ArTracker({ rows, onDraftFollowup, onMarkSent }) {
+function ArTracker({ rows, onDraftFollowup }) {
   const tracked = useMemo(() => rows.filter((row) => getDaysOverdue(row) > 0), [rows]);
   const [copiedKey, setCopiedKey] = useState(null);
   const [busyKey, setBusyKey] = useState(null);
@@ -536,10 +511,9 @@ function ArTracker({ rows, onDraftFollowup, onMarkSent }) {
             const rounds = buildFollowupRounds(row);
             const activeRound =
               rounds.find((round) => round.status === "drafted" || round.status === "draft due") ||
-              rounds.find((round) => round.status === "scheduled") ||
-              rounds.find((round) => round.status !== "sent") ||
+              rounds.find((round) => round.status === "upcoming") ||
               rounds[rounds.length - 1];
-            const fallbackCopy = buildEmailCopy(row, activeRound.round);
+            const fallbackCopy = generateCollectionDraft(row, activeRound.round);
             const subject = activeRound.subject || fallbackCopy.subject;
             const body = activeRound.body || fallbackCopy.body;
             const actionKey = `${row.qbo_invoice_id || row.id || getInvoiceNumber(row)}:${activeRound.round}`;
@@ -560,8 +534,7 @@ function ArTracker({ rows, onDraftFollowup, onMarkSent }) {
                   </div>
                   <div className="text-right text-[12px] text-white/55">
                     <div>Last drafted: {followups.last_drafted_at ? timeAgo(followups.last_drafted_at) : "Not yet"}</div>
-                    <div>Last follow-up: {followups.last_sent_at ? timeAgo(followups.last_sent_at) : "Not sent"}</div>
-                    <div>Next draft: {followups.next_scheduled_at ? formatDate(followups.next_scheduled_at) : "Cadence pending"}</div>
+                    <div>Delivery: Copy and paste manually</div>
                   </div>
                 </div>
                 <div className="mt-4 grid gap-2 md:grid-cols-3">
@@ -581,12 +554,8 @@ function ArTracker({ rows, onDraftFollowup, onMarkSent }) {
                           <span className="text-[11px] capitalize text-white/60">{round.status}</span>
                         </div>
                         <div className="mt-1 text-[11px] text-white/45">
-                          {round.sent_at
-                            ? `Sent ${timeAgo(round.sent_at)}`
-                            : round.drafted_at
+                          {round.drafted_at
                             ? `Drafted ${timeAgo(round.drafted_at)}`
-                            : round.scheduled_for
-                            ? `Scheduled ${formatDate(round.scheduled_for)}`
                             : `${round.offset}d after due`}
                         </div>
                       </div>
@@ -596,7 +565,7 @@ function ArTracker({ rows, onDraftFollowup, onMarkSent }) {
                 <div className="mt-4 rounded-[16px] border border-white/10 bg-white/[0.035] p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <div className="text-xs font-semibold text-white">Round {activeRound.round} email copy</div>
+                      <div className="text-xs font-semibold text-white">Round {activeRound.round} collection email draft</div>
                       <div className="text-[11px] text-white/45">Review, copy, and send from your own inbox.</div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -609,7 +578,7 @@ function ArTracker({ rows, onDraftFollowup, onMarkSent }) {
                             : "border-white/15 bg-white/[0.06] text-white/85 hover:bg-white/[0.12]"
                         }`}
                       >
-                        {copiedKey === actionKey ? "✓ Copied!" : "Copy Email"}
+                        {copiedKey === actionKey ? "✓ Copied!" : "Copy Draft"}
                       </button>
                       <button
                         type="button"
@@ -618,14 +587,6 @@ function ArTracker({ rows, onDraftFollowup, onMarkSent }) {
                         className="rounded-full border border-white/15 bg-white/[0.06] px-3 py-1.5 text-xs font-semibold text-white/85 hover:bg-white/[0.12] disabled:opacity-60"
                       >
                         {isBusy ? "Working..." : "Regenerate"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isBusy}
-                        onClick={() => runAction(actionKey, () => onMarkSent(row, activeRound.round, { subject, body }))}
-                        className="rounded-full border border-[rgba(var(--accent-rgb),0.45)] bg-[rgba(var(--accent-rgb),0.16)] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[rgba(var(--accent-rgb),0.24)] disabled:opacity-60"
-                      >
-                        Mark Sent
                       </button>
                     </div>
                   </div>
@@ -3573,13 +3534,6 @@ function JobAssignmentBoard({
                 className="h-9 rounded-[14px] border border-white/10 bg-black/20 px-3 text-xs text-white outline-none placeholder:text-white/35 focus:border-emerald-300/45"
               />
             </div>
-            {assignmentMessage ? (
-              <div className="mt-2 flex justify-end">
-                <span className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1 text-[11px] font-semibold text-emerald-100">
-                  {assignmentMessage}
-                </span>
-              </div>
-            ) : null}
           </div>
 
           <div className="custom-scrollbar relative z-0 min-h-0 flex-1 overflow-auto overscroll-contain">
@@ -7792,7 +7746,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           setJobs(buildDemoJobCostingJobs(next));
           return next;
         });
-        setAssignmentMessage("Transaction removed from job.");
         return;
       }
       const data = await safeFetch(apiUrl(`/api/job-costing/assignments/${encodeURIComponent(txn.assignment_id)}`), {
@@ -7804,7 +7757,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setTransactions(nextTransactions);
       setJobs(nextJobs);
       writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });
-      setAssignmentMessage(data?.message || "Transaction removed from job.");
       await loadSuggestions();
     } catch (e) {
       setAssignmentError(e?.message || "Could not remove assignment.");
@@ -8519,7 +8471,7 @@ export default function JobsDashboard() {
   }, []);
 
   const draftFollowup = useCallback(async (row, round) => {
-    const draft = buildEmailCopy(row, round);
+    const draft = generateCollectionDraft(row, round);
     const now = new Date().toISOString();
     applyFollowupOverride(row, round, {
       status: "drafted",
@@ -8549,53 +8501,6 @@ export default function JobsDashboard() {
     } catch (e) {
       console.warn("[JobsDashboard] draft follow-up failed", e?.message || e);
       setArError(e?.message || "Failed to generate follow-up copy.");
-    }
-  }, [applyFollowupOverride, businessId, readOnly, reloadOpenInvoices, usingDemo]);
-
-  const markFollowupSent = useCallback(async (row, round, copy = {}) => {
-    const sentAt = new Date();
-    applyFollowupOverride(row, round, {
-      status: "sent",
-      subject: copy.subject,
-      body: copy.body,
-      drafted_at: sentAt.toISOString(),
-      sent_at: sentAt.toISOString(),
-      scheduled_for: null,
-    });
-    if (round < 3) {
-      const scheduledFor = new Date(sentAt);
-      scheduledFor.setDate(scheduledFor.getDate() + 7);
-      const nextDraft = buildEmailCopy(row, round + 1);
-      applyFollowupOverride(row, round + 1, {
-        status: "scheduled",
-        subject: nextDraft.subject,
-        body: nextDraft.body,
-        scheduled_for: scheduledFor.toISOString(),
-      });
-    }
-    const qboInvoiceId = row.qbo_invoice_id;
-    if (readOnly) {
-      setArError("Follow-up updates are unavailable in read-only Admin View.");
-      return;
-    }
-    if (usingDemo || !businessId || !qboInvoiceId) return;
-    setArError("");
-    try {
-      await safeFetch(apiUrl("/api/ar/followups/mark-sent"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          business_id: businessId,
-          qbo_invoice_id: qboInvoiceId,
-          round,
-          subject: copy.subject,
-          body: copy.body,
-        }),
-      });
-      await reloadOpenInvoices();
-    } catch (e) {
-      console.warn("[JobsDashboard] mark follow-up sent failed", e?.message || e);
-      setArError(e?.message || "Failed to mark follow-up sent.");
     }
   }, [applyFollowupOverride, businessId, readOnly, reloadOpenInvoices, usingDemo]);
 
@@ -8737,7 +8642,6 @@ export default function JobsDashboard() {
           <ArTracker
             rows={invoiceRows}
             onDraftFollowup={draftFollowup}
-            onMarkSent={markFollowupSent}
           />
         )}
       </div>

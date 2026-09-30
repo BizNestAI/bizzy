@@ -12,7 +12,7 @@ import {
 function inferStructureFromPrompt(prompt = '') {
   const p = String(prompt || '').toLowerCase();
   const wantsThorough =
-    /\b(best ways|strateg(y|ies)|guide|playbook|deep dive|comprehensive|in depth|how to|ideas|tactics|framework|step by step|explain|thoughts)\b/.test(p);
+    /\b(playbook|deep dive|comprehensive|in depth|detailed analysis|full analysis|thorough|framework)\b/.test(p);
 
   const asksWhy = /\bwhy|reason|because|rationale|tradeoff|trade-off\b/.test(p);
   const asksHow = /\bhow\b/.test(p);
@@ -49,28 +49,25 @@ function chooseNarrativeHint(prompt = '') {
   if (h.wantsCompare || h.wantsTable) return 'contrast-brief';
   if (h.asksWhy) return 'mini-essay-with-reasoning';
   if (h.asksHow) return 'example-led-explanation';
-  return 'mini-essay (paragraphs), avoid bullets unless explicitly asked';
+  return 'direct answer in short paragraphs; add structure only when it materially improves clarity';
 }
 
 /**
- * NEW: Detects when structured reasoning (section headers or breakdowns)
- * would improve clarity. Bizzi can then decide to use headings dynamically.
+ * Detect explicit complexity signals without using prompt length as a proxy.
  */
 function detectStructuredReasoning(prompt = '') {
   const p = String(prompt || '').toLowerCase();
-  const signals =
-    /\b(risks?|advantages?|pros|cons|benefits?|issues?|problems?|causes?|effects?|impact|analysis|breakdown|explain|thoughts|opinion|future|plan)\b/.test(p);
-  const longQuery = p.split(/\s+/).length > 10;
-  if (signals || longQuery) return true;
-  return false;
+  return /\b(compare|comparison|versus|vs\.?|pros and cons|forecast|afford|financial review|troubleshoot|diagnose|procedure|step by step|deep dive|comprehensive|breakdown|playbook)\b/.test(p);
 }
 
 /**
  * Choose depth (controls verbosity)
  */
-function chooseDepth({ flags = {}, surface } = {}) {
+function chooseDepth({ flags = {}, surface, prompt = '' } = {}) {
   if (flags.quick || surface === 'popover' || surface === 'chip') return 'brief';
   if (flags.deepDive || surface === 'doc') return 'comprehensive';
+  const p = String(prompt || '').trim().toLowerCase();
+  if (p.length <= 100 && /^(what (?:is|are|does)|define|when (?:is|do|does)|who (?:is|are))\b/.test(p)) return 'brief';
   return 'standard';
 }
 
@@ -82,7 +79,11 @@ function chooseStyle({ intent, prompt, flags = {} } = {}) {
   const structuralIntent =
     intent === 'procedure' ||
     intent === 'decision_brief' ||
-    intent === 'kpi_compare';
+    intent === 'kpi_compare' ||
+    intent === 'forecast_generate' ||
+    intent === 'affordability_check' ||
+    intent === 'financial_insight' ||
+    intent === 'troubleshooting';
 
   if (flags.wantStructure || hints.wantsScaffold || structuralIntent) {
     return 'scaffolded';
@@ -133,15 +134,15 @@ export function buildPersonaSystems(opts = {}) {
 
   // Depth & style
   const hints = inferStructureFromPrompt(prompt);
-  let depth = opts.depth || chooseDepth({ flags, surface });
+  let depth = opts.depth || chooseDepth({ flags, surface, prompt });
   if (!opts.depth && !flags.quick) {
     if (flags.deepDive || hints.wantsThorough) depth = 'comprehensive';
   }
 
-  const style = chooseStyle({ intent, prompt, flags });
+  const style = opts.style || chooseStyle({ intent, prompt, flags });
   let narrative = chooseNarrativeHint(prompt);
   if (flags.demoPunchy) {
-    narrative = 'headline + metric bullets + 2–3 action steps; call out risks before the plan';
+    narrative = 'lead with the material finding; use metric bullets or actions only when they improve the answer';
   }
   const shouldStructure = detectStructuredReasoning(prompt);
 
@@ -174,13 +175,13 @@ export function buildPersonaSystems(opts = {}) {
 
   if (shouldStructure) {
     systemHints.push(
-      `This question benefits from a reasoned, multi-part answer. Use 2–4 short paragraphs and, only if truly helpful, add a brief topic-specific label (no boilerplate headings).`
+      `This question benefits from multi-part reasoning. Use topic-specific labels, bullets, steps, or a small table only where they materially improve clarity.`
     );
   }
 
   if (flags.demoPunchy) {
     systemHints.push(
-      'Demo mode: lead with a short titled section, list raw metrics or KPIs as bullets, then give a numbered or bulleted action plan that references exact dollars, percentages, or lead counts. Close by offering to execute a concrete next step.'
+      'Demo mode: lead with the material finding and use exact supplied dollars, percentages, or lead counts. Add an action plan or offer a draft/checklist only when it materially helps.'
     );
   }
 

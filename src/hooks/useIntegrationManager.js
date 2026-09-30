@@ -1,6 +1,5 @@
 // src/hooks/useIntegrationManager.js
 import { useCallback, useEffect, useMemo, useState } from "react";
-import useGmailConnect from "./email/useGmailConnect";
 import { apiUrl, safeFetch } from "../utils/safeFetch";
 import { getDemoMode, setDemoMode } from "../services/demo/demoClient.js";
 import { useAdminView } from "../context/AdminViewContext.jsx";
@@ -32,12 +31,6 @@ export const INTEGRATION_META = {
     cta: "Connect Plaid",
     category: "finance",
   },
-  gmail: {
-    label: "Gmail",
-    description: "Bring in email, tasks, and Bizzi AI replies.",
-    cta: "Connect Gmail",
-    category: "communications",
-  },
   facebook: {
     label: "Facebook",
     description: "Track post performance and engagement.",
@@ -68,16 +61,14 @@ const DEFAULT_STATE = Object.fromEntries(
   Object.keys(INTEGRATION_META).map((key) => [
     key,
     {
-      status: key === "gmail" ? STATUS.CONNECTED : STATUS.DISCONNECTED,
-      lastSync: key === "gmail" ? Date.now() : null,
+      status: STATUS.DISCONNECTED,
+      lastSync: null,
       error: null,
       info: null,
     },
   ])
 );
 DEFAULT_STATE.__version = STORAGE_VERSION;
-
-const noop = () => {};
 
 function resolveBusinessId(explicitId) {
   if (explicitId) return explicitId;
@@ -224,7 +215,6 @@ export default function useIntegrationManager(options = {}) {
     const initial = readState(resolvedBusinessId);
     return readOnly ? withReadOnlyLoadingState(initial) : initial;
   });
-  const { connect: connectGmail = noop } = useGmailConnect();
   const qbStatus = state?.quickbooks?.status || DEFAULT_STATE.quickbooks.status;
 
   const readStateForMode = useCallback(
@@ -444,10 +434,6 @@ export default function useIntegrationManager(options = {}) {
           }
           return { status: STATUS.AWAITING };
         }
-        case "gmail": {
-          await connectGmail(resolvedBusinessId);
-          return { status: STATUS.AWAITING };
-        }
         case "plaid": {
           const tokenResp = await safeFetch(apiUrl("/api/integrations/plaid/link-token"), {
             method: "POST",
@@ -528,7 +514,7 @@ export default function useIntegrationManager(options = {}) {
           throw new Error(`Unsupported provider: ${provider}`);
       }
     },
-    [connectGmail, readOnly, resolvedBusinessId]
+    [readOnly, resolvedBusinessId]
   );
 
   const connect = useCallback(

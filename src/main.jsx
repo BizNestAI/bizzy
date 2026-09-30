@@ -40,7 +40,6 @@ import "./index.css";
 import { installTabVisibilityMotionGuard } from "./utils/tabVisibilityMotionGuard";
 
 import CalendarHub from "./pages/Calendar/CalendarHub.jsx";
-import EmailPage from "./pages/Email/EmailPage.jsx";
 import ActivityHub from "./pages/Activity/ActivityHub.jsx";
 
 import DocsLibraryPage from "./pages/Docs/DocsLibraryPage.jsx";
@@ -339,9 +338,6 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               <Route path="marketing" element={<MarketingDashboard />} />
               <Route path="marketing/reviews" element={<ReviewsPageWrapper />} />
               <Route path="marketing/captions" element={<SocialCaptionPage />} />
-
-              {/* Email */}
-              <Route path="email" element={<EmailPage />} />
 
               {/* Tax */}
               <Route path="tax" element={<TaxDashboard />} />

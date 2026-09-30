@@ -28,7 +28,6 @@ const modalOverlayFiles = [
   "src/components/Marketing/EmailCampaignGallery.jsx",
   "src/components/Investments/HoldingsTable.jsx",
   "src/components/Investments/WealthMovesPanel.jsx",
-  "src/components/Email/ActivityDrawer.jsx",
   "src/components/Bizzy/ChatDrawer.jsx",
   "src/components/Bizzy/OperatorRequestsPanel.jsx",
   "src/components/BizzyDocs/UploadDocModal.jsx",

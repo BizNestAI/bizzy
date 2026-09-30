@@ -17,7 +17,6 @@ const accentHexMap = {
   marketing: ACCENT_HEX,
   tax: ACCENT_HEX,
   investments: ACCENT_HEX,
-  email: ACCENT_HEX,
 };
 
 const CHROME_HEX  = ACCENT_HEX;
@@ -42,7 +41,6 @@ function getModuleFromPath(path) {
   if (seg === "marketing") return "marketing";
   if (seg === "tax") return "tax";
   if (seg === "investments") return "investments";
-  if (seg === "email") return "email";
   if (seg === "calendar") return "calendar";
   if (seg === "activity") return "activity";
   if (seg === "leads-jobs") return "jobs";

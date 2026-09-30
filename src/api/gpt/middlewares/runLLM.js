@@ -11,16 +11,11 @@ export async function runLLM(req, _res, next) {
 
     // Inputs prepared by earlier middlewares
     const parsedInput    = req.bizzy.contextBundle || {};
-    const styleMessages  = Array.isArray(req.bizzy?.systemMessages) ? req.bizzy.systemMessages : [];
-    const personaMessage = typeof req.bizzy?.personaMessage === 'string' ? req.bizzy.personaMessage : null;
-
     const result = await generateBizzyResponse({
       user_id,
       message,
       type: intent,
       parsedInput,
-      styleMessages,
-      personaMessage,
       business_id: req.business?.id || req.auth?.businessId || req.bizzy.business_id || null,
     });
 

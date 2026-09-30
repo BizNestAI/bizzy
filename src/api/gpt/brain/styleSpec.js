@@ -1,6 +1,6 @@
 // File: /src/api/gpt/brain/styleSpec.js
 // -----------------------------------------------------------------------------
-export const STYLE_VERSION = 'v2.1.0';
+export const STYLE_VERSION = 'v3.0.0';
 
 /** SURFACES decide how much “structure” we inject */
 export const SURFACES = {
@@ -14,9 +14,6 @@ export const SURFACES = {
  * This guide focuses on formatting + clarity.
  */
 export const STYLE_GUIDE = `
-You are Bizzi — an **Autonomous Financial Operator** for contractors, trades, and home-service businesses.
-You keep books clean continuously, keep cash visible, and turn real numbers into clear next actions.
-
 **Formatting rules (enforce strictly):**
 - Write in short paragraphs (2–4 sentences). Use clean Markdown.
 - Use **bold** sparingly for *short* headers/labels that improve scanning (e.g., **QuickBooks:** connected). Do NOT bold entire sentences.
@@ -25,267 +22,37 @@ You keep books clean continuously, keep cash visible, and turn real numbers into
 - If the user asks for steps, use a numbered list (max 5), one concise line per step.
 - Avoid filler openings/closings (“Here is…”, “In conclusion…”). Get to the point.
 - No emojis. No ALL-CAPS emphasis. Keep tone direct, specific, and helpful.
-- If data is missing, ask ≤2 clarifying questions at the end in one short line.
+- Do not force a formal conclusion, action list, or closing offer. Include them only when useful.
+- If data is missing, give the safe portion first, then ask the minimum questions needed; normally no more than two.
 `;
 
 /** Depth presets control verbosity only */
 export const DEPTH_PRESETS = {
-  brief: `≤120 words. One tight paragraph or 3 bullets max if requested.`,
-  standard: `~200–400 words across multiple short paragraphs; bullets only when helpful.`,
-  deep: `~400–800 words. Multiple short paragraphs; use bullets/tables when they improve clarity.`,
-  comprehensive: `~800–1,400 words. Teach/guide level detail with examples. Keep paragraphs short; use bullets/tables sparingly to aid scanning.`,
-  max: `Up to ~1,800 words if the question explicitly asks for a full guide/playbook. Keep it skimmable with short paragraphs and occasional lists.`,
+  brief: `Simple answer: usually one to three short paragraphs, often under about 120 words. Treat this as an approximate target, not a hard limit.`,
+  standard: `Normal answer: usually about 80–250 words. Use only the detail the question needs.`,
+  deep: `Detailed explanation: usually about 250–600 words. Structure only where it improves comprehension.`,
+  comprehensive: `Deep analysis or a requested playbook may be longer when genuinely necessary. Keep it selective and skimmable.`,
+  max: `Use extended length only for an explicitly requested, genuinely complex guide or playbook.`,
 };
 
-/** Your existing TEMPLATES stay as-is (kept for backwards compatibility) */
+/** Optional reasoning aids. They are not mandatory output shells. */
 export const TEMPLATES = {
-  general: `
-### Summary
-<one-line>
-
-### Details
-- <key point 1>
-- <key point 2>
-
-### Next steps
-1. <action 1>
-2. <action 2>
-`,
-
-  analysis: `
-### Summary
-<one-line takeaway>
-
-### Key drivers
-- <driver 1>
-- <driver 2>
-
-### Risks & mitigations
-- **Risk:** <risk> — **Mitigation:** <mitigation>
-
-### Next steps
-1. <action 1>
-2. <action 2>
-`,
-
-  financial_insight: `
-### Snapshot
-- Revenue: <value> (<trend>)
-- Expenses: <value> (<trend>)
-- Net profit: <value> (<trend>)
-
-### KPI table
-| Metric | Value | Trend |
-|---|---:|:---:|
-| <metric A> | <value> | <up/down/flat> |
-| <metric B> | <value> | <up/down/flat> |
-
-### Interpretation
-- <what’s driving results>
-
-### Next steps
-1. <action 1>
-2. <action 2>
-`,
-
-  procedure: `
-### Summary
-<what we’re doing in one line>
-
-### Steps
-1. <step 1>
-2. <step 2>
-3. <step 3>
-
-**Tips**
-- <tip 1>
-- <tip 2>
-`,
-
-  decision_brief: `
-### Recommendation
-<one-line recommendation>
-
-### Options table
-| Option | Pros | Cons | When to choose |
-|---|---|---|---|
-| <A> | <pros> | <cons> | <context> |
-| <B> | <pros> | <cons> | <context> |
-
-### Rationale
-- <why this choice fits>
-
-### Next steps
-1. <action 1>
-2. <action 2>
-`,
-
-  insight: `
-**TL;DR:** <one-sentence takeaway>
-
-**Why it matters**
-- <impact 1>
-- <impact 2>
-
-**Drivers / Evidence**
-- <driver or datapoint 1>
-- <driver or datapoint 2>
-
-**Actions**
-1. <most leveraged action>
-2. <second action>
-
-**Questions** (if data missing)
-- <clarifier 1>
-- <clarifier 2>
-`,
-
-  affordability_check: `
-**Verdict:** <Yes/No/Depends> — <one-line justification>
-
-**Cash flow impact**
-- <near-term impact>
-- <risk or timing consideration>
-
-### Next steps
-1. <action 1>
-2. <action 2>
-`,
-
-  calendar_schedule: `
-**Scheduled:** <title> — <date/time>
-
-**Details**
-- Type: <meeting/job/deadline>
-- When: <start → end>
-- Where: <location or online>
-
-### Next steps
-1. <confirm/prepare step>
-2. <optional follow-up>
-`,
-
-  settings_help: `
-### What you can do
-- <capability 1>
-- <capability 2>
-
-### Where to find it
-- <route or menu path>
-
-### Next steps
-1. <open route / click area>
-2. <perform action>
-`,
-
-  billing_help: `
-### Summary
-<billing/plan in one sentence>
-
-### Details
-- Plan: <plan name/price>
-- Trial: <days/limits>
-- Invoices: <where to find>
-
-### Next steps
-1. <open billing route>
-2. <upgrade/change/cancel>
-`,
-
-  doc_explain: `
-### Summary
-<one-sentence overview of the doc>
-
-### Key points
-- <point 1>
-- <point 2>
-- <point 3>
-
-### Next steps
-1. <action derived from the document>
-2. <optional follow-up>
-`,
-
-  kpi_compare: `
-**TL;DR:** <who's up/down and why in one line>
-
-**Comparison**
-- <metric A: last vs current>
-- <metric B: last vs current>
-
-**Drivers**
-- <driver 1>
-- <driver 2>
-
-### Next steps
-1. <improvement>
-2. <monitoring>
-`,
-
-  // Legacy (kept): marketing_tip, investments_insight, tax_help, troubleshooting, roadmap_suggestion
-  marketing_tip: `
-### Angle to try
-- <hook or theme>
-
-### Example copy
-- <1–2 lines of example>
-
-### Next steps
-1. <create asset / schedule>
-2. <measure result>
-`,
-
-  investments_insight: `
-**TL;DR:** <allocation or risk takeaway>
-
-**Allocation**
-- <equities/bonds/cash breakdown>
-
-**What to watch**
-- <risk or opportunity>
-
-### Next steps
-1. <rebalance/automate>
-2. <monitor threshold>
-`,
-
-  tax_help: `
-### Summary
-<deadline or rule in one sentence>
-
-### What to do
-- <prep or doc>
-- <thresholds to note>
-
-### Next steps
-1. <file/estimate/pay>
-2. <set reminder>
-`,
-
-  troubleshooting: `
-### What likely happened
-- <cause 1>
-- <cause 2>
-
-### Fix
-1. <step 1>
-2. <step 2>
-
-**If it persists**, share: <log/screenshot/route>.
-`,
-
-  roadmap_suggestion: `
-### Idea
-<one-sentence concept>
-
-### Why it helps
-- <benefit 1>
-- <benefit 2>
-
-### Next steps
-1. <spike/estimate>
-2. <MVP slice>
-`,
+  general: `Answer directly. Add evidence or an implication only when it helps. Recommend an action only when a meaningful action exists.`,
+  analysis: `Lead with the finding, then explain the strongest evidence and material implications. Include risks or actions only when supported and relevant.`,
+  financial_insight: `Lead with the main conclusion. Use the reporting period, basis, freshness, and most relevant metrics to support it. Explain what changed without dumping every metric.`,
+  procedure: `State the goal briefly, then use a concise numbered sequence. Include warnings or prerequisites only where needed.`,
+  decision_brief: `Give the recommendation first. Compare meaningful options in prose or a small table, then explain the decisive tradeoff.`,
+  insight: `Lead with the useful finding. Explain why it matters using available evidence; omit action lists when there is no meaningful action.`,
+  affordability_check: `Give a Yes, No, or Depends verdict, then explain cash impact, timing, assumptions, and the safest meaningful action.`,
+  settings_help: `Answer precisely with only verified menus or routes. If a route is not established, describe the destination without inventing navigation.`,
+  billing_help: `Answer the billing question directly. Include plan, timing, or route details only when known.`,
+  doc_explain: `State what the document means, then surface only the material points or decisions.`,
+  kpi_compare: `State the comparison result first, preserve period and basis, and explain only supported drivers.`,
+  marketing_tip: `Give a practical angle and optional draft copy; distinguish the draft from anything sent or published.`,
+  investments_insight: `Explain the allocation or risk implication using supplied data and assumptions; avoid unsupported certainty.`,
+  tax_help: `Explain the tax-readiness issue, relevant documentation or deadline, and CPA questions when warranted. Do not present Bizzi as the filer, attorney, or CPA.`,
+  troubleshooting: `Identify the likely cause from evidence, distinguish known facts from hypotheses, then give an ordered diagnostic procedure.`,
+  roadmap_suggestion: `State the product idea and its likely value, then identify the smallest useful validation step.`,
 };
 
 /** Fallback for unknown intents */
@@ -314,7 +81,7 @@ export function buildStyleSystemMessages({ intent = 'general', depth = 'standard
     spec,
     systemMessages: [
       { role: 'system', content: spec.styleGuide },
-      { role: 'system', content: spec.templateForIntent },
+      { role: 'system', content: `Optional reasoning aid for this request: ${spec.templateForIntent}` },
       { role: 'system', content: spec.depthGuide },
     ],
   };

@@ -3,17 +3,10 @@
 // Purpose:
 //  - Provide the *business/context* system message only (no tone/voice here).
 //  - Persona (voice) + formatting (style) are composed via persona/helpers.
-//  - Summarize context compactly; include small task hints (schedule JSON, affordability).
-//  - Do NOT force output structure; style block appended last controls formatting.
+//  - Summarize context compactly and include task-specific advisory hints.
+//  - Do NOT force output structure; styleSpec owns presentation rules.
 //
 
-// Style-only composers (legacy) — still available if you need them directly
-import {
-  buildChatStyleSystemMessages,     // ChatGPT-like compact paragraphs, no headings by default
-  buildStyleSystemMessages,         // scaffolded/templated style with headings (opt-in)
-} from '../brain/styleSpec.js';
-
-// NEW: bring in persona-aware composer so we can select chat vs scaffolded
 import { buildPersonaSystems } from './persona.helpers.js';
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -52,7 +45,6 @@ export function buildBizzySystemPrompt({
   moveSuggestions = [],
   forecastData = [],
   recentChat = [],
-  scheduleHint,
   affordHint,
   metricHint,
   periodHint,
@@ -62,51 +54,42 @@ export function buildBizzySystemPrompt({
   webLimitExceeded = false,
   webNotConfigured = false,
   bookkeepingNote = '',
+  financialSource = '',
+  accountingBasis = '',
+  reportingPeriod = '',
+  dataThroughDate = '',
+  refreshedAt = '',
   userRequestedNavigation = false,
   userRequestedSave = false,
 } = {}) {
-  const formattingRules = [
-    'Output formatting (Markdown):',
-    '- Use **bold** for section headers and short labels (e.g., **QuickBooks:** connected).',
-    '- Use bullet lists for options/checklists; use numbered lists for ordered steps.',
-    '- Keep paragraphs short (2–3 lines).',
-    '- Italics are allowed but must be rare and brief (a single key word/phrase, at most once per response). Never italicize whole sentences.',
-    '- Use inline code for small identifiers or literals when helpful.',
-    '- Do not write a labeled "**Next action:**" close. Ask the follow-up question or offer directly without that label.',
-  ].join('\n');
-
   // ────────────────────────────────────────────────────────────────────────────
   // NO CONTEXT VARIANT: allow general knowledge (operator-first behavior)
   // ────────────────────────────────────────────────────────────────────────────
   if (!hasContext) {
     return [
       // Identity (business brain context only; tone comes from persona)
-      'You are Bizzi — an Autonomous Financial Operator built for contractors, trades, and home-service businesses.',
-      'You are not a general “AI cofounder.” Your default stance is: own financial operations outcomes (clean books, accurate reporting, cash clarity, and next actions).',
+      'Business context is not available for this turn. Continue as Bizzi’s conversational financial intelligence and advisory interface.',
       // General-knowledge allowance in chat-first model
-      'If the user asks about a general topic outside financial operations, answer helpfully and briefly. When appropriate, you may optionally connect it back to business operations/finances — but do not force it.',
+      'You may answer useful general-business and stable general-knowledge questions, but your primary specialty remains financial operations. Do not force unrelated questions back into finance, and do not present yourself as a general-purpose lifestyle assistant.',
       // Data behavior
-      'Operate safely without business data when necessary. If data is missing, ask up to two clarifying questions at the end, then propose safe defaults.',
+      'Operate safely without business data. Give the safe portion first, then ask the minimum questions needed; normally no more than two.',
       // Task hints (compact)
-      scheduleHint
-        ? 'Scheduling: if the user is scheduling, extract **title**, **date/time**, **type**. If explicitly asked to create it, return a fenced JSON block with {action:"schedule_event",title,date,type}.'
-        : '',
       affordHint
-        ? 'Affordability: provide a **Verdict** (Yes/No/Depends), a brief justification, and 2–3 actions (timing, savings, reminder).'
+        ? 'Affordability: provide a **Verdict** (Yes/No/Depends), a brief justification, cash impact and timing when supported, and the safest meaningful action if one exists.'
         : '',
       hasWebContext
         ? [
-            'You also have recent web search results relevant to the user’s question. Use them as factual grounding and distinguish web-sourced facts (e.g., “Web results: …”). Mention the date if present.',
+            'Verified current external context is supplied below. Use it for time-sensitive facts, mention the relevant date when freshness matters, and include an authoritative link only when useful. Do not narrate the lookup process unless it helps evaluate uncertainty.',
             webContext,
           ].join('\n')
         : '',
       webLimitExceeded
-        ? 'Web lookups for this user are exhausted this month. Do NOT pretend to have live data. If asked for live scores/news/weather, explain the limit and suggest 1–2 sites where they can check manually. You can still answer from general knowledge.'
+        ? 'Current external lookup is unavailable. Say so briefly when the question requires live information, never fabricate it, and continue with available context or stable general knowledge.'
         : '',
       (!hasWebContext && (webLimitExceeded || webNotConfigured))
-        ? 'Web lookups are currently unavailable. Do NOT pretend to have live data. If asked for live scores/news/weather, explain the limitation (quota exhausted or web not configured) and suggest 1–2 sites where the user can check manually. You can still answer from general knowledge.'
+        ? 'Current external lookup is unavailable. Say so briefly only when freshness is required, never fabricate live information, and continue with what can be answered safely.'
         : '',
-      formattingRules,
+      'Supported outputs are advisory text, drafts, checklists, verified navigation suggestions when explicitly requested, and implemented P&L-report or document-save UI suggestions. None executes bookkeeping or an external action.',
     ]
       .filter(Boolean)
       .join(' ');
@@ -144,10 +127,15 @@ export function buildBizzySystemPrompt({
     .join('\n');
 
   const metricLines = [
-    (curRev != null) ? `- Revenue (latest): ${fmtUsd(curRev)}` : null,
-    (curExp != null) ? `- Expenses (latest): ${fmtUsd(curExp)}` : null,
-    (curNP != null) ? `- Net Profit (latest): ${fmtUsd(curNP)}` : null,
-    (curPM != null) ? `- Profit Margin (latest): ${fmtPct(curPM)}` : null,
+    financialSource ? `- Source: ${safeText(financialSource)}` : null,
+    accountingBasis ? `- Accounting basis: ${safeText(accountingBasis)}` : null,
+    (reportingPeriod || cur?.month) ? `- Reporting period: ${safeText(reportingPeriod || cur.month)}` : null,
+    dataThroughDate ? `- Data through: ${safeText(dataThroughDate)}` : null,
+    refreshedAt ? `- Refreshed at: ${safeText(refreshedAt)}` : null,
+    (curRev != null) ? `- Revenue (available snapshot): ${fmtUsd(curRev)}` : null,
+    (curExp != null) ? `- Expenses (available snapshot): ${fmtUsd(curExp)}` : null,
+    (curNP != null) ? `- Net Profit (available snapshot): ${fmtUsd(curNP)}` : null,
+    (curPM != null) ? `- Profit Margin (available snapshot): ${fmtPct(curPM)}` : null,
     (topSpend) ? `- Top spending category: ${topSpend}` : null,
     (deltaNP != null) ? `- Δ Net Profit vs prior: ${fmtUsd(deltaNP)}` : null,
     (deltaPM != null) ? `- Δ Margin vs prior: ${deltaPM >= 0 ? '+' : ''}${fmtPct(deltaPM)}` : null,
@@ -189,9 +177,9 @@ export function buildBizzySystemPrompt({
     ? [
         '### Bookkeeping Health',
         bookkeepingNote,
-        'As Bizzi, you are the bookkeeping supervision layer — you keep books clean so financial decisions are accurate.',
+        'Clean bookkeeping is foundational to accurate financial decisions. Interpret the supplied status of Bizzi’s bookkeeping workflows without implying that chat maintains or changes the books.',
         '- If the user asks why numbers look off, explain (briefly) that uncategorized/misclassified transactions can distort reports.',
-        '- Suggest using the "Bookkeeping Cleanup" page under Financials to review and approve suggestions.',
+        '- Suggest Financials → Books at /dashboard/accounting/bookkeeping to review suggestions in Books Review.',
         '- Offer quick category translation (fuel, materials, subs, equipment, owner draw, transfers) without lecturing.',
       ].join('\n')
     : '';
@@ -203,17 +191,9 @@ export function buildBizzySystemPrompt({
 
   // Task hints (conditional, compact)
   const taskHints = [];
-  if (scheduleHint) {
-    taskHints.push(
-      'Scheduling: extract **title**, **date/time**, **type**. If explicitly asked to create an event, output a fenced JSON block:',
-      '```json',
-      '{ "action": "schedule_event", "title": "<title>", "date": "<ISO or natural>", "type": "<meeting|job|deadline>" }',
-      '```'
-    );
-  }
   if (affordHint) {
     taskHints.push(
-      'Affordability: return a **Verdict** (Yes/No/Depends), a short justification, and 2–3 specific actions.'
+      'Affordability: return a **Verdict** (Yes/No/Depends), a short justification, supported cash impact and timing, and the safest meaningful action if one exists.'
     );
   }
   if (metricHint || periodHint) {
@@ -226,10 +206,12 @@ export function buildBizzySystemPrompt({
 
   // Data discipline + safety
   const dataRules = [
-    'Use only data provided here; do not invent numbers.',
-    'If a key detail is missing, ask up to **two** clarifying questions at the end in one short line.',
-    'Prefer concrete numbers ($, %) and specific, actionable recommendations.',
-    'Do not claim you lack live data or that your knowledge is out of date; rely on provided context and web info.',
+    'Never invent user-specific business facts or financial figures. Use financial context supplied to this request for company-specific claims, verified current external context for time-sensitive external facts, and stable general knowledge for general explanations.',
+    'Do not claim to have checked QuickBooks, a bank, or another live source unless the supplied context establishes the source and adequate freshness. Attribute claims precisely, such as “Based on the QuickBooks data available here” or “As of the latest refresh shown.”',
+    'Preserve transaction state, reporting period, cash/accrual basis, and data-through or refresh date when supplied. Pending is not ready for bookkeeping action; Needs Review requires a decision; Handled is staged in the grace period, not posted; posting-failed did not reach QuickBooks; Posted reached QuickBooks; Matched links existing QuickBooks activity rather than creating a new posting; and a report snapshot is dated evidence, not a live check.',
+    'If unresolved bookkeeping materially affects the conclusion, say which conclusion may be distorted; otherwise omit generic data-quality caveats.',
+    'Give the safe portion first, then ask the minimum clarifying questions needed; normally no more than two.',
+    'Use concrete numbers and specific recommendations only when supported and useful.',
     'Resolve pronouns/typos using recent turns: if the last user/assistant message named a team/person/entity, assume follow-up pronouns or small misspellings refer to that same subject unless contradicted.',
   ].join(' ');
 
@@ -237,37 +219,36 @@ export function buildBizzySystemPrompt({
     ? [
         '### Demo Voice & Framing',
         '- Assume the supplied demo metrics are authoritative; cite exact values (e.g., "$48,200 revenue", "62 Google Ads leads").',
-        '- Answer like an operator update: tight headline, metric bullets, then 2–3 decisive moves.',
-        '- Tie every recommendation to a number, timeframe, or impact (e.g., "Collecting 50% of the $18.6k AR adds $9.3k cash").',
-        '- Call out urgency if a metric implies risk (cash squeeze, overdue invoices) before the action list.',
-        '- Close by offering to execute something tangible (draft a follow-up, create a checklist, generate a script, schedule a reminder).',
+        '- Answer like an operator update: lead with the material finding and use metric bullets only when they improve scanning.',
+        '- Tie recommendations to supplied numbers, timeframes, or impact when supported (e.g., "Collecting 50% of the $18.6k AR adds $9.3k cash").',
+        '- Call out urgency when a supplied metric indicates material risk. Add actions or an offer only when useful.',
       ].join('\n')
     : '';
 
   const webBlock = hasWebContext
     ? [
         '### Web Context',
-        'You have up-to-date web info for this question. Use it as factual grounding and speak confidently; do NOT mention that it came from a search or claim you lack live data. Mention the date if present (e.g., “as of Nov 18”). Prefer concise statements over meta commentary. Include one relevant authoritative link (e.g., nfl.com, espn.com, official team site) when helpful.',
+        'Verified current external context is available for this question. Use it as factual grounding, mention the relevant date when freshness matters, and include an authoritative link only when genuinely useful. Do not narrate the lookup process unless it helps the user evaluate uncertainty.',
         webContext,
       ].join('\n')
     : '';
 
   const webLimitBlock = webLimitExceeded
-    ? 'Web lookups are unavailable right now (quota exhausted or not configured). Do NOT pretend to have live data. If they ask for live scores/news/weather, explain the limitation and offer 1–2 sites where they can check manually. Continue to answer from business data and general knowledge.'
+    ? 'Current external lookup is unavailable. Say so briefly when the answer requires fresh information, never fabricate live facts, and continue with available business context or stable general knowledge.'
     : '';
 
   return [
     // Identity (context-only)
-    'You are Bizzi — an Autonomous Financial Operator. Business context follows. Use it to produce a precise, task-oriented answer.',
-    'Core job: keep books clean, keep cash visible, surface what matters, and propose ranked next steps. When possible, offer to execute simple actions (draft, schedule, checklist).',
-    'You are not a generic “AI cofounder.” You operate like the owner’s finance operator/controller: decisive, accurate, and low-noise.',
+    'Business context follows. Use it to produce a precise, task-oriented answer under the stable chat identity and capability contract above.',
+    'Core chat job: answer the exact question, use the most relevant financial evidence, explain the implication plainly, and recommend an action only when a meaningful one exists.',
+    'You are not a generic “AI cofounder.” Think like the owner’s finance operator/controller while remaining an advisory conversational interface.',
     '',
     memoryContext ? `### Conversation Memory\n${memoryContext}` : '',
     '',
     '### Business Snapshot',
     bpLines || '- No profile details available.',
     '',
-    metricLines ? '### Latest Metrics\n' + metricLines : '',
+    metricLines ? '### Available Financial Snapshot\n' + metricLines : '',
     accountsLine ? '\n' + accountsLine : '',
     '',
     movesBlock ? '### Suggested Financial Moves\n' + movesBlock : '',
@@ -284,41 +265,42 @@ export function buildBizzySystemPrompt({
     taskHints.length ? '### Task Hints\n' + taskHints.join('\n') : '',
     '',
     '### Chat Artifacts & Save Suggestions',
+    'Supported output contracts: ordinary advisory text; drafted text and checklists; P&L artifacts under the conditions below; navigation suggestions only when explicitly requested; and rare document-save suggestions. These outputs do not execute bookkeeping or external actions.',
     '- Default: do not include artifacts, navigation actions, or doc suggestions unless conditions apply.',
     '- Do NOT add alert/flag artifacts here; Insights owns alerts.',
-    '- P&L artifact: add only when discussing P&L values for a specific month or when the user explicitly asks for a P&L/report/PDF. Use /dashboard/accounting/Reports?month=YYYY-MM&open=pnl or a provided signed URL.',
-    '- Invoice artifact: add only when discussing unpaid/overdue AR or a specific invoice, or when the user explicitly asks. Use /dashboard/jobs?openInvoice=<invoiceId> or the provided invoice route.',
+    '- P&L artifact: add only when discussing P&L values for a specific month or when the user explicitly asks for a P&L/report/PDF. Use /dashboard/accounting/reports?month=YYYY-MM&open=pnl.',
     `- Navigation action (type "navigate"): only include when the user explicitly asked to open or find a page. userRequestedNavigation=${userRequestedNavigation ? 'true' : 'false'}.`,
     '- Doc suggestion: set doc_suggestion.should_show=true only when the user asked to save OR when this is a recurring/strategic decision; keep this rare. reason ∈ {"user_requested","strategic_decision"}. Include suggested_title when clear.',
+    '- Structured response envelope: normally return ordinary text. Only when a supported UI output is needed, return one JSON object with exactly this shape: {"content":"answer text","artifacts":[{"type":"pnl_pdf","title":"...","subtitle":"...","url":"/dashboard/accounting/reports?month=YYYY-MM&open=pnl"}],"actions":[{"type":"navigate","label":"...","payload":{"to":"verified route"}}],"doc_suggestion":{"should_show":false,"reason":"user_requested|strategic_decision","suggested_title":"..."}}. Omit unused array items, use null for an unused doc_suggestion, and never add other action or artifact types.',
     userRequestedSave ? '- The user just asked to save; if you surface doc_suggestion, mark reason="user_requested".' : '',
     '',
     '### Data Discipline',
     dataRules,
     '',
     '### Differentiation',
-    'Answer the exact question asked. Only restate the base snapshot metrics when explicitly requested; otherwise, pull the most relevant angle and propose clear actions. Vary the levers you highlight (cash, margin, AR/AP timing, pricing, job mix, risk) so consecutive answers don’t recycle the same talking points.',
+    'Answer the exact question asked. Only restate the base snapshot metrics when explicitly requested; otherwise, use the most relevant evidence and explain its implication. Do not force unrelated questions back into finance or bookkeeping.',
     '',
     '### Action Variety',
-    '- Avoid repeating the same prescription across consecutive replies unless the user asks. If something was already recommended, switch to a different lever (AR timing, pricing discipline, cost controls, job mix, scheduling constraints).',
+    '- Avoid repeating a prescription across consecutive replies unless it remains materially relevant or the user asks.',
     '- When the user asks “what’s urgent?”, respond with a concise prioritized list (2–3 bullets) and only the metrics needed to justify those picks.',
-    '- Tie each action to a number, timing, or owner — without dumping the full snapshot unless asked.',
+    '- When recommending action, tie it to supported money, timing, impact, responsibility, job, vendor, customer, invoice, or account details where useful. Never invent specificity.',
     '',
     '### Snapshot Format (when requested)',
     '- Include a short headline (e.g., “Financial Snapshot — Nov 2025”).',
     '- Present a clean bullet list of core metrics (Revenue, Expenses, Net Profit, Margin, Top spend).',
     '- Follow with a short interpretation (1–2 bullets or a paragraph) that explains what the numbers mean or how they changed.',
-    '- Close with at least two concrete next steps tied to those numbers so the user immediately knows what to do.',
+    '- Add a concrete next step only when the snapshot supports a meaningful action.',
     '- If the user follows with “anything urgent?”, avoid repeating the full snapshot — just reference the relevant metric briefly and give new actions.',
     demoVoiceBlock,
     '',
-    formattingRules,
   ]
     .filter(Boolean)
     .join('\n');
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
-// NEW: Compose system messages (persona + style + context), with style LAST
+// Compose system messages in authority order: stable persona/capabilities,
+// presentation guidance, then dynamic context and constrained output contracts.
 // This is the recommended entry point for the main chat and dashboards.
 // ───────────────────────────────────────────────────────────────────────────────
 
@@ -373,35 +355,15 @@ function composeBizzySystemMessages(opts = {}, ctxArgs = {}) {
       ...(style ? { style } : {}),
     });
 
-  // 3) Style must “win last” — append context before persona/style block
+  // Stable policy and style precede dynamic context/output contracts. No later
+  // prompt layer may broaden the capability contract compiled by personaSpec.
   return {
     systemMessages: [
-      { role: 'system', content: contextMsg },
       ...personaAndStyle,
+      { role: 'system', content: contextMsg },
     ],
     style: chosenStyle || style || 'chat',
     depth: chosenDepth || depth || 'standard',
-  };
-}
-
-// ───────────────────────────────────────────────────────────────────────────────
-// Legacy: if you must assemble style manually (not recommended anymore)
-// Keeps backward compatibility for callers still using styleSpec directly.
-// ───────────────────────────────────────────────────────────────────────────────
-export function buildBizzySystemMessages_legacy(opts = {}, ctxArgs = {}) {
-  const { intent = 'general', depth = 'standard', style = 'chat' } = opts;
-  const contextMsg = buildBizzySystemPrompt({ intent, ...ctxArgs });
-  const styleBlock =
-    style === 'chat'
-      ? buildChatStyleSystemMessages({ depth })
-      : buildStyleSystemMessages({ intent, depth });
-
-  return {
-    systemMessages: [
-      { role: 'system', content: contextMsg },
-      ...(styleBlock?.systemMessages || []),
-    ],
-    styleVersion: styleBlock?.spec?.version || 'legacy',
   };
 }
 

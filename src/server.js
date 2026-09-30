@@ -64,8 +64,6 @@ import { billingRouter, billingWebhookHandler } from "./api/billing/billing.rout
 import docsRouter from "./api/docs/docs.routes.js";
 import insightsRoutes from "./api/insights/insights.routes.js";
 import affordabilityCheckHandler from "./api/accounting/affordabilityCheck.js";
-import emailRouter from "./api/email/gmail.routes.js";
-import { callback as gmailOAuthCallback } from "./api/email/gmail.auth.js";
 import { qboEnvName } from "./utils/qboEnv.js";
 import { validateTaxEnvironmentSafety } from "./services/tax/taxEnvironmentSafety.js";
 import { startTaxRecalculationWorker } from "./services/tax/events/taxRecalculationWorker.service.js";
@@ -267,13 +265,6 @@ app.post("/api/accounting/affordabilityCheck", ...requireCustomerOrAdminView, af
 
 /* ----------------------- Bizzy Insight (requires auth) ----------------------- */
 app.use("/api/gpt/brain/bizzyInsight", requireAuth, bizzyInsightRouter);
-
-/* ------------------------------ Email ------------------------------ */
-/** 🔓 PUBLIC: Google OAuth callback must NOT require your JWT */
-app.get("/api/email/callback", gmailOAuthCallback);
-
-/** 🔐 2) All other email routes require auth. */
-app.use("/api/email", requireAuth, emailRouter);
 
 /* ------------------------------------ Marketing ------------------------------------ */
 app.use("/api/marketing", ...requireCustomerOrAdminView, marketingRouter);

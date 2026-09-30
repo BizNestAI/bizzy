@@ -540,6 +540,24 @@ test("completed job assignments leave Posted Transactions immediately without a 
   assert.match(source, /writeJobCostingLiveCache\(businessId, readOnly, \{ transactions: optimisticTransactions, jobs: optimisticJobs \}\);\s*closeAssignmentPicker\(\);/);
 });
 
+test("Posted Transactions never renders an assignment success alert", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const boardStart = source.indexOf("function JobAssignmentBoard({");
+  const boardEnd = source.indexOf("function AssignedTransactionsModal", boardStart);
+  const removeStart = source.indexOf("const removeAssignment = useCallback");
+  const removeEnd = source.indexOf("const handleDragStart = useCallback", removeStart);
+  assert.ok(boardStart > 0);
+  assert.ok(boardEnd > boardStart);
+  assert.ok(removeStart > 0);
+  assert.ok(removeEnd > removeStart);
+
+  const boardSource = source.slice(boardStart, boardEnd);
+  const removeSource = source.slice(removeStart, removeEnd);
+  assert.equal(boardSource.includes("{assignmentMessage ? ("), false);
+  assert.equal(removeSource.includes('setAssignmentMessage("Transaction removed from job.")'), false);
+  assert.equal(removeSource.includes('data?.message || "Transaction removed from job."'), false);
+});
+
 test("assigned transaction detail modal is viewport-centered in a blurred document portal", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../src/index.css", import.meta.url), "utf8");

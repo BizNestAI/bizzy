@@ -4,16 +4,15 @@ import { qboEnvName } from '../../../utils/qboEnv.js';
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import { retrieveRelevantMemories, storeMemory } from './bizzyMemoryService.js';
-import { buildBizzySystemPrompt, buildBizzySystemMessages } from './bizzySystemPrompt.js';
+import { buildBizzySystemMessages } from './bizzySystemPrompt.js';
 import { getEmbedding } from '../../../utils/openaiEmbedding.js';
 import { detectAffordabilityIntent, extractExpenseDetails } from '../affordabilityParser.js';
-import { saveCalendarEvent } from '../../../services/calendar/saveCalendarEvent.js';
-import { buildPersonaSystems } from './persona.helpers.js';
 import { intentToModule } from '../utils/intentToModule.js';
 import { generateThreadTitle } from '../../chats/title.util.js';
 import { webLookup } from '../webLookup.js';
 import { getBookkeepingHealth } from '../../accounting/bookkeepingHealth.js';
 import { formatBizzyMarkdown } from './formatBizzyMarkdown.js';
+import { parseStructuredResponse } from './structuredResponse.js';
 import {
   identifyOnboardingPrompt,
   buildOnboardingGuide,
@@ -254,11 +253,6 @@ function extractResponseText(resp) {
   return '';
 }
 
-function detectSchedulingIntent(text) {
-  const triggers = ['schedule', 'set a reminder', 'book a meeting', 'add to calendar'];
-  return triggers.some((t) => String(text || '').toLowerCase().includes(t));
-}
-
 const sanitizeRole = (r) => {
   const v = String(r || '').toLowerCase();
   if (v === 'bizzy') return 'assistant';
@@ -266,10 +260,7 @@ const sanitizeRole = (r) => {
   return 'assistant';
 };
 
-// Updated: autonomous financial operator framing
-const BASE_SYSTEM =
-  'You are Bizzi, an Autonomous Financial Operator for contractors and home-service businesses. Be calm, pragmatic, specific, and low-noise.';
-
+// Compact logging helper; identity is defined only by the canonical prompt compiler.
 const preview = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 140);
 
 const WEB_LOOKUP_LIMIT = 20;
@@ -277,9 +268,6 @@ const WEB_LOOKUP_LIMIT = 20;
 const CHECKLIST_TEMPLATE = [
   { key: 'business_profile', label: 'Business profile' },
   { key: 'quickbooks', label: 'QuickBooks' },
-  { key: 'calendar', label: 'Calendar' },
-  { key: 'email', label: 'Email' },
-  { key: 'job_tool', label: 'Job tool' },
 ];
 
 function buildOnboardingChecklist({ businessProfileComplete, qbConnected }) {
@@ -318,8 +306,6 @@ function needsWebLookup(message, intent) {
 
   return liveSignals.some((re) => re.test(text));
 }
-
-const MAX_ARTIFACTS = 2;
 
 function normalizeDataMode(value) {
   const mode = String(value || '').trim().toLowerCase();
@@ -419,71 +405,6 @@ function applyDemoContext(bundle, demoData) {
   bundle.dataMode = 'demo';
 }
 
-const extractJsonCandidate = (raw = '') => {
-  const trimmed = String(raw || '').trim();
-  if (!trimmed) return null;
-  try {
-    const direct = JSON.parse(trimmed);
-    if (direct && typeof direct === 'object') return direct;
-  } catch {}
-
-  const fenced = trimmed.match(/```json\s*([\s\S]*?)```/i);
-  if (fenced && fenced[1]) {
-    try {
-      const parsed = JSON.parse(fenced[1]);
-      if (parsed && typeof parsed === 'object') return parsed;
-    } catch {}
-  }
-  return null;
-};
-
-const sanitizeArtifacts = (raw = []) => {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((a) => ({
-      type: a?.type,
-      title: a?.title || '',
-      subtitle: a?.subtitle || '',
-      url: a?.url || '',
-      meta: a?.meta,
-    }))
-    .filter((a) => a.type && a.title && a.url && (a.type === 'pnl_pdf' || a.type === 'invoice'))
-    .slice(0, MAX_ARTIFACTS);
-};
-
-const sanitizeActions = (raw = [], allowNavigation = false) => {
-  if (!allowNavigation || !Array.isArray(raw)) return [];
-  return raw
-    .filter((a) => a?.type === 'navigate' && a?.payload?.to && a?.label)
-    .map((a) => ({ type: 'navigate', label: a.label, payload: { to: a.payload.to } }));
-};
-
-const normalizeDocSuggestion = (raw) => {
-  if (!raw || typeof raw !== 'object') return null;
-  const { should_show, shouldShow, reason, suggested_title, suggestedTitle } = raw;
-  const show = should_show ?? shouldShow ?? false;
-  const title = suggested_title || suggestedTitle || undefined;
-  return {
-    should_show: !!show,
-    reason: reason || undefined,
-    ...(title ? { suggested_title: title } : {}),
-  };
-};
-
-const parseStructuredResponse = (rawText, { allowNavigation = false } = {}) => {
-  const parsed = extractJsonCandidate(rawText);
-  if (!parsed || typeof parsed !== 'object') {
-    return { content: rawText, artifacts: [], actions: [], doc_suggestion: null };
-  }
-  const content = typeof parsed.content === 'string' ? parsed.content : rawText;
-  return {
-    content,
-    artifacts: sanitizeArtifacts(parsed.artifacts),
-    actions: sanitizeActions(parsed.actions, allowNavigation),
-    doc_suggestion: normalizeDocSuggestion(parsed.doc_suggestion || parsed.docSuggestion),
-  };
-};
-
 // Coerce the settled embedding result to a non-empty float array or null
 const normalizeVec = (settled) => {
   if (!settled || settled.status !== 'fulfilled') return null;
@@ -504,8 +425,6 @@ export async function generateBizzyResponse({
   message,
   type = null,
   parsedInput = null,
-  styleMessages = [],
-  personaMessage = null,
   threadId = null,
   business_id: businessIdFromHandler = null,
   dataMode = 'auto',
@@ -540,14 +459,7 @@ export async function generateBizzyResponse({
         const parsed = extractExpenseDetails(message);
         return await generateBizzyResponse({
           user_id, message, type: 'affordability_check',
-          parsedInput: { ...parsedInput, affordHint: parsed }, styleMessages, personaMessage,
-          threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode,
-        });
-      }
-      if (detectSchedulingIntent(message)) {
-        return await generateBizzyResponse({
-          user_id, message, type: 'calendar_schedule',
-          parsedInput: { ...parsedInput, scheduleHint: message }, styleMessages, personaMessage,
+          parsedInput: { ...parsedInput, affordHint: parsed },
           threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode,
         });
       }
@@ -680,8 +592,10 @@ export async function generateBizzyResponse({
     const checklistText = formatChecklistText(onboardingChecklist);
     const onboardingToneBlock = showOnboardingTone ? buildOnboardingToneBlock(onboardingMatch?.title || null) : null;
     const onboardingGuide = onboardingMatch ? buildOnboardingGuide(onboardingMatch, { checklist: checklistText }) : null;
-    const onboardingSuggestedActions = onboardingMatch?.suggestedActions || [];
-    const onboardingFollowUp = onboardingMatch?.followUpPrompt || '';
+    // Retained response fields stay structurally compatible, but onboarding no longer emits
+    // actions or forced follow-up questions.
+    const onboardingSuggestedActions = [];
+    const onboardingFollowUp = '';
     const onboardingMeta = {
       active: showOnboardingTone,
       promptId: onboardingMatch?.id || null,
@@ -863,10 +777,10 @@ export async function generateBizzyResponse({
 
     const bookkeepingNote =
       bookkeepingHealth?.uncategorized_count > 0
-        ? `This business has ${bookkeepingHealth.uncategorized_count} uncategorized transactions in QuickBooks. You can help them understand why this matters, and direct them to the "Bookkeeping Cleanup" page in Financials to fix it.`
+        ? `This business has ${bookkeepingHealth.uncategorized_count} uncategorized transactions in QuickBooks. You can help them understand why this matters and direct them to Financials → Books at /dashboard/accounting/bookkeeping to review them in Books Review.`
         : '';
 
-    // Build system messages (unchanged; but system prompt now reflects Autonomous Financial Operator)
+    // Build the canonical advisory chat system messages.
     const { systemMessages: personaAndStyle } = buildBizzySystemMessages(
       {
         intent,
@@ -883,9 +797,13 @@ export async function generateBizzyResponse({
         moveSuggestions: moves,
         forecastData: forecast,
         recentChat,
-        scheduleHint: bundle.scheduleHint,
         affordHint: bundle.affordHint,
         bookkeepingNote,
+        financialSource: bundle.financialSource || bundle.financial_source || bundle.source || '',
+        accountingBasis: bundle.accountingBasis || bundle.accounting_basis || bundle.basis || '',
+        reportingPeriod: bundle.reportingPeriod || bundle.reporting_period || bundle.period || bundle.periodHint || '',
+        dataThroughDate: bundle.dataThroughDate || bundle.data_through_date || bundle.dataThrough || '',
+        refreshedAt: bundle.refreshedAt || bundle.refreshed_at || bundle.refreshTime || '',
         metricHint: bundle.metricHint,
         periodHint: bundle.periodHint,
         demoSnapshot: demoData,
@@ -911,8 +829,8 @@ export async function generateBizzyResponse({
 
     const rawMessages = [
       ...(onboardingToneBlock ? [{ role: 'system', content: onboardingToneBlock }] : []),
-      ...personaAndStyle,
       ...(onboardingGuide ? [{ role: 'system', content: onboardingGuide }] : []),
+      ...personaAndStyle,
       ...chatHistoryFormatted,
       { role: 'user', content: message },
     ];
@@ -954,12 +872,7 @@ export async function generateBizzyResponse({
     let bizzyReply = null;
     let lastResponseDebug = null;
     let openaiUsageTelemetry = null;
-    const scriptedOnboardingReply = onboardingMatch?.response
-      ? [
-          onboardingMatch.response.trim(),
-          onboardingFollowUp ? onboardingFollowUp.trim() : '',
-        ].filter(Boolean).join('\n\n')
-      : null;
+    const scriptedOnboardingReply = onboardingMatch?.response?.trim() || null;
 
     if (scriptedOnboardingReply) {
       bizzyReply = scriptedOnboardingReply;
@@ -995,7 +908,7 @@ export async function generateBizzyResponse({
           '```',
         ].join('\n');
       } else {
-        bizzyReply = `I received your message — but I’m missing some context to operate properly. If you connect QuickBooks and your business profile, I can take over the financial workflow more reliably.`;
+        bizzyReply = `I received your message, but I’m missing enough context to give you a reliable answer. Connecting QuickBooks and completing your business profile will give chat better financial context.`;
       }
     }
 
@@ -1147,9 +1060,7 @@ export async function generateBizzyResponseHandler(req, res) {
   try {
     const { message, type } = req.body ?? {};
     const user_id = req.auth?.userId || req.user?.id || null;
-    const styleMessages  = Array.isArray(req.bizzy?.systemMessages) ? req.bizzy.systemMessages : [];
     const normalizedType = type || req.body?.intent || req.bizzy?.intent || null;
-    const personaMessage = typeof req.bizzy?.personaMessage === 'string' ? req.bizzy.personaMessage : null;
 
     const bundle    = req.bizzy?.contextBundle || {};
     const clientCtx = req.body?.context || req.body?.parsedInput || {};
@@ -1235,8 +1146,6 @@ export async function generateBizzyResponseHandler(req, res) {
       message,
       type: normalizedType,
       parsedInput,
-      styleMessages,
-      personaMessage,
       threadId: threadIdToUse || null,
       business_id,
       dataMode,

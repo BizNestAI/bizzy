@@ -6,14 +6,12 @@ import { createRateLimiter } from '../../_shared/rateLimit.js';
 // Direct handler that creates/continues threads and returns meta.thread_id
 import { generateBizzyResponseHandler, getBizzyChatAccessHandler } from './generateBizzyResponse.js';
 
-// (Optional) keep the legacy pipeline reachable at /pipeline
+// Compatibility pipeline; final prompt compilation still occurs only in generateBizzyResponse.
 import {
   normalizeRequest,
   attachIntent,
   attachContext,
   finalizeContext,
-  attachStyle,
-  attachPersona,
   clarifyGate,
   runLLM,
   postProcess,
@@ -43,8 +41,6 @@ const chain = [
   attachIntent,
   attachContext,
   finalizeContext,
-  attachStyle,
-  attachPersona,
   clarifyGate,
   runLLM,
   postProcess,

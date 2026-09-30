@@ -69,10 +69,10 @@ test("private user-scoped server mounts use canonical auth without requiring ten
   }
 });
 
-test("provider callbacks and health checks remain intentionally public", () => {
+test("active provider callbacks and health checks remain intentionally public", () => {
   assert.match(serverSource, /app\.post\(\s*"\/api\/billing\/webhook",\s*express\.raw/);
   assert.match(serverSource, /app\.use\("\/api\/qbo\/webhooks", qboJobCostingWebhooksRouter\)/);
-  assert.match(serverSource, /app\.get\("\/api\/email\/callback", gmailOAuthCallback\)/);
+  assert.doesNotMatch(serverSource, /\/api\/email|gmailOAuthCallback/);
   assert.match(serverSource, /app\.get\("\/healthz", \(_req, res\) => res\.status\(200\)\.json/);
   assert.match(serverSource, /app\.get\("\/api\/integrations\/plaid\/_ping", \(_req, res\) =>/);
 });

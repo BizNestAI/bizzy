@@ -2,15 +2,13 @@
 // -----------------------------------------------------------------------------
 // Barrel for GPT middlewares used by the router. Order in the router:
 // normalizeRequest → attachIntent → attachContext → finalizeContext
-// → attachStyle → attachPersona → clarifyGate → runLLM → postProcess → finalize
+// → clarifyGate → runLLM → postProcess → finalize
 // -----------------------------------------------------------------------------
 
 // Re-export specialized middlewares (each lives in its own file)
 export { attachIntent }     from './attachIntent.js';
 export { attachContext }    from './attachContext.js';
 export { finalizeContext }  from './finalizeContext.js';
-export { attachStyle }      from './attachStyle.js';
-export { attachPersona }    from './attachPersona.js';
 export { clarifyGate }      from './clarifyGate.js';
 export { postProcess }      from './postProcess.js';
 export { runLLM }           from './runLLM.js';       // keep ONLY this, do not also define runLLM inline

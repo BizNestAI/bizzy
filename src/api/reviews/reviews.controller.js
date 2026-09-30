@@ -3,7 +3,7 @@ import { listReviewsQuery, statsQuery, replyBody, requestBody, csvImportBody } f
 import { listReviews, importCsvBase64, upsertNormalizedReviews } from './reviews.service.js';
 import { getReviewStats } from './reviewStats.service.js';
 import { buildReviewInsights } from './reviewInsights.service.js';
-import { sendOwnerReplyEmail } from '../../services/reviews/gmail.service.js';
+import { prepareReviewEmail } from '../../services/reviews/reviewEmail.service.js';
 import { buildReplyDraft } from './gpt/reviewDrafts.js';
 import { emitInsights } from '../../services/reviews/insightsBus.js';
 import { sendOk, sendErr } from '../_shared/apiResponder.js';
@@ -74,11 +74,10 @@ export const postReply = asyncHandler(async (req, res) => {
     rating: r.rating, themes: r.themes, body: r.body, author_name: r.author_name
   });
 
-  const send = await sendOwnerReplyEmail({
+  const send = await prepareReviewEmail({
     toEmail: r.author_email || 'no-reply@example.com',
     subject: `Reply from your contractor`,
     text: draft,
-    tokens: null,
   });
 
   const { error: upErr } = await req.supabase

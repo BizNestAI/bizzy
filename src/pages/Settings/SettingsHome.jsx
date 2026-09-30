@@ -480,7 +480,7 @@ useEffect(() => {
             />
             <div className="text-xs text-white/55 sm:max-w-[18rem]">
               <div>{dataMode !== "live" ? "Bizzi demo data is active." : "Live mode enabled."}</div>
-              <div>{dataMode !== "live" ? "Great for demos and testing." : "Connect QuickBooks, Gmail, Plaid, and more to populate your dashboards."}</div>
+              <div>{dataMode !== "live" ? "Great for demos and testing." : "Connect QuickBooks and Plaid to populate your financial dashboards."}</div>
             </div>
           </div>
         </div>
@@ -664,7 +664,6 @@ useEffect(() => {
                   subtitle="Bring in communications and social data."
                   icon={Mail}
                 >
-                  <IntegrationRow provider="gmail" manager={integrationManager} />
                   <IntegrationRow name="Slack" description="Team notifications and workflows." disabled />
                   <IntegrationRow provider="facebook" manager={integrationManager} />
                   <IntegrationRow provider="instagram" manager={integrationManager} />

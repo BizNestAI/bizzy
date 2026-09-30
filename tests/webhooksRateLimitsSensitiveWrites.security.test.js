@@ -16,7 +16,6 @@ const signupSource = readFileSync(join(root, "src/api/auth/signupConfirmation.ro
 const gptSource = readFileSync(join(root, "src/api/gpt/brain/gpt.routes.js"), "utf8");
 const plaidSource = readFileSync(join(root, "src/api/integrations/plaid.routes.js"), "utf8");
 const adminSource = readFileSync(join(root, "src/api/admin/monthlyReview.routes.js"), "utf8");
-const gmailAuthSource = readFileSync(join(root, "src/api/email/gmail.auth.js"), "utf8");
 const investmentsControllerSource = readFileSync(join(root, "src/api/investments/investments.controller.js"), "utf8");
 const jobsSource = readFileSync(join(root, "src/api/Jobs/jobs.routes.js"), "utf8");
 const insightsSource = readFileSync(join(root, "src/api/insights/insights.routes.js"), "utf8");
@@ -263,14 +262,6 @@ test("shared rate limiter rejects requests over the configured bucket limit", ()
   assert.equal(responses[0].statusCode, 429);
   assert.equal(responses[0].body.error, "test_limited");
   assert.equal(responses[0].headers["Retry-After"], "60");
-});
-
-test("Gmail OAuth state has no production default secret and enforces signed expiry checks", () => {
-  assert.match(gmailAuthSource, /process\.env\.NODE_ENV === 'production' \? '' : 'dev-state-secret'/);
-  assert.match(gmailAuthSource, /GMAIL_OAUTH_STATE_SECRET_REQUIRED/);
-  assert.match(gmailAuthSource, /crypto\.timingSafeEqual/);
-  assert.match(gmailAuthSource, /STATE_MAX_AGE_MS = 10 \* 60 \* 1000/);
-  assert.match(gmailAuthSource, /Date\.now\(\) - issuedAt > STATE_MAX_AGE_MS/);
 });
 
 test("internal monthly review admin does not trust self-editable user profile role", () => {

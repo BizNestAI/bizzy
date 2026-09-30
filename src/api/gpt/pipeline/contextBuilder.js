@@ -73,7 +73,7 @@ async function readRecentChat({ user_id, business_id, threadId = null, limit = 6
         content: String(m.content || '').slice(0, MAX_STRING),
       }))
       .filter((m) => !!m.content);
-  } catch (_e) {
+  } catch {
     // Fail-soft: no recent chat
     return [];
   }
@@ -83,7 +83,6 @@ export async function buildContext({
   user_id,
   business_id,
   intent,
-  message,
   hint,
   bundle = {},
   _supabase = supabase,
@@ -94,7 +93,6 @@ export async function buildContext({
   const threadId =
     hint?.threadId ??
     bundle?.threadId ??
-    bundle?.email?.threadId ??
     null;
 
   // Always-light recent chat (from gpt_messages only)
@@ -108,59 +106,7 @@ export async function buildContext({
 
   // Intent-scoped lightweight hints (no heavy joins here)
   switch (intent) {
-    // ===== Email (existing & new) =====
-    case 'email_summarize':
-    case 'email_reply':
-    case 'email_template': {
-      out.emailHint = {
-        message  : message || '',
-        threadId : hint?.threadId || bundle?.email?.threadId || null,
-        accountId: hint?.accountId || bundle?.email?.accountId || null,
-      };
-      break;
-    }
-    case 'email_search': {
-      out.emailHint = {
-        message    : message || '',
-        searchQuery: hint?.searchQuery || (message || ''),
-        accountId  : hint?.accountId || null,
-        fromEmail  : hint?.fromEmail  || null,
-        toEmail    : hint?.toEmail    || null,
-      };
-      break;
-    }
-    case 'email_extract_tasks': {
-      out.emailHint = {
-        message  : message || '',
-        threadId : hint?.threadId || bundle?.email?.threadId || null,
-        accountId: hint?.accountId || bundle?.email?.accountId || null,
-      };
-      break;
-    }
-    case 'email_followup': {
-      out.emailHint = {
-        message     : message || '',
-        threadId    : hint?.threadId || bundle?.email?.threadId || null,
-        accountId   : hint?.accountId || bundle?.email?.accountId || null,
-        followupDelay: hint?.followupDelay || null,
-      };
-      break;
-    }
-    case 'email_find_contact': {
-      out.emailHint = {
-        message    : message || '',
-        accountId  : hint?.accountId  || null,
-        fromEmail  : hint?.fromEmail  || null,
-        contactName: hint?.contactName|| null,
-      };
-      break;
-    }
-
     // ===== Other modules =====
-    case 'calendar_schedule': {
-      out.scheduleHint = message || '';
-      break;
-    }
     case 'affordability_check': {
       out.affordHint = hint || {};
       break;

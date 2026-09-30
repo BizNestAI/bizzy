@@ -7,7 +7,7 @@ const root = process.cwd();
 const source = readFileSync(join(root, "src/hooks/useOnboardingStatus.js"), "utf8");
 
 test("quick prompt mode cannot become normal solely from a local completed-once flag", () => {
-  const quickPromptModeBlock = source.match(/const quickPromptMode = useMemo\(\(\) => \{([\s\S]*?)\n  \}, \[/)?.[1] || "";
+  const quickPromptModeBlock = source.match(/const quickPromptMode = useMemo\(\(\) => \{([\s\S]*?)\n {2}\}, \[/)?.[1] || "";
   const integrationGateIndex = quickPromptModeBlock.indexOf('if (!state.qbConnected || !state.plaidConnected) return "onboarding";');
   const completedOnceIndex = quickPromptModeBlock.indexOf('if (state.onboardingCompletedOnce) return "normal";');
 
@@ -35,7 +35,8 @@ test("successful integration status checks clear stale local connection flags", 
 });
 
 test("business profile completion reads every field it evaluates", () => {
-  assert.match(source, /\.select\("id,business_name,industry,state,services_offered"\)/);
+  assert.match(source, /\.select\("id,business_name,industry,state"\)/);
+  assert.match(source, /profile\?\.business_name/);
+  assert.match(source, /profile\?\.industry/);
   assert.match(source, /profile\?\.state/);
-  assert.match(source, /profile\?\.services_offered/);
 });

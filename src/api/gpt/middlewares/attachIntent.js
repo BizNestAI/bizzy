@@ -2,8 +2,6 @@
 import { resolveIntent, ALL_INTENTS, getIntentModule } from '../registry/intentRegistry.js';
 
 // --- category sets for route bias (keep in sync with registry keys) ---
-const EMAIL = new Set(['email_summarize','email_reply','email_template',
-  'email_search','email_extract_tasks','email_followup','email_find_contact']);
 const FIN = new Set([
   'fin_variance_explain','forecast_generate','cash_runway','invoice_status',
   'expense_spike','job_profitability','pricing_strategy','fin_overview'
@@ -18,7 +16,7 @@ const INV = new Set([
   'retirement_projection','contribution_limit','rebalance_advice','inv_overview'
 ]);
 const OPS = new Set([
-  'job_status','lead_followup','agenda_range','calendar_schedule'
+  'job_status','lead_followup','agenda_range'
 ]);
 const DOCS = new Set(['doc_save','docs_find']);
 const BILLING = new Set(['billing_manage','settings_update','integrations_connect']);
@@ -27,7 +25,6 @@ const NAVHELP = new Set(['navigate','app_help']);
 // Resolve a coarse category from current path
 function routeCategory(path = '') {
   const p = String(path).toLowerCase();
-  if (/\/dashboard\/email/.test(p)) return 'email';
   if (/accounting|financials/.test(p)) return 'fin';
   if (/marketing/.test(p)) return 'mkt';
   if (/tax/.test(p)) return 'tax';
@@ -39,7 +36,6 @@ function routeCategory(path = '') {
 }
 function inCategory(key, cat) {
   if (!cat) return false;
-  if (cat === 'email') return EMAIL.has(key);
   if (cat === 'fin') return FIN.has(key);
   if (cat === 'tax') return TAX.has(key);
   if (cat === 'mkt') return MKT.has(key);
@@ -53,17 +49,9 @@ function inCategory(key, cat) {
 // Friendly label for clarifier options
 function labelForIntent(key) {
   const map = {
-    email_summarize: 'Summarize this email',
-    email_reply: 'Draft a reply',
-    email_template: 'Use an email template',
-    email_search: 'Search emails',
-    email_extract_tasks: 'Extract tasks from email',
-    email_followup: 'Schedule a follow-up',
-    email_find_contact: 'Find contact history',
     fin_variance_explain: 'Explain KPI change',
     forecast_generate: 'Generate forecast',
     cash_runway: 'Cash runway',
-    calendar_schedule: 'Schedule it',
     affordability_check: 'Affordability check',
     job_status: 'Jobs in progress',
     lead_followup: 'Lead follow-up',
@@ -131,18 +119,6 @@ export function attachIntent(req, _res, next) {
       if (/\b(forecast|projection)\b/.test(s) && c.key === 'forecast_generate') bonus += 0.2;
       if (/\b(tomorrow|next (7|seven) days|this week)\b/.test(s) && c.key === 'agenda_range') bonus += 0.1;
 
-      // Email nudges
-      if (/\b(tl;dr|summarize|summary|what.?s this about|what is this about)\b/.test(s) && c.key === 'email_summarize') bonus += 0.25;
-      if (/\b(reply|respond|write back|draft(?:\s+a)?\s+reply)\b/.test(s) && c.key === 'email_reply') bonus += 0.25;
-      if (/\b(template|payment reminder|estimate follow[- ]?up|scheduling(?:\s+email)?|follow[- ]?up)\b/.test(s) && c.key === 'email_template') bonus += 0.2;
-      if (/\b(search|find|show)\b/.test(s) && c.key === 'email_search') bonus += 0.25;
-      if (/\b(action items?|tasks?|todos?)\b/.test(s) && c.key === 'email_extract_tasks') bonus += 0.25;
-      if (/\bfollow[- ]?up\b/.test(s) && c.key === 'email_followup') bonus += 0.25;
-      if (/\b(last|recent)\b.*\b(from|with)\b/.test(s) && c.key === 'email_find_contact') bonus += 0.25;
-
-      // If the client includes thread/account hints, prefer email intents
-      if ((req.body?.threadId || req.body?.accountId) && EMAIL.has(c.key)) bonus += 0.2;
-
       c.score = c.base + bonus;
     }
 
@@ -182,7 +158,7 @@ export function attachIntent(req, _res, next) {
 
     req.bizzy.intentCandidates = candidates.slice(0, 5);
     next();
-  } catch (e) {
+  } catch {
     req.bizzy = req.bizzy || {};
     req.bizzy.intent = 'general';
     next();

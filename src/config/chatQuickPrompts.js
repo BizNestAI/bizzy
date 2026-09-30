@@ -1,26 +1,11 @@
-import { ONBOARDING_PROMPT_BANK } from "./onboardingPromptBank";
+import { ONBOARDING_PROMPTS as ONBOARDING_PROMPT_BANK } from "./onboardingPromptBank.js";
 
-// Show only a curated subset of onboarding prompts, while the full bank remains answerable.
-const ALLOWED_IDS = [
-  "setup_biz",
-  "sync_quickbooks_plaid",
-  "daily_use",
-  "bizzi_value",
-  "first_step",
-  "can_bizzi_take_actions",
-];
+// Exact pre-onboarding prompt order shared by desktop, mobile, and ChatCanvas.
+export const ONBOARDING_PROMPTS = ONBOARDING_PROMPT_BANK.map(
+  (entry) => entry.canonicalPrompt
+);
 
-// Optional label overrides for display (does not affect underlying answers).
-const LABEL_OVERRIDES = {
-  setup_biz: "How do I set up my business in Bizzi?",
-  sync_quickbooks_plaid: "How do I sync Plaid and QuickBooks?",
-};
-
-export const ONBOARDING_PROMPTS = ONBOARDING_PROMPT_BANK
-  .filter((entry) => ALLOWED_IDS.includes(entry?.id))
-  .map((entry) => LABEL_OVERRIDES[entry.id] || entry.canonicalPrompt)
-  .filter(Boolean);
-
+// Post-onboarding prompts are intentionally unchanged.
 export const NORMAL_PROMPTS = [
   "What are my top priorities this week?",
   "What’s changed in my business since last month?",

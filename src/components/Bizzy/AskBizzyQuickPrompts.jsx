@@ -28,8 +28,8 @@ const CURATED = {
   ],
   calendar: [
     { text: 'What’s on my agenda tomorrow?', tooltip: 'Pulls tomorrow’s events.' },
-    { text: 'Schedule a job review for Friday 9am', tooltip: 'Creates a calendar event.' },
-    { text: 'Add reminder to invoice the client next Monday', tooltip: 'Adds a calendar reminder.' },
+    { text: 'What needs my attention in my books?', tooltip: 'Reviews available bookkeeping context for issues that need attention.' },
+    { text: 'Draft a follow-up for an overdue invoice', tooltip: 'Prepares draft wording without sending it.' },
   ],
   general: [
     { text: 'What are my top priorities this week?', tooltip: 'AI-generated priority checklist.' },
