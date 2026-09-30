@@ -29,7 +29,7 @@ test("Admin View metrics GET is persisted-cache only before QBO or derived-data 
   assert.ok(adminBranch < metricsSource.indexOf('supabase.from("account_breakdown").upsert', adminBranch), "Admin View must branch before breakdown upsert");
   assert.ok(adminBranch < metricsSource.indexOf("upsertExpenseTotalsMonthly", adminBranch), "Admin View must branch before expense totals upsert");
   assert.ok(adminBranch < metricsSource.indexOf("generateFinancialPulseSnapshot", adminBranch), "Admin View must branch before pulse generation");
-  assert.ok(adminBranch < metricsSource.indexOf("generateSuggestedMoves", adminBranch), "Admin View must branch before moves generation");
+  assert.doesNotMatch(metricsSource, /generateSuggestedMoves|suggestedMovesEngine/);
   assert.match(metricsSource, /admin_view_cache_only: true/);
   assert.match(metricsSource, /sendAdminViewReadOnlyUnavailable\(res, \{ error: "admin_view_read_only_data_unavailable" \}\)/);
 });

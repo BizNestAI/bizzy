@@ -7,12 +7,6 @@ const AUTH_STORAGE_KEYS = [
   "bizzy:businessName",
   "bizzy:business_name",
   "bizzy:industry",
-  "bizzy:has_viewed_integrations_page",
-  "bizzy:visitedIntegrations",
-  "bizzy:force_onboarding_complete",
-  "bizzy:onboarding_completed_once",
-  "bizzy:qb_connected",
-  "bizzy:plaid_connected",
 ];
 
 export function clearStoredAuthAndBusinessState() {

@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -7,7 +8,6 @@ const root = process.cwd();
 const read = (path) => readFileSync(join(root, path), "utf8");
 
 const headlineSource = read("src/api/insights/headline.controller.js");
-const movesSource = read("src/api/gpt/suggestedMovesEngine.js");
 const pulseSource = read("src/api/insights/pulse.controller.js");
 const top3Source = read("src/api/insights/top3.controller.js");
 
@@ -23,24 +23,6 @@ test("Admin View headline GET returns cached headline or unavailable before gene
   assert.ok(adminBranch < controller.indexOf("getAccountingSnapshot(business_id)"), "Admin View must branch before internal metrics fetch");
   assert.ok(adminBranch < controller.indexOf("supabase.from('bizzy_headlines').insert"), "Admin View must branch before headline cache insert");
   assert.match(headlineSource, /sendAdminViewReadOnlyUnavailable\(res, \{ error: 'admin_view_read_only_data_unavailable' \}\)/);
-});
-
-test("Admin View accounting moves GET is persisted-only and ignores query user authority", () => {
-  const routeStart = movesSource.indexOf('router.get("/", async (req, res) =>');
-  const adminBranch = movesSource.indexOf("if (isAdminViewRequest(req))", routeStart);
-  assert.ok(routeStart > 0, "moves GET route must exist");
-  assert.ok(adminBranch > routeStart, "moves GET must branch for Admin View");
-  assert.match(
-    movesSource.slice(routeStart, adminBranch),
-    /const business_id = req\.tenantContext\?\.businessId \|\| req\.business\?\.id \|\| req\.auth\?\.businessId/
-  );
-  assert.match(movesSource.slice(routeStart, adminBranch), /\(\(!user_id && !isAdminViewRequest\(req\)\) \|\| !business_id\)/);
-  assert.ok(adminBranch < movesSource.indexOf("generateSuggestedMoves({", adminBranch), "Admin View must branch before suggested move generation");
-  assert.ok(adminBranch < movesSource.indexOf("buildMockMoves", adminBranch), "Admin View must branch before mock/default fabrication");
-  const adminBlock = movesSource.slice(adminBranch, movesSource.indexOf("// If specific month requested", adminBranch));
-  assert.match(adminBlock, /\.from\("financial_moves"\)/);
-  assert.match(adminBlock, /admin_view_cache_only: true/);
-  assert.doesNotMatch(adminBlock, /generateSuggestedMoves|OpenAI|upsert|insert|update|delete|getEmbedding/);
 });
 
 test("Admin View legacy insight pulse is blocked before internal metrics HTTP fetch", () => {

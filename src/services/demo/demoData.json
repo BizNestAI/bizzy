@@ -259,26 +259,6 @@
         "value": 3100
       }
     ],
-    "suggestedMoves": [
-      {
-        "title": "Collect on Hawthorne + Greenway invoices",
-        "rationale": "Follow up on the $6.5k past due before payroll hits.",
-        "timeframe": "Immediate",
-        "month": "Nov 2025"
-      },
-      {
-        "title": "Pre-buy tile for Elm St job",
-        "rationale": "Supplier discount disappears after Nov 20; save ~8%",
-        "timeframe": "This Week",
-        "month": "Nov 2025"
-      },
-      {
-        "title": "Shift 10% of ad spend to referrals",
-        "rationale": "Referral leads have 2x close rate and zero CAC.",
-        "timeframe": "This Month",
-        "month": "Nov 2025"
-      }
-    ],
     "pulse": {
       "revenueSummary": "Revenue is pacing $48.2k for November, +15% vs October from two kitchen projects.",
       "spendingTrend": "Labor is elevated the next 10 days while both crews overlap; materials normalize after the Elm St delivery.",

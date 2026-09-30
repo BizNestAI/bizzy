@@ -56,9 +56,8 @@ test("frontend no longer directly reads server-only integration credential table
   }
 });
 
-test("onboarding status uses backend integration status APIs instead of credential-table fallbacks", () => {
-  assert.match(onboardingSource, /\/auth\/status\?business_id=/);
-  assert.match(onboardingSource, /\/api\/integrations\/plaid\/status\?business_id=/);
+test("onboarding status uses one canonical backend status API instead of credential-table fallbacks", () => {
+  assert.match(onboardingSource, /\/api\/onboarding\/status\?business_id=/);
   assert.doesNotMatch(onboardingSource, /\.from\(\s*["']quickbooks_tokens["']\s*\)/);
   assert.doesNotMatch(onboardingSource, /\.from\(\s*["']plaid_items["']\s*\)/);
 });
@@ -76,7 +75,7 @@ test("QBO and Plaid status APIs are protected by canonical auth and tenant conte
   assert.match(qboAuthSource, /router\.get\("\/status", \.\.\.requireVerifiedBusiness/);
   assert.match(qboAuthSource, /const business_id = req\.business\?\.id \|\| req\.auth\?\.businessId \|\| null/);
 
-  assert.match(serverSource, /app\.use\("\/api\/integrations\/plaid", requireAuth, requireBusinessContext, plaidIntegrationsRouter\)/);
+  assert.match(serverSource, /app\.use\("\/api\/integrations\/plaid", \.\.\.requireCustomerOrAdminView, plaidIntegrationsRouter\)/);
   assert.match(plaidRoutesSource, /req\.business\?\.id/);
   assert.doesNotMatch(plaidRoutesSource, /b\.business_id|q\.business_id|h\["x-business-id"\]/);
 });
@@ -111,3 +110,4 @@ test("current onboarding foundation writes have moved behind backend authority",
   assert.match(businessServiceSource, /\.from\('business_profiles'\)[\s\S]*?\.update/);
   assert.doesNotMatch(read("src/pages/UserAdmin/BusinessWizard.jsx"), /\.from\('user_business_link'\)[\s\S]*?\.insert/);
 });
+/* global process */

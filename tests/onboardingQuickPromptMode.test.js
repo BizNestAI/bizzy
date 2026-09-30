@@ -6,37 +6,19 @@ import { join } from "node:path";
 const root = process.cwd();
 const source = readFileSync(join(root, "src/hooks/useOnboardingStatus.js"), "utf8");
 
-test("quick prompt mode cannot become normal solely from a local completed-once flag", () => {
+test("quick prompt mode uses only the canonical backend onboarding result", () => {
   const quickPromptModeBlock = source.match(/const quickPromptMode = useMemo\(\(\) => \{([\s\S]*?)\n {2}\}, \[/)?.[1] || "";
-  const integrationGateIndex = quickPromptModeBlock.indexOf('if (!state.qbConnected || !state.plaidConnected) return "onboarding";');
-  const completedOnceIndex = quickPromptModeBlock.indexOf('if (state.onboardingCompletedOnce) return "normal";');
-
-  assert.ok(integrationGateIndex >= 0, "quick prompt mode must gate on live QBO/Plaid connection state");
-  assert.ok(completedOnceIndex >= 0, "quick prompt mode may still honor completed-once after prerequisites");
-  assert.ok(
-    integrationGateIndex < completedOnceIndex,
-    "live QBO/Plaid prerequisites must be checked before completed-once can select normal prompts"
-  );
+  assert.match(quickPromptModeBlock, /state\.onboardingComplete/);
+  assert.doesNotMatch(quickPromptModeBlock, /onboardingCompletedOnce|hasViewedIntegrations|qbConnected|plaidConnected/);
 });
 
-test("successful integration status checks clear stale local connection flags", () => {
-  assert.match(
-    source,
-    /window\.localStorage\.setItem\(LOCAL_KEYS\.qbConnected, qbConnected \? "true" : "false"\)/
-  );
-  assert.match(
-    source,
-    /window\.localStorage\.setItem\(LOCAL_KEYS\.plaidConnected, plaidConnected \? "true" : "false"\)/
-  );
-  assert.doesNotMatch(
-    source,
-    /\n\s*plaidConnected = plaidConnected \|\| Boolean\(readLocalFlag\(LOCAL_KEYS\.plaidConnected\)\);\n\s*const profile =/
-  );
+test("frontend reads one canonical onboarding endpoint and stores no completion facts locally", () => {
+  assert.match(source, /\/api\/onboarding\/status\?business_id=/);
+  assert.doesNotMatch(source, /LOCAL_KEYS|localStorage\.setItem|hasViewedIntegrationsPage|onboardingCompletedOnce/);
 });
 
-test("business profile completion reads every field it evaluates", () => {
-  assert.match(source, /\.select\("id,business_name,industry,state"\)/);
-  assert.match(source, /profile\?\.business_name/);
-  assert.match(source, /profile\?\.industry/);
-  assert.match(source, /profile\?\.state/);
+test("business profile completion is not recomputed in the browser", () => {
+  assert.doesNotMatch(source, /\.from\("business_profiles"\)|profile\?\.business_name|profile\?\.industry|profile\?\.state/);
+  assert.match(source, /status\?\.business_profile_complete/);
 });
+/* global process */

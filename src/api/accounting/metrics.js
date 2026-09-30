@@ -1,4 +1,5 @@
 // File: /src/api/accounting/metrics.js
+/* global process */
 import express from "express";
 import OpenAI from "openai";
 
@@ -6,7 +7,6 @@ import {
   generateFinancialPulseSnapshot,
   shouldGenerateScheduledFinancialPulse,
 } from "./monthlyFinancialPulse.js";
-import { generateSuggestedMoves } from "../gpt/suggestedMovesEngine.js";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { upsertExpenseTotalsMonthly } from "../../services/expenseTotalsMonthly.js";
 import {
@@ -14,7 +14,6 @@ import {
   getMonthlyHealthSummary,
   listAvailableHealthMonths,
 } from "../../services/accounting/healthMonthlySnapshotService.js";
-import { getQBOClient } from "../../utils/qboClient.js";
 import { getQuickBooksAccessToken } from "../../services/quickbooksTokenService.js";
 import fetch from "node-fetch";
 import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
@@ -29,7 +28,6 @@ const LAST_QBO_FETCH = new Map(); // key => timestamp
 const router = express.Router();
 
 const ENV_MOCK = String(process.env.USE_MOCK_ACCOUNTING || "").toLowerCase() === "true";
-const MOCK_GEN = String(process.env.MOCK_GENERATE_MOVES || "").toLowerCase() === "true";
 const EMBED_ACCOUNTS = String(process.env.EMBED_ACCOUNTS || "").toLowerCase() === "true";
 
 // Latest available month helper for initializing period selection
@@ -142,7 +140,6 @@ const ymd = (d) => d.toISOString().split("T")[0];
 const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
 const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
 const prevMonthDate = (d) => new Date(d.getFullYear(), d.getMonth() - 1, 1);
-const normalizeMonth = (m) => /^\d{4}-\d{2}$/.test(m) ? `${m}-01` : m;
 function isCurrentMonth(date) {
   const now = new Date();
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
@@ -382,7 +379,7 @@ function accumulatePL(rows, acc = { income: 0, expense: 0, lines: [] }, header =
 }
 
 /** Build mock response (with optional background insights) */
-function buildMock({ user_id, business_id, today, generateInsights = MOCK_GEN }) {
+function buildMock({ user_id, business_id, today, generateInsights = false }) {
   const monthText = ymd(startOfMonth(today)); // e.g., "2025-09-01"
 
   const cur = {
@@ -421,15 +418,6 @@ function buildMock({ user_id, business_id, today, generateInsights = MOCK_GEN })
             month: monthText
           });
         }
-        await generateSuggestedMoves({
-          monthlyMetrics: cur,
-          priorMonthMetrics: prior,
-          forecastData: {},
-          userGoals: {},
-          businessContext: { business_id },
-          user_id,
-          month: monthText
-        });
       } catch (e) {
         console.warn("[metrics mock] insights failed:", e?.message || e);
       }
@@ -579,7 +567,6 @@ router.get("/", async (req, res) => {
   const prevStart = prevMonthDate(curStart);
   const prevEnd = endOfMonth(prevStart);
   const monthText = monthKeyFromParts(curStart.getFullYear(), curStart.getMonth() + 1);
-  const currentMonthText = monthKeyFromParts(new Date().getFullYear(), new Date().getMonth() + 1);
   const isCurrent = isCurrentMonth(curStart);
 
   if (isAdminViewRequest(req)) {
@@ -1129,22 +1116,6 @@ router.get("/", async (req, res) => {
             month: monthText
           }).catch(e => console.warn("[pulse] failed:", e?.message || e));
         }
-
-        await generateSuggestedMoves({
-          monthlyMetrics: {
-            total_revenue: totalRevenue,
-            total_expenses: totalExpenses,
-            net_profit: netProfit,
-            profit_margin: profitMargin,
-            top_spending_category: topExpenseName
-          },
-          priorMonthMetrics: prior || {},
-          forecastData: {},
-          userGoals: {},
-          businessContext: { business_id },
-          user_id,
-          month: monthText
-        }).catch(e => console.warn("[moves] failed:", e?.message || e));
 
       } catch (persistErr) {
         console.warn("[metrics persist async] error:", persistErr?.message || persistErr);

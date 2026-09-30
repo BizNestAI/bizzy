@@ -50,12 +50,11 @@ test("starting signup clears stale auth and business context first", () => {
   assert.match(authServiceSource, /Local stale auth\/business state has already been cleared\./);
   assert.match(cleanupSource, /"currentBusinessId"/);
   assert.match(cleanupSource, /"business_id"/);
-  assert.match(cleanupSource, /"bizzy:onboarding_completed_once"/);
-  assert.match(cleanupSource, /"bizzy:qb_connected"/);
-  assert.match(cleanupSource, /"bizzy:plaid_connected"/);
+  assert.doesNotMatch(cleanupSource, /onboarding_completed_once|qb_connected|plaid_connected|viewed_integrations/);
 });
 
 test("protected route auth failures use the shared stale-state cleanup", () => {
   assert.match(protectedRouteSource, /clearStoredAuthAndBusinessState\(\);/);
   assert.doesNotMatch(protectedRouteSource, /function clearStoredAuthState\(\)/);
 });
+/* global process */

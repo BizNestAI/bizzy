@@ -18,7 +18,6 @@ import { useSearchParams } from "react-router-dom";
 import useIntegrationManager, { INTEGRATION_META } from "../../hooks/useIntegrationManager";
 import { getDemoMode, setDemoMode, isTestingMode, setTestingMode } from "../../services/demo/demoClient.js";
 import { logout as performLogout } from "../../services/authService";
-import { markIntegrationsPageViewed } from "../../hooks/useOnboardingStatus";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import {
   getPlaidStatus,
@@ -161,7 +160,7 @@ export default function SettingsHome() {
   }, [searchParams, setSearchParams]);
   const [pendingIntegrationFocus, setPendingIntegrationFocus] = useState(null);
   const [dataMode, setDataMode] = useState(() => getDemoMode());
-  const [testingMode, setTestingModeState] = useState(() => isTestingMode());
+  const [, setTestingModeState] = useState(() => isTestingMode());
   const [modeUpdating, setModeUpdating] = useState(false);
   const [qbCompanyName, setQbCompanyName] = useState("");
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -170,7 +169,7 @@ export default function SettingsHome() {
 
   // Profile
   const [name, setName] = useState("");
-  const [email, setEmail] = useState(user?.email || "");
+  const [email] = useState(user?.email || "");
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState("");
   const [profileError, setProfileError] = useState("");
@@ -180,7 +179,6 @@ export default function SettingsHome() {
   const [savingBusiness, setSavingBusiness] = useState(false);
   const [bizSuccessMsg, setBizSuccessMsg] = useState("");
   const [bizErrorMsg, setBizErrorMsg] = useState("");
-  const hasMarkedIntegrationsRef = useRef(false);
   const plaidRefreshOnceRef = useRef(false);
 
   /* ---------------- Effects ---------------- */
@@ -347,7 +345,7 @@ export default function SettingsHome() {
     try {
       await performLogout();
       navigate("/login");
-    } catch (err) {
+    } catch {
       setLogoutError("Unable to log out. Please try again.");
       setLoggingOut(false);
     }
@@ -376,28 +374,6 @@ export default function SettingsHome() {
     }
     setPendingIntegrationFocus(null);
   }, [activeTab, pendingIntegrationFocus]);
-
-  useEffect(() => {
-    if (activeTab !== "Integrations") return;
-    if (!businessId || hasMarkedIntegrationsRef.current) return;
-    if (readOnly) return;
-    hasMarkedIntegrationsRef.current = true;
-    markIntegrationsPageViewed({ businessId }).finally(() => {
-      try {
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem("bizzy:has_viewed_integrations_page", "true");
-          window.localStorage.setItem("bizzy:visitedIntegrations", "true");
-        }
-      } catch {
-        /* ignore */
-      }
-      try {
-        window.dispatchEvent(new Event("bizzy:onboarding-flags-updated"));
-      } catch {
-        /* ignore */
-      }
-    });
-  }, [activeTab, businessId, readOnly]);
 
   // Fetch QuickBooks company name for display
   useEffect(() => {
@@ -490,7 +466,7 @@ useEffect(() => {
       <div className="mb-5">
         <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Settings tabs">
           <div className="flex flex-wrap gap-1.5 sm:gap-2">
-            {tabs.map(({ key, icon: Icon }) => {
+            {tabs.map(({ key }) => {
               const active = activeTab === key;
               return (
                 <button

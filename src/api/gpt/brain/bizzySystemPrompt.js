@@ -42,7 +42,6 @@ export function buildBizzySystemPrompt({
   businessProfile = null,
   monthlyMetrics = [],
   topAccounts = [],
-  moveSuggestions = [],
   forecastData = [],
   recentChat = [],
   affordHint,
@@ -61,6 +60,12 @@ export function buildBizzySystemPrompt({
   refreshedAt = '',
   userRequestedNavigation = false,
   userRequestedSave = false,
+  accountStatus = null,
+  financialSummary = null,
+  plaidSummary = null,
+  detailedContext = null,
+  normalizedPeriod = null,
+  loaderStatus = null,
 } = {}) {
   // ────────────────────────────────────────────────────────────────────────────
   // NO CONTEXT VARIANT: allow general knowledge (operator-first behavior)
@@ -118,9 +123,9 @@ export function buildBizzySystemPrompt({
 
   const bp = businessProfile || {};
   const bpLines = [
-    bp.name ? `- Business: ${bp.name}` : null,
+    (bp.name || bp.business_name) ? `- Business: ${bp.name || bp.business_name}` : null,
     bp.industry ? `- Industry: ${bp.industry}` : null,
-    bp.location ? `- Location: ${bp.location}` : null,
+    (bp.location || bp.state) ? `- Location: ${bp.location || bp.state}` : null,
     (bp.team_size || bp.team_size === 0) ? `- Team Size: ${bp.team_size}` : null,
   ]
     .filter(Boolean)
@@ -146,14 +151,6 @@ export function buildBizzySystemPrompt({
   const accountsLine =
     (Array.isArray(topAccounts) && topAccounts.length)
       ? `- Top Accounts: ${shortList(topAccounts, 3)}`
-      : null;
-
-  const movesBlock =
-    (Array.isArray(moveSuggestions) && moveSuggestions.length)
-      ? moveSuggestions
-          .slice(0, 3)
-          .map((m) => `- ${safeText(m.title)}: ${safeText(m.rationale)}`)
-          .join('\n')
       : null;
 
   const forecastBlock =
@@ -212,6 +209,10 @@ export function buildBizzySystemPrompt({
     'If unresolved bookkeeping materially affects the conclusion, say which conclusion may be distorted; otherwise omit generic data-quality caveats.',
     'Give the safe portion first, then ask the minimum clarifying questions needed; normally no more than two.',
     'Use concrete numbers and specific recommendations only when supported and useful.',
+    'Preserve metric semantics: revenue is not cash collected, revenue is not net income, bank balance is not profit, a Plaid balance is not a QuickBooks book balance, and an invoice amount is not collected cash.',
+    'When the user asks how much money they made, interpret it as revenue unless recent conversation clearly establishes another measure; identify that interpretation and include net income only when supplied.',
+    'Treat canonical account-status true, false, and unknown distinctly. Never call an integration disconnected when its status or status loader is unknown/error.',
+    'For a company-specific financial request: if the named integration is confirmed disconnected, name it; if it is connected but the relevant loader failed, say it is connected but the requested figures could not be retrieved right now; if the loader succeeded with no qualifying rows, say no qualifying data was found for the requested period; if data is stale, answer from it and state the cutoff.',
     'Resolve pronouns/typos using recent turns: if the last user/assistant message named a team/person/entity, assume follow-up pronouns or small misspellings refer to that same subject unless contradicted.',
   ].join(' ');
 
@@ -251,8 +252,6 @@ export function buildBizzySystemPrompt({
     metricLines ? '### Available Financial Snapshot\n' + metricLines : '',
     accountsLine ? '\n' + accountsLine : '',
     '',
-    movesBlock ? '### Suggested Financial Moves\n' + movesBlock : '',
-    '',
     forecastBlock ? '### Forecast Preview\n' + forecastBlock : '',
     '',
     bookkeepingBlock,
@@ -263,6 +262,13 @@ export function buildBizzySystemPrompt({
     webLimitBlock,
     '',
     taskHints.length ? '### Task Hints\n' + taskHints.join('\n') : '',
+    '',
+    accountStatus ? `### Account Status (canonical persisted facts)\n${JSON.stringify(accountStatus)}` : '',
+    financialSummary ? `### Financial Summary (bounded)\n${JSON.stringify(financialSummary)}` : '',
+    plaidSummary ? `### Plaid Balance Summary (cached; not QuickBooks book balance)\n${JSON.stringify(plaidSummary)}` : '',
+    normalizedPeriod ? `### Requested Period\n${JSON.stringify(normalizedPeriod)}` : '',
+    detailedContext ? `### Intent-Specific Context\n${JSON.stringify(detailedContext)}` : '',
+    loaderStatus ? `### Context Availability\n${JSON.stringify(loaderStatus)}` : '',
     '',
     '### Chat Artifacts & Save Suggestions',
     'Supported output contracts: ordinary advisory text; drafted text and checklists; P&L artifacts under the conditions below; navigation suggestions only when explicitly requested; and rare document-save suggestions. These outputs do not execute bookkeeping or external actions.',

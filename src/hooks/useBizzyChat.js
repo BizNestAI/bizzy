@@ -245,7 +245,7 @@ export const useBizzyChat = (user_id) => {
   const sendMessage = async (
     userInput,
     {
-      intent = 'general',
+      intent,
       depth = defaultDepthRef.current,
       context = null,
       business_id,
@@ -287,7 +287,7 @@ export const useBizzyChat = (user_id) => {
         business_id: bizId,
         data_mode: dataMode,
         message: trimmedInput,
-        intent,
+        ...(intent ? { intent } : {}),
         context: {
           ...(context || {}),
           userRequestedNavigation,

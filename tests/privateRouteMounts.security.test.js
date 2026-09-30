@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -14,7 +15,6 @@ const businessScopedMounts = [
   "/api/chats",
   "/api/accounting/metrics",
   "/api/accounting/pulse",
-  "/api/accounting/moves",
   "/api/accounting/expense-breakdown",
   "/api/accounting/revenue-series",
   "/api/accounting/profit-series",

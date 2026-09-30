@@ -73,7 +73,7 @@ test('post-onboarding business prompts and onboarding-state transition remain in
   const bar = read('src/components/Bizzy/BizzyChatBar.jsx');
   const canvas = read('src/components/Bizzy/ChatCanvasBar.jsx');
   const quickPromptUi = read('src/components/Bizzy/AskBizzyQuickPrompts.jsx');
-  assert.match(hook, /if \(state\.onboardingComplete\) return "normal"/);
+  assert.match(hook, /if \(state\.onboardingComplete !== false\) return "normal"/);
   assert.match(hook, /return "onboarding"/);
   assert.match(bar, /isOnboardingMode \? ONBOARDING_PROMPTS : quickPrompts/);
   assert.match(canvas, /isOnboardingMode \? ONBOARDING_PROMPTS : quickPrompts/);

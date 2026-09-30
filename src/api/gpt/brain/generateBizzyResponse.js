@@ -1,9 +1,9 @@
 // File: /src/api/gpt/generateBizzyResponse.js
+/* global process */
 import { supabase } from '../../../services/supabaseAdmin.js';
-import { qboEnvName } from '../../../utils/qboEnv.js';
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
-import { retrieveRelevantMemories, storeMemory } from './bizzyMemoryService.js';
+import { isOperationalMemory, retrieveRelevantMemories, storeMemory } from './bizzyMemoryService.js';
 import { buildBizzySystemMessages } from './bizzySystemPrompt.js';
 import { getEmbedding } from '../../../utils/openaiEmbedding.js';
 import { detectAffordabilityIntent, extractExpenseDetails } from '../affordabilityParser.js';
@@ -24,6 +24,8 @@ import {
   maybeLogMainChatCostWarning,
   recordMainChatUsage,
 } from './chatCostControls.js';
+import { buildChatContext } from '../orchestration/chatContextService.js';
+import { invokeBizzyChatCompletion } from './openaiInvocation.js';
 
 // 👉 NEW: demo-mode helpers
 import { isDemoMode, loadDemoData } from '../../../services/demo/loadDemoData.js';
@@ -31,7 +33,13 @@ import { isDemoMode, loadDemoData } from '../../../services/demo/loadDemoData.js
 const openaiKey = process.env.OPENAI_API_KEY || '';
 const openai = openaiKey ? new OpenAI({ apiKey: openaiKey }) : null;
 const BIZZY_CHAT_MODEL = process.env.BIZZY_GPT_MODEL || 'gpt-5.6-terra';
-const isGpt5Model = /^gpt-5/i.test(BIZZY_CHAT_MODEL || '');
+console.info('[bizzy-openai] configuration', {
+  configured: Boolean(openaiKey),
+  model: BIZZY_CHAT_MODEL,
+  invocation_method: 'chat.completions',
+  timeout_ms: 45_000,
+  max_retries: 1,
+});
 const FREE_CHAT_LIMIT = 2;
 const PAID_CHAT_LIMIT = 300;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -166,93 +174,6 @@ export async function getBizzyChatAccess({ user_id, business_id } = {}) {
   };
 }
 
-function flattenMessageContent(content) {
-  const chunks = Array.isArray(content) ? content : [content];
-  return chunks
-    .map((chunk) => {
-      if (typeof chunk === 'string') return chunk;
-      if (typeof chunk?.text === 'string') return chunk.text;
-      if (chunk?.text?.value) return chunk.text.value;
-      if (typeof chunk?.content === 'string') return chunk.content;
-      if (Array.isArray(chunk?.content)) return flattenMessageContent(chunk.content);
-      try {
-        return JSON.stringify(chunk ?? '');
-      } catch {
-        return String(chunk ?? '');
-      }
-    })
-    .join('\n');
-}
-
-function prepareResponsesInput(messages = []) {
-  const instructions = [];
-  const conversation = [];
-
-  messages.forEach((msg) => {
-    const role = sanitizeRole(msg.role);
-    const textBody = flattenMessageContent(msg.content);
-
-    if (!textBody) return;
-
-    if (role === 'system' || role === 'developer') {
-      instructions.push(textBody);
-      return;
-    }
-
-    conversation.push({
-      role,
-      content: [{ type: 'input_text', text: textBody }],
-    });
-  });
-
-  return {
-    instructions: instructions.join('\n\n'),
-    conversation,
-  };
-}
-
-function extractResponseText(resp) {
-  if (!resp) return '';
-
-  if (Array.isArray(resp.output_text) && resp.output_text.length) {
-    return resp.output_text.join('\n').trim();
-  }
-
-  const messageBlock = resp.output?.find((p) => p.type === 'message');
-  if (messageBlock?.content?.length) {
-    return messageBlock.content
-      .map((chunk) => {
-        if (!chunk) return '';
-        if (typeof chunk === 'string') return chunk;
-        if (chunk?.text && typeof chunk.text === 'string') return chunk.text;
-        if (chunk?.text?.value) return chunk.text.value;
-        return '';
-      })
-      .join('')
-      .trim();
-  }
-
-  const reasoning = resp.output?.find((p) => p.type === 'reasoning');
-  if (reasoning?.content?.length) {
-    const text = reasoning.content
-      .map((chunk) => chunk?.text || chunk?.text?.value || '')
-      .filter(Boolean)
-      .join('\n')
-      .trim();
-    if (text) return text;
-  }
-
-  const choice = resp.choices?.[0]?.message?.content;
-  if (typeof choice === 'string') return choice.trim();
-  if (Array.isArray(choice)) {
-    return choice
-      .map((c) => (typeof c === 'string' ? c : c?.text || ''))
-      .join('')
-      .trim();
-  }
-  return '';
-}
-
 const sanitizeRole = (r) => {
   const v = String(r || '').toLowerCase();
   if (v === 'bizzy') return 'assistant';
@@ -268,15 +189,19 @@ const WEB_LOOKUP_LIMIT = 20;
 const CHECKLIST_TEMPLATE = [
   { key: 'business_profile', label: 'Business profile' },
   { key: 'quickbooks', label: 'QuickBooks' },
+  { key: 'plaid', label: 'Plaid' },
 ];
 
-function buildOnboardingChecklist({ businessProfileComplete, qbConnected }) {
+function buildOnboardingChecklist({ businessProfileComplete, qbConnected, plaidConnected }) {
   return CHECKLIST_TEMPLATE.map((item) => {
     if (item.key === 'business_profile') {
       return { ...item, status: businessProfileComplete ? 'done' : 'pending' };
     }
     if (item.key === 'quickbooks') {
       return { ...item, status: qbConnected ? 'done' : 'pending' };
+    }
+    if (item.key === 'plaid') {
+      return { ...item, status: plaidConnected ? 'done' : 'pending' };
     }
     return { ...item, status: 'pending' };
   });
@@ -291,7 +216,7 @@ function formatChecklistText(items = []) {
     .join('\n');
 }
 
-function needsWebLookup(message, intent) {
+function needsWebLookup(message) {
   const text = String(message || '').toLowerCase();
   const businessGuard = /\b(cash flow|quickbooks|invoice|invoices|ar|accounts receivable|ap|payables|job|crew|marketing|ad spend|tax|forecast|kpi|profit|revenue|expenses|payroll|vendor|invoice)\b/;
   if (businessGuard.test(text)) return false;
@@ -322,8 +247,6 @@ function demoBusinessProfileFromSnapshot(demoData) {
     name,
     industry: 'Remodeling and home services',
     team_size: null,
-    has_viewed_integrations_page: true,
-    onboarding_completed_once: true,
   };
 }
 
@@ -331,7 +254,6 @@ function resetLiveFinancialContext(bundle) {
   [
     'kpis',
     'forecast',
-    'moves',
     'accounts',
     'bookkeepingHealth',
     'metricHint',
@@ -383,14 +305,6 @@ function applyDemoContext(bundle, demoData) {
       }]
     : [];
 
-  bundle.moves = Array.isArray(fin?.suggestedMoves)
-    ? fin.suggestedMoves.map((move) => ({
-        title: move?.title || '',
-        rationale: [move?.rationale, move?.timeframe].filter(Boolean).join(' '),
-        month: move?.month || monthTag,
-      })).filter((move) => move.title)
-    : [];
-
   if (Array.isArray(fin?.unpaidCustomers)) {
     const jobLookup = new Map(
       (demoData?.jobs?.topUnpaid || []).map((job) => [job.external_id || job.id, job.title || job.name || ''])
@@ -433,9 +347,10 @@ export async function generateBizzyResponse({
   const requestedDataMode = normalizeDataMode(dataMode);
   const effectiveDemoMode = requestedDataMode === 'demo' || (requestedDataMode !== 'live' && isDemoMode());
   console.log('[gpt] start', { user_id, threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode, demoMode: effectiveDemoMode });
+  const requestId = randomUUID();
   const llmInvocation = {
     requested_model: BIZZY_CHAT_MODEL,
-    method: isGpt5Model ? 'responses' : 'chat.completions',
+    method: 'chat.completions',
   };
   let responseArtifacts = [];
   let responseActions = [];
@@ -469,7 +384,6 @@ export async function generateBizzyResponse({
     // Usage soft cap (unchanged)
     console.log('[gpt] usage-check ok');
     const currentMonth = getCurrentUsageMonth();
-    let usageRow = null;
     try {
       const { data: usageData } = await supabase
         .from('gpt_usage')
@@ -477,7 +391,6 @@ export async function generateBizzyResponse({
         .eq('user_id', user_id)
         .eq('month', currentMonth)
         .maybeSingle();
-      usageRow = usageData || null;
       const currentCount = usageData?.query_count || 0;
       if (currentCount >= 300) {
         return {
@@ -487,7 +400,9 @@ export async function generateBizzyResponse({
           followUpPrompt: '',
         };
       }
-    } catch {}
+    } catch {
+      // Usage lookup is best-effort; the handler-level billing gate remains authoritative.
+    }
 
     // Resolve business id (unchanged)
     console.log('[gpt] business resolved', { businessId: businessIdFromHandler });
@@ -495,8 +410,6 @@ export async function generateBizzyResponse({
     let businessProfile = null;
     let bookkeepingHealth = null;
     let businessProfileComplete = false;
-    let hasViewedIntegrationsPage = false;
-    let onboardingCompletedOnce = false;
     let qbConnected = false;
     let plaidConnected = false;
 
@@ -524,41 +437,21 @@ export async function generateBizzyResponse({
         businessProfile = bp || null;
         businessId = bp?.id || null;
       }
-    } catch {}
-
-    const profileName = businessProfile?.business_name || businessProfile?.name || '';
-    businessProfileComplete = Boolean(profileName && businessProfile?.industry);
-    hasViewedIntegrationsPage = false;
-    onboardingCompletedOnce = false;
-    if (effectiveDemoMode) {
-      businessProfileComplete = true;
-      hasViewedIntegrationsPage = true;
-      onboardingCompletedOnce = true;
-      qbConnected = true;
-      plaidConnected = true;
+    } catch {
+      // The canonical context normally supplies this profile; preserve graceful degradation.
     }
 
-    if (!effectiveDemoMode && businessId) {
-      try {
-        const { data: qbRow } = await supabase
-          .from('quickbooks_tokens')
-          .select('business_id')
-          .eq('business_id', businessId)
-          .eq('qbo_env', qboEnvName)
-          .eq('is_active', true)
-          .eq('status', 'active')
-          .maybeSingle();
-        qbConnected = !!qbRow;
-      } catch {}
-
-      try {
-        const { count } = await supabase
-          .from('plaid_items')
-          .select('plaid_item_id', { count: 'exact', head: true })
-          .eq('business_id', businessId)
-          .eq('is_active', true);
-        plaidConnected = (count || 0) > 0;
-      } catch {}
+    const profileName = businessProfile?.business_name || businessProfile?.name || '';
+    businessProfileComplete = Boolean(profileName && businessProfile?.industry && businessProfile?.state);
+    const canonicalAccountStatus = bundle.chatContext?.account_status || null;
+    if (effectiveDemoMode) {
+      businessProfileComplete = true;
+      qbConnected = true;
+      plaidConnected = true;
+    } else if (canonicalAccountStatus) {
+      businessProfileComplete = canonicalAccountStatus.business_profile_complete;
+      qbConnected = canonicalAccountStatus.quickbooks_connected;
+      plaidConnected = canonicalAccountStatus.plaid_connected;
     }
 
     // Fetch bookkeeping health snapshot to inform coaching behaviors
@@ -574,21 +467,19 @@ export async function generateBizzyResponse({
     }
 
     // Onboarding controls (unchanged)
-    const onboardingComplete =
-      businessProfileComplete &&
-      qbConnected &&
-      plaidConnected &&
-      hasViewedIntegrationsPage;
-    const onboardingModeActive = onboardingCompletedOnce ? false : !onboardingComplete;
-    const onboardingChecklist = buildOnboardingChecklist({ businessProfileComplete, qbConnected });
+    const onboardingComplete = effectiveDemoMode ? true : canonicalAccountStatus?.onboarded;
+    const onboardingModeActive = onboardingComplete === false;
+    const onboardingChecklist = buildOnboardingChecklist({ businessProfileComplete, qbConnected, plaidConnected });
     const onboardingHintId =
       parsedInput?.onboardingPromptId ||
       parsedInput?.context?.onboardingPromptId ||
       parsedInput?.meta?.onboardingPromptId ||
       parsedInput?.meta?.context?.onboardingPromptId ||
       null;
-    const onboardingMatch = identifyOnboardingPrompt(message, onboardingHintId);
-    const showOnboardingTone = onboardingModeActive || !!onboardingMatch;
+    const onboardingMatch = onboardingModeActive ? identifyOnboardingPrompt(message, onboardingHintId) : null;
+    // Onboarding guidance is scoped to an approved onboarding prompt. Ordinary
+    // questions always retain the normal chat contract, even before onboarding.
+    const showOnboardingTone = onboardingModeActive && !!onboardingMatch;
     const checklistText = formatChecklistText(onboardingChecklist);
     const onboardingToneBlock = showOnboardingTone ? buildOnboardingToneBlock(onboardingMatch?.title || null) : null;
     const onboardingGuide = onboardingMatch ? buildOnboardingGuide(onboardingMatch, { checklist: checklistText }) : null;
@@ -599,12 +490,11 @@ export async function generateBizzyResponse({
     const onboardingMeta = {
       active: showOnboardingTone,
       promptId: onboardingMatch?.id || null,
-      completedOnce: onboardingCompletedOnce,
       checklist: onboardingChecklist,
       profileComplete: businessProfileComplete,
       qbConnected,
       plaidConnected,
-      hasViewedIntegrationsPage,
+      status: canonicalAccountStatus?.status || (effectiveDemoMode ? 'known' : 'unknown'),
     };
     bundle.onboardingPromptId = onboardingMatch?.id || onboardingHintId || null;
     bundle.onboardingChecklist = onboardingChecklist;
@@ -627,12 +517,23 @@ export async function generateBizzyResponse({
     // ───────────────────────────────────────────────
 
     // Support data fetches (unchanged)
-    const needKPIs     = !Array.isArray(bundle.kpis)     || bundle.kpis.length === 0;
-    const needForecast = !Array.isArray(bundle.forecast) || bundle.forecast.length === 0;
-    const needMoves    = !Array.isArray(bundle.moves)    || bundle.moves.length === 0;
+    const summaryRows = [
+      ...(bundle.chatContext?.financial_summary?.previous_12_completed_months || []),
+      ...(bundle.chatContext?.financial_summary?.current_month ? [bundle.chatContext.financial_summary.current_month] : []),
+    ];
+    if (!Array.isArray(bundle.kpis) || bundle.kpis.length === 0) {
+      bundle.kpis = summaryRows.map((row) => ({
+        month: row.month,
+        total_revenue: row.revenue,
+        total_expenses: row.expenses,
+        net_profit: row.net_income,
+        profit_margin: row.profit_margin,
+      })).reverse();
+    }
+    const needKPIs = !Array.isArray(bundle.kpis) || bundle.kpis.length === 0;
 
     const supportPromises = [];
-    if (!effectiveDemoMode && businessId && (needKPIs || needForecast || needMoves)) {
+    if (!effectiveDemoMode && businessId && needKPIs) {
       if (needKPIs) {
         supportPromises.push(
           supabase
@@ -642,28 +543,6 @@ export async function generateBizzyResponse({
             .order('month', { ascending: false })
             .limit(3)
             .then(({ data }) => ({ kpis: data || [] }))
-        );
-      }
-      if (needForecast) {
-        supportPromises.push(
-          supabase
-            .from('cashflow_forecast')
-            .select('month,cash_in,cash_out,net_cash')
-            .eq('business_id', businessId)
-            .order('month', { ascending: true })
-            .limit(6)
-            .then(({ data }) => ({ forecast: data || [] }))
-        );
-      }
-      if (needMoves) {
-        supportPromises.push(
-          supabase
-            .from('financial_moves')
-            .select('*')
-            .eq('business_id', businessId)
-            .order('month', { ascending: false })
-            .limit(3)
-            .then(({ data }) => ({ moves: data || [] }))
         );
       }
     }
@@ -677,8 +556,7 @@ export async function generateBizzyResponse({
     }
 
     const kpis     = Array.isArray(bundle.kpis) && bundle.kpis.length ? bundle.kpis : (mergedSupport.kpis || []);
-    const forecast = Array.isArray(bundle.forecast) && bundle.forecast.length ? bundle.forecast : (mergedSupport.forecast || []);
-    const moves    = Array.isArray(bundle.moves) && bundle.moves.length ? bundle.moves : (mergedSupport.moves || []);
+    const forecast = intent === 'forecast_generate' ? (bundle.chatContext?.intent_context?.data || []) : [];
     let recentChat = Array.isArray(bundle.recentChat) ? bundle.recentChat : [];
     let recentChatSummary = '';
 
@@ -687,13 +565,15 @@ export async function generateBizzyResponse({
       try {
         const { data: recentMsgs } = await supabase
           .from('gpt_messages')
-          .select('role, content')
+          .select('role, content, message_kind')
           .eq('thread_id', threadId)
+          .eq('message_kind', 'conversation')
           .order('created_at', { ascending: false })
           .limit(12);
         if (Array.isArray(recentMsgs) && recentMsgs.length) {
-          recentChat = recentMsgs.slice(0, 6);
-          const older = recentMsgs.slice(6);
+          const safeRecentMessages = recentMsgs.filter((row) => !isOperationalMemory({ bizzy_response: row.content }));
+          recentChat = safeRecentMessages.slice(0, 6);
+          const older = safeRecentMessages.slice(6);
           if (older.length) {
             const cleaned = older
               .map((m) => {
@@ -715,29 +595,27 @@ export async function generateBizzyResponse({
     let memoryContext = '';
     try {
       if (!effectiveDemoMode) {
-        const memorySnippets = await retrieveRelevantMemories(user_id, message);
+        const memorySnippets = await retrieveRelevantMemories(user_id, businessId, message);
         memoryContext = memorySnippets?.length
           ? `Context from past Bizzi conversations:\n${memorySnippets.map((m) => m.summary).join('\n')}`
           : '';
       }
-    } catch {}
+    } catch {
+      // Conversation memory is optional context.
+    }
 
     if (recentChatSummary) {
       memoryContext += `\n\nRecent conversation summary (older turns): ${recentChatSummary}`;
     }
 
-    if (kpis?.length) {
+    if (kpis?.length && !bundle.chatContext?.financial_summary) {
       const r = kpis[0];
       memoryContext += `\n\nRecent financial summary:\nRevenue $${r.total_revenue} • Expenses $${r.total_expenses} • Net Profit $${r.net_profit} • Margin ${r.profit_margin}% • Top spend: ${r.top_spending_category}.`;
-    }
-    if (moves?.length) {
-      const previewList = moves.map((m) => `- ${m.title}: ${m.rationale}`).join('\n');
-      memoryContext += `\n\nSuggested Financial Moves:\n${previewList}`;
     }
 
     // Web lookup (unchanged)
     const forceSportsLookup = false; // keep existing heuristics if you need
-    const wantsWebLookup = needsWebLookup(message, intent) || forceSportsLookup;
+    const wantsWebLookup = needsWebLookup(message) || forceSportsLookup;
     webNotConfigured = wantsWebLookup && !hasWebKey;
     if (wantsWebLookup) {
       console.log('[webLookup] intent', { wantsWebLookup, hasWebKey, webNotConfigured });
@@ -773,7 +651,7 @@ export async function generateBizzyResponse({
 `;
     }
 
-    const hasContext = !!(businessProfile || kpis?.length || forecast?.length || moves?.length || demoData);
+    const hasContext = !!(businessProfile || kpis?.length || forecast?.length || bundle.chatContext || demoData);
 
     const bookkeepingNote =
       bookkeepingHealth?.uncategorized_count > 0
@@ -781,20 +659,19 @@ export async function generateBizzyResponse({
         : '';
 
     // Build the canonical advisory chat system messages.
-    const { systemMessages: personaAndStyle } = buildBizzySystemMessages(
-      {
+    let personaAndStyle;
+    try {
+      ({ systemMessages: personaAndStyle } = buildBizzySystemMessages({
         intent,
         module: intentToModule(intent),
         prompt: message,
         surface: 'chat',
-      },
-      {
+      }, {
         hasContext,
         memoryContext,
         businessProfile,
-        monthlyMetrics: kpis,
+        monthlyMetrics: bundle.chatContext?.financial_summary ? [] : kpis,
         topAccounts: bundle.accounts || [],
-        moveSuggestions: moves,
         forecastData: forecast,
         recentChat,
         affordHint: bundle.affordHint,
@@ -813,8 +690,38 @@ export async function generateBizzyResponse({
         webNotConfigured,
         userRequestedNavigation: allowNavigationActions,
         userRequestedSave: !!bundle.userRequestedSave,
-      }
-    );
+        accountStatus: bundle.chatContext?.account_status || null,
+        financialSummary: bundle.chatContext?.financial_summary || null,
+        plaidSummary: bundle.chatContext?.plaid_summary || null,
+        detailedContext: bundle.chatContext?.intent_context || null,
+        normalizedPeriod: bundle.chatContext?.period || null,
+        loaderStatus: bundle.chatContext?.loader_status || null,
+      }));
+    } catch (compilationError) {
+      console.error('[gpt] prompt compilation failed', {
+        request_id: requestId,
+        business_id: businessId,
+        intent,
+        period: bundle.chatContext?.period || null,
+        error_class: 'prompt_compilation_failure',
+        message: compilationError?.message || String(compilationError),
+      });
+      return {
+        responseText: 'I’m having trouble generating a response right now. Your QuickBooks and Plaid connections may still be working.',
+        artifacts: [],
+        actions: [],
+        doc_suggestion: null,
+        suggestedActions: [],
+        followUpPrompt: '',
+        meta: {
+          error: 'prompt_compilation_failed',
+          operational_error: true,
+          request_id: requestId,
+          intent,
+          thread_id: threadId || null,
+        },
+      };
+    }
 
     const chatHistoryFormatted =
       Array.isArray(recentChat) && recentChat.length
@@ -870,8 +777,8 @@ export async function generateBizzyResponse({
     }
 
     let bizzyReply = null;
-    let lastResponseDebug = null;
     let openaiUsageTelemetry = null;
+    let operationalError = false;
     const scriptedOnboardingReply = onboardingMatch?.response?.trim() || null;
 
     if (scriptedOnboardingReply) {
@@ -880,36 +787,30 @@ export async function generateBizzyResponse({
       llmInvocation.reason = 'scripted_onboarding_prompt';
     } else {
       console.log('[gpt] calling LLM');
-      try {
-        if (openai) {
-          const completion = await openai.chat.completions.create({
-            model: BIZZY_CHAT_MODEL,
-            messages,
-            temperature: 0.7,
-            max_completion_tokens: 1400,
-          });
-          llmInvocation.actual_model = completion?.model || null;
-          llmInvocation.api = 'chat.completions';
-          openaiUsageTelemetry = buildMainChatUsageTelemetry(completion, BIZZY_CHAT_MODEL);
-          bizzyReply = completion?.choices?.[0]?.message?.content?.trim() || null;
-        }
-      } catch (e) {
-        console.error('[OpenAI] completion failed:', e?.message || e);
+      const invocation = await invokeBizzyChatCompletion({ client: openai, model: BIZZY_CHAT_MODEL, messages });
+      llmInvocation.actual_model = invocation.response?.model || null;
+      llmInvocation.api = 'chat.completions';
+      llmInvocation.diagnostic = invocation.diagnostic;
+      openaiUsageTelemetry = invocation.response ? buildMainChatUsageTelemetry(invocation.response, BIZZY_CHAT_MODEL) : null;
+      bizzyReply = invocation.content;
+      if (!invocation.ok) {
+        operationalError = true;
+        console.error('[OpenAI] chat unavailable', {
+          request_id: requestId,
+          business_id: businessId,
+          intent,
+          period: bundle.chatContext?.period || null,
+          model: BIZZY_CHAT_MODEL,
+          invocation_method: 'chat.completions',
+          context_loader_availability: bundle.chatContext?.loader_status || null,
+          ...invocation.diagnostic,
+        });
       }
     }
 
     if (!bizzyReply) {
-      if (isGpt5Model && lastResponseDebug) {
-        const snippet = JSON.stringify(lastResponseDebug, null, 2).slice(0, 1800);
-        bizzyReply = [
-          'GPT-5 Responses returned an empty message. Share this payload snippet with OpenAI support:',
-          '```json',
-          snippet,
-          '```',
-        ].join('\n');
-      } else {
-        bizzyReply = `I received your message, but I’m missing enough context to give you a reliable answer. Connecting QuickBooks and completing your business profile will give chat better financial context.`;
-      }
+      operationalError = true;
+      bizzyReply = 'I’m having trouble generating a response right now. Your QuickBooks and Plaid connections may still be working.';
     }
 
     const structured = parseStructuredResponse(bizzyReply, { allowNavigation: allowNavigationActions });
@@ -928,7 +829,7 @@ export async function generateBizzyResponse({
 
       const [uVec, aVec] = await Promise.allSettled([
         getEmbedding(userEmbeddingText),
-        getEmbedding(bizzyEmbeddingText),
+        operationalError ? Promise.resolve(null) : getEmbedding(bizzyEmbeddingText),
       ]);
 
       const userEmb = normalizeVec(uVec);
@@ -948,6 +849,7 @@ export async function generateBizzyResponse({
             created_at    : nowIso,
             embedding_text: userEmb ? userEmbeddingText : null,
             embedding     : userEmb,
+            message_kind  : 'conversation',
           },
           {
             thread_id     : localThreadId,
@@ -956,8 +858,9 @@ export async function generateBizzyResponse({
             role          : 'assistant',
             content       : bizzyReply,
             created_at    : nowIso,
-            embedding_text: asstEmb ? bizzyEmbeddingText : null,
+            embedding_text: operationalError ? null : (asstEmb ? bizzyEmbeddingText : null),
             embedding     : asstEmb,
+            message_kind  : operationalError ? 'operational_error' : 'conversation',
           },
         ])
         .select('id,thread_id,role');
@@ -984,22 +887,27 @@ export async function generateBizzyResponse({
     console.log('[gpt] storing memory');
     // Memory (unchanged)
     try {
-      const memoryTags = [intent || 'general'];
-      if (onboardingMatch) {
-        memoryTags.unshift('onboarding_help');
+      if (!operationalError) {
+        const memoryTags = [intent || 'general'];
+        if (onboardingMatch) {
+          memoryTags.unshift('onboarding_help');
+        }
+        await storeMemory({
+          user_id,
+          business_id: businessId,
+          input_text: message,
+          bizzy_response: bizzyReply,
+          tags: memoryTags,
+          kpis: kpis?.length ? {
+            revenue_ytd: kpis[0]?.total_revenue || 0,
+            margin_pct : kpis[0]?.profit_margin || 0,
+            top_expense_categories: kpis[0]?.top_spending_category ? [kpis[0].month ? `${kpis[0].top_spending_category}` : kpis[0].top_spending_category] : [],
+          } : null,
+        });
       }
-      await storeMemory({
-        user_id,
-        input_text: message,
-        bizzy_response: bizzyReply,
-        tags: memoryTags,
-        kpis: kpis?.length ? {
-          revenue_ytd: kpis[0]?.total_revenue || 0,
-          margin_pct : kpis[0]?.profit_margin || 0,
-          top_expense_categories: kpis[0]?.top_spending_category ? [kpis[0].month ? `${kpis[0].top_spending_category}` : kpis[0].top_spending_category] : [],
-        } : null,
-      });
-    } catch {}
+    } catch {
+      // Memory persistence must not fail the user-facing response.
+    }
 
     const formattedReply = formatBizzyMarkdown(bizzyReply);
 
@@ -1024,10 +932,12 @@ export async function generateBizzyResponse({
         onboarding: onboardingMeta,
         onboarding_actions: onboardingSuggestedActions,
         onboarding_mode_active: showOnboardingTone,
+        operational_error: operationalError,
+        request_id: requestId,
         ...(webContext ? { web_context_preview: webContext.slice(0, 200) } : {}),
       },
       internalTelemetry: {
-        request_id: randomUUID(),
+        request_id: requestId,
         openai_usage: openaiUsageTelemetry || {
           model: scriptedOnboardingReply ? 'scripted_onboarding_prompt' : BIZZY_CHAT_MODEL,
           input_tokens: 0,
@@ -1064,7 +974,7 @@ export async function generateBizzyResponseHandler(req, res) {
 
     const bundle    = req.bizzy?.contextBundle || {};
     const clientCtx = req.body?.context || req.body?.parsedInput || {};
-    const parsedInput = { ...bundle, ...clientCtx };
+    let parsedInput = { ...bundle, ...clientCtx };
 
     const incomingThreadId = req.body?.thread_id || null;
     const business_id = req.business?.id || req.auth?.businessId || null;
@@ -1119,17 +1029,47 @@ export async function generateBizzyResponseHandler(req, res) {
       }
     }
 
+    let orchestration;
+    try {
+      orchestration = await buildChatContext({
+        businessId: business_id,
+        message,
+        forcedIntent: normalizedType,
+        db: supabase,
+      });
+    } catch (contextError) {
+      const requestId = randomUUID();
+      console.error('[gpt handler] context compilation failed', {
+        request_id: requestId,
+        business_id,
+        error_class: 'context_compilation_failure',
+        message: contextError?.message || String(contextError),
+      });
+      return res.status(503).json({
+        responseText: 'I’m having trouble generating a response right now. Your QuickBooks and Plaid connections may still be working.',
+        artifacts: [],
+        actions: [],
+        doc_suggestion: null,
+        suggestedActions: [],
+        followUpPrompt: '',
+        error: 'context_compilation_failed',
+        meta: { operational_error: true, request_id: requestId, thread_id: incomingThreadId || null },
+      });
+    }
+    parsedInput = { ...parsedInput, chatContext: orchestration };
+    const resolvedType = orchestration.intent;
+
     if (!threadIdToUse && business_id) {
       try {
         const fallbackTitle = (req.body?.message || '').slice(0, 60) || 'New conversation';
-        const module = intentToModule(normalizedType || 'general');
+        const module = intentToModule(resolvedType || 'general');
         const { data: created } = await supabase
           .from('gpt_threads')
           .insert({
             user_id,
             business_id: business_id,
             title: fallbackTitle,
-            first_intent: normalizedType || 'general',
+            first_intent: resolvedType || 'general',
             module,
           })
           .select('id,title')
@@ -1138,13 +1078,15 @@ export async function generateBizzyResponseHandler(req, res) {
           threadIdToUse     = created.id;
           fallbackTitleUsed = created.title || fallbackTitle;
         }
-      } catch {}
+      } catch {
+        // Core response generation can create the thread if this best-effort step fails.
+      }
     }
 
     const result = await generateBizzyResponse({
       user_id,
       message,
-      type: normalizedType,
+      type: resolvedType,
       parsedInput,
       threadId: threadIdToUse || null,
       business_id,
@@ -1154,7 +1096,7 @@ export async function generateBizzyResponseHandler(req, res) {
 
     publicResult.meta = {
       ...(publicResult.meta || {}),
-      intent: normalizedType || publicResult.meta?.intent || 'general',
+      intent: resolvedType || publicResult.meta?.intent || 'general',
       thread_id: threadIdToUse || publicResult.meta?.thread_id || null,
     };
 
@@ -1182,7 +1124,9 @@ export async function generateBizzyResponseHandler(req, res) {
           }
         }
       }
-    } catch {}
+    } catch {
+      // Auto-title is optional and must not fail the completed chat turn.
+    }
 
     try {
       if (!publicResult?.meta?.error && user_id) {
