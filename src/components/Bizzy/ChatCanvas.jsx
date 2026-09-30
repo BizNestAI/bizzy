@@ -50,44 +50,6 @@ function getMsgTime(m) {
   return 0;
 }
 
-function chunkWords(str = "") {
-  if (!str) return [{ text: "", atomic: true }];
-
-  const splitWordsPreserveWhitespace = (line = "") => {
-    const parts = [];
-    let cursor = 0;
-    while (cursor < line.length && /\s/.test(line[cursor])) cursor += 1;
-    if (cursor > 0) parts.push({ text: line.slice(0, cursor), atomic: false });
-    const wordRegex = /\S+\s*/g;
-    wordRegex.lastIndex = cursor;
-    let match;
-    while ((match = wordRegex.exec(line))) {
-      parts.push({ text: match[0], atomic: false });
-      cursor = wordRegex.lastIndex;
-    }
-    if (cursor < line.length) parts.push({ text: line.slice(cursor), atomic: false });
-    return parts;
-  };
-
-  const chunks = [];
-  const lines = str.split("\n");
-  lines.forEach((line, idx) => {
-    const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
-    if (listMatch) {
-      const [, indent, marker, rest] = listMatch;
-      chunks.push({ text: `${indent}${marker} `, atomic: true });
-      if (rest) chunks.push(...splitWordsPreserveWhitespace(rest));
-    } else if (line.length === 0) {
-      chunks.push({ text: "", atomic: true });
-    } else {
-      chunks.push(...splitWordsPreserveWhitespace(line));
-    }
-    if (idx < lines.length - 1) chunks.push({ text: "\n", atomic: true });
-  });
-
-  return chunks.length ? chunks : [{ text: "", atomic: true }];
-}
-
 function hideDanglingMarkdownMarkers(str = "") {
   if (!str) return "";
 
@@ -152,17 +114,18 @@ function truncateForFollowups(text = "", max = 600, mode = "tail") {
 }
 
 /* ---------------- typewriter ---------------- */
-const REVEAL_LEAD_IN_CHARS = 180;
-const REVEAL_MAX_DURATION_MS = 2600;
-const REVEAL_TARGET_CHUNK_FRAMES = 48;
+const REVEAL_MAX_DURATION_MS = 3200;
+const PUNCTUATION_COST = /[.!?]/;
+const SOFT_PAUSE_COST = /[,;:]/;
 
-function getBurstSize(totalLength = 0) {
-  if (totalLength <= REVEAL_LEAD_IN_CHARS) return 1;
-  const remaining = Math.max(0, totalLength - REVEAL_LEAD_IN_CHARS);
-  return Math.max(2, Math.ceil(remaining / REVEAL_TARGET_CHUNK_FRAMES));
+function revealCost(char = "") {
+  if (char === "\n") return 3.2;
+  if (PUNCTUATION_COST.test(char)) return 3.8;
+  if (SOFT_PAUSE_COST.test(char)) return 2.1;
+  return 1;
 }
 
-function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
+function Typewriter({ id, text = "", speed = 110, onDone, onProgress }) {
   const [typingDone, setTypingDone] = useState(false);
   const [shown, setShown] = useState("");
   const iRef = useRef(0);
@@ -177,10 +140,7 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
     onDoneRef.current = onDone;
     onProgressRef.current = onProgress;
   }, [onDone, onProgress]);
-  const chunkRef = useRef([]);
-  const chunkCostsRef = useRef([]);
   const budgetRef = useRef(0);
-  const visibleCharCountRef = useRef(0);
   useEffect(() => {
     setTypingDone(false);
   }, [id, text]);
@@ -191,25 +151,22 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
     setShown("");
     lastTsRef.current = 0;
     budgetRef.current = 0;
-    visibleCharCountRef.current = 0;
     finishedRef.current = false;
-    const chunks = chunkWords(textRef.current);
-    chunkRef.current = chunks;
-    chunkCostsRef.current = chunks.map(({ text }) => {
-      const trimmed = text.replace(/\s+/g, "");
-      const cost = trimmed.length || text.length || 1;
-      return Math.max(1, cost);
-    });
 
-    const renderPartial = () => {
-      const idx = iRef.current;
-      const chunks = chunkRef.current;
-      const costs = chunkCostsRef.current;
-      if (idx >= chunks.length) return;
-      const base = chunks.slice(0, idx).map((c) => c.text).join("");
-      visibleCharCountRef.current = base.length;
-      setShown(base);
+    const finish = () => {
+      setShown(textRef.current);
+      if (finishedRef.current) return;
+      finishedRef.current = true;
+      onProgressRef.current?.(1);
+      onDoneRef.current?.();
+      setTypingDone(true);
     };
+
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    if (reducedMotion || !textRef.current) {
+      rafRef.current = requestAnimationFrame(finish);
+      return () => cancelAnimationFrame(rafRef.current || 0);
+    }
 
     const loop = (ts) => {
       if (!lastTsRef.current) lastTsRef.current = ts;
@@ -217,36 +174,21 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
       lastTsRef.current = ts;
 
       const totalLength = textRef.current.length;
-      const burstSize = getBurstSize(totalLength);
-      const leadInComplete = visibleCharCountRef.current >= Math.min(REVEAL_LEAD_IN_CHARS, totalLength);
-      const revealSpeed = leadInComplete
-        ? Math.max(speed * burstSize, totalLength / (REVEAL_MAX_DURATION_MS / 1000))
-        : speed;
+      const revealSpeed = Math.max(speed, totalLength / (REVEAL_MAX_DURATION_MS / 1000));
       budgetRef.current += revealSpeed * dt;
-      while (
-        iRef.current < chunkRef.current.length &&
-        budgetRef.current >= chunkCostsRef.current[iRef.current]
-      ) {
-        budgetRef.current -= chunkCostsRef.current[iRef.current];
+      while (iRef.current < totalLength) {
+        const cost = revealCost(textRef.current[iRef.current]);
+        if (budgetRef.current < cost) break;
+        budgetRef.current -= cost;
         iRef.current += 1;
-        const nextText = chunkRef.current.slice(0, iRef.current).map((c) => c.text).join("");
-        visibleCharCountRef.current = nextText.length;
-        setShown(nextText);
-        onProgressRef.current?.(
-          textRef.current.length ? nextText.length / textRef.current.length : 1
-        );
       }
-      if (iRef.current < chunkRef.current.length) {
-        renderPartial();
+      const nextText = textRef.current.slice(0, iRef.current);
+      setShown(nextText);
+      onProgressRef.current?.(totalLength ? iRef.current / totalLength : 1);
+      if (iRef.current < totalLength) {
         rafRef.current = requestAnimationFrame(loop);
       } else {
-        setShown(textRef.current);
-        if (!finishedRef.current) {
-          finishedRef.current = true;
-          onProgressRef.current?.(1);
-          onDoneRef.current?.();
-          setTypingDone(true);
-        }
+        finish();
       }
     };
 
@@ -693,6 +635,7 @@ function MessageStream({
 
   // Track the last assistant tail we've animated so it doesn't replay
   const lastAnimatedTailKeyRef = useRef(null);
+  const arrivalAnimationDoneRef = useRef(new Set());
   const handleFollowupClick = useCallback(
     async (text) => {
       const prompt = (text || "").trim();
@@ -1354,13 +1297,14 @@ function MessageStream({
 
           // Animate any newly arrived tail assistant after the latest user.
           // Reopened historical threads are pre-marked above so they do not replay.
+          const explicitlyFresh =
+            m.animateOnArrival === true && !arrivalAnimationDoneRef.current.has(key);
           const shouldAnimate =
             isTailAssistant &&
             hasAssistantAfterLastUser &&
             lastAnimatedTailKeyRef.current !== key &&
             !alreadyAnimated &&
-            !reopenBlockRef.current &&
-            !threadJustOpenedRef.current;
+            (explicitlyFresh || (!reopenBlockRef.current && !threadJustOpenedRef.current));
 
           if (shouldAnimate) {
             stickToBottomRef.current = false;
@@ -1395,6 +1339,7 @@ function MessageStream({
                     if (el) el.scrollTop = el.scrollHeight;
                     stickToBottomRef.current = false;
                     animatedRef.current.add(key);
+                    arrivalAnimationDoneRef.current.add(key);
                     lastAnimatedTailKeyRef.current = key;
                     freshQueryRef.current = false;
                     markTypewriterDone(key);
@@ -1527,7 +1472,7 @@ function AssistantRow({
         <Typewriter
           id={id}
           text={text}
-          speed={95}
+          speed={110}
           onProgress={onProgress}
           onDone={() => {
             setIsReady(true);

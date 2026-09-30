@@ -227,6 +227,9 @@ export const useBizzyChat = (user_id) => {
         id: Date.now() + 1,
         sender: 'assistant',
         text: incomingText || 'No response generated.',
+        // Runtime-only signal: every newly received reply should animate, even
+        // when a scripted response returns before thread-open effects settle.
+        animateOnArrival: true,
         artifacts,
         actions,
         doc_suggestion: docSuggestion,
