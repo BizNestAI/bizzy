@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, Image as ImageIcon, Link2, Mic, PanelRightOpen, Plus, RefreshCcw, Trash2, Upload, UploadCloud, Wand2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, Image as ImageIcon, Link2, Mic, Plus, RefreshCcw, Trash2, Upload, UploadCloud, Wand2, X } from "lucide-react";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 import { getJobsTopUnpaid, getArStatus } from "../../services/jobs/jobs";
 import { getDemoJobsTopUnpaid } from "./jobsMockData.js";
@@ -2575,7 +2575,6 @@ function JobBucketCard({
   onDragLeave,
   onDrop,
   onViewAssigned,
-  onOpenRevenueDetail,
   onRetrySummary,
   onMarkComplete,
   onReopenJob,
@@ -2598,13 +2597,12 @@ function JobBucketCard({
   const displayTone = jobBucketStatus(job, target);
   const manualWithoutRevenue = isManualBizziJob(job) && !hasCanonicalRevenueSummary(job);
   const revenueUnavailableLabel = manualWithoutRevenue ? "No revenue source yet" : basis.refreshingLabel;
-  const revenueActionLabel = manualWithoutRevenue ? "Detail" : basis.retryLabel;
   const trend = getMarginTrend(job);
   const marginBar = Number.isFinite(marginValue) ? Math.max(0, Math.min(100, marginValue)) : 0;
   const assignedCount = getJobDocumentCount(job) || job.assigned_transaction_count || job.transactions?.length || 0;
   const assignedTransactionCount = Number(job.assigned_transaction_count ?? (Array.isArray(job.transactions) ? job.transactions.length : 0)) || 0;
   const canShowRevertCandidateJob = !completed && onRevertCandidateJob && isSuggestedCandidateJob(job) && assignedTransactionCount <= 0;
-  const canDeleteManualJob = !completed && onDeleteJob && isManualBizziJob(job);
+  const canDeleteJobBucket = !completed && Boolean(onDeleteJob);
   const openChangeOrderCount = Number(job.open_change_order_count || 0);
   const approvedChangeOrderValue = Number(job.approved_change_order_value ?? job.change_order_approved_revenue ?? job.change_order_revenue ?? 0) || 0;
   const completedDate = job.completed_at || job.completedAt || job.end_date || job.endDate || null;
@@ -2673,18 +2671,19 @@ function JobBucketCard({
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
           <div className="truncate text-[9px] font-medium text-white/36">{revenueAvailable ? `Margin based on ${basis.label.toLowerCase()}` : revenueUnavailableLabel}</div>
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (revenueAvailable) onOpenRevenueDetail?.(job);
-              else onRetrySummary?.();
-            }}
-            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.035] px-1.5 py-0.5 text-[9px] font-semibold text-white/48 transition hover:border-emerald-300/25 hover:bg-emerald-300/[0.08] hover:text-emerald-50"
-          >
-            <PanelRightOpen className="h-2.5 w-2.5" />
-            {revenueAvailable ? "Detail" : revenueActionLabel}
-          </button>
+          {!revenueAvailable && !manualWithoutRevenue ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRetrySummary?.();
+              }}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.035] px-1.5 py-0.5 text-[9px] font-semibold text-white/48 transition hover:border-emerald-300/25 hover:bg-emerald-300/[0.08] hover:text-emerald-50"
+            >
+              <RefreshCcw className="h-2.5 w-2.5" />
+              {basis.retryLabel}
+            </button>
+          ) : null}
         </div>
       </div>
       {reviewWarning ? (
@@ -2742,7 +2741,7 @@ function JobBucketCard({
             {revertingCandidateJob ? "Moving..." : "Back to Suggested"}
           </button>
         ) : null}
-        {canDeleteManualJob ? (
+        {canDeleteJobBucket ? (
           <button
             type="button"
             onClick={(event) => {
@@ -2750,11 +2749,11 @@ function JobBucketCard({
               onDeleteJob(job);
             }}
             disabled={deletingJob}
-            title="Delete this manually created job."
-            className="inline-flex items-center gap-1.5 rounded-full border border-rose-300/20 bg-rose-300/[0.07] px-2.5 py-1 text-[11px] font-semibold text-rose-50 transition hover:border-rose-300/40 hover:bg-rose-300/[0.12] disabled:opacity-50"
+            aria-label={`Delete ${job.jobName || "job"} bucket`}
+            title="Delete job bucket and return its transactions to Posted Transactions."
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-rose-300/20 bg-rose-300/[0.07] text-rose-50 transition hover:border-rose-300/40 hover:bg-rose-300/[0.12] disabled:opacity-50"
           >
-            <Trash2 className="h-3 w-3" />
-            {deletingJob ? "Deleting..." : "Delete"}
+            <Trash2 className={`h-3.5 w-3.5 ${deletingJob ? "animate-pulse" : ""}`} />
           </button>
         ) : null}
         {onMarkComplete && !completed ? (
@@ -3073,7 +3072,6 @@ function JobAssignmentBoard({
   onAssignClick,
   onDragEnd,
   onViewAssigned,
-  onOpenRevenueDetail,
   onRetrySummary,
   onMarkComplete,
   onReopenJob,
@@ -3467,7 +3465,6 @@ function JobAssignmentBoard({
                     onDragLeave={onDragLeaveJob}
                     onDrop={onDropOnJob}
                     onViewAssigned={onViewAssigned}
-                    onOpenRevenueDetail={onOpenRevenueDetail}
                     onRetrySummary={onRetrySummary}
                     onMarkComplete={assignmentDisabled ? null : onMarkComplete}
                     onReopenJob={assignmentDisabled ? onReopenJob : null}
@@ -6411,7 +6408,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const creatingManualJobRef = useRef(false);
   const [deletingJobId, setDeletingJobId] = useState("");
   const [importJobsOpen, setImportJobsOpen] = useState(false);
-  const [revenueDrawerJob, setRevenueDrawerJob] = useState(null);
   const [projectsCapability, setProjectsCapability] = useState(() => initialLiveCache?.projectsCapability || null);
   const [importJobsLoading, setImportJobsLoading] = useState(false);
   const [assignmentImpactPreview, setAssignmentImpactPreview] = useState(null);
@@ -7251,17 +7247,26 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     setAssignmentError("");
     setAssignmentMessage("");
     const previousJobs = jobs;
+    const previousTransactions = transactions;
     const previousSelectedJob = selectedJob;
     try {
       const nextJobs = jobs.filter((item) => String(getLocalJobId(item)) !== jobId);
+      const nextTransactions = transactions.map((transaction) => {
+        const assignmentRows = Array.isArray(transaction.assignment_rows) ? transaction.assignment_rows : [];
+        const remainingRows = assignmentRows.filter((row) => String(row?.job_id || "") !== jobId);
+        if (remainingRows.length !== assignmentRows.length || String(transaction.job_id || "") === jobId) {
+          return hydrateDemoAssignmentMetadata(transaction, remainingRows);
+        }
+        return transaction;
+      });
       setJobs(nextJobs);
-      writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
+      setTransactions(nextTransactions);
+      writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs, transactions: nextTransactions });
       if (getLocalJobId(selectedJob) && String(getLocalJobId(selectedJob)) === jobId) setSelectedJob(null);
       if (usingDemo) {
-        setAssignmentMessage(`${getJobDisplayName(job)} deleted.`);
         return;
       }
-      const data = await safeFetch(apiUrl(`/api/job-costing/jobs/${encodeURIComponent(jobId)}/manual`), {
+      const data = await safeFetch(apiUrl(`/api/job-costing/jobs/${encodeURIComponent(jobId)}`), {
         method: "DELETE",
         body: { business_id: businessId },
       });
@@ -7279,19 +7284,19 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           transactionTotal: Number(data?.transactions_total ?? data?.total_count ?? data.transactions.length) || data.transactions.length,
         });
       }
-      setAssignmentMessage(`${getJobDisplayName(job)} deleted.`);
       void loadJobCosting();
     } catch (e) {
       pendingDeletedJobIdsRef.current.delete(jobId);
       setJobs(previousJobs);
-      writeJobCostingLiveCache(businessId, readOnly, { jobs: previousJobs });
+      setTransactions(previousTransactions);
+      writeJobCostingLiveCache(businessId, readOnly, { jobs: previousJobs, transactions: previousTransactions });
       setSelectedJob(previousSelectedJob || null);
       setAssignmentError(e?.message || "Could not delete job.");
     } finally {
       pendingDeletedJobIdsRef.current.delete(jobId);
       setDeletingJobId("");
     }
-  }, [businessId, deletingJobId, jobs, loadJobCosting, readOnly, selectedJob, usingDemo]);
+  }, [businessId, deletingJobId, jobs, loadJobCosting, readOnly, selectedJob, transactions, usingDemo]);
 
   const syncQboProjects = useCallback(async () => {
     setImportJobsLoading(true);
@@ -7957,7 +7962,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             onDropOnJob={handleDropOnJob}
             onAssignClick={openAssignmentPicker}
             onViewAssigned={setViewAssignedJob}
-            onOpenRevenueDetail={setRevenueDrawerJob}
             onRetrySummary={loadJobCosting}
             onMarkComplete={markJobComplete}
             onReopenJob={reopenJob}
@@ -8187,7 +8191,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             removingId={removingAssignmentId}
           />
         ) : null}
-        <RevenueDetailDrawer job={revenueDrawerJob} onClose={() => setRevenueDrawerJob(null)} />
         <AddJobDrawer
           open={addJobOpen}
           onClose={() => setAddJobOpen(false)}

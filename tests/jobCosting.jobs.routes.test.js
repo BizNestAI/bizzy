@@ -874,6 +874,31 @@ describe("job costing jobs routes", () => {
     assert.equal(mockSupabase.store.jobs[0].archived_at, undefined);
   });
 
+  test("job bucket deletion archives a synced bucket and returns its assignments to Posted Transactions", async () => {
+    mockSupabase.store.jobs = [
+      { id: "qbo-job-delete-1", business_id: BUSINESS_ID, job_name: "Synced QBO Job", creation_method: "qbo_project", source_type: "quickbooks", status: "active" },
+    ];
+    mockSupabase.store.job_transaction_assignments = [
+      { id: "assignment-qbo-job", business_id: BUSINESS_ID, job_id: "qbo-job-delete-1", transaction_id: TXN_ID },
+    ];
+    seedConfirmedRows(mockSupabase, [
+      makeRpcPostedRow({ id: TXN_ID, qboId: "qbo-delete-1", assigned: true }),
+    ]);
+
+    const response = await request(app, "/api/job-costing/jobs/qbo-job-delete-1", {
+      method: "DELETE",
+      body: {},
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.deleted_job_id, "qbo-job-delete-1");
+    assert.equal(response.body.released_assignment_count, 1);
+    assert.equal(mockSupabase.store.job_transaction_assignments.length, 0);
+    assert.equal(mockSupabase.store.jobs[0].status, "archived");
+    assert.equal(response.body.jobs.some((job) => job.id === "qbo-job-delete-1"), false);
+    assert.equal(response.body.transactions.some((txn) => txn.id === TXN_ID), true);
+  });
+
   test("jobs summary excludes archived jobs from active and completed counts", async () => {
     mockSupabase.store.jobs = [
       { id: "active-job", business_id: BUSINESS_ID, job_name: "Active", status: "active", source_type: "manual", creation_method: "manual" },

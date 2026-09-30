@@ -849,7 +849,7 @@ export function isManualJobRecord(job = {}) {
   );
 }
 
-export async function deleteManualJob({ businessId, jobId, db = defaultSupabase } = {}) {
+export async function deleteManualJob({ businessId, jobId, db = defaultSupabase, allowAnyJob = false } = {}) {
   if (!businessId || !jobId) throw new Error("businessId and jobId are required");
 
   let { data: job, error: jobError } = await db
@@ -880,7 +880,7 @@ export async function deleteManualJob({ businessId, jobId, db = defaultSupabase 
 
   const localJobId = job.id;
 
-  if (!isManualJobRecord(job)) {
+  if (!allowAnyJob && !isManualJobRecord(job)) {
     const unsupported = new Error("Only manually created jobs can be deleted.");
     unsupported.status = 400;
     unsupported.code = "job_delete_not_supported";

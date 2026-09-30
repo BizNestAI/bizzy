@@ -556,6 +556,18 @@ test("assigned transaction detail modal is viewport-centered in a blurred docume
   assert.match(css, /\[data-job-costing-detail-dialog\]\.bizzy-modal-main-backdrop\s*\{[\s\S]*left:\s*0\s*!important;[\s\S]*width:\s*100vw;[\s\S]*backdrop-filter:\s*blur\(14px\)/);
 });
 
+test("job bucket cards no longer expose the unused revenue Detail drawer", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const cardStart = source.indexOf("function JobBucketCard");
+  const cardEnd = source.indexOf("function CandidateBucketCard", cardStart);
+  const cardSource = source.slice(cardStart, cardEnd);
+
+  assert.equal(cardSource.includes("onOpenRevenueDetail"), false);
+  assert.equal(cardSource.includes('revenueAvailable ? "Detail"'), false);
+  assert.equal(source.includes("revenueDrawerJob"), false);
+  assert.equal(source.includes("onOpenRevenueDetail={setRevenueDrawerJob}"), false);
+});
+
 test("Add Job opens in a dashboard-centered animated modal without Trade Type", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const modalStart = source.indexOf("function JobCostingModal({");
@@ -591,7 +603,7 @@ test("Add Job opens in a dashboard-centered animated modal without Trade Type", 
   assert.equal(addJobSource.includes("trade_type"), false);
 });
 
-test("Manual Job buckets expose guarded delete and create handlers", async () => {
+test("active Job buckets expose icon-only delete and create handlers", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const cardStart = source.indexOf("function JobBucketCard({");
   const cardEnd = source.indexOf("function ChangeOrderOverview", cardStart);
@@ -607,15 +619,15 @@ test("Manual Job buckets expose guarded delete and create handlers", async () =>
   assert.equal(source.includes("function isManualBizziJob"), true);
   assert.equal(source.includes("job.can_delete_manual_job === true || job.can_delete_job === true || job.is_manual_job === true"), true);
   assert.equal(source.includes('sourceType === "bizzi"'), true);
-  assert.equal(cardSource.includes("canDeleteManualJob"), true);
-  assert.equal(cardSource.includes("isManualBizziJob(job);"), true);
+  assert.equal(cardSource.includes("canDeleteJobBucket"), true);
+  assert.equal(cardSource.includes("!completed && Boolean(onDeleteJob)"), true);
   assert.equal(cardSource.includes("isSuggestedCandidateJob(job) && assignedTransactionCount <= 0"), true);
   assert.equal(cardSource.includes('"No revenue source yet"'), true);
   assert.equal(source.includes('emptyManualJob ? "New" : "Revenue Needed"'), true);
   assert.equal(source.includes('"Revenue Needed"'), true);
   assert.equal(cardSource.includes("<Trash2"), true);
-  assert.equal(cardSource.includes('Delete this manually created job.'), true);
-  assert.equal(cardSource.includes('{deletingJob ? "Deleting..." : "Delete"}'), true);
+  assert.equal(cardSource.includes('Delete job bucket and return its transactions to Posted Transactions.'), true);
+  assert.equal(cardSource.includes('aria-label={`Delete ${job.jobName || "job"} bucket`}'), true);
   assert.equal(pageSource.includes("setTransactions(data.transactions)"), true);
   assert.equal(pageSource.includes("creatingManualJobRef.current"), true);
   assert.equal(pageSource.includes("optimistic-manual-job"), true);
@@ -624,6 +636,8 @@ test("Manual Job buckets expose guarded delete and create handlers", async () =>
   assert.equal(pageSource.includes("getLocalJobId(job)"), true);
   assert.equal(pageSource.includes("setSelectedJob(previousSelectedJob || null)"), true);
   assert.equal(pageSource.includes('method: "DELETE"'), true);
+  assert.equal(pageSource.includes("hydrateDemoAssignmentMetadata(transaction, remainingRows)"), true);
+  assert.equal(pageSource.includes("setTransactions(previousTransactions)"), true);
 });
 
 test("Job Costing dashboard filters archived and deleted jobs from summary and cache payloads", async () => {

@@ -2886,6 +2886,25 @@ async function handleManualJobDelete(req, res) {
   }
 }
 
+async function handleJobBucketDelete(req, res) {
+  try {
+    const businessId = ensureBusinessId(req, res);
+    if (!businessId) return;
+    const jobId = req.params?.jobId;
+    if (!jobId) return res.status(400).json({ ok: false, error: "job_id_required", message: "Job ID is required." });
+    const result = await deleteManualJob({ businessId, jobId, allowAnyJob: true });
+    const refreshed = await fetchJobCostingRows(businessId);
+    return res.json({ ...result, ...refreshed });
+  } catch (e) {
+    console.error("[job-costing.job-bucket-delete]", e);
+    res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.code || "job_bucket_delete_failed",
+      message: e?.message || "Failed to delete the job bucket.",
+    });
+  }
+}
+
 router.get("/assignment-history", requireRouteAuth, handleAssignmentHistory);
 router.post("/assignment-preview", requireRouteAuth, handleAssignmentPreview);
 router.post("/assignments/confirm", requireRouteAuth, handleAssignmentConfirm);
@@ -2942,6 +2961,8 @@ router.post("/jobs/manual", requireRouteAuth, handleManualJobCreate);
 router.post("/job-costing/jobs/manual", requireRouteAuth, handleManualJobCreate);
 router.delete("/jobs/:jobId/manual", requireRouteAuth, handleManualJobDelete);
 router.delete("/job-costing/jobs/:jobId/manual", requireRouteAuth, handleManualJobDelete);
+router.delete("/jobs/:jobId", requireRouteAuth, handleJobBucketDelete);
+router.delete("/job-costing/jobs/:jobId", requireRouteAuth, handleJobBucketDelete);
 router.post("/qbo/job-costing/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
 router.post("/job-costing/qbo/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
 router.post("/qbo/job-costing/backfill", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
