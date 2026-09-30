@@ -1303,8 +1303,10 @@ function MessageStream({
             isTailAssistant &&
             hasAssistantAfterLastUser &&
             lastAnimatedTailKeyRef.current !== key &&
-            !alreadyAnimated &&
-            (explicitlyFresh || (!reopenBlockRef.current && !threadJustOpenedRef.current));
+            (
+              explicitlyFresh ||
+              (!alreadyAnimated && !reopenBlockRef.current && !threadJustOpenedRef.current)
+            );
 
           if (shouldAnimate) {
             stickToBottomRef.current = false;

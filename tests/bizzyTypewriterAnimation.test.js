@@ -16,8 +16,19 @@ test('scripted fast replies bypass thread-open timing guards without replaying l
   const canvas = read('src/components/Bizzy/ChatCanvas.jsx');
 
   assert.match(canvas, /m\.animateOnArrival === true && !arrivalAnimationDoneRef\.current\.has\(key\)/);
-  assert.match(canvas, /explicitlyFresh \|\| \(!reopenBlockRef\.current && !threadJustOpenedRef\.current\)/);
+  assert.match(
+    canvas,
+    /explicitlyFresh \|\|\s*\(!alreadyAnimated && !reopenBlockRef\.current && !threadJustOpenedRef\.current\)/
+  );
   assert.match(canvas, /arrivalAnimationDoneRef\.current\.add\(key\)/);
+});
+
+test('fresh replies override the new-thread premark that previously made onboarding answers static', () => {
+  const canvas = read('src/components/Bizzy/ChatCanvas.jsx');
+  const animationDecision = canvas.match(/const shouldAnimate =([\s\S]*?);\n\s*if \(shouldAnimate\)/)?.[1] || '';
+
+  assert.match(animationDecision, /explicitlyFresh \|\|/);
+  assert.doesNotMatch(animationDecision, /!alreadyAnimated &&\s*\(\s*explicitlyFresh/);
 });
 
 test('typewriter uses frame-paced character bursts with punctuation pauses and reduced-motion support', () => {
