@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { buildMockTaxFixture } from "../../services/demo/mockTaxFixture.js";
+import { resolveScopedDeductionsRequestStatus } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import {
   bulkUpdateTaxClassifications,
   confirmTaxClassification,
@@ -60,10 +61,17 @@ export function useTaxDeductions({
   const [refreshError, setRefreshError] = useState(null);
   const [error, setError] = useState(null);
   const [resourceErrors, setResourceErrors] = useState({});
+  const [requestStatus, setRequestStatus] = useState({
+    scopeKey: null,
+    matrix: "idle",
+    classification: "idle",
+  });
   const seq = useRef(0);
   const pollInFlight = useRef(false);
   const isDemo = shouldUseDemoData();
   const scopeKey = `${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`;
+  const requestEnabled = enabled && Boolean(businessId);
+  const scopedRequestStatus = resolveScopedDeductionsRequestStatus({ requestStatus, scopeKey, enabled: requestEnabled });
   const shouldPollClassification = isActiveClassificationStatus(
     classificationJobStatus?.status || classificationCoverage?.jobStatus?.status || classificationCoverage?.classificationStatus
   );
@@ -82,6 +90,12 @@ export function useTaxDeductions({
     setClassificationJobStatus(null);
     setClassificationRows(null);
     setClassificationReviewSummary(null);
+    setRequestStatus({
+      scopeKey,
+      matrix: enabled && businessId ? "loading" : "idle",
+      classification: enabled && businessId ? "loading" : "idle",
+    });
+    setLoading(Boolean(enabled && businessId));
     setError(null);
     setRefreshError(null);
   }, [scopeKey, isDemo, businessId, year, asOfDate, enabled]);
@@ -97,6 +111,7 @@ export function useTaxDeductions({
       setClassificationJobStatus(fixture.deductions?.coverage?.jobStatus || null);
       setClassificationRows(fixture.deductionTransactions);
       setClassificationReviewSummary(null);
+      setRequestStatus({ scopeKey, matrix: "success", classification: "success" });
       setLoading(false);
       setError(null);
       setResourceErrors({});
@@ -105,6 +120,9 @@ export function useTaxDeductions({
     if (!enabled || !businessId) return null;
     const request = ++seq.current;
     setLoading(true);
+    if (!refresh) {
+      setRequestStatus({ scopeKey, matrix: "loading", classification: "loading" });
+    }
     setError(null);
     setResourceErrors({});
     try {
@@ -130,14 +148,23 @@ export function useTaxDeductions({
           classificationReviewSummary: reviewSummaryResult,
         });
         setResourceErrors(errors);
+        setRequestStatus({
+          scopeKey,
+          matrix: allTransactionsResult.status === "fulfilled" ? "success" : "error",
+          classification: coverageResult.status === "fulfilled" ? "success" : "error",
+        });
         // The review summary enriches the Needs attention view, but it is not
         // authoritative for the overview, coverage, or deductions matrix. A
         // failure there must not claim that the entire Tax request failed while
         // the primary resources are visibly usable.
         setError(selectWorkspaceError({ overviewResult, allTransactionsResult, coverageResult }));
-        if (refresh && !Object.keys(errors).length) {
-          setLastRefreshedAt(new Date().toISOString());
-          setRefreshError(null);
+        if (refresh) {
+          const primaryError = selectWorkspaceError({ overviewResult, allTransactionsResult, coverageResult });
+          if (primaryError) setRefreshError(primaryError);
+          else {
+            setLastRefreshedAt(new Date().toISOString());
+            setRefreshError(null);
+          }
         }
       }
       return {
@@ -156,7 +183,7 @@ export function useTaxDeductions({
     } finally {
       if (request === seq.current) setLoading(false);
     }
-  }, [businessId, year, asOfDate, filterKey, enabled, isDemo]);
+  }, [businessId, year, asOfDate, filterKey, enabled, isDemo, scopeKey]);
 
   const loadSecondaryDetails = useCallback(async ({ signal, refresh = false } = {}) => {
     if (isDemo || !enabled || !businessId) return null;
@@ -262,6 +289,10 @@ export function useTaxDeductions({
     loading,
     error,
     resourceErrors,
+    sectionStatus: {
+      matrix: scopedRequestStatus.matrix,
+      classification: scopedRequestStatus.classification,
+    },
     refreshing,
     refreshError,
     lastRefreshedAt,

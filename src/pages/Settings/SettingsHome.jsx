@@ -12,6 +12,8 @@ import {
   LogOut, AlertTriangle, ChevronDown, Check
 } from "lucide-react";
 import BillingCard from "../../pages/Settings/BillingCard.jsx";
+import SettingsTabs from "./SettingsTabs.js";
+import { SETTINGS_TABS } from "./settingsTabsConfig.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
 import { useNavigate } from "react-router-dom";
 import { useSearchParams } from "react-router-dom";
@@ -41,14 +43,6 @@ const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.
 const INTEGRATION_ACTION_BUTTON_CLASS =
   "inline-flex h-11 w-full items-center justify-center whitespace-nowrap rounded-xl px-4 text-sm font-semibold sm:w-[232px]";
 const PLAID_STATUS_CACHE_VERSION = 1;
-
-/** Tabs visible for MVP */
-const tabs = [
-  { key: "Profile",      icon: User },
-  { key: "Business",     icon: Building2 },
-  { key: "Integrations", icon: PlugZap },
-  { key: "Billing",      icon: CreditCard },
-];
 
 const CREDITS_CAP = 300;
 const EMPTY_BUSINESS_FORM = {
@@ -126,12 +120,12 @@ export default function SettingsHome() {
     const focus = (searchParams.get("integration") || "").toLowerCase();
     if (focus) return "Integrations";
     if (tabParam) {
-      const match = tabs.find((t) => t.key.toLowerCase() === tabParam);
+      const match = SETTINGS_TABS.find((t) => t.key.toLowerCase() === tabParam);
       if (match) return match.key;
     }
     try {
       const storedTab = (window.localStorage?.getItem("bizzy:settingsActiveTab") || "").toLowerCase();
-      const match = storedTab && tabs.find((t) => t.key.toLowerCase() === storedTab);
+      const match = storedTab && SETTINGS_TABS.find((t) => t.key.toLowerCase() === storedTab);
       if (match) return match.key;
     } catch {
       /* ignore */
@@ -466,38 +460,12 @@ useEffect(() => {
       <div className="mb-5">
         <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Settings tabs">
           <div className="flex flex-wrap gap-1.5 sm:gap-2">
-            {tabs.map(({ key }) => {
-              const active = activeTab === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => setActiveTab(key)}
-                  aria-selected={active}
-                  className="group inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[13px] focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 active:outline-none active:ring-0"
-                  style={
-                    active
-                      ? {
-                          outline: "none",
-                          transition: "none",
-                          color: "var(--text)",
-                          border: `1px solid rgba(var(--accent-rgb),0.24)`,
-                          boxShadow: "none",
-                          background: "rgba(var(--accent-rgb),0.1)",
-                        }
-                      : {
-                          outline: "none",
-                          transition: "none",
-                          color: "var(--text)",
-                          border: `1px solid ${SOFT_BORDER}`,
-                          background: "rgba(255,255,255,0.018)",
-                        }
-                  }
-                >
-                  <Icon className="h-4 w-4 opacity-75 group-hover:opacity-100" />
-                  {key}
-                </button>
-              );
-            })}
+            <SettingsTabs
+              items={SETTINGS_TABS}
+              activeTab={activeTab}
+              onSelect={setActiveTab}
+              softBorder={SOFT_BORDER}
+            />
             <button
               onClick={() => navigate('/setup?from=settings', { state: { fromSettings: true } })}
               className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] transition"

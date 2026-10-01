@@ -15,6 +15,7 @@ import { useBusinessContext } from "../../context/BusinessContext";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
 import { useTaxOverview } from "../../hooks/tax/useTaxOverview.js";
 import { useTaxDeductions } from "../../hooks/tax/useTaxDeductions.js";
+import { resolveDeductionsRenderState } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import { useTaxPayments } from "../../hooks/tax/useTaxPayments.js";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
 import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/deductionsWorkspaceViewModel.js";
@@ -542,7 +543,17 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
     deductions.classificationRows ||
     deductions.postedTransactions
   );
-  const initialDeductionsLoading = deductions.loading && !hasUsableDeductionsData;
+  const matrixRequestStatus = deductions.sectionStatus?.matrix || (deductions.loading ? "loading" : "idle");
+  const classificationRequestStatus = deductions.sectionStatus?.classification || (deductions.loading ? "loading" : "idle");
+  const deductionsRenderState = resolveDeductionsRenderState({
+    sectionStatus: { matrix: matrixRequestStatus, classification: classificationRequestStatus },
+    hasData: hasUsableDeductionsData,
+    hasMatrixData: Boolean(deductions.allTransactions || deductions.transactions || deductions.classificationRows || deductions.postedTransactions),
+    hasClassificationData: Boolean(deductions.classificationCoverage),
+    refreshing: deductions.refreshing,
+  });
+  const initialDeductionsLoading = deductionsRenderState.showInitialLoading;
+  const initialDeductionsError = deductionsRenderState.showInitialError;
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
   const matrix = useMemo(
     () => {
@@ -682,13 +693,16 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
             disabled={deductions.refreshing || !hasUsableDeductionsData}
             className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-[12px] text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           >
-            <RefreshCcw className={`h-3.5 w-3.5 ${deductions.refreshing ? "animate-spin" : ""}`} />
-            {deductions.refreshing ? "Refreshing" : "Refresh"}
+            <RefreshCcw className={`h-3.5 w-3.5 ${deductions.refreshing ? "animate-spin motion-reduce:animate-none" : ""}`} />
+            {deductions.refreshing ? "Updating" : "Refresh"}
           </button>
+          {deductions.refreshing && hasUsableDeductionsData ? (
+            <span className="sr-only" role="status" aria-live="polite">Updating tax deduction data. Existing values remain visible.</span>
+          ) : null}
         </div>
       </div>
 
-      {deductions.error ? (
+      {deductions.error && !deductions.refreshError && !initialDeductionsError ? (
         <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
           {deductions.error.message || "Deductions failed to load."}
         </div>
@@ -712,7 +726,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       ) : null}
       {deductions.refreshError ? (
         <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
-          {deductions.refreshError.message || "Refresh failed."}
+          <span className="font-semibold">Refresh failed.</span>{" "}
+          Existing deduction data remains on screen and may be stale. {deductions.refreshError.message || "Try again when ready."}
         </div>
       ) : deductions.lastRefreshedAt ? (
         <div className="mt-3 text-xs text-white/42">
@@ -721,6 +736,18 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       ) : null}
       {initialDeductionsLoading ? (
         <DeductionsLoadingState />
+      ) : initialDeductionsError ? (
+        <div className="mt-5 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-5 text-sm text-rose-100" role="alert">
+          <div className="font-semibold">Deductions failed to load.</div>
+          <p className="mt-1 text-rose-100/75">{deductions.error?.message || "The deduction summary is unavailable."}</p>
+          <button
+            type="button"
+            onClick={refreshDeductions}
+            className="mt-3 rounded-full border border-rose-200/25 bg-rose-100/10 px-3 py-1.5 text-xs font-semibold text-rose-50 transition hover:bg-rose-100/15"
+          >
+            Retry
+          </button>
+        </div>
       ) : (
         <>
       <div className="mt-5 rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-3">

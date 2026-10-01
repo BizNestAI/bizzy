@@ -438,7 +438,7 @@ test("manual Refresh bypasses cached read-only tax resources and exposes result 
   const client = fs.readFileSync("src/services/tax/taxApiClient.js", "utf8");
   assert.match(dashboard, /const refreshDeductions = deductions\.refresh/);
   assert.match(dashboard, /onClick=\{refreshDeductions\}/);
-  assert.match(dashboard, /deductions\.refreshing \? "Refreshing" : "Refresh"/);
+  assert.match(dashboard, /deductions\.refreshing \? "Updating" : "Refresh"/);
   assert.match(dashboard, /deductions\.refreshError/);
   assert.match(dashboard, /Updated \{formatRelativeRefreshTime\(deductions\.lastRefreshedAt\)\}/);
   assert.match(hook, /load\(\{ \.\.\.options, refresh: true \}\)/);
@@ -493,7 +493,7 @@ test("deductions hook stages cold loading and keeps cached data visible during r
   assert.match(hook, /fetchAllPostedTransactions/);
   assert.match(hook, /getTaxClassifications/);
   assert.match(hook, /getCachedTaxDeductionsOverview\(\{ businessId, year, asOfDate, allowStale: true \}\)/);
-  assert.match(dashboard, /const initialDeductionsLoading = deductions\.loading && !hasUsableDeductionsData/);
+  assert.match(dashboard, /const initialDeductionsLoading = deductionsRenderState\.showInitialLoading/);
   assert.match(dashboard, /disabled=\{deductions\.refreshing \|\| !hasUsableDeductionsData\}/);
   assert.match(hook, /setError\(selectWorkspaceError\(\{ overviewResult, allTransactionsResult, coverageResult \}\)\)/);
   assert.doesNotMatch(hook, /setError\(Object\.values\(errors\)\[0\]/);
