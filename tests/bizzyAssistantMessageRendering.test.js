@@ -10,7 +10,7 @@ const ADOBE_TABLE = `I found **6 Adobe transactions** in the available history:
 | Date | Amount | Description | Category | Status |
 |---|---:|---|---|---|
 | Aug 28, 2026 | -$7.57 | ADOBE *800-833-6687 | — | Pending |
-| Jul 30, 2026 | -$7.57 | ADOBE *800-833-6687 | Software | Posted to QuickBooks |
+| Jul 30, 2026 | +$32.16 | ADOBE *800-833-6687 | Software | Posted to QuickBooks |
 
 The recurring charge is about **$7.50–$7.57/month**.`;
 
@@ -58,4 +58,19 @@ test("tables expose a bounded horizontal-scroll container for narrow screens", (
   assert.match(dom, /overflow-x:auto/);
   assert.match(dom, /max-width:100%/);
   assert.match(dom, /tabindex="0"/);
+});
+
+test("transaction table headers, amounts, dates, and short categories remain unbroken", () => {
+  const dom = render({ text: ADOBE_TABLE });
+  assert.match(dom, /<th[^>]*>Amount<\/th>/);
+  assert.match(dom, /<th[^>]*>Category<\/th>/);
+  assert.match(dom, /<td[^>]*>\+\$32\.16<\/td>/);
+  assert.match(dom, /white-space:nowrap;word-break:normal;overflow-wrap:normal/);
+  assert.match(dom, /nth-child\(1\).*min-width:120px;white-space:nowrap/);
+  assert.match(dom, /nth-child\(2\).*min-width:95px;white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums/);
+  assert.match(dom, /nth-child\(3\).*min-width:220px;white-space:normal/);
+  assert.match(dom, /nth-child\(4\).*min-width:130px;white-space:nowrap/);
+  assert.match(dom, /nth-child\(5\).*min-width:260px;white-space:normal/);
+  assert.match(dom, /table-layout:auto/);
+  assert.doesNotMatch(dom, /table-layout:fixed/);
 });
