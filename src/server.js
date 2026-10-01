@@ -73,10 +73,10 @@ import { startTaxScheduler } from "./services/tax/scheduling/taxScheduler.servic
 import taxRouter from "./api/tax/index.js";
 
 import bizzyInsightRouter from "./api/gpt/brain/bizzyInsight.js";
-import { requireAuth } from "./api/gpt/middlewares/requireAuth.js";
 import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from "./api/_shared/tenantAuth.js";
 import plaidIntegrationsRouter from "./api/integrations/plaid.routes.js";
 import { buildSafeErrorResponse, redactErrorForLog } from "./api/_shared/safeErrorResponse.js";
+import { ENTITLEMENT_CAPABILITIES, requireEntitlementCapability, requirePaidMutation } from "./api/_shared/entitlementAuth.js";
 
 /* 🔹 NEW: Hero insights router */
 import heroInsightsRouter from "./api/hero-insights/router.js";
@@ -222,6 +222,9 @@ const DEV_BYPASS =
 
 const requireBusinessContext = requireBusinessAccess();
 const requireCustomerOrAdminView = [requireAuthOrAdminView, requireBusinessContext, rejectAdminViewWrites()];
+const requireSubscribedMutation = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.FINANCIAL_WRITE });
+const requireSubscribedCompute = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.PAID_COMPUTE });
+const requireProviderSyncMutation = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.PROVIDER_SYNC });
 app.use((req, _res, next) => {
   if (DEV_BYPASS && req.path.startsWith("/api/investments")) {
     if (!req.headers["x-user-id"])
@@ -235,8 +238,8 @@ app.use((req, _res, next) => {
 
 /* ---------------------------------- GPT & Chats ---------------------------------- */
 app.use("/api/gpt", gptRoutes);
-app.use("/api/chats", ...requireCustomerOrAdminView, chatsRoutes);
-app.use("/api/bizzy", requireAuth, bizzyFollowupsRouter);
+app.use("/api/chats", ...requireCustomerOrAdminView, requireSubscribedMutation, chatsRoutes);
+app.use("/api/bizzy", ...requireCustomerOrAdminView, requireSubscribedMutation, bizzyFollowupsRouter);
 
 /* ------------------------------------ Accounting ----------------------------------- */
 app.use("/api/auth", signupConfirmationRouter);
@@ -249,31 +252,36 @@ app.use("/api/accounting/expense-breakdown", ...requireCustomerOrAdminView, expe
 app.use("/api/accounting/health", ...requireCustomerOrAdminView, healthAccountingRouter);
 app.use("/api/accounting/revenue-series", ...requireCustomerOrAdminView, revenueSeriesRouter);
 app.use("/api/accounting/profit-series", ...requireCustomerOrAdminView, profitSeriesRouter);
-app.use("/api/accounting/reports-sync", ...requireCustomerOrAdminView, reportsSyncRouter);
+app.use("/api/accounting/reports-sync", ...requireCustomerOrAdminView, requireProviderSyncMutation, reportsSyncRouter);
 app.use("/api/accounting/pnl", ...requireCustomerOrAdminView, pnlPdfRouter);
-app.use("/api/accounting/forecast", ...requireCustomerOrAdminView, forecastRouter);
+app.use("/api/accounting/forecast", ...requireCustomerOrAdminView, requireSubscribedCompute, forecastRouter);
 app.use("/api/accounting/forecast-accuracy", ...requireCustomerOrAdminView, forecastAccuracyRouter);
-app.use("/api/accounting/scenarios", ...requireCustomerOrAdminView, scenariosRouter);
-app.use("/api/accounting", ...requireCustomerOrAdminView, bookkeepingRouter);
-app.use("/api/qbo", ...requireCustomerOrAdminView, qboSyncRouter);
-app.use("/api/qbo/backfill", ...requireCustomerOrAdminView, qboBackfillRouter);
-app.use("/api/ar", ...requireCustomerOrAdminView, arRouter);
-app.use("/api/bookkeeping", ...requireCustomerOrAdminView, bookkeepingPlaidRouter);
-app.post("/api/accounting/affordabilityCheck", ...requireCustomerOrAdminView, affordabilityCheckHandler);
+app.use("/api/accounting/scenarios", ...requireCustomerOrAdminView, requireSubscribedMutation, scenariosRouter);
+app.use("/api/accounting", ...requireCustomerOrAdminView, requireSubscribedMutation, bookkeepingRouter);
+app.use("/api/qbo", ...requireCustomerOrAdminView, requireProviderSyncMutation, qboSyncRouter);
+app.use("/api/qbo/backfill", ...requireCustomerOrAdminView, requireProviderSyncMutation, qboBackfillRouter);
+app.use("/api/ar", ...requireCustomerOrAdminView, requireSubscribedMutation, arRouter);
+app.use("/api/bookkeeping", ...requireCustomerOrAdminView, requireSubscribedMutation, bookkeepingPlaidRouter);
+app.post("/api/accounting/affordabilityCheck", ...requireCustomerOrAdminView, requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PAID_COMPUTE), affordabilityCheckHandler);
 
-/* ----------------------- Bizzy Insight (requires auth) ----------------------- */
-app.use("/api/gpt/brain/bizzyInsight", requireAuth, bizzyInsightRouter);
+/* ----------------------- Bizzy Insight (paid tenant compute) ----------------------- */
+app.use(
+  "/api/gpt/brain/bizzyInsight",
+  ...requireCustomerOrAdminView,
+  requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PAID_COMPUTE),
+  bizzyInsightRouter
+);
 
 /* ------------------------------------ Marketing ------------------------------------ */
-app.use("/api/marketing", ...requireCustomerOrAdminView, marketingRouter);
+app.use("/api/marketing", ...requireCustomerOrAdminView, requireSubscribedMutation, marketingRouter);
 
-app.use("/api/jobs", ...requireCustomerOrAdminView, jobsRoutes);
-app.use("/api/job-costing", ...requireCustomerOrAdminView, jobCostingChangeOrdersRouter);
-app.use("/api/job-costing", ...requireCustomerOrAdminView, jobCostingBidBuilderRouter);
-app.use("/api/job-costing", ...requireCustomerOrAdminView, jobsRoutes);
+app.use("/api/jobs", ...requireCustomerOrAdminView, requireSubscribedMutation, jobsRoutes);
+app.use("/api/job-costing", ...requireCustomerOrAdminView, requireSubscribedMutation, jobCostingChangeOrdersRouter);
+app.use("/api/job-costing", ...requireCustomerOrAdminView, requireSubscribedMutation, jobCostingBidBuilderRouter);
+app.use("/api/job-costing", ...requireCustomerOrAdminView, requireSubscribedMutation, jobsRoutes);
 
 /* --------------------------- Investments & Calendar --------------------------- */
-app.use("/api/investments", requireAuth, investmentsRouter);
+app.use("/api/investments", ...requireCustomerOrAdminView, requireSubscribedMutation, investmentsRouter);
 app.use("/api/calendar", calendarRoutes);
 app.get("/api/integrations/plaid/_ping", (_req, res) =>
   res.json({ ok: true, at: "plaid_routes_ping" })
@@ -281,12 +289,12 @@ app.get("/api/integrations/plaid/_ping", (_req, res) =>
 app.use("/api/integrations/plaid", ...requireCustomerOrAdminView, plaidIntegrationsRouter);
 
 /* -------------------------------- Reviews, Docs, Insights ------------------------------- */
-app.use("/api/reviews", ...requireCustomerOrAdminView, reviewsRouter);
-app.use("/api/docs", ...requireCustomerOrAdminView, docsRouter);
+app.use("/api/reviews", ...requireCustomerOrAdminView, requireSubscribedMutation, reviewsRouter);
+app.use("/api/docs", ...requireCustomerOrAdminView, requireSubscribedMutation, docsRouter);
 app.use("/api/insights", insightsRoutes);
 
 /* -------------------------------- Tax (authenticated) -------------------------------- */
-app.use("/api/tax", ...requireCustomerOrAdminView, taxRouter);
+app.use("/api/tax", ...requireCustomerOrAdminView, requireSubscribedMutation, taxRouter);
 
 /* 🔹 NEW: Hero Insights API
    - Public by default so we can show curated mock hero before sync

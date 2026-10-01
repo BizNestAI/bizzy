@@ -8,6 +8,7 @@ import {
   getMonthlyHealthSummary,
   HEALTH_ACCOUNTING_METHOD,
 } from "./healthMonthlySnapshotService.js";
+import { filterEntitledBusinessIds } from "../billing/entitledBusinesses.js";
 
 const JOB_TABLE = "monthly_financial_pulse_jobs";
 const PULSE_TABLE = "monthly_financial_pulse";
@@ -135,18 +136,19 @@ export async function discoverEligibleQboBusinesses({ db = defaultSupabase } = {
 
   const businessIds = Array.from(new Set((tokenRows || []).map((row) => row?.business_id).filter(Boolean)));
   if (!businessIds.length) return { businesses: [], discovered: 0, skipped: 0 };
+  const entitledBusinessIds = await filterEntitledBusinessIds(businessIds, { db });
 
   const { data: profileRows, error: profileError } = await db
     .from("business_profiles")
     .select("id,user_id,business_name")
-    .in("id", businessIds);
+    .in("id", entitledBusinessIds);
   if (profileError) throw new Error(`monthly_brief_business_owner_lookup_failed: ${profileError.message || profileError}`);
 
   const profileById = new Map((profileRows || []).map((row) => [row.id, row]));
   let skipped = 0;
   const businesses = [];
 
-  for (const businessId of businessIds) {
+  for (const businessId of entitledBusinessIds) {
     const profile = profileById.get(businessId);
     if (!profile?.user_id) {
       skipped += 1;
@@ -163,7 +165,7 @@ export async function discoverEligibleQboBusinesses({ db = defaultSupabase } = {
     });
   }
 
-  return { businesses, discovered: businessIds.length, skipped };
+  return { businesses, discovered: businessIds.length, skipped: skipped + businessIds.length - entitledBusinessIds.length };
 }
 
 export async function ensureMonthlyBriefForTarget({

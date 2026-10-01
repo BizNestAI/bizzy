@@ -67,15 +67,13 @@ export default function useBillingStatus(businessId, userId, refreshKey = 0) {
   const isPastDue = statusValue === "past_due";
   const isCanceled = statusValue === "canceled";
   const isBlocked = statusValue === "free";
-  const isReadOnly = statusValue === "canceled";
   const isPaidOrTrial = isActive || isTrialing;
+  const isReadOnly = !isPaidOrTrial;
 
   let accessLevel = status?.access_level || null;
   if (!accessLevel) {
     if (isActive || isTrialing) accessLevel = "full";
-    else if (isPastDue) accessLevel = "limited";
-    else if (isCanceled) accessLevel = "read_only";
-    else accessLevel = "blocked";
+    else accessLevel = "read_only";
   }
 
   return {

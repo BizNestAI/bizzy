@@ -2165,8 +2165,13 @@ export async function processPendingMerchantBacklogApprovalOperations({
   const processed = [];
   const failed = [];
   const skipped = [];
+  const { businessHasPaidEntitlement } = await import("../billing/entitledBusinesses.js");
   for (const operation of operations) {
     try {
+      if (!(await businessHasPaidEntitlement(operation.business_id, { db }))) {
+        skipped.push({ operation_id: operation.operation_id, business_id: operation.business_id, reason: "paid_entitlement_required" });
+        continue;
+      }
       const claim = await claimMerchantBacklogApprovalOperation({
         db,
         businessId: operation.business_id,

@@ -12,6 +12,7 @@ import { getBusinessesEligibleForTaxCalculation } from "./getBusinessesEligibleF
 import { claimTaxSchedulerLock, createTaxSchedulerRun, finishTaxSchedulerRun } from "./taxSchedulerPersistence.js";
 import { runTaxDeadlineScan } from "./runTaxDeadlineScan.js";
 import { runTaxReserveFreshnessScan } from "./runTaxReserveFreshnessScan.js";
+import { businessHasPaidEntitlement } from "../../billing/entitledBusinesses.js";
 
 export async function runDailyTaxScheduler({
   supabase,
@@ -69,6 +70,11 @@ export async function runDailyTaxScheduler({
       const eligibility = await getBusinessesEligibleForTaxCalculation({ supabase, taxYear, page, pageSize, now });
       summary.businessesScanned += eligibility.businesses.length;
       for (const item of eligibility.businesses) {
+        if (!(await businessHasPaidEntitlement(item.businessId, { db: supabase }))) {
+          summary.businessesSkipped += 1;
+          summary.skipReasons.entitlement_inactive = (summary.skipReasons.entitlement_inactive || 0) + 1;
+          continue;
+        }
         if (!item.eligible) {
           summary.businessesSkipped += 1;
           summary.skipReasons[item.reason] = (summary.skipReasons[item.reason] || 0) + 1;

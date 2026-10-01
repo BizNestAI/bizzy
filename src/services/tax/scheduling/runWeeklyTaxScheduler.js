@@ -10,6 +10,7 @@ import {
 } from "./taxScheduleDomain.js";
 import { getBusinessesEligibleForTaxCalculation } from "./getBusinessesEligibleForTaxCalculation.js";
 import { claimTaxSchedulerLock, createTaxSchedulerRun, finishTaxSchedulerRun } from "./taxSchedulerPersistence.js";
+import { businessHasPaidEntitlement } from "../../billing/entitledBusinesses.js";
 
 export async function runWeeklyTaxScheduler({
   supabase,
@@ -72,6 +73,11 @@ export async function runWeeklyTaxScheduler({
           summary.businessesSkipped += 1;
           summary.skipReasons[item.reason] = (summary.skipReasons[item.reason] || 0) + 1;
           if (item.reason === TAX_SCHEDULER_ELIGIBILITY_REASONS.RECENT_RUN_FRESH) summary.runsReused += 1;
+          continue;
+        }
+        if (!(await businessHasPaidEntitlement(item.businessId, { db: supabase }))) {
+          summary.businessesSkipped += 1;
+          summary.skipReasons.paid_entitlement_required = (summary.skipReasons.paid_entitlement_required || 0) + 1;
           continue;
         }
         summary.businessesEligible += 1;

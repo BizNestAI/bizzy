@@ -1,4 +1,5 @@
 import { supabase } from "../services/supabaseAdmin.js";
+import { filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 import {
   enqueueUnresolvedBookkeepingBacklog,
   processPendingBookkeepingRequestsUntilIdle,
@@ -41,7 +42,7 @@ async function getActiveBusinessIds() {
     if (row.business_id) ids.add(row.business_id);
   });
 
-  return Array.from(ids).slice(0, DISCOVERY_BUSINESS_LIMIT);
+  return (await filterEntitledBusinessIds(Array.from(ids))).slice(0, DISCOVERY_BUSINESS_LIMIT);
 }
 
 export async function runBookkeepingProcessingWorkerOnce({

@@ -3,6 +3,7 @@ import { reconsiderNeedsReviewTransactions } from "./routineExpenseReconsiderati
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 import { CATEGORIZATION_POLICY_VERSION } from "./categorizationEvidencePolicy.js";
+import { businessHasPaidEntitlement } from "../billing/entitledBusinesses.js";
 
 export const BOOKKEEPING_PROCESSING_STATUSES = {
   PENDING: "pending",
@@ -396,6 +397,24 @@ async function skipRequest({ db, request, workerId, now, reason }) {
   });
 }
 
+async function deferForEntitlement({ db, request, workerId, now }) {
+  const timestamp = nowIso(now);
+  return updateRequest({
+    db,
+    requestId: request.id,
+    patch: {
+      status: BOOKKEEPING_PROCESSING_STATUSES.PENDING,
+      process_after: hoursFrom(now, 1),
+      locked_at: null,
+      locked_by: null,
+      error_code: "paid_entitlement_required",
+      error_message: "Processing deferred until paid entitlement is restored.",
+      metadata: { ...(request.metadata || {}), workerId, deferredReason: "paid_entitlement_required" },
+      updated_at: timestamp,
+    },
+  });
+}
+
 function isAlreadyHandledOrPosted(existingCat) {
   return (
     ["approved", "auto_approved", "posted"].includes(String(existingCat?.status || "").toLowerCase()) ||
@@ -447,6 +466,10 @@ export async function processPendingBookkeepingRequests({
     try {
       if (!request.business_id || !request.transaction_id) {
         results.push(await skipRequest({ db, request, workerId, now, reason: "missing_transaction_scope" }));
+        continue;
+      }
+      if (!(await businessHasPaidEntitlement(request.business_id, { db }))) {
+        results.push(await deferForEntitlement({ db, request, workerId, now }));
         continue;
       }
 

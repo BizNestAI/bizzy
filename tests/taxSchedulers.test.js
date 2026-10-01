@@ -100,6 +100,23 @@ test("weekly scheduler uses weekly cron source and does not force duplicate runs
   assert.equal(supabase.store.tax_recalculation_requests[0].event_type, "financial_source_sync_completed");
 });
 
+test("weekly scheduler defers an eligible business after entitlement loss", async () => {
+  const supabase = makeSupabase({
+    business_profiles: [business(BUSINESS_ID)],
+    business_billing: [{ business_id: BUSINESS_ID, subscription_status_test: "canceled" }],
+    tax_profiles: [profile(BUSINESS_ID)],
+    qbo_posted_transactions: [posted(BUSINESS_ID)],
+  });
+  const result = await runWeeklyTaxScheduler({
+    supabase,
+    scheduledFor: date("2026-07-13T00:00:00Z"),
+    taxYear: TAX_YEAR,
+    now: date("2026-07-14T12:00:00Z"),
+  });
+  assert.equal(result.requestsQueued, 0);
+  assert.equal(result.skipReasons.paid_entitlement_required, 1);
+});
+
 test("scheduler lock blocks concurrent worker and recovers stale lock", async () => {
   const supabase = makeSupabase();
   const scheduledFor = date("2026-07-14T00:00:00Z");
@@ -205,6 +222,10 @@ test("ordinary users cannot invoke internal scheduler route without secret", () 
 });
 
 function makeSupabase(store = {}) {
+  const businessBilling = store.business_billing || (store.business_profiles || []).map((row) => ({
+    business_id: row.id,
+    subscription_status_test: "active",
+  }));
   return {
     store: {
       tax_recalculation_requests: [],
@@ -212,6 +233,7 @@ function makeSupabase(store = {}) {
       tax_scheduler_runs: [],
       scheduled_job_locks: [],
       tax_reserve_accounts: [],
+      business_billing: businessBilling,
       ...store,
     },
   };

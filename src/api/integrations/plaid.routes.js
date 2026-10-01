@@ -2,7 +2,7 @@ import { Router } from "express";
 import { runPlaidSyncForBusiness } from "../../services/plaid/plaidSyncService.js";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
-import { getPlaidClient } from "../../services/plaid/plaidClient.js";
+import { getPlaidClient, plaidEnvName } from "../../services/plaid/plaidClient.js";
 import { runReconciliationOnceForBusiness } from "../../cron/reconciliation.cron.js";
 import {
   redactPlaidSecrets,
@@ -16,8 +16,14 @@ import {
   getPlaidStatus,
 } from "../../services/plaid/plaidIntegrationService.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
+import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from "../_shared/entitlementAuth.js";
+import { consumePlaidLinkState, createPlaidLinkState } from "../../services/plaid/plaidLinkStateService.js";
 
 const router = Router();
+const primaryOwner = requireBusinessRole(["owner"]);
+const integrationAdmin = requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.INTEGRATION_ADMIN);
+const providerSync = requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PROVIDER_SYNC);
+const providerDisconnect = requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PROVIDER_DISCONNECT);
 const plaidMutationRateLimit = createRateLimiter({
   windowMs: 60_000,
   max: Number(process.env.PLAID_ROUTE_RATE_LIMIT_PER_MINUTE || 20),
@@ -63,28 +69,36 @@ router.get("/status", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/link-token", requireAuth, plaidMutationRateLimit, async (req, res) => {
+router.post("/link-token", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
     const userId = req.auth?.userId || req.user?.id || req.user?.user_id || null;
+    const linkSession = await createPlaidLinkState({ businessId, userId, db: supabase });
     const linkToken = await createLinkToken({ businessId, userId });
     if (!linkToken) throw new Error("link_token_missing");
-    return res.json({ ok: true, link_token: linkToken });
+    return res.json({ ok: true, link_token: linkToken, link_session: linkSession });
   } catch (err) {
     console.error("[plaid] link token failed", redactPlaidSecrets(err?.message || err));
     return res.status(500).json({ ok: false, error: "plaid_link_token_failed" });
   }
 });
 
-router.post("/exchange", requireAuth, plaidMutationRateLimit, async (req, res) => {
+router.post("/exchange", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const publicToken = req.body?.public_token;
+  const linkSession = req.body?.link_session;
   if (!publicToken) {
     return res.status(400).json({ ok: false, error: "missing_public_token", message: "public_token is required" });
   }
   try {
+    await consumePlaidLinkState({
+      state: linkSession,
+      businessId,
+      userId: req.auth?.userId || req.user?.id || null,
+      db: supabase,
+    });
     const metadata = req.body?.metadata || null;
     const result = await exchangePublicToken({
       businessId,
@@ -108,7 +122,7 @@ router.post("/exchange", requireAuth, plaidMutationRateLimit, async (req, res) =
   }
 });
 
-router.post("/sync", requireAuth, plaidMutationRateLimit, async (req, res) => {
+router.post("/sync", requireAuth, plaidMutationRateLimit, providerSync, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
@@ -133,7 +147,7 @@ router.post("/sync", requireAuth, plaidMutationRateLimit, async (req, res) => {
   }
 });
 
-router.post("/disconnect-item", requireAuth, async (req, res) => {
+router.post("/disconnect-item", requireAuth, primaryOwner, providerDisconnect, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const plaidItemId = req.body?.plaid_item_id || req.body?.item_id || null;
@@ -147,6 +161,7 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
       .from("plaid_items")
       .select("plaid_item_id,plaid_access_token")
       .eq("business_id", businessId)
+      .eq("plaid_env", plaidEnvName)
       .eq("plaid_item_id", plaidItemId)
       .maybeSingle();
     if (itemErr) throw itemErr;
@@ -163,6 +178,7 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
               .from("plaid_items")
               .update({ plaid_access_token: encrypted, updated_at: new Date().toISOString() })
               .eq("business_id", businessId)
+              .eq("plaid_env", plaidEnvName)
               .eq("plaid_item_id", plaidItemId);
           },
         });
@@ -178,6 +194,7 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
         .from("plaid_accounts")
         .select("plaid_account_id")
         .eq("business_id", businessId)
+        .eq("plaid_env", plaidEnvName)
         .eq("plaid_item_id", plaidItemId);
       if (acctErr) throw acctErr;
 
@@ -209,6 +226,7 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
           .from("plaid_accounts")
           .delete()
           .eq("business_id", businessId)
+          .eq("plaid_env", plaidEnvName)
           .eq("plaid_item_id", plaidItemId);
       }
 
@@ -216,6 +234,7 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
         .from("bank_sync_runs")
         .delete()
         .eq("business_id", businessId)
+        .eq("plaid_env", plaidEnvName)
         .eq("plaid_item_id", plaidItemId);
       await supabase
         .from("plaid_items")
@@ -244,6 +263,7 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
         updated_at: nowIso,
       })
       .eq("business_id", businessId)
+      .eq("plaid_env", plaidEnvName)
       .eq("plaid_item_id", plaidItemId);
     await supabase
       .from("plaid_accounts")
@@ -253,6 +273,7 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
         updated_at: nowIso,
       })
       .eq("business_id", businessId)
+      .eq("plaid_env", plaidEnvName)
       .eq("plaid_item_id", plaidItemId);
 
     return res.json({
@@ -271,7 +292,7 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/disconnect", requireAuth, async (req, res) => {
+router.post("/disconnect", requireAuth, primaryOwner, providerDisconnect, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const plaid = getPlaidClient();
@@ -280,7 +301,8 @@ router.post("/disconnect", requireAuth, async (req, res) => {
     const { data: items, error: itemsErr } = await supabase
       .from("plaid_items")
       .select("plaid_item_id,plaid_access_token,id")
-      .eq("business_id", businessId);
+      .eq("business_id", businessId)
+      .eq("plaid_env", plaidEnvName);
     if (itemsErr) throw itemsErr;
 
     const errors = [];
@@ -296,6 +318,7 @@ router.post("/disconnect", requireAuth, async (req, res) => {
                 .from("plaid_items")
                 .update({ plaid_access_token: encrypted, updated_at: new Date().toISOString() })
                 .eq("business_id", businessId)
+                .eq("plaid_env", plaidEnvName)
                 .eq("plaid_item_id", item.plaid_item_id);
             },
           });
@@ -321,12 +344,13 @@ router.post("/disconnect", requireAuth, async (req, res) => {
         .delete()
         .eq("business_id", businessId)
         .select("id");
-      await supabase.from("plaid_accounts").delete().eq("business_id", businessId);
+      await supabase.from("plaid_accounts").delete().eq("business_id", businessId).eq("plaid_env", plaidEnvName);
       await supabase.from("bank_sync_runs").delete().eq("business_id", businessId);
       const { data: itemsDeleted } = await supabase
         .from("plaid_items")
         .delete()
         .eq("business_id", businessId)
+        .eq("plaid_env", plaidEnvName)
         .select("plaid_item_id");
 
       const removed_transactions = Array.isArray(txnDeleted) ? txnDeleted.length : 0;
@@ -360,7 +384,8 @@ router.post("/disconnect", requireAuth, async (req, res) => {
         cursor: null,
         updated_at: nowIso,
       })
-      .eq("business_id", businessId);
+      .eq("business_id", businessId)
+      .eq("plaid_env", plaidEnvName);
     await supabase
       .from("plaid_accounts")
       .update({
@@ -368,7 +393,8 @@ router.post("/disconnect", requireAuth, async (req, res) => {
         disconnected_at: nowIso,
         updated_at: nowIso,
       })
-      .eq("business_id", businessId);
+      .eq("business_id", businessId)
+      .eq("plaid_env", plaidEnvName);
 
     console.info("[plaid][disconnect]", {
       business_id: businessId,

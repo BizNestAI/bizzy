@@ -76,7 +76,7 @@ function projectChatBilling(row) {
 
 function hasActiveMonthlySubscription(billing) {
   if (!billing) return false;
-  if (billing.subscription_status !== 'active') return false;
+  if (billing.subscription_status !== 'active' && billing.subscription_status !== 'trialing') return false;
   if (!billing.stripe_subscription_id && !billing.plan_type) return false;
   if (billing.cancel_at_period_end && billing.current_period_end) {
     const end = new Date(billing.current_period_end);

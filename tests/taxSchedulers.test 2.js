@@ -205,6 +205,10 @@ test("ordinary users cannot invoke internal scheduler route without secret", () 
 });
 
 function makeSupabase(store = {}) {
+  const businessBilling = store.business_billing || (store.business_profiles || []).map((row) => ({
+    business_id: row.id,
+    subscription_status_test: "active",
+  }));
   return {
     store: {
       tax_recalculation_requests: [],
@@ -212,6 +216,7 @@ function makeSupabase(store = {}) {
       tax_scheduler_runs: [],
       scheduled_job_locks: [],
       tax_reserve_accounts: [],
+      business_billing: businessBilling,
       ...store,
     },
   };

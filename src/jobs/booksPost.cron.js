@@ -63,6 +63,7 @@ import {
   taxonomyRequiresBookkeepingPostingReview,
 } from "../services/bookkeeping/postingDecisionAuthority.js";
 import { buildCreditCardCreditPayload } from "../services/bookkeeping/creditCardMerchantRefundPayload.js";
+import { businessHasPaidEntitlement, filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
@@ -3225,6 +3226,11 @@ async function markFailed(item, message, { manual = false } = {}) {
 }
 
 export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false, duplicateChallengeId = null, createNewIncomeOverride = false, manualDuplicateOverride = null, operationId = null, childOperationId = null }) {
+  if (!(await businessHasPaidEntitlement(businessId))) {
+    const error = new Error("entitlement_capability_denied");
+    error.status = 402;
+    throw error;
+  }
   if (!businessId) throw new Error("missing_business_id");
   if (!transactionId) throw new Error("missing_transaction_id");
 
@@ -3407,6 +3413,10 @@ async function runOnce(options = {}) {
     businesses_failed: 0,
   };
   try {
+    if (businessId && !(await businessHasPaidEntitlement(businessId))) {
+      summary.skipped = 1;
+      return summary;
+    }
     if (businessId) {
       const autoPostEnabled = await getAutoPostToQuickBooks(supabase, businessId);
       if (!autoPostEnabled) {
@@ -3437,6 +3447,10 @@ async function runOnce(options = {}) {
           return true;
         });
     const dueBusinessIds = Array.from(new Set((duePending || []).map((item) => item.business_id).filter(Boolean)));
+    const entitledBusinessIds = new Set(await filterEntitledBusinessIds(dueBusinessIds));
+    const entitlementBlockedRows = duePending.filter((item) => !entitledBusinessIds.has(item.business_id));
+    duePending = duePending.filter((item) => entitledBusinessIds.has(item.business_id));
+    summary.skipped += entitlementBlockedRows.length;
     const policyByBusiness = {};
     for (const biz of dueBusinessIds) {
       try {

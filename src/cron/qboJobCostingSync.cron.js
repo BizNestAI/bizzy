@@ -1,4 +1,5 @@
 import { supabase } from "../services/supabaseAdmin.js";
+import { filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 import {
   processQueuedQboWebhookEvents,
   runDailyQboJobCostingReconciliation,
@@ -30,7 +31,7 @@ async function getConnectedQuickBooksBusinessIds() {
     console.warn("[qbo-job-costing-sync-cron] token lookup failed", error.message || error);
     return [];
   }
-  return Array.from(new Set((data || []).map((row) => row.business_id).filter(Boolean)));
+  return filterEntitledBusinessIds(Array.from(new Set((data || []).map((row) => row.business_id).filter(Boolean))));
 }
 
 async function runForConnectedBusinesses(taskName, task) {

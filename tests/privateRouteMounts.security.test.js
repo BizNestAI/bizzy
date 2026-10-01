@@ -36,10 +36,6 @@ const businessScopedMounts = [
   "/api/docs",
 ];
 
-const userScopedMounts = [
-  "/api/bizzy",
-];
-
 test("major private business-scoped server mounts use canonical auth and tenant middleware", () => {
   assert.match(
     serverSource,
@@ -47,26 +43,20 @@ test("major private business-scoped server mounts use canonical auth and tenant 
   );
   for (const mount of businessScopedMounts) {
     const escaped = mount.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`app\\.use\\("${escaped}", \\.\\.\\.requireCustomerOrAdminView, `);
+    const pattern = new RegExp(`app\\.use\\("${escaped}", \\.\\.\\.requireCustomerOrAdminView, [^\\n]+\\)`);
     assert.match(serverSource, pattern, `${mount} is not mounted with verified customer/Admin View tenant context`);
   }
   assert.match(
     serverSource,
-    /app\.post\("\/api\/accounting\/affordabilityCheck", \.\.\.requireCustomerOrAdminView, affordabilityCheckHandler\)/
+    /app\.post\("\/api\/accounting\/affordabilityCheck", \.\.\.requireCustomerOrAdminView, requireEntitlementCapability\(ENTITLEMENT_CAPABILITIES\.PAID_COMPUTE\), affordabilityCheckHandler\)/
   );
 });
 
-test("private user-scoped server mounts use canonical auth without requiring tenant context", () => {
-  for (const mount of userScopedMounts) {
-    const escaped = mount.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`app\\.use\\("${escaped}", requireAuth, [^\\n]+\\)`);
-    assert.match(serverSource, pattern, `${mount} is not mounted with requireAuth`);
-    assert.doesNotMatch(
-      serverSource,
-      new RegExp(`app\\.use\\("${escaped}", \\.\\.\\.requireCustomerOrAdminView, `),
-      `${mount} should not require business context`
-    );
-  }
+test("Bizzy followups require canonical tenant context and a paid mutation entitlement", () => {
+  assert.match(
+    serverSource,
+    /app\.use\("\/api\/bizzy", \.\.\.requireCustomerOrAdminView, requireSubscribedMutation, bizzyFollowupsRouter\)/
+  );
 });
 
 test("active provider callbacks and health checks remain intentionally public", () => {
@@ -81,10 +71,12 @@ test("mixed GPT, calendar, insights, and QuickBooks routes protect browser endpo
   assert.match(gptRoutesSource, /router\.post\('\/generate',\s+\.\.\.privateBusinessRoute,/);
   assert.match(gptRoutesSource, /router\.post\('\/pipeline', \.\.\.privateBusinessRoute,/);
   assert.match(calendarRoutesSource, /router\.get\('\/health', healthRoute\)/);
-  assert.match(calendarRoutesSource, /router\.patch\('\/events\/:id', \.\.\.privateBusinessRoute,/);
-  assert.match(insightsRoutesSource, /router\.get\('\/list', \.\.\.privateBusinessRoute,/);
+  assert.match(calendarRoutesSource, /router\.use\(\.\.\.privateBusinessRoute, requirePaidMutation\(\)\)/);
+  assert.match(calendarRoutesSource, /router\.patch\('\/events\/:id', patchEvent\)/);
+  assert.match(insightsRoutesSource, /router\.use\(\.\.\.privateBusinessRoute, requirePaidMutation\(\{ capability: 'paid_compute' \}\)\)/);
+  assert.match(insightsRoutesSource, /router\.get\('\/list', \.\.\.privateBusinessRoute, listHandler\)/);
   assert.match(insightsRoutesSource, /router\.post\('\/feedback', \.\.\.privateBusinessRoute,/);
-  assert.match(qboAuthSource, /router\.get\("\/quickbooks", \.\.\.requireVerifiedBusiness,/);
+  assert.match(qboAuthSource, /router\.get\("\/quickbooks", \.\.\.requireQboConnectionAdmin,/);
   assert.match(qboAuthSource, /router\.get\("\/callback", async \(req, res\) =>/);
 });
 

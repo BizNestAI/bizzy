@@ -41,7 +41,7 @@ test("/api/chats remains protected by auth and tenant middleware", () => {
   );
   assert.match(
     serverSource,
-    /app\.use\("\/api\/chats", \.\.\.requireCustomerOrAdminView, chatsRoutes\)/
+    /app\.use\("\/api\/chats", \.\.\.requireCustomerOrAdminView, requireSubscribedMutation, chatsRoutes\)/
   );
 });
 

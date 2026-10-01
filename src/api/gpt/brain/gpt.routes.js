@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from '../../_shared/tenantAuth.js';
 import { createRateLimiter } from '../../_shared/rateLimit.js';
+import { ENTITLEMENT_CAPABILITIES, requireEntitlementCapability } from '../../_shared/entitlementAuth.js';
 
 // Direct handler that creates/continues threads and returns meta.thread_id
 import { generateBizzyResponseHandler, getBizzyChatAccessHandler } from './generateBizzyResponse.js';
@@ -20,6 +21,7 @@ import {
 
 const router = Router();
 const privateBusinessRoute = [requireAuthOrAdminView, requireBusinessAccess(), rejectAdminViewWrites()];
+const paidChat = requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PAID_COMPUTE);
 const aiGenerateRateLimit = createRateLimiter({
   windowMs: 60_000,
   max: Number(process.env.BIZZY_AI_RATE_LIMIT_PER_MINUTE || 20),
@@ -32,8 +34,8 @@ router.get('/health', (_req, res) => res.json({ ok: true, module: 'gpt' }));
 router.get('/chat-access', ...privateBusinessRoute, getBizzyChatAccessHandler);
 
 // Primary endpoints used by the client
-router.post('/generate',          ...privateBusinessRoute, aiGenerateRateLimit, generateBizzyResponseHandler);
-router.post('/generate-response', ...privateBusinessRoute, aiGenerateRateLimit, generateBizzyResponseHandler);
+router.post('/generate',          ...privateBusinessRoute, aiGenerateRateLimit, paidChat, generateBizzyResponseHandler);
+router.post('/generate-response', ...privateBusinessRoute, aiGenerateRateLimit, paidChat, generateBizzyResponseHandler);
 
 // Optional legacy pipeline
 const chain = [
@@ -46,6 +48,6 @@ const chain = [
   postProcess,
   finalize,
 ];
-router.post('/pipeline', ...privateBusinessRoute, aiGenerateRateLimit, ...chain);
+router.post('/pipeline', ...privateBusinessRoute, aiGenerateRateLimit, paidChat, ...chain);
 
 export default router;

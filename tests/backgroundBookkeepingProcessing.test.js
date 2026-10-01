@@ -20,12 +20,42 @@ const OTHER_BUSINESS_ID = "22222222-2222-4222-8222-222222222222";
 
 function makeStore() {
   return {
+    business_billing: [
+      { business_id: BUSINESS_ID, subscription_status_test: "active" },
+      { business_id: OTHER_BUSINESS_ID, subscription_status_test: "active" },
+    ],
     bookkeeping_processing_requests: [],
     transaction_categorizations: [],
     bank_transactions: [],
     clarification_requests: [],
   };
 }
+
+test("queued bookkeeping work is deferred when entitlement is canceled before execution", async () => {
+  const supabase = makeSupabase();
+  seedBankTransactions(supabase, BUSINESS_ID, ["txn-canceled"]);
+  supabase.store.transaction_categorizations.push({
+    business_id: BUSINESS_ID,
+    transaction_id: "txn-canceled",
+    status: "needs_review",
+    qbo_txn_id: null,
+    meta: {},
+  });
+  await enqueueBookkeepingProcessingForTransactions({ businessId: BUSINESS_ID, transactionIds: ["txn-canceled"], supabase });
+  supabase.store.business_billing[0].subscription_status_test = "canceled";
+  let executed = false;
+  __setBackgroundBookkeepingProcessingTestDeps({
+    runBookkeepingSuggestionPass: async () => { executed = true; },
+  });
+
+  const result = await processPendingBookkeepingRequests({ supabase, batchSize: 1, workerId: "canceled-worker" });
+  const row = supabase.store.bookkeeping_processing_requests[0];
+  assert.equal(executed, false);
+  assert.equal(result.completed, 0);
+  assert.equal(row.status, "pending");
+  assert.equal(row.error_code, "paid_entitlement_required");
+  assert.ok(new Date(row.process_after).getTime() > Date.now());
+});
 
 class Query {
   constructor(store, table) {

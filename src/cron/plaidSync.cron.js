@@ -1,6 +1,7 @@
 import { supabase } from "../services/supabaseAdmin.js";
 import { runPlaidSyncForBusiness } from "../services/plaid/plaidSyncService.js";
 import { runReconciliationOnceForBusiness } from "./reconciliation.cron.js";
+import { filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 
 const CRON_DISABLED = String(process.env.DISABLE_PLAID_SYNC_CRON || "").toLowerCase() === "true";
 const CRON_INTERVAL_MINUTES = Number(process.env.PLAID_SYNC_CRON_INTERVAL_MINUTES || 15);
@@ -61,8 +62,11 @@ async function tick() {
   }
   if (!items || !items.length) return;
 
+  const entitledBusinessIds = new Set(await filterEntitledBusinessIds(items.map((item) => item.business_id)));
+
   let processed = 0;
   for (const item of items) {
+    if (!entitledBusinessIds.has(item.business_id)) continue;
     if (processed >= MAX_ITEMS_PER_TICK) break;
     const tz = item.metadata?.timezone || item.metadata?.profile?.timezone || null;
     if (!shouldSyncNow(tz, item.last_sync_at)) continue;

@@ -267,6 +267,12 @@ function createFakePulseDb(overrides = {}) {
       { id: "biz-b", user_id: "owner-b", business_name: "B" },
       { id: "biz-inactive", user_id: "owner-inactive", business_name: "Inactive" },
     ],
+    business_billing: overrides.business_billing || [
+      { business_id: "biz-a", subscription_status_test: "active" },
+      { business_id: "biz-b", subscription_status_test: "trialing" },
+      { business_id: "biz-inactive", subscription_status_test: "active" },
+      { business_id: "biz-missing-owner", subscription_status_test: "active" },
+    ],
     monthly_review_qbo_pnl_snapshots: overrides.monthly_review_qbo_pnl_snapshots || [
       {
         id: "snap-a-aug",

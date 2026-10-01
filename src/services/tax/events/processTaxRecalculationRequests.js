@@ -11,6 +11,7 @@ import {
 import { isMaterialChangeComparison } from "./taxRecalculationPolicy.js";
 import { recordRecalculationOutcome } from "./taxRecalculationTrigger.service.js";
 import { evaluateTaxCalculationPrerequisites } from "../taxCalculationPrerequisites.service.js";
+import { businessHasPaidEntitlement } from "../../billing/entitledBusinesses.js";
 
 let deps = {
   runCanonicalTaxCalculation,
@@ -71,6 +72,22 @@ export async function getTaxRecalculationDiagnostics({ supabase, businessId = nu
 async function processOneRequest({ supabase, request, workerId, now }) {
   const logContext = { requestId: request.id, eventId: request.event_id, businessId: request.business_id, taxYear: request.tax_year };
   try {
+    if (!(await businessHasPaidEntitlement(request.business_id, { db: supabase }))) {
+      return updateRequest({
+        supabase,
+        requestId: request.id,
+        patch: {
+          status: TAX_RECALCULATION_REQUEST_STATUSES.PENDING,
+          process_after: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+          locked_at: null,
+          locked_by: null,
+          error_code: "paid_entitlement_required",
+          error_message: "Processing deferred until paid entitlement is restored.",
+          metadata: { ...(request.metadata || {}), workerId, deferredReason: "paid_entitlement_required" },
+          updated_at: now.toISOString(),
+        },
+      });
+    }
     const prerequisites = await deps.evaluateTaxCalculationPrerequisites({
       supabase,
       businessId: request.business_id,

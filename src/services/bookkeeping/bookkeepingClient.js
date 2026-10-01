@@ -873,11 +873,11 @@ export async function createPlaidLinkToken(businessId) {
   });
 }
 
-export async function exchangePlaidPublicToken(businessId, public_token, metadata = null) {
+export async function exchangePlaidPublicToken(businessId, public_token, metadata = null, link_session = null) {
   return safeFetch(apiUrl("/api/integrations/plaid/exchange"), {
     method: "POST",
     headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
-    body: JSON.stringify({ business_id: businessId, public_token, metadata }),
+    body: JSON.stringify({ business_id: businessId, public_token, metadata, link_session }),
   });
 }
 

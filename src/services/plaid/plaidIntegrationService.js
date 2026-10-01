@@ -2,6 +2,7 @@ import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 import { encryptPlaidAccessToken } from "./plaidTokenCrypto.js";
 import { buildPhysicalAccountIdentity } from "./plaidCanonicalIdentity.js";
+import { plaidClientUserId } from "./plaidLinkStateService.js";
 
 const devLog = (tag, payload) => {
   if (process.env.NODE_ENV !== "production") {
@@ -14,13 +15,14 @@ export async function createLinkToken({ businessId, userId }) {
   const plaid = getPlaidClient();
   if (!plaid) throw new Error("plaid_not_configured");
   const resp = await plaid.linkTokenCreate({
-    user: { client_user_id: String(userId) },
+    user: { client_user_id: plaidClientUserId({ businessId, userId }) },
     client_name: "Bizzi",
     products: ["transactions"],
     transactions: { days_requested: 365 },
     country_codes: ["US"],
     language: "en",
-    ...(process.env.PLAID_WEBHOOK_URL ? { webhook: process.env.PLAID_WEBHOOK_URL } : {}),
+    // Bizzi currently resolves Plaid updates by polling business-scoped items.
+    // Do not advertise a webhook URL until a verified item_id-to-business handler exists.
     ...(process.env.PLAID_REDIRECT_URI ? { redirect_uri: process.env.PLAID_REDIRECT_URI } : {}),
   });
   const linkToken = resp?.data?.link_token;
@@ -34,6 +36,7 @@ async function hydrateConnectedAt(businessId, accounts) {
     .from("plaid_accounts")
     .select("plaid_account_id,connected_at")
     .eq("business_id", businessId)
+    .eq("plaid_env", plaidEnvName)
     .in("plaid_account_id", ids);
   const map = {};
   (data || []).forEach((row) => {
@@ -243,6 +246,7 @@ export async function exchangePublicToken({ businessId, userId, publicToken, met
   const { data: foreignItem, error: foreignItemErr } = await supabase
     .from("plaid_items")
     .select("business_id,plaid_item_id")
+    .eq("plaid_env", plaidEnvName)
     .eq("plaid_item_id", item_id)
     .neq("business_id", businessId)
     .maybeSingle();
@@ -274,7 +278,7 @@ export async function exchangePublicToken({ businessId, userId, publicToken, met
   };
   const { error: upsertErr } = await supabase
     .from("plaid_items")
-    .upsert(basePayload, { onConflict: "business_id,plaid_item_id" });
+    .upsert(basePayload, { onConflict: "business_id,plaid_env,plaid_item_id" });
   if (upsertErr) throw upsertErr;
 
   const accountResult = await fetchAndUpsertAccounts({
@@ -303,6 +307,7 @@ export async function getPlaidStatus({ businessId }) {
     .from("plaid_items")
     .select("plaid_item_id,institution_name,institution_id,status,last_sync_at,updated_at,is_active")
     .eq("business_id", businessId)
+    .eq("plaid_env", plaidEnvName)
     .eq("is_active", true);
   if (itemErr) throw itemErr;
 
@@ -310,6 +315,7 @@ export async function getPlaidStatus({ businessId }) {
     .from("plaid_items")
     .select("plaid_item_id", { count: "exact", head: true })
     .eq("business_id", businessId)
+    .eq("plaid_env", plaidEnvName)
     .eq("is_active", false);
   if (disconnectedErr) throw disconnectedErr;
 
@@ -317,6 +323,7 @@ export async function getPlaidStatus({ businessId }) {
     .from("plaid_accounts")
     .select("plaid_account_id,plaid_item_id,name,official_name,mask,type,subtype,is_active,current_balance,available_balance,connected_at,last_sync_at")
     .eq("business_id", businessId)
+    .eq("plaid_env", plaidEnvName)
     .eq("is_active", true);
   if (acctErr) throw acctErr;
 

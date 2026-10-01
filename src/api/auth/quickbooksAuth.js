@@ -29,6 +29,12 @@ import {
 } from "../../services/quickbooks/qboOAuthStateService.js";
 import { decryptQuickBooksTokenRow, encryptQuickBooksTokenPayload } from "../../services/quickbooksTokenService.js";
 import { redactQboSecrets, safeQboClientError } from "../../services/quickbooks/qboSecurity.js";
+import {
+  ENTITLEMENT_CAPABILITIES,
+  requireBusinessRole,
+  requireEntitlementCapability,
+  resolveBusinessEntitlement,
+} from "../_shared/entitlementAuth.js";
 
 const router = express.Router();
 
@@ -264,9 +270,27 @@ export async function saveQboTokens({
 
 const requireVerifiedBusiness = [requireAuth, requireBusinessAccess()];
 const requireVerifiedBusinessOrAdminView = [requireAuthOrAdminView, requireBusinessAccess()];
+const requireQboConnectionAdmin = [
+  ...requireVerifiedBusiness,
+  requireBusinessRole(["owner"]),
+  requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.INTEGRATION_ADMIN),
+];
+const requireQboDisconnectAdmin = [
+  ...requireVerifiedBusiness,
+  requireBusinessRole(["owner"]),
+  requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PROVIDER_DISCONNECT),
+];
+
+async function resolveCallbackRole({ businessId, userId }) {
+  const { data: business } = await supabase.from("business_profiles").select("user_id").eq("id", businessId).maybeSingle();
+  if (business?.user_id === userId) return "owner";
+  const { data: membership } = await supabase.from("user_business_link").select("role")
+    .eq("business_id", businessId).eq("user_id", userId).maybeSingle();
+  return String(membership?.role || "staff").toLowerCase();
+}
 
 // Step 1: Redirect to QuickBooks login
-router.get("/quickbooks", ...requireVerifiedBusiness, async (req, res) => {
+router.get("/quickbooks", ...requireQboConnectionAdmin, async (req, res) => {
   const businessId = req.business?.id || req.auth?.businessId || null;
   const userId = req.auth?.userId || req.user?.id || null;
 
@@ -275,9 +299,9 @@ router.get("/quickbooks", ...requireVerifiedBusiness, async (req, res) => {
   }
 
   const includeProjectsScope = req.query.projects === "1" || req.query.include_projects_scope === "1";
-  const forceSwitchCompany = ["true", "1", "yes"].includes(
-    String(req.query?.forceSwitchCompany || req.query?.force_switch_company || req.query?.force_switch || "").toLowerCase()
-  );
+  // Different-company replacement is intentionally unavailable in the launch flow.
+  // Client input can never authorize replacement.
+  const forceSwitchCompany = false;
   const forceBackfill = ["true", "1", "yes"].includes(
     String(req.query?.forceBackfill || req.query?.force_backfill || "").toLowerCase()
   );
@@ -348,6 +372,11 @@ router.get("/callback", async (req, res) => {
   try {
     const business_id = oauthState.businessId;
     const user_id = oauthState.userId;
+    const callbackRole = await resolveCallbackRole({ businessId: business_id, userId: user_id });
+    const callbackEntitlement = await resolveBusinessEntitlement({ businessId: business_id, role: callbackRole });
+    if (!callbackEntitlement.capabilities.has(ENTITLEMENT_CAPABILITIES.INTEGRATION_ADMIN)) {
+      throw new Error("QBO_ENTITLEMENT_REQUIRED");
+    }
     const tokenRes = await fetch(tokenUrl, {
       method: "POST",
       headers: {
@@ -384,8 +413,6 @@ router.get("/callback", async (req, res) => {
       companyInfo?.LegalName ||
       (await fetchCompanyName({ access_token, realm_id: realmId }).catch(() => null));
 
-    const forceSwitchCompany = oauthState.metadata?.forceSwitchCompany === true;
-
     // detect mismatch with existing connection
     const { data: existingRow } = await supabase
       .from("quickbooks_tokens")
@@ -406,8 +433,28 @@ router.get("/callback", async (req, res) => {
       throw new Error("QBO_REALM_ALREADY_CONNECTED");
     }
     const storedCompanyId = existingRow?.company_id || existingRow?.realm_id || null;
-    if (storedCompanyId && storedCompanyId !== realmId && !forceSwitchCompany) {
-      const message = "You connected a different QuickBooks company. Switching may affect posting destinations. Confirm switch?";
+    if (storedCompanyId && storedCompanyId !== realmId) {
+      const message = "This Bizzi business is locked to its existing QuickBooks company. Contact support for a controlled company replacement.";
+      const rejectedToken = refresh_token || access_token;
+      if (rejectedToken) {
+        const revoked = await revokeQuickBooksToken({ token: rejectedToken });
+        if (!revoked?.ok) {
+          console.warn("[QBO replacement rejected] best-effort token revoke failed", {
+            business_id,
+            qbo_env: qboEnvName,
+            status: revoked?.status || null,
+          });
+        }
+      }
+      await supabase.from("qbo_connection_history").insert({
+        business_id,
+        qbo_env: qboEnvName,
+        prior_realm_id: storedCompanyId,
+        proposed_realm_id: realmId,
+        actor_user_id: user_id,
+        action: "replacement_rejected",
+        reason: "ordinary_oauth_company_change_blocked",
+      });
       console.warn("[QBO RECONNECTED TO DIFFERENT COMPANY]", {
         business_id,
         previous: storedCompanyId,
@@ -438,6 +485,15 @@ router.get("/callback", async (req, res) => {
       }
     }
 
+    await supabase.from("qbo_connection_history").insert({
+      business_id,
+      qbo_env: qboEnvName,
+      prior_realm_id: storedCompanyId,
+      proposed_realm_id: realmId,
+      actor_user_id: user_id,
+      action: storedCompanyId ? "same_realm_reconnect" : "initial_connect",
+      reason: storedCompanyId ? "ordinary_oauth_reconnect" : "ordinary_oauth_initial_connect",
+    });
     await saveQboTokens({
       business_id,
       user_id,
@@ -549,7 +605,7 @@ router.get("/callback", async (req, res) => {
 });
 
 // Disconnect: delete tokens for a verified business
-router.post("/disconnect", ...requireVerifiedBusiness, async (req, res) => {
+router.post("/disconnect", ...requireQboDisconnectAdmin, async (req, res) => {
   try {
     const business_id = req.business?.id || req.auth?.businessId || null;
     if (!business_id) return res.status(400).json({ error: "missing_business_id" });

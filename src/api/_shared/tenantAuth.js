@@ -83,7 +83,7 @@ export function getRequestedBusinessId(req, { required = true } = {}) {
 async function hasBusinessMembership({ supabase, userId, businessId }) {
   const { data, error } = await supabase
     .from("user_business_link")
-    .select("user_id,business_id")
+    .select("user_id,business_id,role")
     .eq("user_id", userId)
     .eq("business_id", businessId)
     .limit(1)
@@ -96,7 +96,7 @@ async function hasBusinessMembership({ supabase, userId, businessId }) {
       403
     );
   }
-  return Boolean(data);
+  return data || null;
 }
 
 function mapAdminViewError(err) {
@@ -208,11 +208,11 @@ export async function resolveAuthorizedBusiness({
 
   const ownerUserId = business.user_id || null;
   const isOwner = ownerUserId && String(ownerUserId) === String(userId);
-  const isMember = isOwner
-    ? false
+  const membership = isOwner
+    ? null
     : await hasBusinessMembership({ supabase, userId, businessId: requestedBusinessId });
 
-  if (!isOwner && !isMember) {
+  if (!isOwner && !membership) {
     throw new TenantAuthError(
       TENANT_AUTH_CODES.BUSINESS_ACCESS_DENIED,
       "Business access denied.",
@@ -226,6 +226,7 @@ export async function resolveAuthorizedBusiness({
     ownerUserId,
     businessName: business.business_name || null,
     accessVia: isOwner ? "owner" : "membership",
+    membershipRole: isOwner ? "owner" : String(membership?.role || "staff").toLowerCase(),
     tenantMode: "customer",
     readOnly: false,
     userId,
@@ -240,6 +241,7 @@ export function attachAuthorizedBusiness(req, business) {
     ownerUserId: business.ownerUserId || null,
     businessName: business.businessName || null,
     accessVia: business.accessVia || null,
+    membershipRole: business.membershipRole || null,
   };
   req.auth ||= {};
   req.auth.businessId = business.id;
@@ -251,6 +253,7 @@ export function attachAuthorizedBusiness(req, business) {
     business: req.business,
     readOnly: business.readOnly === true,
     userId: business.userId || req.auth.userId || null,
+    membershipRole: business.membershipRole || null,
     staffUserId: business.staffUserId || null,
     staffRole: business.staffRole || null,
     adminViewSessionId: business.adminViewSessionId || null,

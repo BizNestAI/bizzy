@@ -153,7 +153,12 @@ test("browser direct table access is limited to known read-only surfaces", () =>
     .map((file) => `\n// ${relative(root, file)}\n${readFileSync(file, "utf8")}`)
     .join("\n");
 
-  assert.match(source, /\.from\(\s*["']financial_metrics["']\s*\)/);
+  assert.doesNotMatch(
+    source,
+    /\.from\(\s*["']financial_metrics["']\s*\)/,
+    "financial metrics browser reads should use the tenant-authorized server API"
+  );
+  assert.match(source, /\/api\/accounting\/metrics/);
   assert.match(source, /\.from\(\s*["']gpt_usage["']\s*\)/);
 
   for (const table of ALL_TABLES) {

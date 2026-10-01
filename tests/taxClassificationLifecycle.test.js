@@ -1121,6 +1121,7 @@ async function processPendingRunFromEvent({ supabase, changeType, transactionId 
 function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false, taxProfiles = [completeProfile()], taxDeductionRules = [softwareRule(), mealsRule()] } = {}) {
   const store = {
     business_profiles: [{ id: BUSINESS_ID, bookkeeping_start_date: null }],
+    business_billing: [{ business_id: BUSINESS_ID, subscription_status_test: "active" }],
     bank_transactions: [],
     transaction_categorizations: [],
     qbo_posted_transactions: [],
@@ -1145,6 +1146,7 @@ function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false
   }
   if (includeOtherTenantTransaction) {
     store.business_profiles.push({ id: OTHER_BUSINESS_ID, bookkeeping_start_date: null });
+    store.business_billing.push({ business_id: OTHER_BUSINESS_ID, subscription_status_test: "active" });
     store.bank_transactions.push(bankTxn({ id: "other-txn", business_id: OTHER_BUSINESS_ID }));
     store.transaction_categorizations.push(categorization({ id: "other-cat", business_id: OTHER_BUSINESS_ID, transaction_id: "other-txn" }));
     store.qbo_posted_transactions.push(qboPosted({ id: "other-qbo", business_id: OTHER_BUSINESS_ID, transaction_id: "other-txn", qbo_txn_id: "other-qbo-id" }));

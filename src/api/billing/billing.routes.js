@@ -13,7 +13,6 @@ import { claimStripeWebhookEventForProcessing } from "./stripeWebhookIdempotency
 
 const APP_URL = process.env.APP_URL || process.env.APP_BASE_URL || "http://localhost:5173";
 const ACTIVE_SUFFIX = stripeMode === "test" ? "test" : "live";
-const USE_LEGACY_FALLBACK = stripeMode === "live";
 
 const ACTIVE_BILLING_COLUMNS = {
   stripe_customer_id: `stripe_customer_id_${ACTIVE_SUFFIX}`,
@@ -28,6 +27,8 @@ const ACTIVE_BILLING_COLUMNS = {
   last_invoice_id: `last_invoice_id_${ACTIVE_SUFFIX}`,
   last_payment_failed_at: `last_payment_failed_at_${ACTIVE_SUFFIX}`,
   plan_type: `plan_type_${ACTIVE_SUFFIX}`,
+  stripe_event_created_at: `stripe_event_created_at_${ACTIVE_SUFFIX}`,
+  stripe_event_id: `stripe_event_id_${ACTIVE_SUFFIX}`,
 };
 
 if (process.env.NODE_ENV !== "production") {
@@ -122,7 +123,6 @@ async function upsertBusinessBilling(businessId, payload = {}) {
     if (value === undefined) return;
     const scopedKey = ACTIVE_BILLING_COLUMNS[key];
     if (scopedKey) scopedPayload[scopedKey] = value;
-    if (USE_LEGACY_FALLBACK) scopedPayload[key] = value;
   });
   const row = {
     business_id: businessId,
@@ -265,10 +265,6 @@ function readActiveBillingValue(row, key, fallbackValue = null) {
   const scopedKey = ACTIVE_BILLING_COLUMNS[key];
   const scopedValue = scopedKey ? row?.[scopedKey] : undefined;
   if (scopedValue !== undefined && scopedValue !== null) return scopedValue;
-  if (USE_LEGACY_FALLBACK) {
-    const legacyValue = row?.[key];
-    if (legacyValue !== undefined && legacyValue !== null) return legacyValue;
-  }
   return fallbackValue;
 }
 
@@ -623,10 +619,8 @@ billingRouter.get("/status", ...requireVerifiedBillingBusinessOrAdminView, async
     ]);
     const canStartCheckout = !blockingCheckoutStatuses.has(status);
     const planLabel = mapPlanLabel(payload.plan_type);
-    let accessLevel = "blocked";
+    let accessLevel = "read_only";
     if (status === "active" || status === "trialing") accessLevel = "full";
-    else if (status === "past_due") accessLevel = "limited";
-    else if (status === "canceled") accessLevel = "read_only";
     return res.json({
       ...payload,
       plan_label: planLabel,
@@ -1214,9 +1208,13 @@ export async function billingWebhookHandler(req, res) {
     return res.json({ received: true, duplicate: true });
   }
 
+  const eventOrdering = {
+    stripe_event_created_at: event.created ? new Date(event.created * 1000).toISOString() : new Date().toISOString(),
+    stripe_event_id: event.id || null,
+  };
   const touchBilling = async (businessId, fields = {}) => {
     if (!businessId) return;
-    await upsertBusinessBilling(businessId, fields);
+    await upsertBusinessBilling(businessId, { ...fields, ...eventOrdering });
   };
 
   const extractBusinessId = async (obj) => {

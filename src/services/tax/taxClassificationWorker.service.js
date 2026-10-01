@@ -24,6 +24,7 @@ import { evaluateTaxCalculationPrerequisites } from "./taxCalculationPrerequisit
 import { handleTaxRecalculationEvent } from "./events/taxRecalculationTrigger.service.js";
 import { TAX_RECALCULATION_EVENT_TYPES } from "./events/taxRecalculationEventDomain.js";
 import { getBusinessesEligibleForTaxClassification } from "./taxClassificationRecovery.service.js";
+import { businessHasPaidEntitlement } from "../billing/entitledBusinesses.js";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_RUN_BATCH_SIZE = 5;
@@ -139,6 +140,7 @@ export async function enqueueRecoveryTaxClassificationRuns({ supabase, taxYear =
     const year = business.taxYear || business.tax_year || business.profile?.tax_year;
     if (!businessId || !year) continue;
     try {
+      if (!(await businessHasPaidEntitlement(businessId, { db: supabase }))) continue;
       const lifecycle = business.lifecycle || await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear: year });
       if (lifecycle.classificationStatus !== "ready_to_classify") continue;
       const queued = await enqueueTaxClassificationRun({
@@ -199,6 +201,16 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
   const businessId = run.business_id || run.businessId;
   const taxYear = run.tax_year || run.taxYear;
   try {
+    if (!(await businessHasPaidEntitlement(businessId, { db: supabase }))) {
+      return requeueTaxClassificationRun({
+        supabase,
+        runId: run.id,
+        progress: {},
+        now,
+        processAfter: new Date(now.getTime() + 60 * 60 * 1000),
+        metadata: { ...(run.metadata || {}), deferredReason: "paid_entitlement_required" },
+      });
+    }
     await validateDeductionRuleConfiguration({ supabase, businessId, taxYear });
     if ((run.metadata || run.meta)?.repairMode === "unresolved_fallback") {
       const repaired = await repairUnresolvedFallbackClassifications({

@@ -6,23 +6,14 @@ import { useAdminView } from "../../context/AdminViewContext.jsx";
 const DEFAULT_MESSAGE = "Activate Bizzi to enable automated workflows.";
 
 export function getBillingAccess(statusValue) {
-  if (process.env.NODE_ENV !== "production") {
-    return { access: "full", canRunAI: true, isReadOnly: false, isBlocked: false };
-  }
   const normalized = statusValue || "free";
   if (normalized === "trialing" || normalized === "active") {
     return { access: "full", canRunAI: true, isReadOnly: false, isBlocked: false };
   }
-  if (normalized === "past_due") {
-    return { access: "limited", canRunAI: true, isReadOnly: false, isBlocked: false };
-  }
-  if (normalized === "canceled") {
+  if (["past_due", "canceled", "unpaid", "incomplete", "incomplete_expired", "free", "missing", "unknown"].includes(normalized)) {
     return { access: "read_only", canRunAI: false, isReadOnly: true, isBlocked: false };
   }
-  if (normalized === "unpaid" || normalized === "incomplete" || normalized === "incomplete_expired") {
-    return { access: "blocked", canRunAI: false, isReadOnly: false, isBlocked: true };
-  }
-  return { access: "blocked", canRunAI: false, isReadOnly: false, isBlocked: true };
+  return { access: "read_only", canRunAI: false, isReadOnly: true, isBlocked: false };
 }
 
 export function resolveStatusValue(status) {
@@ -57,7 +48,7 @@ export default function BillingGate({
   const access = useMemo(() => {
     const level = status?.access_level || accessLevel || null;
     if (level === "full") return { access: "full", canRunAI: true, isReadOnly: false, isBlocked: false };
-    if (level === "limited") return { access: "limited", canRunAI: true, isReadOnly: false, isBlocked: false };
+    if (level === "limited") return { access: "read_only", canRunAI: false, isReadOnly: true, isBlocked: false };
     if (level === "read_only") return { access: "read_only", canRunAI: false, isReadOnly: true, isBlocked: false };
     if (level === "blocked") return { access: "blocked", canRunAI: false, isReadOnly: false, isBlocked: true };
     return getBillingAccess(statusValue);
@@ -81,7 +72,7 @@ export default function BillingGate({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="font-semibold">Payment issue detected.</div>
-              <div className="text-amber-100/80 text-xs">You still have temporary access while you update billing.</div>
+              <div className="text-amber-100/80 text-xs">Paid actions are paused. Historical data remains available while you update billing.</div>
             </div>
             <button
               type="button"

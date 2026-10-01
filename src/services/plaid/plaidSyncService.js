@@ -927,6 +927,10 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
 }
 
 export async function runPlaidSyncForBusiness(businessId, { force = false } = {}) {
+  const { businessHasPaidEntitlement } = await import("../billing/entitledBusinesses.js");
+  if (!(await businessHasPaidEntitlement(businessId, { db: supabase }))) {
+    return { ok: true, synced: 0, skipped: 1, reason: "paid_entitlement_required", bookkeeping_enqueued: 0 };
+  }
   const plaid = getPlaidClient();
   if (!plaid) throw new Error("plaid_not_configured");
 
@@ -934,6 +938,7 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
     .from("plaid_items")
     .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active")
     .eq("business_id", businessId)
+    .eq("plaid_env", plaidEnvName)
     .eq("is_active", true);
   if (itemsErr) throw itemsErr;
   if (!items || !items.length) return { ok: true, synced: 0, skipped: 0 };
@@ -943,6 +948,10 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
   let bookkeepingEnqueued = 0;
   for (const item of items) {
     try {
+      if (!(await businessHasPaidEntitlement(businessId, { db: supabase }))) {
+        skipped += 1;
+        continue;
+      }
       const res = await runSyncForItem(plaid, businessId, item, { force });
       if (res?.skipped) {
         skipped += 1;

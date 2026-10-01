@@ -3,6 +3,7 @@ import { supabase } from '../services/supabaseAdmin.js';
 import { ensureForecastV1Run } from '../services/accounting/forecastV1Service.js';
 import { log } from '../utils/reviews/logger.js';
 import { qboEnvName } from '../utils/qboEnv.js';
+import { filterEntitledBusinessIds } from '../services/billing/entitledBusinesses.js';
 
 async function runOnce() {
   log.info('[cron] forecast refresh start');
@@ -20,10 +21,11 @@ async function runOnce() {
     return;
   }
 
+  const entitled = new Set(await filterEntitledBusinessIds((data || []).map((row) => row.business_id)));
   const seen = new Set();
   for (const token of data || []) {
     const businessId = token.business_id;
-    if (!businessId || seen.has(businessId)) continue;
+    if (!businessId || !entitled.has(businessId) || seen.has(businessId)) continue;
     seen.add(businessId);
 
     try {

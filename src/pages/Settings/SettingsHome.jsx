@@ -111,6 +111,8 @@ export default function SettingsHome() {
   const navigate = useNavigate();
   const userId = adminView.active ? "admin_view" : (user?.id || localStorage.getItem("user_id"));
   const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem("currentBusinessId"));
+  const isPrimaryOwner = !adminView.active && Boolean(userId && currentBusiness?.user_id && String(currentBusiness.user_id) === String(userId));
+  const ownerAdministrationDisabled = readOnly || !isPrimaryOwner;
   const [searchParams, setSearchParams] = useSearchParams();
   const [billingRefresh, setBillingRefresh] = useState(0);
   const [billingToast, setBillingToast] = useState("");
@@ -597,8 +599,11 @@ useEffect(() => {
                 subtitle="Connect your books and bank data."
                 icon={PlugZap}
               >
-                <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} disabled={readOnly} />
-                <PlaidIntegrationCard businessId={businessId} readOnly={readOnly} />
+                <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} disabled={ownerAdministrationDisabled} />
+                <PlaidIntegrationCard businessId={businessId} readOnly={ownerAdministrationDisabled} />
+                {!isPrimaryOwner && !adminView.active ? (
+                  <p className="mt-3 text-xs" style={{ color: TEXT_MUTED }}>Only the primary business owner can manage integrations.</p>
+                ) : null}
               </Section>
 
               {SHOW_MARKETING_COMMS ? (
@@ -665,10 +670,13 @@ useEffect(() => {
                       userId={userId}
                       businessId={businessId}
                       status={billingStatus}
-                      readOnly={readOnly}
+                      readOnly={ownerAdministrationDisabled}
                       onBillingRefresh={() => setBillingRefresh((v) => v + 1)}
                     />
                   </div>
+                  {!isPrimaryOwner && !adminView.active ? (
+                    <p className="mt-3 text-xs" style={{ color: TEXT_MUTED }}>Only the primary business owner can manage billing.</p>
+                  ) : null}
                 </>
               )}
               {activeTab === "Billing" && loadingBilling ? (
@@ -908,7 +916,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
           token: linkToken,
           onSuccess: async (public_token, metadata) => {
             try {
-              await exchangePlaidPublicToken(businessId, public_token, metadata);
+              await exchangePlaidPublicToken(businessId, public_token, metadata, tokenResp?.link_session);
               await triggerPlaidSync(businessId);
               await fetchStatus();
               await refreshMappings();
@@ -1684,7 +1692,7 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
   const handleForceReconnect = () => {
     if (readOnly) return;
     if (!provider || !manager) return;
-    manager.connect(provider, { forceSwitchCompany: true });
+    manager.connect(provider);
     setShowCompanyMismatch(false);
     mismatchDismissedRef.current = true;
   };

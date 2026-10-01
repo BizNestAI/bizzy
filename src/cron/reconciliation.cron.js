@@ -1,4 +1,5 @@
 import { supabase } from "../services/supabaseAdmin.js";
+import { filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 import { evaluateReconciliationStatus } from "../services/bookkeeping/reconciliationEvaluator.js";
 import { triggerContractorCfoInsightsBestEffort } from "../services/insights/contractorCfoTriggerService.js";
 
@@ -39,7 +40,7 @@ async function getActiveBusinessIds() {
     if (row.business_id) ids.add(row.business_id);
   });
 
-  return Array.from(ids);
+  return filterEntitledBusinessIds(Array.from(ids));
 }
 
 async function getLastReconRunAt(businessId) {

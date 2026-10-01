@@ -126,6 +126,7 @@ const created = {
   businesses: [],
   rows: [],
   storageObjects: [],
+  storageBuckets: [],
 };
 
 const STORAGE_BUCKETS = [
@@ -340,6 +341,7 @@ async function setupTenantRows(user, business, label) {
       institution_id: `ins_${label}`,
       institution_name: `RLS Bank ${label}`,
       status: "connected",
+      plaid_env: "sandbox",
     }),
     linked_financial_items: await insertSeed("linked_financial_items", {
       user_id: user.id,
@@ -503,9 +505,10 @@ async function setupUncertifiedTableRows(user, business, label, baseRows = {}) {
     }),
     plaid_accounts: await insertSeed("plaid_accounts", {
       business_id: business.id,
-      plaid_item_id: `pa_item_${suffix}`,
+      plaid_item_id: `plaid_item_${suffix}`,
       plaid_account_id: `pa_acct_${suffix}`,
       name: `RLS Plaid Account ${label}`,
+      plaid_env: "sandbox",
     }),
     plaid_qbo_account_mappings: await insertSeed("plaid_qbo_account_mappings", {
       business_id: business.id,
@@ -853,7 +856,7 @@ function syntheticPayload(table, user, business, suffix) {
       business_id: business.id, access_token: `enc:v1:insert-access-${x}`, refresh_token: `enc:v1:insert-refresh-${x}`, realm_id: `insert_realm_${x}`, qbo_env: "sandbox",
     },
     plaid_items: {
-      business_id: business.id, user_id: user.id, plaid_item_id: `insert_plaid_${x}`, plaid_access_token: `enc:v1:insert-plaid-${x}`, status: "connected",
+      business_id: business.id, user_id: user.id, plaid_item_id: `insert_plaid_${x}`, plaid_access_token: `enc:v1:insert-plaid-${x}`, status: "connected", plaid_env: "sandbox",
     },
     linked_financial_items: {
       user_id: user.id, provider: "plaid", item_id: `insert_linked_${x}`, access_token_enc: "\\x696e736572742d746f6b656e",
@@ -931,7 +934,7 @@ function syntheticPayload(table, user, business, suffix) {
       user_id: user.id, business_id: business.id, month: "2099-09-01", revenue: 1,
     },
     plaid_accounts: {
-      business_id: business.id, plaid_item_id: `insert_pa_item_${x}`, plaid_account_id: `insert_pa_acct_${x}`, name: "insert plaid account",
+      business_id: business.id, plaid_item_id: `insert_pa_item_${x}`, plaid_account_id: `insert_pa_acct_${x}`, name: "insert plaid account", plaid_env: "sandbox",
     },
     plaid_qbo_account_mappings: {
       business_id: business.id, plaid_account_id: `insert_map_plaid_${x}`, qbo_account_id: `insert_map_qbo_${x}`, qbo_account_name: "insert qbo", qbo_account_type: "Bank",
@@ -1018,7 +1021,7 @@ async function runAnonTests(bizA, userA) {
 }
 
 async function runTenantTableTests(userA, bizA, rowsA, userB, bizB, rowsB) {
-  const tenantTables = ["bank_transactions", "ar_open_items", "invoices", "financial_metrics", "tax_snapshots", "bizzy_memory", "gpt_usage"];
+  const tenantTables = ["bank_transactions", "ar_open_items", "invoices", "financial_metrics", "tax_snapshots"];
   const pairs = [
     { actor: "User A", user: userA, ownBiz: bizA, ownRows: rowsA, victimUser: userB, victimBiz: bizB, victimRows: rowsB, target: "Business B" },
     { actor: "User B", user: userB, ownBiz: bizB, ownRows: rowsB, victimUser: userA, victimBiz: bizA, victimRows: rowsA, target: "Business A" },
@@ -1073,6 +1076,8 @@ async function runUncertifiedTableTests(userA, bizA, rowsA, userB, bizB, rowsB) 
     "affordability_assessments",
     "balance_sheet_history",
     "billing_customers",
+    "bizzy_memory",
+    "gpt_usage",
     "bizzy_deadlines",
     "bizzy_headlines",
     "bookkeeping_health",
@@ -1376,6 +1381,16 @@ async function runStorageTests(userA, bizA, userB, bizB) {
   ];
   const seeded = {};
 
+  const { data: existingBuckets, error: bucketListError } = await admin.storage.listBuckets();
+  if (bucketListError) throw new Error(`Failed listing storage buckets: ${bucketListError.message}`);
+  const existingBucketIds = new Set((existingBuckets || []).map((bucket) => bucket.id));
+  for (const bucket of STORAGE_BUCKETS) {
+    if (existingBucketIds.has(bucket.id)) continue;
+    const { error } = await admin.storage.createBucket(bucket.id, { public: false });
+    if (error) throw new Error(`Failed creating synthetic ${bucket.id} bucket: ${error.message}`);
+    created.storageBuckets.push(bucket.id);
+  }
+
   for (const bucket of STORAGE_BUCKETS) {
     seeded[bucket.id] = {
       [bizA.id]: await seedStorageObject(bucket.id, bizA.id, "business-a-seed"),
@@ -1548,6 +1563,9 @@ async function cleanup() {
   for (const object of [...created.storageObjects].reverse()) {
     if (!object?.bucket || !object?.path) continue;
     await admin.storage.from(object.bucket).remove([object.path]);
+  }
+  for (const bucket of [...created.storageBuckets].reverse()) {
+    await admin.storage.deleteBucket(bucket);
   }
   for (const row of [...created.rows].reverse()) {
     if (!row?.table) continue;

@@ -220,6 +220,7 @@ function makeSupabase(store = {}) {
   return {
     store: {
       tax_recalculation_requests: [],
+      business_billing: [{ business_id: BUSINESS_ID, subscription_status_test: "active" }],
       ...store,
     },
   };

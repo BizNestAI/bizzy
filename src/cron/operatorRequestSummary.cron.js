@@ -1,4 +1,5 @@
 import { supabase } from "../services/supabaseAdmin.js";
+import { filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 import { reconcileOperatorRequestSummariesForBusinesses } from "../services/bookkeeping/operatorRequestSummaryService.js";
 
 const DISABLED = String(process.env.DISABLE_OPERATOR_REQUEST_SUMMARY_CRON || "").toLowerCase() === "true";
@@ -35,7 +36,7 @@ async function discoverBusinessIds() {
     if (row.business_id) ids.add(row.business_id);
   });
 
-  return Array.from(ids).slice(0, BUSINESS_LIMIT);
+  return (await filterEntitledBusinessIds(Array.from(ids))).slice(0, BUSINESS_LIMIT);
 }
 
 export async function runOperatorRequestSummaryReconciliationOnce() {

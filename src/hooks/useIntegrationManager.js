@@ -133,7 +133,7 @@ function writeState(businessId, state) {
 }
 
 // Intentionally no-op: disable toast notifications for integration flows
-function toast(_detail) {
+function toast() {
   return;
 }
 
@@ -160,7 +160,7 @@ function loadPlaidScript() {
   return plaidScriptPromise;
 }
 
-async function openPlaidLink(linkToken, businessId) {
+async function openPlaidLink(linkToken, businessId, linkSession) {
   if (typeof window === "undefined") throw new Error("Plaid unavailable in SSR");
   const Plaid = await loadPlaidScript();
   return new Promise((resolve, reject) => {
@@ -174,6 +174,7 @@ async function openPlaidLink(linkToken, businessId) {
             body: JSON.stringify({
               business_id: businessId,
               public_token,
+              link_session: linkSession,
               metadata: metadata || null,
             }),
           });
@@ -404,7 +405,7 @@ export default function useIntegrationManager(options = {}) {
   }, [qbStatus, readOnly]);
 
   const runAction = useCallback(
-    async (provider, options = {}) => {
+    async (provider) => {
       if (readOnly) {
         throw new Error("admin_view_read_only");
       }
@@ -414,9 +415,6 @@ export default function useIntegrationManager(options = {}) {
           urlObj.searchParams.set("business_id", resolvedBusinessId || "default");
           urlObj.searchParams.set("format", "json");
           urlObj.searchParams.set("return_to", "/dashboard/settings?tab=Integrations");
-          if (options?.forceSwitchCompany) {
-            urlObj.searchParams.set("forceSwitchCompany", "true");
-          }
           const payload = await safeFetch(urlObj.toString(), {
             method: "GET",
             headers: { Accept: "application/json" },
@@ -447,7 +445,7 @@ export default function useIntegrationManager(options = {}) {
             toast({ title: "Plaid demo connected", body: "Using mock investment data." });
             return { connected: true };
           }
-          const linkResult = await openPlaidLink(linkToken, resolvedBusinessId);
+          const linkResult = await openPlaidLink(linkToken, resolvedBusinessId, tokenResp?.link_session);
           if (linkResult?.connected) {
             try {
               const statusRes = await safeFetch(

@@ -23,7 +23,8 @@ const {
 function createFakeDb(seed = {}) {
   const tables = {
     business_profiles: [{ id: "business-1", user_id: "user-1", job_costing_revenue_basis: "invoiced" }],
-    quickbooks_tokens: [{ id: "token-1", business_id: "business-1", realm_id: "realm-1", qbo_env: "sandbox", created_at: "2026-07-24T00:00:00.000Z" }],
+    quickbooks_tokens: [{ id: "token-1", business_id: "business-1", realm_id: "realm-1", qbo_env: "sandbox", is_active: true, status: "active", created_at: "2026-07-24T00:00:00.000Z" }],
+    business_billing: [{ business_id: "business-1", subscription_status_test: "active" }],
     qbo_webhook_events: [],
     qbo_cdc_cursors: [],
     qbo_job_costing_daily_sync_state: [],

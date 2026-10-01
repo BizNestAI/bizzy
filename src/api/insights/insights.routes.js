@@ -10,6 +10,7 @@ import { generateContractorCfoInsights } from './generators/contractorCfo.genera
 import { markInsightFeedback } from '../../services/insights/insightDedupeService.js';
 import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from '../_shared/tenantAuth.js';
 import { createRateLimiter } from '../_shared/rateLimit.js';
+import { requirePaidMutation } from '../_shared/entitlementAuth.js';
 
 const router = Router();
 const DEFAULT_INSIGHTS_MODULE = 'contractor_cfo';
@@ -53,6 +54,7 @@ function parseForce(value) {
 }
 
 router.get('/health', (_req, res) => res.json({ ok: true, module: 'insights' }));
+router.use(...privateBusinessRoute, requirePaidMutation({ capability: 'paid_compute' }));
 
 // ——— Normalization / defaults for GET routes ———
 router.use((req, _res, next) => {

@@ -1,6 +1,7 @@
 /* global process */
 import { supabase } from '../supabaseAdmin.js';
 import { runContractorCfoInsightsForBusiness } from './contractorCfoEngine.js';
+import { businessHasPaidEntitlement, filterEntitledBusinessIds } from '../billing/entitledBusinesses.js';
 import { ensureContractorCfoInsightsSchemaReady } from './contractorCfoSchemaCheck.js';
 
 const DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -29,6 +30,9 @@ export async function runContractorCfoInsightsIfEnabled({
   }
   if (!isContractorCfoInsightsEnabled()) {
     return { ok: true, skipped: true, reason: 'contractor_cfo_insights_disabled', inserted: 0 };
+  }
+  if (!(await businessHasPaidEntitlement(businessId))) {
+    return { ok: true, skipped: true, reason: 'entitlement_inactive', inserted: 0 };
   }
   const schema = await ensureContractorCfoInsightsSchemaReady();
   if (!schema.ok) {
@@ -90,7 +94,7 @@ export async function getActiveContractorCfoBusinessIds() {
     activeBusinessIdsFrom('plaid_items', (q) => q.eq('is_active', true)),
   ]);
 
-  return Array.from(new Set([...qboIds, ...plaidIds]));
+  return filterEntitledBusinessIds(Array.from(new Set([...qboIds, ...plaidIds])));
 }
 
 function computeDelay(targetHour = 6, targetMinute = 0) {

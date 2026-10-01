@@ -1,4 +1,5 @@
 import { supabase } from "../services/supabaseAdmin.js";
+import { filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 import { refreshMonthlyQboFinancialSnapshot } from "../services/accounting/healthMonthlySnapshotService.js";
 import { qboEnvName } from "../utils/qboEnv.js";
 import { prevMonthParts } from "../utils/monthKey.js";
@@ -27,13 +28,14 @@ export async function runQboFinancialHealthRefreshOnce() {
     return { ok: false, businesses: 0, error: error?.message || String(error) };
   }
 
+  const entitled = new Set(await filterEntitledBusinessIds((data || []).map((row) => row.business_id)));
   const seen = new Set();
   let refreshed = 0;
   let failed = 0;
 
   for (const row of data || []) {
     const businessId = row?.business_id;
-    if (!businessId || seen.has(businessId)) continue;
+    if (!businessId || !entitled.has(businessId) || seen.has(businessId)) continue;
     seen.add(businessId);
     try {
       const now = new Date();

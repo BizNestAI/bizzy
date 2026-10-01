@@ -232,7 +232,8 @@ test("QBO OAuth callback derives tenant from persisted state, not decoded callba
 
 test("QBO OAuth initiation requires canonical auth and business authorization", () => {
   assert.match(qboAuthSource, /const requireVerifiedBusiness = \[requireAuth, requireBusinessAccess\(\)\]/);
-  assert.match(qboAuthSource, /router\.get\("\/quickbooks", \.\.\.requireVerifiedBusiness/);
+  assert.match(qboAuthSource, /requireQboConnectionAdmin = \[[\s\S]*\.\.\.requireVerifiedBusiness[\s\S]*requireBusinessRole\(\["owner"\]\)[\s\S]*INTEGRATION_ADMIN/);
+  assert.match(qboAuthSource, /router\.get\("\/quickbooks", \.\.\.requireQboConnectionAdmin/);
   assert.match(qboAuthSource, /const businessId = req\.business\?\.id/);
   assert.doesNotMatch(qboAuthSource, /req\.query\.business_id[^;]*;/);
 });

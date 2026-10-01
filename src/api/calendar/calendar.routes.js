@@ -1,6 +1,5 @@
 // File: /src/api/calendar/calendar.routes.js
 import { Router } from 'express';
-import { requireAuth } from '../gpt/middlewares/requireAuth.js';
 import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from '../_shared/tenantAuth.js';
 import {
   healthRoute,
@@ -13,6 +12,7 @@ import {
   getAgendaGlanceRoute,  // optional glance
   quickCreateRoute,
 } from './calendar.controller.js';
+import { requirePaidMutation } from '../_shared/entitlementAuth.js';
 
 const router = Router();
 
@@ -29,16 +29,17 @@ const router = Router();
 router.get('/health', healthRoute);
 
 const privateBusinessRoute = [requireAuthOrAdminView, requireBusinessAccess(), rejectAdminViewWrites()];
+router.use(...privateBusinessRoute, requirePaidMutation());
 
-router.get('/events', ...privateBusinessRoute, getEvents);
-router.post('/events', ...privateBusinessRoute, postEvent);
-router.patch('/events/:id', ...privateBusinessRoute, patchEvent);
-router.delete('/events/:id', ...privateBusinessRoute, delEvent);
+router.get('/events', getEvents);
+router.post('/events', postEvent);
+router.patch('/events/:id', patchEvent);
+router.delete('/events/:id', delEvent);
 
-router.get('/agenda', ...privateBusinessRoute, getAgendaRoute);
-router.get('/agenda-range', ...privateBusinessRoute, getAgendaRangeRoute);
-router.get('/agenda-glance', ...privateBusinessRoute, getAgendaGlanceRoute);
+router.get('/agenda', getAgendaRoute);
+router.get('/agenda-range', getAgendaRangeRoute);
+router.get('/agenda-glance', getAgendaGlanceRoute);
 
-router.post('/quick-create', requireAuth, quickCreateRoute);
+router.post('/quick-create', quickCreateRoute);
 
 export default router;

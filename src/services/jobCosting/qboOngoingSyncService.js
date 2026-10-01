@@ -6,6 +6,7 @@ import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
 import { runQboJobCostingSync } from "./qboJobCostingSyncService.js";
 import { generateJobCandidatesForBusiness } from "./jobIdentityResolver.js";
 import { runQboProjectsSync } from "./qboProjectsService.js";
+import { businessHasPaidEntitlement } from "../billing/entitledBusinesses.js";
 export { redactQboSecrets } from "../quickbooks/qboSecurity.js";
 
 export const QBO_JOB_COSTING_WEBHOOK_ENTITIES = [
@@ -116,21 +117,26 @@ export async function findBusinessIdForRealm({ realmId, db = defaultSupabase } =
     .select("business_id")
     .eq("realm_id", String(realmId))
     .eq("qbo_env", qboEnvName)
+    .eq("is_active", true)
+    .eq("status", "active")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error && !isMissingSchemaError(error)) throw error;
-  if (data?.business_id) return data.business_id;
+  if (data?.business_id && await businessHasPaidEntitlement(data.business_id, { db })) return data.business_id;
 
   const fallback = await db
     .from("quickbooks_tokens")
     .select("business_id")
     .eq("realm_id", String(realmId))
+    .eq("is_active", true)
+    .eq("status", "active")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (fallback.error && !isMissingSchemaError(fallback.error)) throw fallback.error;
-  return fallback.data?.business_id || null;
+  if (fallback.data?.business_id && await businessHasPaidEntitlement(fallback.data.business_id, { db })) return fallback.data.business_id;
+  return null;
 }
 
 async function findExistingWebhookEvent({ db, eventHash }) {
@@ -373,7 +379,10 @@ export async function processQboWebhookEvent({
   });
 
   try {
-    const businessId = event.business_id || await findBusinessIdForRealm({ realmId: event.realm_id, db });
+    const resolvedBusinessId = event.business_id || await findBusinessIdForRealm({ realmId: event.realm_id, db });
+    const businessId = resolvedBusinessId && await businessHasPaidEntitlement(resolvedBusinessId, { db })
+      ? resolvedBusinessId
+      : null;
     if (!businessId) {
       const result = { ok: false, skipped: true, reason: "realm_not_connected" };
       await updateWebhookEvent({
