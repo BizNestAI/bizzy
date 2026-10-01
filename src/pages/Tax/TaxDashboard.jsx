@@ -535,7 +535,13 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const attentionCounts = useMemo(() => buildAttentionCounts(workspaceRows), [workspaceRows]);
   const attentionRows = useMemo(() => filterAttentionWorkspaceRows(workspaceRows, attentionTab), [workspaceRows, attentionTab]);
   const attentionGroups = useMemo(() => buildAttentionReviewGroups(attentionRows), [attentionRows]);
-  const hasUsableDeductionsData = Boolean(deductions.overview || workspaceRows.length || deductions.classificationCoverage);
+  const hasUsableDeductionsData = Boolean(
+    workspaceRows.length ||
+    deductions.allTransactions ||
+    deductions.transactions ||
+    deductions.classificationRows ||
+    deductions.postedTransactions
+  );
   const initialDeductionsLoading = deductions.loading && !hasUsableDeductionsData;
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
   const matrix = useMemo(
@@ -1346,6 +1352,25 @@ function DeductionsLoadingState() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div aria-hidden="true" className="flex flex-wrap gap-1.5">
+        <SkeletonLine className="h-9 w-40 rounded-full" />
+        <SkeletonLine className="h-9 w-32 rounded-full" />
+        <SkeletonLine className="h-9 w-32 rounded-full" />
+      </div>
+
+      <div aria-hidden="true" className="grid gap-2 md:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <div key={index} className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-black/16 px-3 py-3">
+            <SkeletonSheen />
+            <div className="relative">
+              <SkeletonLine className="h-2.5 w-36" />
+              <SkeletonLine className="mt-3 h-7 w-20" />
+              <SkeletonLine className="mt-2 h-3 w-48 max-w-full" />
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/18">

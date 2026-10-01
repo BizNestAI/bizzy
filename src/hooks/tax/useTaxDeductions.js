@@ -50,10 +50,10 @@ export function useTaxDeductions({
   const [classificationJobStatus, setClassificationJobStatus] = useState(null);
   const [classificationRows, setClassificationRows] = useState(null);
   const [classificationReviewSummary, setClassificationReviewSummary] = useState(null);
-  // Enter the initial live-request state during render. Waiting for the effect to
-  // flip this flag allows one paint of the empty DTOs, which looks like real
-  // zero-value tax data before the requests have even started.
-  const startsWithLiveRequest = enabled && Boolean(businessId) && !shouldUseDemoData() && !initialCachedOverview;
+  // The overview cache does not contain the transaction rows used by the matrix.
+  // Enter loading during render even when that cache exists so empty row DTOs do
+  // not briefly look like authoritative zero-value deduction totals.
+  const startsWithLiveRequest = enabled && Boolean(businessId) && !shouldUseDemoData();
   const [loading, setLoading] = useState(startsWithLiveRequest);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(null);

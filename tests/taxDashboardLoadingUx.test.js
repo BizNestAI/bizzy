@@ -63,9 +63,10 @@ test("Tax dashboard keeps cached content visible during background refresh", () 
 });
 
 test("Deductions enter a loading state before their first live request can paint false zeros", () => {
-  assert.match(deductionsHookSource, /const startsWithLiveRequest = enabled && Boolean\(businessId\) && !shouldUseDemoData\(\) && !initialCachedOverview;/);
+  assert.match(deductionsHookSource, /const startsWithLiveRequest = enabled && Boolean\(businessId\) && !shouldUseDemoData\(\);/);
   assert.match(deductionsHookSource, /const \[loading, setLoading\] = useState\(startsWithLiveRequest\);/);
-  assert.match(dashboardSource, /const hasUsableDeductionsData = Boolean\(deductions\.overview \|\| workspaceRows\.length \|\| deductions\.classificationCoverage\);/);
+  assert.match(dashboardSource, /const hasUsableDeductionsData = Boolean\([\s\S]*workspaceRows\.length[\s\S]*deductions\.allTransactions[\s\S]*deductions\.postedTransactions[\s\S]*\);/);
+  assert.doesNotMatch(sourceBetween(dashboardSource, "const hasUsableDeductionsData", "const initialDeductionsLoading"), /deductions\.overview|deductions\.classificationCoverage/);
   assert.match(dashboardSource, /const initialDeductionsLoading = deductions\.loading && !hasUsableDeductionsData;/);
 });
 
@@ -77,6 +78,8 @@ test("Deductions first-load treatment is accessible, animated, and contains no f
   assert.match(skeleton, /Loading deduction totals and classification activity\./);
   assert.match(skeleton, /SkeletonSheen/);
   assert.match(skeleton, /SkeletonLine/);
+  assert.match(skeleton, /md:grid-cols-3/);
+  assert.match(skeleton, /Array\.from\(\{ length: 3 \}\)/);
   assert.doesNotMatch(skeleton, /\$0|No classification run yet|No QBO-confirmed/i);
 });
 
