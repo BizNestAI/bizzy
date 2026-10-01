@@ -31,7 +31,7 @@ export function resolveChatIntent(message, forcedIntent = null) {
   if (/\baccrual(?: basis)?\b/.test(text) && /\b(my|our|company|business|numbers?|figures?|financials?|performance|report|p&l|revenue|expenses?|profit|income|margin)\b/.test(text)) return "financial_summary";
   if (/\b(quickbooks|qbo) transactions?\b/.test(text)) return "qbo_transactions";
   if (/\b(plaid|bank) transactions?\b/.test(text)) return "plaid_transactions";
-  if (/\b(?:show|find|list|search).{0,30}\btransactions?\b|\btransactions?\s+(?:with|from|for)\b/.test(text)) return "transaction_search";
+  if (/\b(?:show|find|list|search).{0,40}\btransactions?\b|\btransactions?\s+(?:with|from|for)\b/.test(text)) return "transaction_search";
   if (/\b(chart of accounts|coa|accounts list)\b/.test(text)) return "chart_of_accounts";
   if (/\b(expense|expenses|spend|spending|costs?)\b/.test(text)) return "financial_expenses";
   if (/\b(net (?:income|profit)|profit)\b/.test(text)) return "financial_net_income";
@@ -46,8 +46,9 @@ export function extractChatEntities(message, intent) {
     ? { requested_basis: "accrual", supported_basis: "cash", company_specific_accrual_available: false }
     : { requested_basis: null, supported_basis: "cash", company_specific_accrual_available: false };
   if (intent === "transaction_search") {
-    const match = text.match(/transactions?\s+(?:with|from|for)\s+(.+?)[?.!]*$/i);
-    return { search_text: match?.[1]?.trim().slice(0, 80) || null };
+    const afterTransactions = text.match(/transactions?\s+(?:with|from|for)\s+(.+?)(?:\s+(?:in|during|over|for)\s+(?:the\s+)?(?:last|past|this|previous)\b.*)?[?.!]*$/i);
+    const beforeTransactions = text.match(/\b(?:show|find|list|search)(?:\s+out)?(?:\s+me)?\s+(?:all\s+)?(?:the\s+)?(.+?)\s+transactions?\b/i);
+    return { search_text: (afterTransactions?.[1] || beforeTransactions?.[1])?.trim().slice(0, 80) || null };
   }
   if (intent === "job_profitability") {
     const match = text.match(/(?:the\s+)?(.+?)\s+(?:job|project)\b/i) || text.match(/\b(?:job|project)\s+(.+?)[?.!]*$/i);
@@ -182,14 +183,19 @@ function dedupeTransactions(rows) {
 
 async function loadTransactionSearch({ db, businessId, period, entities, message }) {
   const term = normalizeSearch(entities.search_text);
+  const allTime = /\b(?:ever|all[ -]?time|all (?:the )?.*transactions)\b/i.test(message);
+  const hasPeriod = !allTime && PERIOD_WORDS.test(message);
   let query = db.from("bizzy_chat_bookkeeping_feed")
     .select("transaction_id,plaid_transaction_id,duplicate_fingerprint,transaction_date,description,original_description,memo,merchant_name,normalized_merchant_name,signed_amount,amount,direction,account_name,gl_category,primary_feed,posting_outcome,qbo_entity_id,matched_relationship_id,last_status_at,source_provenance")
     .eq("business_id", businessId);
-  if (PERIOD_WORDS.test(message)) query = query.gte("transaction_date", period.start_date).lte("transaction_date", period.end_date);
+  if (hasPeriod) query = query.gte("transaction_date", period.start_date).lte("transaction_date", period.end_date);
   if (term) query = query.or(["description", "original_description", "memo", "merchant_name", "normalized_merchant_name"].map((field) => `${field}.ilike.%${term}%`).join(","));
-  const rows = dedupeTransactions(queryData(await query.order("transaction_date", { ascending: false }).limit(MAX_DETAIL_ROWS), "bizzy_chat_bookkeeping_feed_search"))
+  const queryLimit = allTime ? MAX_DETAIL_ROWS + 1 : MAX_DETAIL_ROWS;
+  const matched = dedupeTransactions(queryData(await query.order("transaction_date", { ascending: false }).limit(queryLimit), "bizzy_chat_bookkeeping_feed_search"));
+  const truncated = matched.length > MAX_DETAIL_ROWS;
+  const rows = matched.slice(0, MAX_DETAIL_ROWS)
     .map((row) => ({ ...row, account_name: row.account_name ? maskAccountName(row.account_name) : null }));
-  return { data: rows, source: "bizzy_chat_bookkeeping_feed", requested_period: PERIOD_WORDS.test(message) ? period : null, search_scope: PERIOD_WORDS.test(message) ? "requested_period" : "bounded_available_history", accounting_basis: null, data_through: rows[0]?.transaction_date || null, refreshed_at: rows.map((row) => row.last_status_at).filter(Boolean).sort().at(-1) || null, status: availability(rows) };
+  return { data: rows, source: "bizzy_chat_bookkeeping_feed", requested_period: hasPeriod ? period : null, search_scope: allTime ? "bounded_full_available_history" : hasPeriod ? "requested_period" : "bounded_available_history", result_limit: MAX_DETAIL_ROWS, truncated, accounting_basis: null, data_through: rows[0]?.transaction_date || null, refreshed_at: rows.map((row) => row.last_status_at).filter(Boolean).sort().at(-1) || null, status: availability(rows) };
 }
 
 function jobMatchScore(jobName, search) {

@@ -126,6 +126,57 @@ test("ordinary user text resolves financial, cash, AR, job, and integration inte
   assert.equal(resolveChatIntent("What accounting basis are these numbers using?"), "financial_basis");
 });
 
+test("merchant-history paraphrases retain transaction search intent and merchant extraction", () => {
+  const requests = [
+    "Can you show me my transactions with Adobe?",
+    "Can you list out the Adobe transactions we’ve had the last couple months?",
+    "Can you list out all the Adobe transactions we’ve ever had?",
+  ];
+  for (const request of requests) {
+    assert.equal(resolveChatIntent(request), "transaction_search");
+    assert.equal(extractChatEntities(request, "transaction_search").search_text, "Adobe");
+  }
+  assert.equal(extractChatEntities("Can you list out the adobe transactions we’ve ever had?", "transaction_search").search_text, "adobe");
+  assert.equal(extractChatEntities("Can you list out the Stripe transactions we’ve ever had?", "transaction_search").search_text, "Stripe");
+});
+
+test("merchant-history paraphrases use the canonical loader with bounded period policies", async () => {
+  const store = baseStore();
+  store.bizzy_chat_bookkeeping_feed = [{ business_id: BUSINESS, transaction_id: "adobe", transaction_date: "2026-08-28", merchant_name: "Adobe", description: "Adobe", amount: 7.57 }];
+  const noPeriod = await buildChatContext({ businessId: BUSINESS, message: "Can you show me my transactions with Adobe?", now: NOW, db: dbFor(store), logger: { info() {}, error() {} } });
+  assert.equal(noPeriod.intent_context.source, "bizzy_chat_bookkeeping_feed");
+  assert.equal(noPeriod.intent_context.search_scope, "bounded_available_history");
+  assert.equal(noPeriod.intent_context.requested_period, null);
+  const couple = await buildChatContext({ businessId: BUSINESS, message: "Can you list out the Adobe transactions we’ve had the last couple months?", now: NOW, db: dbFor(store), logger: { info() {}, error() {} } });
+  assert.equal(couple.intent_context.source, "bizzy_chat_bookkeeping_feed");
+  assert.equal(couple.intent_context.search_scope, "requested_period");
+  assert.equal(couple.intent_context.requested_period.start_date, "2026-07-01");
+  assert.equal(couple.intent_context.requested_period.end_date, "2026-09-30");
+  assert.equal(couple.intent_context.requested_period.kind, "current_and_prior_two_calendar_months");
+  const ever = await buildChatContext({ businessId: BUSINESS, message: "Can you list out all the Adobe transactions we’ve ever had?", now: NOW, db: dbFor(store), logger: { info() {}, error() {} } });
+  assert.equal(ever.intent_context.source, "bizzy_chat_bookkeeping_feed");
+  assert.equal(ever.intent_context.search_scope, "bounded_full_available_history");
+  assert.equal(ever.intent_context.result_limit, 40);
+  assert.equal(ever.intent_context.truncated, false);
+  const manyStore = baseStore();
+  manyStore.bizzy_chat_bookkeeping_feed = Array.from({ length: 41 }, (_, index) => ({ business_id: BUSINESS, transaction_id: `adobe-${index}`, transaction_date: `2026-08-${String((index % 28) + 1).padStart(2, "0")}`, merchant_name: "Adobe", description: "Adobe", amount: index }));
+  const truncated = await buildChatContext({ businessId: BUSINESS, message: "Can you list out all the Adobe transactions we’ve ever had?", now: NOW, db: dbFor(manyStore), logger: { info() {}, error() {} } });
+  assert.equal(truncated.intent_context.data.length, 40);
+  assert.equal(truncated.intent_context.truncated, true);
+});
+
+test("merchant search preserves no-match behavior for nonexistent and different merchants", async () => {
+  const empty = await buildChatContext({ businessId: BUSINESS, message: "Can you list out all the Nonexistent Merchant transactions we’ve ever had?", now: NOW, db: dbFor(baseStore()), logger: { info() {}, error() {} } });
+  assert.equal(empty.intent, "transaction_search");
+  assert.equal(empty.entities.search_text, "Nonexistent Merchant");
+  assert.equal(empty.intent_context.status, "available_no_matches");
+  const store = baseStore();
+  store.bizzy_chat_bookkeeping_feed = [{ business_id: BUSINESS, transaction_id: "stripe", transaction_date: "2026-08-20", merchant_name: "Stripe", description: "Stripe", amount: 25 }];
+  const stripe = await buildChatContext({ businessId: BUSINESS, message: "Can you list out all the Stripe transactions we’ve ever had?", now: NOW, db: dbFor(store), logger: { info() {}, error() {} } });
+  assert.equal(stripe.entities.search_text, "Stripe");
+  assert.equal(stripe.intent_context.status, "available_with_results");
+});
+
 test("always-on context separates current MTD from 12 completed cash-basis months", async () => {
   const context = await buildChatContext({ businessId: BUSINESS, message: "How much money have I made this month?", now: NOW, db: dbFor(baseStore()), logger: { warn() {} } });
   assert.equal(context.intent, "financial_revenue");

@@ -3,7 +3,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallba
 import { createPortal } from "react-dom";
 import { Copy, Save, ArrowLeft, Check, FileText, Receipt, ArrowUpRight, ChevronRight, ChevronDown } from "lucide-react";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
-import MarkdownRenderer from "./MarkdownRenderer";
+import AssistantMessageContent from "./AssistantMessageContent";
 import { useBusiness } from "../../context/BusinessContext";
 import { createDoc } from "../../services/bizzyDocs/docsService";
 import { generateThreadSummary } from "../../services/bizzyDocs/threadSummary";
@@ -198,7 +198,7 @@ function Typewriter({ id, text = "", speed = 110, onDone, onProgress }) {
 
   return (
     <div className="bizzy-tw" data-typing={typingDone ? "false" : "true"}>
-      <MarkdownRenderer>{typingDone ? text : hideDanglingMarkdownMarkers(shown)}</MarkdownRenderer>
+      <AssistantMessageContent text={typingDone ? text : hideDanglingMarkdownMarkers(shown)} complete={typingDone} />
     </div>
   );
 }
@@ -1372,7 +1372,7 @@ function MessageStream({
           return (
             <div className="chat-row" key={key}>
               <div className="row-wrap">
-                <div className="bubble-assistant"><MarkdownRenderer>{m.text}</MarkdownRenderer></div>
+                <div className="bubble-assistant"><AssistantMessageContent message={m} complete /></div>
                 <ActionRow
                   text={m.text}
                   artifacts={m.artifacts}

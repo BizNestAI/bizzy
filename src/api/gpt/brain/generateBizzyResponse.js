@@ -817,7 +817,7 @@ export async function generateBizzyResponse({
 
     const structured = parseStructuredResponse(bizzyReply, { allowNavigation: allowNavigationActions });
     const rawBizzyReply = structured.content || bizzyReply;
-    bizzyReply = rawBizzyReply;
+    bizzyReply = formatBizzyMarkdown(rawBizzyReply);
     responseArtifacts = structured.artifacts || [];
     responseActions = structured.actions || [];
     responseDocSuggestion = structured.doc_suggestion || null;
@@ -912,10 +912,8 @@ export async function generateBizzyResponse({
       // Memory persistence must not fail the user-facing response.
     }
 
-    const formattedReply = formatBizzyMarkdown(bizzyReply);
-
     return {
-      responseText: formattedReply,
+      responseText: bizzyReply,
       artifacts: responseArtifacts,
       actions: responseActions,
       doc_suggestion: responseDocSuggestion,

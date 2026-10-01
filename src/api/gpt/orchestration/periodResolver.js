@@ -25,6 +25,10 @@ export function resolveFinancialPeriod(message, { now = new Date(), timezone = D
     const startYear = month === 12 ? year : year - 1;
     return { start_date: iso(startYear, startMonth, 1), end_date: iso(year, month, day), label: "trailing 12 months", is_partial: true, timezone: tz, kind: "trailing_12_months" };
   }
+  if (/\blast (?:couple|two) months\b/.test(text)) {
+    const start = new Date(Date.UTC(year, month - 3, 1));
+    return { start_date: iso(start.getUTCFullYear(), start.getUTCMonth() + 1, 1), end_date: iso(year, month, day), label: "current and prior two calendar months", is_partial: true, timezone: tz, kind: "current_and_prior_two_calendar_months" };
+  }
   if (/\blast month\b/.test(text)) {
     const m = month === 1 ? 12 : month - 1;
     const y = month === 1 ? year - 1 : year;
