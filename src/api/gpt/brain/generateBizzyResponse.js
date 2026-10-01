@@ -25,6 +25,7 @@ import {
   recordMainChatUsage,
 } from './chatCostControls.js';
 import { buildChatContext } from '../orchestration/chatContextService.js';
+import { loadRecentStructuredReferences } from '../orchestration/recentStructuredReferences.js';
 import { invokeBizzyChatCompletion } from './openaiInvocation.js';
 
 // 👉 NEW: demo-mode helpers
@@ -415,6 +416,7 @@ export async function generateBizzyResponse({
 
     // Build input bundle EARLY (fixes bundle usage before definition)
     const bundle = parsedInput || {};
+    const structuredReferences = bundle.chatContext?.structured_references || null;
     const allowNavigationActions = !!bundle.userRequestedNavigation;
 
     try {
@@ -861,6 +863,7 @@ export async function generateBizzyResponse({
             embedding_text: operationalError ? null : (asstEmb ? bizzyEmbeddingText : null),
             embedding     : asstEmb,
             message_kind  : operationalError ? 'operational_error' : 'conversation',
+            structured_references: operationalError ? null : structuredReferences,
           },
         ])
         .select('id,thread_id,role');
@@ -887,7 +890,7 @@ export async function generateBizzyResponse({
     console.log('[gpt] storing memory');
     // Memory (unchanged)
     try {
-      if (!operationalError) {
+      if (!operationalError && !(structuredReferences?.transactions?.length)) {
         const memoryTags = [intent || 'general'];
         if (onboardingMatch) {
           memoryTags.unshift('onboarding_help');
@@ -1032,12 +1035,18 @@ export async function generateBizzyResponseHandler(req, res) {
     let orchestration;
     const contextRequestId = randomUUID();
     try {
+      const recentReferences = await loadRecentStructuredReferences({
+        db: supabase,
+        businessId: business_id,
+        threadId: threadIdToUse,
+      });
       orchestration = await buildChatContext({
         businessId: business_id,
         message,
         forcedIntent: normalizedType,
         db: supabase,
         requestId: contextRequestId,
+        recentReferences,
       });
     } catch (contextError) {
       const requestId = contextRequestId;

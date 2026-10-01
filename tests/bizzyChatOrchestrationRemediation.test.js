@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 
 import { getCanonicalOnboardingStatus } from "../src/services/onboardingStatusService.js";
 import { resolveFinancialPeriod } from "../src/api/gpt/orchestration/periodResolver.js";
-import { buildChatContext, resolveChatIntent, extractChatEntities, maskAccountName } from "../src/api/gpt/orchestration/chatContextService.js";
+import { buildChatContext, resolveChatIntent, extractChatEntities, maskAccountName, normalizeJobName } from "../src/api/gpt/orchestration/chatContextService.js";
+import { loadRecentStructuredReferences, sanitizeStructuredReferences } from "../src/api/gpt/orchestration/recentStructuredReferences.js";
 import { buildBizzySystemMessages } from "../src/api/gpt/brain/bizzySystemPrompt.js";
 import { invokeBizzyChatCompletion, normalizeOpenAIOutput, resolveOpenAIInvocation } from "../src/api/gpt/brain/openaiInvocation.js";
 import { isOperationalMemory } from "../src/api/gpt/brain/bizzyMemoryService.js";
@@ -234,6 +235,68 @@ test("job profitability reuses canonical summaries with exact, partial, and init
     assert.equal(context.intent_context.data[0].profitability_verification, "incomplete_unverified_no_cost_sources");
     assert.match(context.intent_context.data[0].warning, /not a reliable final measure/);
   }
+});
+
+test("resolved full job name carries into a P&V follow-up in the same thread", async () => {
+  const canonical = async () => [{ job_id: "pv", job_name: "Projection and Video LLC", net_invoiced_revenue: 7800, total_cost: 0, gross_margin: 7800, margin_percent: 100, assigned_transaction_count: 0 }];
+  const first = await buildChatContext({ businessId: BUSINESS, message: "How profitable is the Projection and Video LLC job?", now: NOW, db: dbFor(baseStore()), jobSummaryLoader: canonical, logger: { info() {}, error() {} } });
+  const followup = await buildChatContext({ businessId: BUSINESS, message: "How profitable is the P&V job?", now: NOW, db: dbFor(baseStore()), jobSummaryLoader: canonical, recentReferences: first.structured_references, logger: { info() {}, error() {} } });
+  assert.equal(followup.intent_context.data[0].job_id, "pv");
+  assert.equal(followup.intent_context.resolution, "recent_conversation_context");
+});
+
+test("P&V resolves uniquely in a new thread but asks for clarification when initials collide", async () => {
+  const one = async () => [{ job_id: "pv", job_name: "Projection and Video LLC" }];
+  const unique = await buildChatContext({ businessId: BUSINESS, message: "How profitable is the P&V job?", now: NOW, db: dbFor(baseStore()), jobSummaryLoader: one, logger: { info() {}, error() {} } });
+  assert.equal(unique.intent_context.data[0].job_id, "pv");
+  assert.equal(unique.intent_context.requires_clarification, false);
+  const two = async () => [{ job_id: "pv1", job_name: "Projection and Video LLC" }, { job_id: "pv2", job_name: "Photography and Video LLC" }];
+  const ambiguous = await buildChatContext({ businessId: BUSINESS, message: "How profitable is the P&V job?", now: NOW, db: dbFor(baseStore()), jobSummaryLoader: two, logger: { info() {}, error() {} } });
+  assert.equal(ambiguous.intent_context.requires_clarification, true);
+  assert.deepEqual(ambiguous.intent_context.data.map((row) => row.job_id), ["pv1", "pv2"]);
+});
+
+test("job normalization treats ampersands, and, punctuation, casing, spacing, and LLC consistently", () => {
+  const variants = ["Projection and Video LLC", "projection & video, llc.", " PROJECTION   AND VIDEO "];
+  assert.deepEqual(variants.map(normalizeJobName), ["projection video", "projection video", "projection video"]);
+  assert.equal(normalizeJobName("P & V"), "p v");
+});
+
+test("Adobe structured references support review and mutation follow-ups without losing candidates", async () => {
+  const prior = sanitizeStructuredReferences({ merchant: "Adobe", period: { start_date: "2026-05-01", end_date: "2026-08-31" }, transactions: [
+    { transaction_id: "pending", date: "2026-08-28", amount: -7.57, description: "Adobe subscription", status: "Pending" },
+    { transaction_id: "review", date: "2026-07-30", amount: -7.57, description: "Adobe Creative Cloud", status: "Needs Review" },
+    { transaction_id: "posted", date: "2026-06-30", amount: -7.5, description: "Adobe", status: "Posted" },
+  ] });
+  const review = await buildChatContext({ businessId: BUSINESS, message: "Which are in Needs Review?", now: NOW, db: dbFor(baseStore()), recentReferences: prior, logger: { info() {}, error() {} } });
+  assert.equal(review.intent, "transaction_followup");
+  assert.deepEqual(review.intent_context.data.map((row) => row.transaction_id), ["review"]);
+  const mutation = await buildChatContext({ businessId: BUSINESS, message: "Categorize the Adobe transaction and post it", now: NOW, db: dbFor(baseStore()), recentReferences: prior, logger: { info() {}, error() {} } });
+  assert.equal(mutation.intent_context.requires_clarification, true);
+  assert.equal(mutation.intent_context.uniquely_actionable_transaction_id, "review");
+  assert.equal(mutation.intent_context.explicit_assumption_required, true);
+  assert.equal(mutation.intent_context.capability.can_categorize, false);
+  assert.equal(mutation.intent_context.capability.can_post_to_qbo, false);
+  assert.equal(mutation.intent_context.capability.supported_destination, "Books → Books Review");
+  assert.equal(mutation.structured_references.transactions.length, 3);
+});
+
+test("recent structured references are bounded and queries are isolated by business and thread", async () => {
+  const bounded = sanitizeStructuredReferences({ merchant: "Adobe", transactions: Array.from({ length: 20 }, (_, i) => ({ transaction_id: `txn-${i}`, date: "2026-08-01", amount: i, description: "Adobe", status: "Posted", raw: { secret: true } })) });
+  assert.equal(bounded.transactions.length, 8);
+  assert.equal("raw" in bounded.transactions[0], false);
+  const calls = [];
+  const query = { select() { return this; }, eq(field, value) { calls.push([field, value]); return this; }, not() { return this; }, order() { return this; }, limit() { return Promise.resolve({ data: [{ structured_references: bounded }], error: null }); } };
+  const loaded = await loadRecentStructuredReferences({ db: { from(table) { assert.equal(table, "gpt_messages"); return query; } }, businessId: "business-a", threadId: "thread-a" });
+  assert.ok(calls.some(([field, value]) => field === "business_id" && value === "business-a"));
+  assert.ok(calls.some(([field, value]) => field === "thread_id" && value === "thread-a"));
+  assert.equal(loaded.transactions.length, 8);
+});
+
+test("raw transaction references are not written to semantic memory", () => {
+  const source = readFileSync(new URL("../src/api/gpt/brain/generateBizzyResponse.js", import.meta.url), "utf8");
+  assert.match(source, /!operationalError && !\(structuredReferences\?\.transactions\?\.length\)/);
+  assert.doesNotMatch(readFileSync(new URL("../src/api/gpt/orchestration/recentStructuredReferences.js", import.meta.url), "utf8"), /bizzy_memory|storeMemory/);
 });
 
 test("cash snapshot exposes reconciling other income and separates connection time from freshness", async () => {

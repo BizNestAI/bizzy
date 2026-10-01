@@ -1,6 +1,7 @@
 import { getCanonicalOnboardingStatus } from "../../../services/onboardingStatusService.js";
 import { resolveIntent as resolveRegisteredIntent } from "../registry/intentRegistry.js";
 import { resolveFinancialPeriod } from "./periodResolver.js";
+import { referencesFromChatContext, sanitizeStructuredReferences } from "./recentStructuredReferences.js";
 
 const MAX_DETAIL_ROWS = 40;
 const CASH_BASIS = "Cash";
@@ -50,7 +51,7 @@ export function extractChatEntities(message, intent) {
   }
   if (intent === "job_profitability") {
     const match = text.match(/(?:the\s+)?(.+?)\s+(?:job|project)\b/i) || text.match(/\b(?:job|project)\s+(.+?)[?.!]*$/i);
-    return { job_search: match?.[1]?.replace(/^how\s+profitable\s+(?:was\s+)?(?:the\s+)?/i, "").replace(/^was\s+(?:the\s+)?/i, "").trim().slice(0, 80) || null };
+    return { job_search: match?.[1]?.replace(/^how\s+profitable\s+(?:(?:is|was)\s+)?(?:the\s+)?/i, "").replace(/^(?:is|was)\s+(?:the\s+)?/i, "").trim().slice(0, 80) || null };
   }
   return ["financial_summary", "financial_revenue", "financial_expenses", "financial_net_income", "financial_basis"].includes(intent)
     ? { accounting_basis: CASH_BASIS, ...basisContext }
@@ -157,6 +158,14 @@ function normalizeSearch(value) {
   return String(value || "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
 }
 
+function normalizeJobName(value) {
+  return normalizeSearch(value).split(" ").filter((token) => !["and", "the", "of", "llc", "inc", "corp", "corporation", "company", "co"].includes(token)).join(" ");
+}
+
+function jobInitials(value) {
+  return normalizeJobName(value).split(" ").filter(Boolean).map((token) => token[0]).join("");
+}
+
 function availability(rows) {
   return rows.length ? "available_with_results" : "available_no_matches";
 }
@@ -184,26 +193,40 @@ async function loadTransactionSearch({ db, businessId, period, entities, message
 }
 
 function jobMatchScore(jobName, search) {
-  const name = normalizeSearch(jobName);
-  const needle = normalizeSearch(search);
+  const name = normalizeJobName(jobName);
+  const needle = normalizeJobName(search);
   if (!needle) return 1;
   if (name === needle) return 100;
   if (name.includes(needle) || needle.includes(name)) return 80;
-  const stop = new Set(["and", "the", "of", "llc", "inc", "company", "co"]);
-  const tokens = name.split(" ").filter((token) => token && !stop.has(token));
-  const needleTokens = needle.split(" ").filter((token) => token && !stop.has(token));
-  const initials = tokens.map((token) => token[0]).join("");
-  const needleInitials = needleTokens.map((token) => token[0]).join("");
+  const tokens = name.split(" ").filter(Boolean);
+  const needleTokens = needle.split(" ").filter(Boolean);
+  const initials = jobInitials(name);
+  const needleInitials = jobInitials(needle);
   if (needleInitials.length >= 2 && initials === needleInitials) return 75;
   const overlap = needleTokens.filter((token) => tokens.includes(token)).length;
   return needleTokens.length && overlap ? 40 + (overlap / needleTokens.length) * 30 : 0;
 }
 
-async function loadJobProfitability({ businessId, entities, db, jobSummaryLoader }) {
+function referenceMatchesJob(search, canonicalName) {
+  const needle = normalizeJobName(search);
+  const canonical = normalizeJobName(canonicalName);
+  return needle === canonical || (needle.length >= 2 && needle === jobInitials(canonical)) || canonical.includes(needle);
+}
+
+async function loadJobProfitability({ businessId, entities, db, jobSummaryLoader, recentReferences }) {
   const loader = jobSummaryLoader || (async (...args) => (await import("../../Jobs/jobs.routes.js")).fetchJobSummaries(...args));
   const summaries = await loader(businessId, { db });
+  const recentJob = recentReferences?.job;
+  if (recentJob && referenceMatchesJob(entities.job_search, recentJob.canonical_name)) {
+    const resolved = summaries.find((row) => String(row.job_id || row.id) === String(recentJob.job_id));
+    if (resolved) summaries.splice(0, summaries.length, resolved);
+  }
   const ranked = summaries.map((row) => ({ row, score: jobMatchScore(row.job_name, entities.job_search) })).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score);
-  const rows = ranked.slice(0, entities.job_search ? 5 : MAX_DETAIL_ROWS).map(({ row, score }) => ({
+  const topScore = ranked[0]?.score || 0;
+  const plausible = ranked.filter(({ score }) => score === topScore);
+  const requiresClarification = Boolean(entities.job_search && plausible.length > 1);
+  const selected = requiresClarification ? plausible : ranked.slice(0, entities.job_search ? 1 : MAX_DETAIL_ROWS);
+  const rows = selected.map(({ row, score }) => ({
     job_id: row.job_id || row.id, job_name: row.job_name, invoiced_revenue: row.net_invoiced_revenue ?? 0,
     collected_revenue: row.collected_cash ?? 0, assigned_direct_costs: row.total_cost ?? 0,
     gross_profit: row.gross_margin ?? 0, margin_percent: row.margin_percent,
@@ -213,10 +236,37 @@ async function loadJobProfitability({ businessId, entities, db, jobSummaryLoader
     warning: Number(row.assigned_transaction_count || 0) === 0 ? "No costs have been assigned, so the calculated margin is not a reliable final measure of profitability." : null,
     data_freshness: row.data_freshness || null, match_score: score, source_provenance: "job_costing_page_canonical_summary",
   }));
-  return { data: rows, source: "job_costing_page_canonical_summary", requested_period: null, accounting_basis: null, data_through: null, refreshed_at: null, status: availability(rows) };
+  return { data: rows, source: "job_costing_page_canonical_summary", requested_period: null, accounting_basis: null, data_through: null, refreshed_at: null, status: availability(rows), requires_clarification: requiresClarification, resolution: recentJob && rows.length === 1 && String(rows[0].job_id) === String(recentJob.job_id) ? "recent_conversation_context" : requiresClarification ? "ambiguous" : rows.length ? "deterministic_name_match" : "no_match" };
 }
 
-async function loadIntentContext({ db, businessId, period, intent, entities, message, jobSummaryLoader }) {
+function loadTransactionFollowup({ recentReferences, message }) {
+  const recent = sanitizeStructuredReferences(recentReferences);
+  const wantsNeedsReview = /needs? review/i.test(message);
+  const candidates = recent.transactions;
+  const matching = wantsNeedsReview ? candidates.filter((row) => /needs? review/i.test(row.status || "")) : candidates;
+  const actionable = candidates.filter((row) => /needs? review/i.test(row.status || ""));
+  return {
+    data: matching,
+    candidates,
+    matched_merchant: recent.merchant,
+    source: "recent_thread_structured_references",
+    requested_period: recent.period,
+    status: availability(matching),
+    requires_clarification: !wantsNeedsReview && candidates.length > 1,
+    uniquely_actionable_transaction_id: actionable.length === 1 ? actionable[0].transaction_id : null,
+    explicit_assumption_required: actionable.length === 1 && candidates.length > 1,
+    capability: { can_categorize: false, can_approve: false, can_post_to_qbo: false, supported_destination: "Books → Books Review" },
+    response_requirements: {
+      acknowledge_candidate_dates_and_amounts: candidates.length > 0,
+      never_claim_transaction_details_are_unavailable: candidates.length > 0,
+      ask_which_transaction_when_ambiguous: !wantsNeedsReview && candidates.length > 1,
+      state_assumption_if_using_unique_actionable_candidate: actionable.length === 1 && candidates.length > 1,
+      refuse_chat_mutation: /categor(?:y|ize)|approve|post/i.test(message),
+    },
+  };
+}
+
+async function loadIntentContext({ db, businessId, period, intent, entities, message, jobSummaryLoader, recentReferences }) {
   if (["financial_summary", "financial_revenue", "financial_expenses", "financial_net_income", "financial_basis"].includes(intent)) {
     const snapshots = await loadCurrentSnapshots({ db, businessId, period });
     return { data: snapshots, source: "monthly_review_qbo_pnl_snapshots", requested_period: period, accounting_basis: CASH_BASIS, requested_basis: entities.requested_basis, supported_basis: "cash", company_specific_accrual_available: false, comparable: true, data_through: snapshots.map((r) => r.source_end_date).sort().at(-1) || null, refreshed_at: snapshots.map((r) => r.pulled_at).sort().at(-1) || null, interpretation: intent === "financial_revenue" && /money .*made|money .*make|how much money/i.test(message) ? "revenue" : null, status: snapshots.length ? "available" : "unavailable", availability_reason: snapshots.length ? null : "cash_basis_snapshot_unavailable" };
@@ -228,22 +278,26 @@ async function loadIntentContext({ db, businessId, period, intent, entities, mes
   if (intent === "transaction_search") return loadTransactionSearch({ db, businessId, period, entities, message });
   if (intent === "invoice_status") return loadTable({ db, businessId, period, table: "ar_aging_v2", select: "qbo_invoice_id,client,amount,days,due_date,status", configure: (q) => q.gt("amount", 0).gt("days", 0).in("status", ["unpaid", "partial", "overdue"]).order("days", { ascending: false }) });
   if (intent === "books_review") return loadTable({ db, businessId, period, table: "bizzy_chat_bookkeeping_feed", select: "transaction_id,transaction_date,description,merchant_name,amount,direction,primary_feed,posting_outcome,failure_review_reason,last_status_at", configure: (q) => q.gte("transaction_date", period.start_date).lte("transaction_date", period.end_date).order("transaction_date", { ascending: false }) });
-  if (intent === "job_profitability") return loadJobProfitability({ businessId, entities, db, jobSummaryLoader });
+  if (intent === "job_profitability") return loadJobProfitability({ businessId, entities, db, jobSummaryLoader, recentReferences });
+  if (intent === "transaction_followup") return loadTransactionFollowup({ recentReferences, message });
   if (intent === "forecast_generate") return loadTable({ db, businessId, period, table: "cashflow_forecast", select: "month,cash_in,cash_out,net_cash,source,updated_at", configure: (q) => q.gte("month", period.start_date).lte("month", period.end_date).order("month", { ascending: true }) });
   if (intent === "tax_readiness") { const year = Number(period.start_date.slice(0, 4)); return loadTable({ db, businessId, period, table: "tax_calculation_runs", select: "tax_year,status,as_of_date,completed_at,confidence_score,source_freshness", configure: (q) => q.eq("tax_year", year).eq("status", "completed").is("superseded_by_run_id", null).order("completed_at", { ascending: false }), limit: 1 }); }
   return undefined;
 }
 
-export async function buildChatContext({ businessId, message, forcedIntent = null, timezone, now = new Date(), db, logger = console, requestId = null, jobSummaryLoader = null } = {}) {
+export async function buildChatContext({ businessId, message, forcedIntent = null, timezone, now = new Date(), db, logger = console, requestId = null, jobSummaryLoader = null, recentReferences = null } = {}) {
   if (!businessId) throw new Error("business_id_required");
   if (!db) throw new Error("database_client_required");
-  const intent = resolveChatIntent(message, forcedIntent);
+  const priorReferences = sanitizeStructuredReferences(recentReferences);
+  let intent = resolveChatIntent(message, forcedIntent);
+  if (priorReferences.transactions.length && /\b(needs? review|categor(?:y|ize)|approve|post(?:ing)?|which (?:one|are)|what category)\b/i.test(message)) intent = "transaction_followup";
   const entities = extractChatEntities(message, intent);
   const period = resolveFinancialPeriod(message, { now, timezone });
   const currentPeriod = resolveFinancialPeriod("this month", { now, timezone });
   const tasks = { account_status: getCanonicalOnboardingStatus({ businessId, db }), financial_summary: loadFinancialSummary({ db, businessId, currentPeriod }), plaid_summary: loadPlaidSummary({ db, businessId, period: currentPeriod }), bookkeeping_health: loadBookkeepingHealth({ db, businessId, period: currentPeriod }) };
   const detailStartedAt = Date.now();
-  const detail = loadIntentContext({ db, businessId, period, intent, entities, message, jobSummaryLoader });
+  if (intent === "transaction_followup" && !entities.search_text) entities.search_text = priorReferences.merchant;
+  const detail = loadIntentContext({ db, businessId, period, intent, entities, message, jobSummaryLoader, recentReferences: priorReferences });
   if (detail) tasks.intent_context = detail;
   const entries = Object.entries(tasks);
   const settled = await Promise.allSettled(entries.map(([, promise]) => promise));
@@ -253,7 +307,8 @@ export async function buildChatContext({ businessId, message, forcedIntent = nul
     const diagnostic = context.loader_status.intent_context || { status: "failed" };
     logger[diagnostic.status === "failed" ? "error" : "info"]?.("[bizzy.chat.loader]", { request_id: requestId, business_id: businessId, intent, loader: context.intent_context?.source || (intent === "transaction_search" ? "bizzy_chat_bookkeeping_feed" : intent), normalized_search_term: normalizeSearch(entities.search_text || entities.job_search) || null, normalized_period: PERIOD_WORDS.test(message) ? `${period.start_date}/${period.end_date}` : null, availability_status: diagnostic.status, result_count: context.intent_context?.data?.length || 0, duration_ms: Date.now() - detailStartedAt, database_error: diagnostic.status === "failed" ? { code: diagnostic.error_code, message: diagnostic.error_message } : null });
   }
+  context.structured_references = referencesFromChatContext(context, priorReferences);
   return context;
 }
 
-export { CASH_BASIS, maskAccountName, dedupeTransactions, jobMatchScore };
+export { CASH_BASIS, maskAccountName, dedupeTransactions, jobMatchScore, normalizeJobName };
