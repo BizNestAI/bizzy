@@ -2,6 +2,8 @@
 /* global process */
 import { supabase } from '../../../services/supabaseAdmin.js';
 import OpenAI from 'openai';
+import { filterSafeDurableMemoryRows, isSafeDurableMemoryRow } from './durableMemoryPolicy.js';
+export { buildDurableMemoryCandidate, containsUnstableMemoryFact, DURABLE_MEMORY_KINDS, DURABLE_MEMORY_POLICY_VERSION, filterSafeDurableMemoryRows, isSafeDurableMemoryRow } from './durableMemoryPolicy.js';
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const EMBEDDING_MODEL = 'text-embedding-3-small'; // 1536-dim
@@ -29,11 +31,15 @@ export function isOperationalMemory(row = {}) {
   if (Array.isArray(row?.tags) && row.tags.includes('operational_error')) return true;
   return OPERATIONAL_MEMORY_PATTERNS.some((pattern) => pattern.test(`${row?.input_text || ''} ${row?.bizzy_response || ''}`));
 }
+export function filterSafeMemoryRows(rows = []) {
+  return filterSafeDurableMemoryRows(rows).filter((row) => !isOperationalMemory(row));
+}
 function summarizeRow(row) {
   const u = (row?.input_text || '').trim();
   const b = (row?.bizzy_response || '').trim();
   const uClip = u.length > 140 ? u.slice(0, 140) + '…' : u;
   const bClip = b.length > 140 ? b.slice(0, 140) + '…' : b;
+  if (row?.memory_kind && !bClip) return `User-confirmed durable ${row.memory_kind.replaceAll('_', ' ')}: “${uClip}”`;
   return `From a previous discussion: “${uClip}” → Bizzy replied: “${bClip}”`;
 }
 
@@ -53,11 +59,17 @@ export async function storeMemory({
   bizzy_response,
   tags = [],
   kpis = {},
+  memory_kind = null,
+  memory_key = null,
+  policy_version = null,
+  source_thread_id = null,
+  source_message_id = null,
   dedupeThreshold = 0.96, // cosine similarity (0..1); set null/0 to disable
 } = {}) {
   if (!user_id) throw new Error('storeMemory: missing user_id');
   if (!business_id) throw new Error('storeMemory: missing business_id');
   if (isTrivial(input_text) && isTrivial(bizzy_response)) return; // nothing meaningful
+  if (!isSafeDurableMemoryRow({ memory_kind, policy_version, input_text, bizzy_response })) return;
 
   const text = clip(input_text || bizzy_response || '');
   if (!text) return;
@@ -72,7 +84,7 @@ export async function storeMemory({
   if (!embedding) throw new Error('Failed to generate embedding for memory.');
 
   // Optional near-duplicate check via RPC if available
-  if (dedupeThreshold && dedupeThreshold > 0) {
+  if (!memory_key && dedupeThreshold && dedupeThreshold > 0) {
     try {
       const { data: near } = await supabase.rpc('match_bizzy_memory', {
         user_uuid: user_id,
@@ -94,7 +106,7 @@ export async function storeMemory({
     }
   }
 
-  const { error } = await supabase.from('bizzy_memory').insert({
+  const row = {
     user_id,
     business_id,
     embedding,
@@ -102,7 +114,17 @@ export async function storeMemory({
     bizzy_response: clip(bizzy_response, 8000),
     tags,
     kpis,
-  });
+    memory_kind,
+    memory_key,
+    policy_version,
+    source_thread_id,
+    source_message_id,
+    updated_at: new Date().toISOString(),
+  };
+  const query = memory_key
+    ? supabase.from('bizzy_memory').upsert(row, { onConflict: 'user_id,business_id,memory_kind,memory_key' })
+    : supabase.from('bizzy_memory').insert(row);
+  const { error } = await query;
 
   if (error) {
     console.error('❌ Failed to store memory:', error);
@@ -156,7 +178,7 @@ export async function retrieveRelevantMemories(
       });
       if (error) throw error;
 
-      return (data || []).filter((row) => !isOperationalMemory(row)).map((row) => ({
+      return filterSafeMemoryRows(data).map((row) => ({
         id: row.id,
         summary: summarizeRow(row),
         similarity: row.similarity,
@@ -174,12 +196,12 @@ export async function retrieveRelevantMemories(
   try {
     const { data } = await supabase
       .from('bizzy_memory')
-      .select('id,input_text,bizzy_response,tags,created_at')
+      .select('id,input_text,bizzy_response,tags,created_at,memory_kind,policy_version')
       .eq('user_id', user_id)
       .eq('business_id', business_id)
       .order('created_at', { ascending: false })
       .limit(50);
-    const docs = (data || []).filter((row) => !isOperationalMemory(row));
+    const docs = filterSafeMemoryRows(data);
     const needle = (input_text || '').toLowerCase();
     const scored = docs
       .map((d) => {

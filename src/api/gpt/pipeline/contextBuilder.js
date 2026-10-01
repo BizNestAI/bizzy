@@ -50,7 +50,7 @@ async function readRecentChat({ user_id, business_id, threadId = null, limit = 6
   try {
     let q = _supabase
       .from('gpt_messages')
-      .select('role,content,created_at');
+      .select('role,content,created_at,message_role_position,message_sequence');
 
     if (threadId) {
       q = q.eq('thread_id', threadId);
@@ -61,6 +61,8 @@ async function readRecentChat({ user_id, business_id, threadId = null, limit = 6
 
     const { data, error } = await q
       .order('created_at', { ascending: false })
+      .order('message_role_position', { ascending: false })
+      .order('message_sequence', { ascending: false })
       .limit(limit);
 
     if (error) throw error;

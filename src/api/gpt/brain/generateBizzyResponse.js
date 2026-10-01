@@ -4,6 +4,7 @@ import { supabase } from '../../../services/supabaseAdmin.js';
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import { isOperationalMemory, retrieveRelevantMemories, storeMemory } from './bizzyMemoryService.js';
+import { buildDurableMemoryCandidate } from './durableMemoryPolicy.js';
 import { buildBizzySystemMessages } from './bizzySystemPrompt.js';
 import { getEmbedding } from '../../../utils/openaiEmbedding.js';
 import { detectAffordabilityIntent, extractExpenseDetails } from '../affordabilityParser.js';
@@ -25,8 +26,9 @@ import {
   recordMainChatUsage,
 } from './chatCostControls.js';
 import { buildChatContext } from '../orchestration/chatContextService.js';
-import { loadRecentStructuredReferences } from '../orchestration/recentStructuredReferences.js';
+import { loadRecentStructuredReferences, shouldPersistStructuredReferences } from '../orchestration/recentStructuredReferences.js';
 import { invokeBizzyChatCompletion } from './openaiInvocation.js';
+import { HISTORY_AUTHORITY_INSTRUCTION, labelOlderConversationDigest, sortConversationMessages } from '../../../utils/conversationMessageOrder.js';
 
 // 👉 NEW: demo-mode helpers
 import { isDemoMode, loadDemoData } from '../../../services/demo/loadDemoData.js';
@@ -567,25 +569,29 @@ export async function generateBizzyResponse({
       try {
         const { data: recentMsgs } = await supabase
           .from('gpt_messages')
-          .select('role, content, message_kind')
+          .select('role, content, message_kind, created_at, message_role_position, message_sequence')
           .eq('thread_id', threadId)
           .eq('message_kind', 'conversation')
           .order('created_at', { ascending: false })
-          .limit(12);
+          .order('message_role_position', { ascending: false })
+          .order('message_sequence', { ascending: false })
+          .limit(24);
         if (Array.isArray(recentMsgs) && recentMsgs.length) {
-          const safeRecentMessages = recentMsgs.filter((row) => !isOperationalMemory({ bizzy_response: row.content }));
-          recentChat = safeRecentMessages.slice(0, 6);
-          const older = safeRecentMessages.slice(6);
+          const safeRecentMessages = sortConversationMessages(
+            recentMsgs.filter((row) => !isOperationalMemory({ bizzy_response: row.content })),
+            { descending: true }
+          );
+          recentChat = safeRecentMessages.slice(0, 12);
+          const older = safeRecentMessages.slice(12, 24);
           if (older.length) {
-            const cleaned = older
+            const cleaned = older.slice().reverse()
               .map((m) => {
                 const role = sanitizeRole(m.role) || 'user';
-                const text = String(m.content || '').replace(/\s+/g, ' ').trim();
+                const text = String(m.content || '').replace(/\s+/g, ' ').trim().slice(0, 140);
                 return text ? `${role}: ${text}` : '';
               })
               .filter(Boolean);
-            const flat = cleaned.join(' • ');
-            recentChatSummary = flat.slice(0, 600);
+            recentChatSummary = cleaned.join('\n').slice(0, 1600);
           }
         }
       } catch (e) {
@@ -599,7 +605,7 @@ export async function generateBizzyResponse({
       if (!effectiveDemoMode) {
         const memorySnippets = await retrieveRelevantMemories(user_id, businessId, message);
         memoryContext = memorySnippets?.length
-          ? `Context from past Bizzi conversations:\n${memorySnippets.map((m) => m.summary).join('\n')}`
+          ? `Non-authoritative durable user context from past Bizzi conversations. Never use it as evidence for current financial, bookkeeping, job, invoice, transaction, integration, or freshness claims:\n${memorySnippets.map((m) => m.summary).join('\n')}`
           : '';
       }
     } catch {
@@ -607,7 +613,7 @@ export async function generateBizzyResponse({
     }
 
     if (recentChatSummary) {
-      memoryContext += `\n\nRecent conversation summary (older turns): ${recentChatSummary}`;
+      memoryContext += `\n\n${labelOlderConversationDigest(recentChatSummary)}`;
     }
 
     if (kpis?.length && !bundle.chatContext?.financial_summary) {
@@ -740,6 +746,10 @@ export async function generateBizzyResponse({
       ...(onboardingToneBlock ? [{ role: 'system', content: onboardingToneBlock }] : []),
       ...(onboardingGuide ? [{ role: 'system', content: onboardingGuide }] : []),
       ...personaAndStyle,
+      ...(chatHistoryFormatted.length ? [{
+        role: 'system',
+        content: HISTORY_AUTHORITY_INSTRUCTION,
+      }] : []),
       ...chatHistoryFormatted,
       { role: 'user', content: message },
     ];
@@ -824,6 +834,7 @@ export async function generateBizzyResponse({
 
     console.log('[gpt] persisting messages');
 
+    let persistedUserMessageId = null;
     // Persist turn (unchanged)
     try {
       const userEmbeddingText  = `User said: ${message}`;
@@ -839,7 +850,10 @@ export async function generateBizzyResponse({
 
       const nowIso = new Date().toISOString();
 
-      const { error: msgErr } = await supabase
+      const persistedStructuredReferences = operationalError || !shouldPersistStructuredReferences(bundle.chatContext)
+        ? null
+        : structuredReferences;
+      const { data: persistedMessages, error: msgErr } = await supabase
         .from('gpt_messages')
         .insert([
           {
@@ -852,6 +866,7 @@ export async function generateBizzyResponse({
             embedding_text: userEmb ? userEmbeddingText : null,
             embedding     : userEmb,
             message_kind  : 'conversation',
+            message_role_position: 0,
           },
           {
             thread_id     : localThreadId,
@@ -863,13 +878,16 @@ export async function generateBizzyResponse({
             embedding_text: operationalError ? null : (asstEmb ? bizzyEmbeddingText : null),
             embedding     : asstEmb,
             message_kind  : operationalError ? 'operational_error' : 'conversation',
-            structured_references: operationalError ? null : structuredReferences,
+            message_role_position: 1,
+            structured_references: persistedStructuredReferences,
           },
         ])
         .select('id,thread_id,role');
 
       if (msgErr) {
         console.error('[gpt_messages insert] failed:', msgErr);
+      } else {
+        persistedUserMessageId = persistedMessages?.find((row) => row.role === 'user')?.id || null;
       }
 
       if (localThreadId) {
@@ -890,22 +908,21 @@ export async function generateBizzyResponse({
     console.log('[gpt] storing memory');
     // Memory (unchanged)
     try {
-      if (!operationalError && !(structuredReferences?.transactions?.length)) {
-        const memoryTags = [intent || 'general'];
-        if (onboardingMatch) {
-          memoryTags.unshift('onboarding_help');
-        }
+      const durableMemory = buildDurableMemoryCandidate({ input_text: message, operationalError });
+      if (durableMemory && !(structuredReferences?.transactions?.length)) {
+        const memoryTags = [durableMemory.memory_kind, 'user_confirmed'];
         await storeMemory({
           user_id,
           business_id: businessId,
-          input_text: message,
-          bizzy_response: bizzyReply,
+          input_text: durableMemory.durable_fact,
+          bizzy_response: '',
           tags: memoryTags,
-          kpis: kpis?.length ? {
-            revenue_ytd: kpis[0]?.total_revenue || 0,
-            margin_pct : kpis[0]?.profit_margin || 0,
-            top_expense_categories: kpis[0]?.top_spending_category ? [kpis[0].month ? `${kpis[0].top_spending_category}` : kpis[0].top_spending_category] : [],
-          } : null,
+          kpis: {},
+          memory_kind: durableMemory.memory_kind,
+          memory_key: durableMemory.memory_key,
+          policy_version: durableMemory.policy_version,
+          source_thread_id: localThreadId,
+          source_message_id: persistedUserMessageId,
         });
       }
     } catch {

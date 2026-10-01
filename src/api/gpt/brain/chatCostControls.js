@@ -1,3 +1,5 @@
+/* global process */
+
 export const MAIN_CHAT_MODEL_PRICING_USD_PER_MILLION = Object.freeze({
   'gpt-5.6-terra': {
     input: 2.5,
@@ -120,14 +122,16 @@ export function applyMainChatContextBudget(
     return { messages, trimmed: false, input_chars: totalChars, max_chars: maxChars };
   }
 
-  const lastUserIndex = [...messages]
+  const currentUserMessage = [...messages]
     .map((msg, index) => ({ msg, index }))
     .reverse()
-    .find(({ msg }) => msg?.role === 'user')?.index;
+    .find(({ msg }) => msg?.role === 'user')?.msg;
 
-  const next = messages.map((msg, index) => {
-    if (index === lastUserIndex) return msg;
-    if (msg?.role === 'system' || msg?.role === 'developer') return msg;
+  const isProtected = (msg) =>
+    msg === currentUserMessage || msg?.role === 'system' || msg?.role === 'developer';
+
+  const next = messages.map((msg) => {
+    if (isProtected(msg)) return msg;
     return trimMessageContent(msg, minHistoricalChars);
   });
 
@@ -137,10 +141,7 @@ export function applyMainChatContextBudget(
     pruned.reduce((sum, msg) => sum + messageTextLength(msg), 0) > maxChars
   ) {
     const removableIndex = pruned.findIndex(
-      (msg, index) =>
-        index !== lastUserIndex &&
-        msg?.role !== 'system' &&
-        msg?.role !== 'developer'
+      (msg) => !isProtected(msg)
     );
     if (removableIndex < 0) break;
     pruned = pruned.filter((_, index) => index !== removableIndex);
@@ -153,6 +154,9 @@ export function applyMainChatContextBudget(
     input_chars: finalChars,
     original_input_chars: totalChars,
     max_chars: maxChars,
+    overflow: finalChars > maxChars,
+    overflow_chars: Math.max(0, finalChars - maxChars),
+    protected_chars: pruned.filter(isProtected).reduce((sum, msg) => sum + messageTextLength(msg), 0),
   };
 }
 

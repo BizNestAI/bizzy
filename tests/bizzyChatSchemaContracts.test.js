@@ -9,6 +9,9 @@ const schema = read("supabase/live_schema_snapshot.sql");
 const pnlMigration = read("supabase/migrations/20260910_monthly_review_qbo_pnl_snapshots.sql");
 const chatMigration = read("supabase/migrations/20261028_bizzy_chat_bookkeeping_feed.sql");
 const isolationMigration = read("supabase/migrations/20261028_bizzy_chat_memory_and_operational_messages.sql");
+const durableMemoryMigration = read("supabase/migrations/20261031_bizzy_durable_memory_safety.sql");
+const memoryCorrectionMigration = read("supabase/migrations/20261031120000_bizzy_memory_post_review_corrections.sql");
+const memoryVerifier = read("scripts/verifyBizzyMemorySchema.sql");
 
 function tableBlock(name, corpus = schema) {
   const quoted = new RegExp(`CREATE TABLE IF NOT EXISTS "public"\\."${name}" \\(([\\s\\S]*?)\\n\\);`, "i").exec(corpus)?.[1];
@@ -54,6 +57,27 @@ test("memory and operational metadata migrations enforce business/message contra
   assert.match(isolationMigration, /bm\.business_id = business_uuid/);
   assert.match(isolationMigration, /message_kind in \('conversation', 'operational_error'\)/);
   assert.match(read("src/api/gpt/brain/generateBizzyResponse.js"), /\.eq\('message_kind', 'conversation'\)/);
+  assert.match(durableMemoryMigration, /memory_kind text/);
+  assert.match(durableMemoryMigration, /policy_version text/);
+  assert.match(durableMemoryMigration, /bm\.policy_version = 'durable-memory-v1'/);
+  assert.match(durableMemoryMigration, /bizzy_memory_durable_identity_idx/);
+  assert.match(memoryCorrectionMigration, /business_profiles bp/);
+  assert.match(memoryCorrectionMigration, /user_business_link ubl/);
+  assert.match(memoryCorrectionMigration, /bp\.user_id = user_uuid/);
+  assert.match(memoryCorrectionMigration, /ubl\.user_id = user_uuid/);
+  assert.match(memoryCorrectionMigration, /message_role_position/);
+  assert.match(memoryCorrectionMigration, /message_sequence/);
+});
+
+test("memory verifier is read-only and reports explicit missing-object failures plus a final verdict", () => {
+  assert.doesNotMatch(memoryVerifier, /\b(?:insert|update|delete|create|alter|grant|revoke|drop|truncate)\b\s+(?:table|function|policy|index|into|public\.)/i);
+  assert.match(memoryVerifier, /case when passed then 'PASS' else 'FAIL'/);
+  assert.match(memoryVerifier, /FINAL VERDICT/);
+  assert.match(memoryVerifier, /exists \(/);
+  assert.match(memoryVerifier, /fixed safe search_path/);
+  assert.match(memoryVerifier, /membership or ownership validation/);
+  assert.match(memoryVerifier, /anon denied/);
+  assert.match(memoryVerifier, /authenticated denied/);
 });
 
 test("financial moves runtime is retired while historical schema remains", () => {

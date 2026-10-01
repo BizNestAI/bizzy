@@ -337,8 +337,8 @@ test("recent structured references are bounded and queries are isolated by busin
   assert.equal(bounded.transactions.length, 8);
   assert.equal("raw" in bounded.transactions[0], false);
   const calls = [];
-  const query = { select() { return this; }, eq(field, value) { calls.push([field, value]); return this; }, not() { return this; }, order() { return this; }, limit() { return Promise.resolve({ data: [{ structured_references: bounded }], error: null }); } };
-  const loaded = await loadRecentStructuredReferences({ db: { from(table) { assert.equal(table, "gpt_messages"); return query; } }, businessId: "business-a", threadId: "thread-a" });
+  const query = { select() { return this; }, eq(field, value) { calls.push([field, value]); return this; }, not() { return this; }, order() { return this; }, limit() { return Promise.resolve({ data: [{ structured_references: bounded, role: "assistant", message_kind: "conversation", created_at: "2026-09-29T12:00:00Z" }], error: null }); } };
+  const loaded = await loadRecentStructuredReferences({ db: { from(table) { assert.equal(table, "gpt_messages"); return query; } }, businessId: "business-a", threadId: "thread-a", now: new Date("2026-09-30T12:00:00Z") });
   assert.ok(calls.some(([field, value]) => field === "business_id" && value === "business-a"));
   assert.ok(calls.some(([field, value]) => field === "thread_id" && value === "thread-a"));
   assert.equal(loaded.transactions.length, 8);
@@ -346,7 +346,7 @@ test("recent structured references are bounded and queries are isolated by busin
 
 test("raw transaction references are not written to semantic memory", () => {
   const source = readFileSync(new URL("../src/api/gpt/brain/generateBizzyResponse.js", import.meta.url), "utf8");
-  assert.match(source, /!operationalError && !\(structuredReferences\?\.transactions\?\.length\)/);
+  assert.match(source, /durableMemory && !\(structuredReferences\?\.transactions\?\.length\)/);
   assert.doesNotMatch(readFileSync(new URL("../src/api/gpt/orchestration/recentStructuredReferences.js", import.meta.url), "utf8"), /bizzy_memory|storeMemory/);
 });
 

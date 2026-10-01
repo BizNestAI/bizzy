@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { supabase } from '../../services/supabaseAdmin.js';
 import { generateThreadTitle } from './title.util.js';
+import { sortConversationMessages } from '../../utils/conversationMessageOrder.js';
 
 const router = Router();
 
@@ -175,13 +176,15 @@ router.get('/:id', tenantGuard, async (req, res) => {
 
     const { data: msgs, error: mErr } = await supabase
       .from('gpt_messages')
-      .select('id,role,content,created_at')
+      .select('id,role,content,created_at,message_role_position,message_sequence')
       .eq('thread_id', id)
       .order('created_at', { ascending: true })
+      .order('message_role_position', { ascending: true })
+      .order('message_sequence', { ascending: true })
       .limit(limit);
     if (mErr) throw mErr;
 
-    res.json({ thread, messages: msgs || [] });
+    res.json({ thread, messages: sortConversationMessages(msgs || []) });
   } catch (e) {
     res.status(500).json({ error: 'get_failed', details: e.message });
   }
@@ -204,18 +207,22 @@ router.get('/:id/messages', tenantGuard, async (req, res) => {
     if (thread.business_id !== business_id) return res.status(403).json({ error: 'forbidden' });
 
     let q = supabase.from('gpt_messages')
-      .select('id,role,content,created_at')
+      .select('id,role,content,created_at,message_role_position,message_sequence')
       .eq('thread_id', id);
 
     if (before) q = q.lt('created_at', before.toISOString());
     if (after)  q = q.gt('created_at', after.toISOString());
 
-    q = q.order('created_at', { ascending: false }).limit(limit);
+    q = q
+      .order('created_at', { ascending: false })
+      .order('message_role_position', { ascending: false })
+      .order('message_sequence', { ascending: false })
+      .limit(limit);
 
     const { data, error } = await q;
     if (error) throw error;
 
-    res.json({ messages: data || [] });
+    res.json({ messages: sortConversationMessages(data || [], { descending: true }) });
   } catch (e) {
     res.status(500).json({ error: 'messages_failed', details: e.message });
   }
@@ -237,9 +244,11 @@ router.post('/:id/auto-title', tenantGuard, async (req, res) => {
 
     const { data: msgs } = await supabase
       .from('gpt_messages')
-      .select('role,content')
+      .select('role,content,created_at,message_role_position,message_sequence')
       .eq('thread_id', id)
       .order('created_at', { ascending: true })
+      .order('message_role_position', { ascending: true })
+      .order('message_sequence', { ascending: true })
       .limit(8);
 
     const userText = (msgs || []).filter(m => m.role === 'user').map(m => m.content).join('\n').slice(0, 1000);

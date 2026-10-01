@@ -207,9 +207,11 @@ docsRouter.post(
       if (thread_id) {
         const { data, error } = await supabase
           .from('gpt_messages')
-          .select('role,content')
+          .select('role,content,created_at,message_role_position,message_sequence')
           .eq('thread_id', thread_id)
           .order('created_at', { ascending: true })
+          .order('message_role_position', { ascending: true })
+          .order('message_sequence', { ascending: true })
           .limit(12);
         if (error) throw error;
         messages = data || [];

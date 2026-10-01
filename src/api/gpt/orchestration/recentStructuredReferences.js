@@ -1,4 +1,6 @@
 const MAX_TRANSACTIONS = 8;
+export const STRUCTURED_REFERENCE_MAX_AGE_DAYS = 30;
+export const STRUCTURED_REFERENCE_MAX_MESSAGE_DISTANCE = 12;
 
 function text(value, max = 120) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max) || null;
@@ -39,25 +41,52 @@ export function referencesFromChatContext(context = {}, previous = {}) {
       status: row.posting_outcome || row.primary_feed || row.status,
     }));
   }
-  if (context.intent === "job_profitability" && rows.length === 1 && !context.intent_context?.requires_clarification) {
-    next.job = { job_id: rows[0].job_id, canonical_name: rows[0].job_name };
+  if (context.intent === "job_profitability" && context.entities?.job_search) {
+    next.job = rows.length === 1 && !context.intent_context?.requires_clarification
+      ? { job_id: rows[0].job_id, canonical_name: rows[0].job_name }
+      : null;
   }
   if (context.intent_context?.requested_period) next.period = context.intent_context.requested_period;
   return sanitizeStructuredReferences(next);
 }
 
-export async function loadRecentStructuredReferences({ db, businessId, threadId } = {}) {
+export function hasStructuredReferences(value = {}) {
+  const refs = sanitizeStructuredReferences(value);
+  return Boolean(refs.merchant || refs.job || refs.period || refs.transactions.length);
+}
+
+export function shouldPersistStructuredReferences(context = {}) {
+  return ['transaction_search', 'transaction_followup', 'job_profitability'].includes(context?.intent) &&
+    hasStructuredReferences(context?.structured_references);
+}
+
+export async function loadRecentStructuredReferences({
+  db,
+  businessId,
+  threadId,
+  now = new Date(),
+  maxAgeDays = STRUCTURED_REFERENCE_MAX_AGE_DAYS,
+  maxMessageDistance = STRUCTURED_REFERENCE_MAX_MESSAGE_DISTANCE,
+} = {}) {
   if (!db || !businessId || !threadId) return sanitizeStructuredReferences();
   const { data, error } = await db.from("gpt_messages")
-    .select("structured_references")
+    .select("structured_references,created_at,role,message_kind,message_role_position,message_sequence")
     .eq("business_id", businessId)
     .eq("thread_id", threadId)
-    .eq("role", "assistant")
-    .not("structured_references", "is", null)
+    .eq("message_kind", "conversation")
     .order("created_at", { ascending: false })
-    .limit(1);
+    .order("message_role_position", { ascending: false })
+    .order("message_sequence", { ascending: false })
+    .limit(maxMessageDistance);
   if (error) throw error;
-  return sanitizeStructuredReferences(data?.[0]?.structured_references || {});
+  const row = (data || []).find((candidate) => candidate?.role === "assistant" && hasStructuredReferences(candidate?.structured_references));
+  if (!row?.created_at) return sanitizeStructuredReferences();
+  const createdAt = new Date(row.created_at);
+  const currentTime = now instanceof Date ? now : new Date(now);
+  const ageMs = currentTime.getTime() - createdAt.getTime();
+  const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > maxAgeMs) return sanitizeStructuredReferences();
+  return sanitizeStructuredReferences(row.structured_references);
 }
 
 export { MAX_TRANSACTIONS };
