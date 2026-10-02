@@ -140,7 +140,7 @@ test("Monthly Review mirror approve and reclassify patch local feed state instea
   assert.match(page, /patchSourceLedgerTransaction\(current,\s*nextRow\)/);
 });
 
-test("Monthly Review re-evaluate button patches mirror feeds without full workspace refresh", () => {
+test("Monthly Review re-evaluate submits the exact population and refreshes every affected mirror", () => {
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const localState = read("src/services/bookkeeping/bookkeepingFeedMirrorLocalState.js");
   const runStart = page.indexOf("const runBookkeepingReconsideration = useCallback");
@@ -150,9 +150,17 @@ test("Monthly Review re-evaluate button patches mirror feeds without full worksp
   const runBody = page.slice(runStart, runEnd);
 
   assert.match(runBody, /bookkeeping\/transactions\/reconsider/);
-  assert.match(runBody, /patchBookkeepingFeedsAfterReconsiderationState\(current,\s*result,\s*sourceLedger\)/);
-  assert.match(runBody, /patchSourceLedgerTransaction/);
-  assert.doesNotMatch(runBody, /refreshAfterFeedAction|loadDetail\(|loadQboPnlSnapshot\(|window\.location\.reload/);
+  assert.match(runBody, /transaction_ids:\s*\[\.\.\.new Set\(transactionIds\)\]/);
+  assert.match(runBody, /auto_approve:\s*true/);
+  assert.match(runBody, /allow_ai_categorization:\s*false/);
+  assert.match(runBody, /allow_qbo_account_create:\s*false/);
+  assert.match(runBody, /loadDetail\(\)/);
+  assert.match(runBody, /loadSourceLedger\(\)/);
+  assert.match(runBody, /loadBookkeepingFeedCounts\(\)/);
+  assert.match(runBody, /loadBookkeepingFeed\(status,\s*\{ reset:\s*true \}\)/);
+  assert.doesNotMatch(runBody, /patchBookkeepingFeedsAfterReconsiderationState|window\.location\.reload/);
+  assert.match(runBody, /suggestions changed/);
+  assert.match(runBody, /skipped as final\/posted\/matched/);
   assert.match(page, /Re-evaluate Needs Review/);
   assert.match(localState, /patchBookkeepingFeedsAfterReconsiderationState/);
   assert.match(localState, /decrementCountBy\(needsReview\.totalCount,\s*promotedRows\.length\)/);

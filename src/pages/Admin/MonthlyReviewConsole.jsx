@@ -20,7 +20,6 @@ import {
   findSourceLedgerAccount,
   patchBookkeepingFeedsAfterApprovalState,
   patchBookkeepingFeedsAfterReclassificationState,
-  patchBookkeepingFeedsAfterReconsiderationState,
   patchOperatorResponseApprovalInDetail,
   patchSourceLedgerTransaction,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
@@ -1213,50 +1212,63 @@ export default function MonthlyReviewConsole() {
     setBookkeepingReconsideration({ loading: true, message: "", error: "" });
     setBookkeepingCountsError("");
     try {
+      const transactionIds = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const feed = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions?month=${encodeURIComponent(month)}&status=needs_review&page=${encodeURIComponent(page)}&page_size=100`, { cache: "no-store" });
+        const rows = Array.isArray(feed?.items) ? feed.items : Array.isArray(feed?.rows) ? feed.rows : [];
+        rows.forEach((row) => {
+          if (row?.id) transactionIds.push(String(row.id));
+        });
+        hasMore = Boolean(feed?.has_more ?? feed?.meta?.has_more);
+        page += 1;
+      }
+      if (!transactionIds.length) {
+        setBookkeepingReconsideration({ loading: false, message: "No selected-month Needs Review transactions remain.", error: "" });
+        await Promise.all([loadBookkeepingFeedCounts(), loadPostingReview()]);
+        return;
+      }
       const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/reconsider`, {
         method: "POST",
         body: {
           month,
-          limit: 200,
-          max_pages: 10,
+          transaction_ids: [...new Set(transactionIds)],
+          auto_approve: true,
+          allow_ai_categorization: false,
+          allow_qbo_account_create: false,
           source: "monthly_review_reconsideration",
         },
       });
-      const processed = Number(result?.reviewed_this_month ?? result?.processed ?? 0);
-      const promoted = Number(result?.moved_to_handled_this_month ?? result?.promoted ?? 0);
+      const examined = Number(result?.examined ?? result?.reviewed_this_month ?? 0);
+      const changed = Number(result?.suggestion_changed ?? 0);
+      const promoted = Number(result?.moved_to_handled ?? result?.moved_to_handled_this_month ?? 0);
+      const remained = Number(result?.remained_needs_review ?? 0);
+      const skippedFinal = Number(result?.skipped_final_posted_matched ?? 0);
+      const failed = Number(result?.failed ?? 0);
+      const reasonSummary = Object.entries(result?.reason_counts || {})
+        .sort((a, b) => Number(b[1]) - Number(a[1]))
+        .map(([reason, count]) => `${count} ${String(reason).replaceAll("_", " ")}`)
+        .join(", ");
       const remainingThisMonth = Number(result?.remaining_needs_review_this_month ?? result?.skipped ?? 0);
       const allHistoryRemaining = Number(result?.remaining_needs_review_all_months ?? 0);
       const backlogSuffix = allHistoryRemaining > remainingThisMonth
         ? ` ${allHistoryRemaining} Needs Review across all imported months.`
         : "";
-      setBookkeepingFeeds((current) => patchBookkeepingFeedsAfterReconsiderationState(current, result, sourceLedger));
-      const promotedRows = (Array.isArray(result?.rows) ? result.rows : []).filter((row) => row?.promoted === true && row?.categorization);
-      if (promotedRows.length) {
-        setSourceLedger((current) => promotedRows.reduce((nextLedger, row) => (
-          patchSourceLedgerTransaction(nextLedger, {
-            id: row.transaction_id,
-            transaction_id: row.transaction_id,
-            status: row.categorization.status || "auto_approved",
-            final_qbo_account_id: row.categorization.final_qbo_account_id || null,
-            final_qbo_account_name: row.categorization.final_qbo_account_name || null,
-            suggested_qbo_account_id: row.categorization.suggested_qbo_account_id || null,
-            suggested_qbo_account_name: row.categorization.suggested_qbo_account_name || null,
-            glAccountId: row.categorization.final_qbo_account_id || null,
-            glAccountName: row.categorization.final_qbo_account_name || null,
-            effective_account_id: row.categorization.final_qbo_account_id || null,
-            effective_account_name: row.categorization.final_qbo_account_name || null,
-            post_after: row.categorization.post_after ?? null,
-            qbo_txn_id: row.categorization.qbo_txn_id || null,
-            meta: row.categorization.meta || null,
-          })
-        ), current));
-      }
+      await Promise.all([
+        loadDetail(),
+        loadSourceLedger(),
+        loadBusinesses(),
+        loadBookkeepingFeedCounts(),
+        loadPostingReview(),
+        ...Object.keys(BOOKKEEPING_FEED_CONFIG).map((status) => (
+          bookkeepingFeeds[status]?.expanded ? loadBookkeepingFeed(status, { reset: true }) : Promise.resolve()
+        )),
+      ]);
       setBookkeepingReconsideration({
         loading: false,
         error: "",
-        message: result?.partial
-          ? `Re-evaluation paused after ${processed} reviewed for ${formatMonth(month)}; ${promoted} moved to Handled and ${remainingThisMonth} still need review for ${formatMonthShort(month)}. Run it again to continue.${backlogSuffix}`
-          : `Re-evaluation complete. ${processed} reviewed, ${promoted} moved to Handled, ${remainingThisMonth} still need review for ${formatMonthShort(month)}.${backlogSuffix}`,
+        message: `Re-evaluation complete for ${formatMonth(month)}: ${examined} examined, ${changed} suggestions changed, ${promoted} moved to Handled, ${remained} remained in Needs Review, ${skippedFinal} skipped as final/posted/matched, and ${failed} failed.${reasonSummary ? ` Reasons: ${reasonSummary}.` : ""} ${remainingThisMonth} now need review for ${formatMonthShort(month)}.${backlogSuffix}`,
       });
     } catch (e) {
       setBookkeepingReconsideration({
@@ -1265,7 +1277,7 @@ export default function MonthlyReviewConsole() {
         error: e?.body?.message || e?.message || "Could not re-evaluate Needs Review transactions.",
       });
     }
-  }, [month, selectedBusinessId, sourceLedger]);
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadPostingReview, loadSourceLedger, month, selectedBusinessId]);
 
   const refreshAfterFeedAction = useCallback(async () => {
     await Promise.all([

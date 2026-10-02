@@ -14,7 +14,7 @@ import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
 import { enqueueUnresolvedBookkeepingBacklog } from "../../services/bookkeeping/backgroundBookkeepingProcessingService.js";
-import { reconsiderNeedsReviewTransactions } from "../../services/bookkeeping/routineExpenseReconsiderationService.js";
+import { runBookkeepingSuggestionPass } from "../bookkeeping/routes/bookkeeping.suggest.routes.js";
 import {
   countBookkeepingTransactions,
   fetchBookkeepingTransactions,
@@ -1011,44 +1011,93 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
     if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
 
     const [rangeStart, rangeEnd] = monthBounds(month);
-    const inclusiveRangeEnd = previousDate(rangeEnd);
-    const limit = Math.min(Math.max(parseInt(req.body?.limit, 10) || 200, 1), 500);
-    const maxPages = Math.min(Math.max(parseInt(req.body?.max_pages, 10) || 10, 1), 25);
-    const source = req.body?.source || "monthly_review_reconsideration";
-    let cursor = req.body?.cursor ? String(req.body.cursor) : null;
-    let pageCount = 0;
-    const rows = [];
-    const totals = { processed: 0, promoted: 0, skipped: 0 };
-    const bucketCounts = {
-      reviewed: 0,
-      moved_to_handled: 0,
-      still_needs_review: 0,
-      pending: 0,
-      protected_workflow: 0,
-      suspense_no_specific_gl: 0,
-      valid_gl_policy_blocked: 0,
-      other: 0,
-    };
-
-    while (pageCount < maxPages) {
-      const result = await reconsiderNeedsReviewTransactions(businessId, {
-        dateFrom: rangeStart,
-        dateTo: inclusiveRangeEnd,
-        cursor,
-        limit,
-        source,
-      });
-      totals.processed += Number(result?.processed || 0);
-      totals.promoted += Number(result?.promoted || 0);
-      totals.skipped += Number(result?.skipped || 0);
-      Object.keys(bucketCounts).forEach((key) => {
-        bucketCounts[key] += Number(result?.bucket_counts?.[key] || 0);
-      });
-      if (Array.isArray(result?.rows)) rows.push(...result.rows);
-      cursor = result?.next_cursor || null;
-      pageCount += 1;
-      if (!cursor) break;
+    const requestedIds = Array.isArray(req.body?.transaction_ids)
+      ? [...new Set(req.body.transaction_ids.map(String))]
+      : [];
+    if (!requestedIds.length || requestedIds.some((id) => !UUID_RE.test(id))) {
+      return res.status(400).json({ ok: false, error: "invalid_transaction_ids", message: "Submit the exact selected-month Needs Review transaction IDs." });
     }
+
+    // Resolve the authoritative population again on the server. This prevents a
+    // stale Admin tab from reconsidering a different month, business, or status.
+    const canonicalRows = [];
+    let page = 1;
+    let totalCount = 0;
+    do {
+      const feed = await fetchBookkeepingTransactions({
+        businessId,
+        statusFilter: "needs_review",
+        rangeStart,
+        rangeEnd,
+        page,
+        pageSize: MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX,
+      });
+      canonicalRows.push(...(feed.rows || []));
+      totalCount = Number(feed.totalCount || 0);
+      page += 1;
+    } while (canonicalRows.length < totalCount);
+
+    const canonicalIds = [...new Set(canonicalRows.map((row) => String(row.id)).filter(Boolean))].sort();
+    const submittedIds = [...requestedIds].sort();
+    if (canonicalIds.length !== submittedIds.length || canonicalIds.some((id, index) => id !== submittedIds[index])) {
+      return res.status(409).json({
+        ok: false,
+        error: "needs_review_population_changed",
+        message: "The selected-month Needs Review population changed. Refresh and try again.",
+        expected_count: canonicalIds.length,
+        submitted_count: submittedIds.length,
+      });
+    }
+
+    const beforeById = new Map(canonicalRows.map((row) => [String(row.id), row]));
+    const result = await runBookkeepingSuggestionPass({
+      businessId,
+      body: {
+        transaction_ids: canonicalIds,
+        range: "all",
+        auto_approve: true,
+        allow_ai_categorization: false,
+        allow_qbo_account_create: false,
+      },
+      user: req.user,
+    });
+
+    const afterNeedsReview = [];
+    const afterHandled = [];
+    for (const statusFilter of ["needs_review", "handled"]) {
+      const target = statusFilter === "needs_review" ? afterNeedsReview : afterHandled;
+      let afterPage = 1;
+      let afterTotal = 0;
+      do {
+        const feed = await fetchBookkeepingTransactions({ businessId, statusFilter, rangeStart, rangeEnd, page: afterPage, pageSize: MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX });
+        target.push(...(feed.rows || []));
+        afterTotal = Number(feed.totalCount || 0);
+        afterPage += 1;
+      } while (target.length < afterTotal);
+    }
+    const afterById = new Map([...afterNeedsReview, ...afterHandled].map((row) => [String(row.id), row]));
+    const suggestionChanged = canonicalIds.filter((id) => {
+      const before = beforeById.get(id) || {};
+      const after = afterById.get(id) || {};
+      return String(before.suggested_qbo_account_id || before.suggested_qbo_account_name || "") !== String(after.suggested_qbo_account_id || after.suggested_qbo_account_name || "")
+        || String(before.suggestion_source || before.meta?.suggestion_source || "") !== String(after.suggestion_source || after.meta?.suggestion_source || "");
+    }).length;
+    const handledIds = new Set(afterHandled.map((row) => String(row.id)));
+    const remainingIds = new Set(afterNeedsReview.map((row) => String(row.id)));
+    const movedToHandled = canonicalIds.filter((id) => handledIds.has(id)).length;
+    const remainedNeedsReview = canonicalIds.filter((id) => remainingIds.has(id)).length;
+    const failed = Number(result?.row_error_count || 0);
+    const skippedFinalPostedMatched = Number(result?.skipped || 0);
+    const reasonCounts = canonicalIds.reduce((counts, id) => {
+      const row = afterById.get(id) || {};
+      const reason = row.auto_handle_decision?.reason
+        || row.meta?.auto_handle_decision?.reason
+        || row.post_block_reason
+        || row.meta?.post_block_reason
+        || (handledIds.has(id) ? "moved_to_handled" : "unclassified_outcome");
+      counts[reason] = Number(counts[reason] || 0) + 1;
+      return counts;
+    }, {});
     const [remainingNeedsReviewThisMonth, remainingNeedsReviewAllMonths] = await Promise.all([
       countBookkeepingTransactions({
         businessId,
@@ -1068,26 +1117,31 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       month,
       range_start: rangeStart,
       range_end: rangeEnd,
-      processed: totals.processed,
-      promoted: totals.promoted,
-      skipped: totals.skipped,
-      reviewed_this_month: totals.processed,
-      moved_to_handled_this_month: totals.promoted,
+      examined: canonicalIds.length,
+      suggestion_changed: suggestionChanged,
+      moved_to_handled: movedToHandled,
+      remained_needs_review: remainedNeedsReview,
+      skipped_final_posted_matched: skippedFinalPostedMatched,
+      failed,
+      reason_counts: reasonCounts,
+      processed: canonicalIds.length,
+      promoted: movedToHandled,
+      skipped: Number(result?.skipped || 0),
+      reviewed_this_month: canonicalIds.length,
+      moved_to_handled_this_month: movedToHandled,
       remaining_needs_review_this_month: remainingNeedsReviewThisMonth,
       remaining_needs_review_all_months: remainingNeedsReviewAllMonths,
-      bucket_counts: {
-        ...bucketCounts,
-        reviewed: totals.processed,
-        moved_to_handled: totals.promoted,
-        still_needs_review: remainingNeedsReviewThisMonth,
-      },
-      rows,
-      next_cursor: cursor,
-      partial: Boolean(cursor),
-      batches: pageCount,
+      bucket_counts: { examined: canonicalIds.length, suggestion_changed: suggestionChanged, moved_to_handled: movedToHandled, remained_needs_review: remainedNeedsReview, skipped_final_posted_matched: skippedFinalPostedMatched, failed, reason_counts: reasonCounts },
+      rows: canonicalIds.map((id) => afterById.get(id)).filter(Boolean),
+      partial: false,
+      batches: 1,
       source_contract: {
-        service: "routineExpenseReconsiderationService",
+        service: "bookkeeping.suggest.runBookkeepingSuggestionPass",
         selected_month_bounds: "server-side [range_start, range_end)",
+        exact_transaction_ids: true,
+        auto_approve: true,
+        allow_ai_categorization: false,
+        allow_qbo_account_create: false,
         qbo_provider_writes: false,
         qbo_transaction_writes: false,
       },
@@ -3609,12 +3663,6 @@ function monthBounds(month) {
   const start = new Date(Date.UTC(year, monthNumber - 1, 1)).toISOString().slice(0, 10);
   const end = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
   return [start, end];
-}
-
-function previousDate(date) {
-  const d = new Date(`${date}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
 }
 
 function previousMonthBounds(month) {
