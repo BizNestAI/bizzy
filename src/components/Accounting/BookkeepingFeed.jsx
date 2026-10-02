@@ -1457,6 +1457,8 @@ export default function BookkeepingFeed({
                 String(account.connectedAccountId || account.plaidAccountId || "") !== String(txn.plaid_account_id || txn.account_id || "")
               ));
             const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (readOnly ? "" : txn.accountId) ?? "";
+            const suggestionSource = txn.suggestion_source || txn.meta?.suggestion_source || null;
+            const blockerReason = txn.auto_handle_decision?.reason || txn.meta?.auto_handle_decision?.reason || txn.post_block_reason || txn.meta?.post_block_reason || null;
             const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
             const qboSchedule = showQboSchedule ? formatQboPostingSchedule(txn) : null;
             const readOnlyGlLabel =
@@ -1701,6 +1703,12 @@ export default function BookkeepingFeed({
                   <button type="button" disabled className="inline-flex h-7 w-full items-center justify-between rounded-lg border border-white/10 bg-[#101312] px-3 text-[10px] font-medium text-slate-400">
                     <span>{selectedAccountValue ? readOnlyGlLabel : "Account unavailable"}</span><span>▾</span>
                   </button>
+                ) : null}
+                {showCanonicalCoa && (suggestionSource || blockerReason) ? (
+                  <div className={`mt-1 whitespace-normal text-[11px] leading-4 ${blockerReason ? "text-amber-100/80" : "text-white/55"}`} title={blockerReason || suggestionSource}>
+                    {`Suggested account${suggestionSource ? ` · ${String(suggestionSource).replaceAll("_", " ")}` : ""}`}
+                    {blockerReason ? ` · Blocked: ${String(blockerReason).replaceAll("_", " ")}` : ""}
+                  </div>
                 ) : null}
                 {txn.status === "auto_approved" && !isCcPaymentWorkflow ? (
                   <span className="inline-flex w-fit items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-wide text-emerald-200/90">

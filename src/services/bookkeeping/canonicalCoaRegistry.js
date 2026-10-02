@@ -130,8 +130,8 @@ const intentMappings = {
 
 const approvedEquivalents = {
   software: ["Software", "Software Expense", "Software Subscriptions"],
-  electric: ["Electric", "Electricity"],
-  materials_supplies: ["Supplies & Materials", "Materials", "Job Materials"],
+  electric: ["Electric", "Electricity", "Utilities", "Utilities:Electric"],
+  materials_supplies: ["Supplies & Materials", "Supplies", "Materials", "Job Materials", "Office Supplies"],
   payment_processing_fees: [
     "Payment Processing Fees",
     "Merchant Processing Fees",

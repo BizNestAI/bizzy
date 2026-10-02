@@ -1060,6 +1060,7 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
         allow_qbo_account_create: false,
       },
       user: req.user,
+      canonicalResolutionSource: "internal_monthly_review",
     });
 
     const afterNeedsReview = [];
@@ -1098,6 +1099,18 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       counts[reason] = Number(counts[reason] || 0) + 1;
       return counts;
     }, {});
+    const reasonDetails = canonicalIds.map((id) => {
+      const row = afterById.get(id) || {};
+      return {
+        transaction_id: id,
+        payee: row.payee || row.vendor || row.merchant_name || null,
+        reason: row.auto_handle_decision?.reason
+          || row.meta?.auto_handle_decision?.reason
+          || row.post_block_reason
+          || row.meta?.post_block_reason
+          || (handledIds.has(id) ? "moved_to_handled" : "unclassified_outcome"),
+      };
+    });
     const [remainingNeedsReviewThisMonth, remainingNeedsReviewAllMonths] = await Promise.all([
       countBookkeepingTransactions({
         businessId,
@@ -1124,6 +1137,7 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       skipped_final_posted_matched: skippedFinalPostedMatched,
       failed,
       reason_counts: reasonCounts,
+      reason_details: reasonDetails,
       processed: canonicalIds.length,
       promoted: movedToHandled,
       skipped: Number(result?.skipped || 0),

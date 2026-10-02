@@ -1012,6 +1012,7 @@ export async function runBookkeepingSuggestionPass({
   body = {},
   query = {},
   user = null,
+  canonicalResolutionSource = "suggest",
 } = {}) {
   if (!businessId) throw new Error("missing_business_id");
 
@@ -2540,7 +2541,7 @@ export async function runBookkeepingSuggestionPass({
           businessId,
           intent: universalHint.primary_intent,
           transactionId: row.id,
-          source: deterministicPaymentProcessingFee ? "internal_payment_processing_fee" : "suggest",
+          source: deterministicPaymentProcessingFee ? "internal_payment_processing_fee" : canonicalResolutionSource,
           allowCreate: allowQboAccountCreate,
         });
         if (canonicalResolution?.ok && canonicalResolution?.account?.id) {
@@ -2773,7 +2774,8 @@ export async function runBookkeepingSuggestionPass({
               canonical_setup_required: true,
               canonical_setup_required_reason: deterministicPaymentProcessingFee
                 ? "payment_processing_account_unavailable"
-                : canonicalResolution?.reason || "canonical_account_requires_review",
+                : canonicalResolution?.reason || "canonical_account_not_found",
+              canonical_resolution_diagnostics: canonicalResolution?.diagnostics || null,
               safe_to_auto_handle: false,
               safe_to_auto_post: false,
               auto_handle_decision: {

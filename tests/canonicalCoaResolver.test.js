@@ -31,6 +31,7 @@ function makeQbo(accounts = [], options = {}) {
           Account: state.accounts.map((account) => ({
             Id: account.id,
             Name: account.name,
+            FullyQualifiedName: account.fullyQualifiedName || account.name,
             AccountType: account.type || "Expense",
             AccountSubType: account.subType || null,
             Active: account.active !== false,
@@ -297,7 +298,7 @@ test("Intuit payment-processing fees create Expense BankCharges when no allowed 
   assert.equal(state.accounts.some((account) => account.name === "Payment Processing Fees"), true);
 });
 
-test("Duke Energy intent creates Electric only from explicit internal Monthly Review approval", async () => {
+test("Duke Energy intent reuses approved Utilities alias without creating Electric", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "utilities", name: "Utilities", type: "Expense" }]);
   const result = await resolveCanonicalQboAccount({
@@ -307,9 +308,9 @@ test("Duke Energy intent creates Electric only from explicit internal Monthly Re
     source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
-  assert.equal(result.account.name, "Electric");
-  assert.equal(result.status, "created_by_bizzi");
-  assert.equal(state.createCount, 1);
+  assert.equal(result.account.name, "Utilities");
+  assert.equal(result.status, "existing_approved_equivalent");
+  assert.equal(state.createCount, 0);
 });
 
 test("Target business supplies resolves Supplies & Materials", async () => {
@@ -326,7 +327,7 @@ test("Target business supplies resolves Supplies & Materials", async () => {
   assert.equal(result.account.name, "Supplies & Materials");
 });
 
-test("ambiguous Supplies account blocks auto-create of Supplies & Materials", async () => {
+test("approved Supplies alias resolves without creating Supplies & Materials", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
   const result = await resolveCanonicalQboAccount({
@@ -336,15 +337,66 @@ test("ambiguous Supplies account blocks auto-create of Supplies & Materials", as
     source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
-  assert.equal(result.ok, false);
-  assert.equal(result.status, "needs_review");
-  assert.equal(result.reason, "ambiguous_candidate_requires_review");
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "existing_approved_equivalent");
   assert.equal(result.account.name, "Supplies");
   assert.equal(state.createCount, 0);
-  assert.equal(
-    supabase.db.business_canonical_qbo_account_mappings[0].metadata.candidate_name,
-    "Supplies"
-  );
+});
+
+test("Duke resolves approved utility aliases and deployed nested account shape deterministically", async () => {
+  for (const account of [
+    { id: "electricity-id", name: "Electricity", type: "Expense" },
+    { id: "utilities-id", name: "Utilities", type: "Expense" },
+    { id: "nested-electric-id", name: "Electric", fullyQualifiedName: "Utilities:Electric", type: "Expense" },
+  ]) {
+    const supabase = makeSupabase();
+    const { qbo } = makeQbo([account]);
+    const result = await resolveCanonicalQboAccount({
+      businessId: BUSINESS_ID,
+      intent: "electric",
+      allowCreate: false,
+      source: "internal_monthly_review",
+      dependencies: deps({ supabase, qbo }),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.account.id, account.id);
+  }
+});
+
+test("Amazon supplies aliases resolve stable IDs while conflicting valid aliases remain reviewable", async () => {
+  for (const name of ["Supplies", "Supplies & Materials", "Office Supplies"]) {
+    const supabase = makeSupabase();
+    const { qbo } = makeQbo([{ id: `stable-${name}`, name, type: "Expense" }]);
+    const result = await resolveCanonicalQboAccount({
+      businessId: BUSINESS_ID,
+      intent: "supplies_materials",
+      allowCreate: false,
+      source: "internal_monthly_review",
+      dependencies: deps({ supabase, qbo }),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.account.id, `stable-${name}`);
+  }
+
+  const supabase = makeSupabase();
+  const { qbo } = makeQbo([
+    { id: "supplies-a", name: "Supplies", type: "Expense" },
+    { id: "office-supplies-b", name: "Office Supplies", type: "Expense" },
+  ]);
+  const ambiguous = await resolveCanonicalQboAccount({ businessId: BUSINESS_ID, intent: "supplies_materials", allowCreate: false, source: "internal_monthly_review", dependencies: deps({ supabase, qbo }) });
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.reason, "ambiguous_candidate_requires_review");
+  assert.deepEqual(ambiguous.diagnostics.conflicting_candidate_ids, ["supplies-a", "office-supplies-b"]);
+});
+
+test("missing deterministic account reports canonical_account_not_found with approved aliases", async () => {
+  const supabase = makeSupabase();
+  const { qbo } = makeQbo([{ id: "suspense", name: "Uncategorized Expense", type: "Expense" }]);
+  const result = await resolveCanonicalQboAccount({ businessId: BUSINESS_ID, intent: "electric", allowCreate: false, source: "internal_monthly_review", dependencies: deps({ supabase, qbo }) });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "canonical_account_not_found");
+  assert.equal(result.account, null);
+  assert.ok(result.diagnostics.attempted_approved_aliases.includes("Utilities:Electric"));
 });
 
 test("ambiguous Software candidate appearing during final pre-create refresh blocks QBO create", async () => {
@@ -519,7 +571,7 @@ test("clarification cannot fuzzy-map Software to Subscriptions and does not crea
   assert.equal(state.createCount, 0);
 });
 
-test("clarification with ambiguous Supplies candidate remains review-required", async () => {
+test("clarification with approved Supplies alias still requires internal mapping authority", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
   const result = await mapAnswerToCoa({
@@ -531,7 +583,7 @@ test("clarification with ambiguous Supplies candidate remains review-required", 
   assert.equal(result.account, null);
   assert.equal(result.review_required, true);
   assert.equal(result.canonical_account_key, "materials_supplies");
-  assert.equal(result.match_reason, "ambiguous_candidate_requires_review");
+  assert.equal(result.match_reason, "canonical_mapping_requires_internal_approval");
   assert.equal(state.createCount, 0);
 });
 

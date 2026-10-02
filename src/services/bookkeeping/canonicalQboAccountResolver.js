@@ -1,3 +1,4 @@
+/* global process */
 import crypto from "crypto";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import { canAutoHandle } from "./autoHandlingPolicy.js";
@@ -79,29 +80,46 @@ function shapeQboAccount(account = {}) {
   };
 }
 
-function findExactCanonicalAccount(coa = [], canonical = {}) {
-  const expected = normalizeCanonicalName(canonical.preferred_account_name);
-  if (!expected) return null;
-  return (coa || [])
-    .map(shapeQboAccount)
-    .find((acct) => acct.active !== false && normalizeCanonicalName(acct.name) === expected && qboTypeCompatible(canonical, acct)) || null;
+function normalizedAccountNames(account = {}) {
+  return [...new Set([account.name, account.fullyQualifiedName].map(normalizeCanonicalName).filter(Boolean))];
 }
 
-function findApprovedEquivalentAccount(coa = [], canonical = {}) {
+function uniqueAccounts(accounts = []) {
+  return [...new Map(accounts.filter((account) => account?.id).map((account) => [String(account.id), account])).values()];
+}
+
+function findExactCanonicalAccounts(coa = [], canonical = {}) {
+  const expected = normalizeCanonicalName(canonical.preferred_account_name);
+  if (!expected) return [];
+  return uniqueAccounts((coa || [])
+    .map(shapeQboAccount)
+    .filter((acct) => acct.active !== false && normalizedAccountNames(acct).includes(expected) && qboTypeCompatible(canonical, acct)));
+}
+
+function findExactCanonicalAccount(coa = [], canonical = {}) {
+  return findExactCanonicalAccounts(coa, canonical)[0] || null;
+}
+
+function findApprovedEquivalentAccounts(coa = [], canonical = {}) {
   if (canonical?.canonical_account_key === PROCESSING_FEE_CANONICAL_KEY) {
-    return findPaymentProcessingFeeAccount(coa, {
+    const match = findPaymentProcessingFeeAccount(coa, {
       shape: shapeQboAccount,
       typeCompatible: (acct) => qboTypeCompatible(canonical, acct),
     });
+    return match ? [match] : [];
   }
   const preferred = normalizeCanonicalName(canonical.preferred_account_name);
   const names = getApprovedEquivalentNames(canonical.canonical_account_key)
     .map(normalizeCanonicalName)
     .filter((name) => name && name !== preferred);
-  if (!names.length) return null;
-  return (coa || [])
+  if (!names.length) return [];
+  return uniqueAccounts((coa || [])
     .map(shapeQboAccount)
-    .find((acct) => acct.active !== false && names.includes(normalizeCanonicalName(acct.name)) && qboTypeCompatible(canonical, acct)) || null;
+    .filter((acct) => acct.active !== false && normalizedAccountNames(acct).some((name) => names.includes(name)) && qboTypeCompatible(canonical, acct)));
+}
+
+function findApprovedEquivalentAccount(coa = [], canonical = {}) {
+  return findApprovedEquivalentAccounts(coa, canonical)[0] || null;
 }
 
 function findAmbiguousCandidates(coa = [], canonical = {}) {
@@ -124,10 +142,6 @@ function findAmbiguousCandidates(coa = [], canonical = {}) {
     .filter((entry) => entry.score >= 0.5)
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.acct);
-}
-
-function findAmbiguousCandidate(coa = [], canonical = {}) {
-  return findAmbiguousCandidates(coa, canonical)[0] || null;
 }
 
 function findUnreviewedAmbiguousCandidate(coa = [], canonical = {}, reviewedCandidateId = null) {
@@ -276,7 +290,7 @@ async function upsertMapping({ supabase, businessId, realmId, qboEnv, canonical,
   return data || row;
 }
 
-async function markNeedsReview({ supabase, businessId, realmId, qboEnv, canonical, transactionId = null, intent = null, reason, candidate = null, source = "resolver" }) {
+async function markNeedsReview({ supabase, businessId, realmId, qboEnv, canonical, transactionId = null, intent = null, reason, candidate = null, source = "resolver", diagnostics = {} }) {
   const nowIso = new Date().toISOString();
   const candidateMetadata = candidate
     ? {
@@ -300,7 +314,7 @@ async function markNeedsReview({ supabase, businessId, realmId, qboEnv, canonica
     review_reason: reason,
     first_transaction_id: transactionId || null,
     first_intent_key: intent || null,
-    metadata: { reason, ...candidateMetadata },
+    metadata: { reason, attempted_approved_aliases: getApprovedEquivalentNames(canonical.canonical_account_key), ...candidateMetadata, ...diagnostics },
     updated_at: nowIso,
   };
   try {
@@ -322,7 +336,7 @@ async function markNeedsReview({ supabase, businessId, realmId, qboEnv, canonica
     transactionId,
     intent,
     reason,
-    metadata: candidateMetadata,
+    metadata: { attempted_approved_aliases: getApprovedEquivalentNames(canonical.canonical_account_key), ...candidateMetadata, ...diagnostics },
   });
   return {
     ok: false,
@@ -331,6 +345,12 @@ async function markNeedsReview({ supabase, businessId, realmId, qboEnv, canonica
     account: candidate,
     reason,
     review_required: true,
+    diagnostics: {
+      canonical_intent: intent || null,
+      canonical_account_key: canonical.canonical_account_key,
+      attempted_approved_aliases: getApprovedEquivalentNames(canonical.canonical_account_key),
+      ...diagnostics,
+    },
   };
 }
 
@@ -395,7 +415,7 @@ async function createQboAccountFromCanonical({ qbo, canonical, requestId }) {
 function buildRecommendation({ mapping = {}, candidateUsage = {} } = {}) {
   const reason = String(mapping.review_reason || mapping.metadata?.reason || "");
   const usageCount = Number(candidateUsage.transaction_count || 0);
-  if (reason === "ambiguous_candidate_requires_review" && usageCount > 0) {
+  if (["ambiguous_candidate_requires_review", "canonical_mapping_requires_internal_approval"].includes(reason) && usageCount > 0) {
     return {
       action: "use_existing",
       label: "Use Existing Account",
@@ -747,7 +767,17 @@ export async function resolveCanonicalQboAccount({
     return markNeedsReview({ supabase, businessId, realmId, qboEnv, canonical, transactionId, intent, reason: err?.message || "qbo_coa_unavailable", source });
   }
 
-  const exact = findExactCanonicalAccount(accounts, canonical);
+  const exactMatches = findExactCanonicalAccounts(accounts, canonical);
+  if (exactMatches.length > 1) {
+    return markNeedsReview({
+      supabase, businessId, realmId, qboEnv, canonical, transactionId, intent,
+      reason: "ambiguous_candidate_requires_review",
+      candidate: exactMatches[0],
+      source,
+      diagnostics: { conflicting_candidate_ids: exactMatches.map((account) => account.id) },
+    });
+  }
+  const exact = exactMatches[0] || null;
   if (exact) {
     if (internalMappingAuthority !== true) {
       return markNeedsReview({
@@ -779,7 +809,18 @@ export async function resolveCanonicalQboAccount({
     return { ok: true, status: CANONICAL_MAPPING_STATUSES.EXISTING_EXACT, canonical, account: exact, created: false, review_required: false };
   }
 
-  const equivalent = findApprovedEquivalentAccount(accounts, canonical);
+  const equivalentMatches = findApprovedEquivalentAccounts(accounts, canonical)
+    .filter((account) => String(account.id || "") !== String(approvedCreateDespiteCandidateId || ""));
+  if (equivalentMatches.length > 1) {
+    return markNeedsReview({
+      supabase, businessId, realmId, qboEnv, canonical, transactionId, intent,
+      reason: "ambiguous_candidate_requires_review",
+      candidate: equivalentMatches[0],
+      source,
+      diagnostics: { conflicting_candidate_ids: equivalentMatches.map((account) => account.id) },
+    });
+  }
+  const equivalent = equivalentMatches[0] || null;
   if (equivalent) {
     if (internalMappingAuthority !== true) {
       return markNeedsReview({
@@ -831,7 +872,7 @@ export async function resolveCanonicalQboAccount({
       intent,
       reason: canonical.canonical_account_key === PROCESSING_FEE_CANONICAL_KEY
         ? "payment_processing_account_unavailable"
-        : "canonical_account_requires_review",
+        : internalMappingAuthority ? "canonical_account_not_found" : "canonical_account_requires_review",
       candidate: ambiguous,
       source,
     });
@@ -877,7 +918,8 @@ export async function resolveCanonicalQboAccount({
     accounts = preCreateLive.accounts || accounts;
     await upsertQboCache({ supabase, businessId, realmId, qboEnv, accounts });
     const preCreateExact = findExactCanonicalAccount(accounts, canonical);
-    const preCreateEquivalent = findApprovedEquivalentAccount(accounts, canonical);
+    const preCreateEquivalent = findApprovedEquivalentAccounts(accounts, canonical)
+      .find((account) => String(account.id || "") !== String(approvedCreateDespiteCandidateId || "")) || null;
     const preCreateMatch = preCreateExact || preCreateEquivalent;
     if (preCreateMatch) {
       const status = preCreateExact ? CANONICAL_MAPPING_STATUSES.EXISTING_EXACT : CANONICAL_MAPPING_STATUSES.EXISTING_APPROVED_EQUIVALENT;
