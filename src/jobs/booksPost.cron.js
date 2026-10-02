@@ -64,6 +64,7 @@ import {
 } from "../services/bookkeeping/postingDecisionAuthority.js";
 import { buildCreditCardCreditPayload } from "../services/bookkeeping/creditCardMerchantRefundPayload.js";
 import { businessHasPaidEntitlement, filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
+import { processVendorRuleLearningRetryJobs } from "../services/bookkeeping/vendorRuleLearningRetryService.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
@@ -84,6 +85,7 @@ let booksPostSweepRunning = false;
 let merchantApprovalQueueRunning = false;
 let merchantApprovalWakeupRunning = false;
 let merchantApprovalQueueWakeupQueued = false;
+let vendorRuleLearningQueueRunning = false;
 const pendingMerchantApprovalWakeups = new Map();
 
 function sleep(ms) {
@@ -3799,6 +3801,8 @@ export function startBooksPostingCron() {
     .finally(() => {
       booksPostSweepRunning = false;
     });
+  processVendorRuleLearningRetryJobs()
+    .catch((err) => log.error("[books-post] vendor rule learning startup sweep error", err));
   setInterval(() => {
     if (booksPostSweepRunning) return;
     booksPostSweepRunning = true;
@@ -3821,6 +3825,15 @@ export function startBooksPostingCron() {
         merchantApprovalQueueRunning = false;
       });
   }, queueIntervalMs);
+  setInterval(() => {
+    if (vendorRuleLearningQueueRunning) return;
+    vendorRuleLearningQueueRunning = true;
+    processVendorRuleLearningRetryJobs()
+      .catch((err) => log.error("[books-post] vendor rule learning queue error", err))
+      .finally(() => {
+        vendorRuleLearningQueueRunning = false;
+      });
+  }, Math.max(queueIntervalMs, 30_000));
 }
 
 export const runBooksPostOnce = runOnce;

@@ -30,7 +30,7 @@ import {
   isPaymentProcessingFeeIntent,
   isStrongIntuitPaymentProcessingFeeDescriptor,
 } from "./paymentProcessingFeeIntent.js";
-import { hasStrongRewardCreditDescriptor } from "./rewardCreditPolicy.js";
+import { hasStrongRewardCreditDescriptor, isCashBackRewardCredit } from "./rewardCreditPolicy.js";
 import { persistUnresolvedCategorizationRows } from "./bookkeepingLifecycleState.js";
 
 const MAX_RECONSIDERATION_LIMIT = 500;
@@ -372,11 +372,12 @@ function statementCreditRewardsEvidence({ bankTxn = {}, account = {}, meta = {},
   const direction = transactionDirection(bankTxn);
   const type = normalizeText(account?.type || account?.accountType || account?.AccountType || "");
   const rewardText = hasStrongRewardCreditDescriptor(text);
-  const rewardHint = ["other_income", "interest_income"].includes(String(universalHint?.primary_intent || "")) ||
+  const universalIntent = String(universalHint?.primary_intent || "");
+  const rewardHint = ["other_income", "interest_income", "credit_card_rewards"].includes(universalIntent) ||
     ["other_income", "credit_card_rewards"].includes(String(meta?.suggested_intent || ""));
   return (
     direction === "INFLOW" &&
-    type.includes("income") &&
+    (type.includes("income") || universalIntent === "credit_card_rewards") &&
     (intent === "credit_card_rewards" || /\breward|cash back|statement credit\b/.test(normalizeText(account?.name || ""))) &&
     (rewardText || rewardHint)
   );
@@ -860,8 +861,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     if (existingTaxonomyType === "cc_payment" && currentTaxonomyType !== "cc_payment") {
       meta = stripStaleCreditCardPaymentMeta(meta);
     }
+    const rewardCredit = isCashBackRewardCredit(bankTxn);
     const ccPaymentPairResult =
-      currentTaxonomyType === "cc_payment" || hasCreditCardPaymentSignal(bankTxn)
+      !rewardCredit && (currentTaxonomyType === "cc_payment" || hasCreditCardPaymentSignal(bankTxn))
         ? await createSafeCreditCardPaymentPairForRow({ db, businessId, row: bankTxn })
         : { status: "no_match", reason: "not_cc_payment" };
     if (

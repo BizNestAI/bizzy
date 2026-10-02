@@ -217,6 +217,9 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
   if (transaction?.pending === true) {
     return block("pending_transaction_not_postable", { confidence, source, evidence });
   }
+  if (evidence.inBookkeepingScope === false || meta.transaction_before_bookkeeping_start_date === true) {
+    return block("outside_bookkeeping_scope", { confidence, source, evidence });
+  }
   const statementCreditException =
     evidence.allowTaxonomyAutoHandle === true &&
     evidence.taxonomyAutoHandleReason === "statement_credit_rewards_income";

@@ -69,6 +69,28 @@ function approvalIdempotencyKey({ businessId, approval, actorType }) {
   })).digest("hex");
 }
 
+async function persistVendorRuleLearningRetry({ db, businessId, transactionId, actorId, actorType, error }) {
+  const row = {
+    business_id: businessId,
+    transaction_id: transactionId,
+    actor_id: actorId || null,
+    actor_type: actorType || "user",
+    status: "pending",
+    attempt_count: 0,
+    last_error: String(error || "vendor_rule_learning_failed").slice(0, 1000),
+    process_after: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  try {
+    const { error: retryError } = await db
+      .from("vendor_rule_learning_jobs")
+      .upsert(row, { onConflict: "business_id,transaction_id" });
+    return retryError ? { queued: false, queue_error: retryError.message } : { queued: true };
+  } catch (retryError) {
+    return { queued: false, queue_error: retryError?.message || "vendor_rule_learning_retry_persist_failed" };
+  }
+}
+
 export function resolveManualApprovalBookkeepingMeta(meta = {}, options = {}) {
   return resolveManualApprovalPostingMeta(meta, options);
 }
@@ -585,12 +607,15 @@ export async function approveBookkeepingTransactions({
           options: {
             allowQboEntityFallback: true,
             learnedFrom: "check",
-            actor: actorId,
+            actor: { id: actorId, role: actorType },
             onlyThisTransaction: item.only_this_transaction === true || item.learn_reusable_rule === false,
           },
           db,
         });
-        vendorRuleResults.push({ transaction_id: item.transaction_id, ...learnResult });
+        if (learnResult?.ok === false) {
+          const retry = await persistVendorRuleLearningRetry({ db, businessId, transactionId: item.transaction_id, actorId, actorType, error: learnResult.error });
+          vendorRuleResults.push({ transaction_id: item.transaction_id, ...learnResult, retryable: true, ...retry });
+        } else vendorRuleResults.push({ transaction_id: item.transaction_id, ...learnResult });
       } else {
         const learnResult = await learnVendorRuleFromTransaction({
           businessId,
@@ -599,16 +624,28 @@ export async function approveBookkeepingTransactions({
           finalAccountName: item.final_qbo_account_name,
           taxonomyType,
           options: {
-            actor: actorId,
+            actor: { id: actorId, role: actorType },
             onlyThisTransaction: item.only_this_transaction === true || item.learn_reusable_rule === false,
           },
           db,
         });
-        vendorRuleResults.push({ transaction_id: item.transaction_id, ...learnResult });
+        if (learnResult?.ok === false) {
+          const retry = await persistVendorRuleLearningRetry({ db, businessId, transactionId: item.transaction_id, actorId, actorType, error: learnResult.error });
+          vendorRuleResults.push({ transaction_id: item.transaction_id, ...learnResult, retryable: true, ...retry });
+        } else vendorRuleResults.push({ transaction_id: item.transaction_id, ...learnResult });
       }
     } catch (e) {
+      const retry = await persistVendorRuleLearningRetry({ db, businessId, transactionId: item.transaction_id, actorId, actorType, error: e?.message || e });
+      vendorRuleResults.push({
+        transaction_id: item.transaction_id,
+        ok: false,
+        error: e?.message || "vendor_rule_learning_failed",
+        approval_succeeded: true,
+        retryable: true,
+        ...retry,
+      });
       if (process.env.NODE_ENV !== "production") {
-        console.warn("[bookkeeping][approve] vendor rule learn skipped", e?.message || e);
+        console.warn("[bookkeeping][approve] vendor rule learning queued for retry", e?.message || e);
       }
     }
   }

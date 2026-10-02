@@ -224,16 +224,10 @@ const requireCustomerOrAdminView = [requireAuthOrAdminView, requireBusinessConte
 const requireSubscribedMutation = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.FINANCIAL_WRITE });
 const requireSubscribedCompute = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.PAID_COMPUTE });
 const requireProviderSyncMutation = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.PROVIDER_SYNC });
-app.use((req, _res, next) => {
-  if (DEV_BYPASS && req.path.startsWith("/api/investments")) {
-    if (!req.headers["x-user-id"])
-      req.headers["x-user-id"] = process.env.DEV_USER_ID || "dev-user";
-    if (!req.headers["x-business-id"])
-      req.headers["x-business-id"] = process.env.DEV_BUSINESS_ID || "dev-biz";
-    if (!req.user) req.user = { id: req.headers["x-user-id"] };
-  }
-  next();
-});
+// Development investment mocks may bypass provider access, but never synthesize
+// authentication or tenant identity. Routes must still receive verified auth
+// and membership-derived business context.
+void DEV_BYPASS;
 
 /* ---------------------------------- GPT & Chats ---------------------------------- */
 app.use("/api/gpt", gptRoutes);

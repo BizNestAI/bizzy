@@ -1160,6 +1160,7 @@ test("same unresolved merchant approval decision reuses the same operation acros
 
 test("durable worker resumes accepted merchant approval operations and schedules immediately", async () => {
   const db = makeSupabase({
+    business_billing: [{ business_id: "biz-1", subscription_status_test: "active" }],
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
     qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
     transaction_categorizations: [
@@ -1219,6 +1220,7 @@ test("durable worker processes only immutable selected transaction ids after a p
     ["apple-5", "2026-08-24", -43.29],
   ];
   const db = makeSupabase({
+    business_billing: [{ business_id: "biz-1", subscription_status_test: "active" }],
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
     qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "24", name: "Software", account_type: "Expense", active: true }],
     transaction_categorizations: appleRows.map(([id]) => ({
@@ -1281,6 +1283,7 @@ test("durable worker processes only immutable selected transaction ids after a p
 
 test("targeted merchant approval processing claims only the requested operation", async () => {
   const db = makeSupabase({
+    business_billing: [{ business_id: "biz-1", subscription_status_test: "active" }],
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
     qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
     transaction_categorizations: ["selected-1", "other-1"].map((id) => ({
@@ -1331,6 +1334,7 @@ test("targeted merchant approval processing claims only the requested operation"
 
 test("durable worker resumes prior decision_saved merchant operations without duplicate rules", async () => {
   const db = makeSupabase({
+    business_billing: [{ business_id: "biz-1", subscription_status_test: "active" }],
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
     qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
     transaction_categorizations: [
@@ -1395,6 +1399,7 @@ test("durable worker resumes prior decision_saved merchant operations without du
 
 test("merchant approval worker skips actively leased operations and recovers expired leases", async () => {
   const activeLeaseDb = makeSupabase({
+    business_billing: [{ business_id: "biz-1", subscription_status_test: "active" }],
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
     qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
     transaction_categorizations: [{
@@ -1428,6 +1433,7 @@ test("merchant approval worker skips actively leased operations and recovers exp
   assert.equal(activeLeaseDb.cat("biz-1", "leased-1").meta.merchant_group_operation_state, "decision_processing");
 
   const expiredLeaseDb = makeSupabase({
+    business_billing: [{ business_id: "biz-1", subscription_status_test: "active" }],
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
     qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
     transaction_categorizations: [{

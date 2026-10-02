@@ -1,3 +1,4 @@
+/* global process */
 import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
@@ -11,7 +12,8 @@ import {
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { getUniversalVendorHintForTransaction } from "../../../services/bookkeeping/universalVendorHintMatcher.js";
-import { resolveIntentKey } from "../../../services/bookkeeping/intentToCoaMapper.js";
+import { mapIntentToCoa, resolveIntentKey } from "../../../services/bookkeeping/intentToCoaMapper.js";
+import { resolvePlaidCategoryIntent } from "../../../services/bookkeeping/plaidCategoryIntentPolicy.js";
 import {
   resolveCanonicalQboAccount,
   validateCanonicalQboAccountForPromotion,
@@ -66,7 +68,6 @@ const UNIVERSAL_COA_ALLOWLIST = new Set([
   "software",
   "advertising",
   "insurance",
-  "equipment_rental",
   "subcontractors",
   "permits_fees",
   "business_licensing_fees",
@@ -103,7 +104,6 @@ const UNIVERSAL_AUTO_APPROVE_ALLOWLIST = new Set([
   "software",
   "advertising",
   "insurance",
-  "equipment_rental",
   "permits_fees",
   "business_licensing_fees",
   "waste_disposal",
@@ -167,6 +167,7 @@ function intentToStandardAccountName(intent = "") {
   return map[key] || null;
 }
 
+// eslint-disable-next-line no-unused-vars
 function shouldForceCanonicalIntentAccount(intent = "", mappedAccountName = "") {
   const key = resolveIntentKey(intent);
   if (!["transportation", "airfare"].includes(key)) return false;
@@ -748,6 +749,7 @@ function hasCreditCardPaymentMemoSignal(row = {}) {
   return hasCreditCardPaymentSignal(row);
 }
 
+// eslint-disable-next-line no-unused-vars
 async function findCreditCardPaymentPairTxnId(businessId, row, { bookkeepingStartDate = null, allowHistoricalContext = false } = {}) {
   const amount = Number(row.amount || 0);
   if (!Number.isFinite(amount) || amount === 0) return null;
@@ -830,7 +832,8 @@ function matchQboAccountByMaskOrName(qboAccounts = [], plaidAcct = {}) {
   return { account: null, confidence: "low", notes: "no_match" };
 }
 
-async function resolveCcPaymentMapping({ businessId, txnRow, coa, coaMap }) {
+// eslint-disable-next-line no-unused-vars
+async function resolveCcPaymentMapping({ businessId, txnRow, coa }) {
   const bankAccounts = findQboBankAccounts(coa);
   const ccAccounts = findQboCreditCardAccounts(coa);
   const plaidAcct = await fetchPlaidAccount(businessId, txnRow.plaid_account_id);
@@ -1032,56 +1035,26 @@ export async function runBookkeepingSuggestionPass({
 
   const rangeStart = txnIds ? null : computeRangeStart(rangeParam);
 
-  function pickCoaMatch(coaMap, candidates = []) {
-    for (const cand of candidates) {
-      const norm = normalizeName(cand);
-      if (coaMap[norm]) return coaMap[norm];
-    }
-    return null;
-  }
-
-  function mapPlaidToCoa(row, coaMap, fallback = {}) {
+  function mapPlaidToCoa(row, coaAccounts, fallback = {}) {
     const dirRaw = row.direction || row.Direction || null;
     const direction = typeof dirRaw === "string" ? dirRaw.toUpperCase() : dirRaw;
     const isOutflow = direction === "OUTFLOW" || (!direction && Number(row.amount || 0) < 0);
     const isInflow = direction === "INFLOW" || (!direction && Number(row.amount || 0) > 0);
-    const primary = (row.category_primary || "").toUpperCase();
-    const detailed = (row.category_detailed || "").toUpperCase();
-    const pfcPrimary = row.personal_finance_category?.primary?.toUpperCase() || "";
-    const pfcDetailed = row.personal_finance_category?.detailed?.toUpperCase() || "";
-    const name = row.name || row.merchant_name || "";
-    const upperName = name.toUpperCase();
-
-    const candidateLists = [];
-
-    if (primary === "TRAVEL" || pfcPrimary === "TRAVEL") {
-      candidateLists.push(["Travel", "Travel Meals", "Transportation"]);
-    }
-    if (primary === "FOOD_AND_DRINK" || pfcPrimary === "FOOD_AND_DRINK") {
-      candidateLists.push(["Meals & Entertainment", "Meals", "Dining", "Restaurants"]);
-    }
-    if (primary === "TRANSPORTATION" || pfcPrimary === "TRANSPORTATION") {
-      candidateLists.push(["Vehicle", "Auto", "Travel", "Fuel"]);
-    }
-    if (primary === "BANK_FEES" || upperName.includes("FEE")) {
-      candidateLists.push(["Bank Charges", "Bank Fees"]);
-    }
-    if (primary === "LOAN_PAYMENTS") {
-      candidateLists.push(["Loan Interest", "Interest Expense"]);
-    }
-    if (primary === "TRANSFER_OUT" || primary === "TRANSFER_IN" || pfcPrimary === "TRANSFER_OUT" || pfcPrimary === "TRANSFER_IN") {
-      candidateLists.push(["Transfers", "Owner Draws", "Owner Distributions"]);
-    }
-    if (!candidateLists.length && detailed) {
-      candidateLists.push([detailed.replace(/_/g, " ").toLowerCase()]);
-    }
-    const flatCandidates = candidateLists.flat().filter(Boolean);
-    const match = pickCoaMatch(coaMap, flatCandidates);
-    if (match) {
+    const allowed = resolvePlaidCategoryIntent(row);
+    const match = allowed
+      ? mapIntentToCoa({ businessId, intent: allowed.intent, coaAccounts })
+      : null;
+    if (match?.qbo_account_id) {
       return {
-        account: match,
+        account: {
+          id: match.qbo_account_id,
+          name: match.qbo_account_name,
+          type: (coaAccounts || []).find((account) => String(account.id || account.Id) === String(match.qbo_account_id))?.type || null,
+        },
         confidence: "medium",
-        reason: `Plaid category ${(primary || pfcPrimary || "unknown")} mapped to COA '${match.name}'.`,
+        reason: `Reviewed Plaid category ${allowed.plaid_category} mapped through canonical intent ${allowed.intent}.`,
+        source: "plaid_allowlist",
+        canonicalAccountKey: resolveIntentToCanonicalKey(allowed.intent),
         direction: direction || (isOutflow ? "OUTFLOW" : isInflow ? "INFLOW" : "UNKNOWN"),
       };
     }
@@ -2882,7 +2855,7 @@ export async function runBookkeepingSuggestionPass({
       }
 
       rowBranch = "plaid_baseline";
-      const mapped = mapPlaidToCoa(row, coaMap, fallbacks);
+      const mapped = mapPlaidToCoa(row, coa, fallbacks);
       const acct = mapped.account;
       const mappedSuggested = ensureAccountName({
         acctId: acct?.id || null,
@@ -2890,12 +2863,12 @@ export async function runBookkeepingSuggestionPass({
         coa,
       });
       const confidence = mapped.confidence || "low";
-      const suggestionSource =
+      const suggestionSource = mapped.source || (
         mapped.reason && mapped.reason.toLowerCase().includes("fallback")
           ? "fallback"
           : mapped.account
           ? "plaid_mapping"
-          : "unknown";
+          : "unknown");
       let newMeta = {
         ...baseMetaWithCheck,
         safe_to_auto_handle: confidence === "high",
@@ -2979,6 +2952,7 @@ export async function runBookkeepingSuggestionPass({
         transaction_id: row.id,
         suggested_qbo_account_id: mappedSuggested.id || null,
         suggested_qbo_account_name: mappedSuggested.name || null,
+        suggested_canonical_account_key: mapped.canonicalAccountKey || null,
         confidence,
         reason: mapped.reason || "",
         status: autoResult.status,

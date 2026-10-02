@@ -288,6 +288,82 @@ test("old stale suggestion is replaced by current canonical COA mapping before p
   assert.equal(row.post_after, null);
 });
 
+test("explicit reevaluation replaces stale Amazon Equipment Rental without immediate posting", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "supplies-current", name: "Supplies & Materials", type: "Expense", subType: "SuppliesMaterialsCogs" }]);
+  addRoutineRow(db, "txn-amazon-stale", {
+    bankTxn: {
+      name: "AMAZON MARKETPLACE NAMZN.COM/BILL",
+      merchant_name: "Amazon",
+      merchant_entity_id: "amazon-entity",
+      amount: -47.19,
+      signed_amount: -47.19,
+    },
+    cat: {
+      suggested_qbo_account_id: "equipment-rental-old",
+      suggested_qbo_account_name: "Equipment Rental",
+      suggested_canonical_account_key: "equipment_rental",
+      confidence: "low",
+      meta: { suggestion_source: "plaid_mapping" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, {
+    db,
+    transactionIds: ["txn-amazon-stale"],
+    range: "all",
+    source: "explicit_launch_reevaluation",
+    dependencies: deps(db, qbo),
+  });
+  const row = db.rows.transaction_categorizations[0];
+  assert.equal(result.promoted, 0);
+  assert.equal(row.suggested_qbo_account_id, "supplies-current");
+  assert.equal(row.suggested_qbo_account_name, "Supplies & Materials");
+  assert.notEqual(row.suggested_qbo_account_name, "Equipment Rental");
+  assert.equal(row.final_qbo_account_id, null);
+  assert.equal(row.status, "needs_review");
+  assert.equal(row.post_after, null);
+  assert.equal(row.qbo_txn_id || null, null);
+  assert.equal(row.meta.auto_handle_decision.reconsideration_source, "explicit_launch_reevaluation");
+});
+
+test("explicit reevaluation maps Duke to Electric and schedules only through normal auto-post delay", async () => {
+  const db = makeDb();
+  db.rows.business_profiles[0].auto_post_to_quickbooks = true;
+  const { qbo } = makeQbo([{ id: "electric-current", name: "Electric", type: "Expense", subType: "Utilities" }]);
+  addRoutineRow(db, "txn-duke-stale", {
+    bankTxn: {
+      name: "BILL PAY DUKEENERGY 5612",
+      merchant_name: "Duke Energy",
+      merchant_entity_id: "duke-entity",
+      amount: -63.38,
+      signed_amount: -63.38,
+    },
+    cat: {
+      suggested_qbo_account_id: "old-generic",
+      suggested_qbo_account_name: "Uncategorized Expense",
+      confidence: "low",
+      meta: { suggestion_source: "fallback" },
+    },
+  });
+
+  const before = Date.now();
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, {
+    db,
+    transactionIds: ["txn-duke-stale"],
+    range: "all",
+    source: "explicit_launch_reevaluation",
+    dependencies: deps(db, qbo),
+  });
+  const row = db.rows.transaction_categorizations[0];
+  assert.equal(result.promoted, 1);
+  assert.equal(row.final_qbo_account_id, "electric-current");
+  assert.equal(row.final_qbo_account_name, "Electric");
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.qbo_txn_id || null, null);
+  assert.ok(Date.parse(row.post_after) >= before + (23 * 60 * 60 * 1000));
+});
+
 test("approval-backed same-business vendor rule promotes stale Needs Review row to auto-approved", async () => {
   const db = makeDb();
   const { qbo, state } = makeQbo([{ id: "transportation-current", name: "Transportation", type: "Expense", subType: "Travel" }]);
@@ -517,7 +593,7 @@ test("ParkMobile can resolve to existing Transportation account when canonical P
   assert.equal(state.createCount, 0);
 });
 
-test("suspense intent can resolve to an active compatible QBO account before fallback", async () => {
+test("processing-fee intent does not fall back to a generic Bank Fees account", async () => {
   const db = makeDb();
   const { qbo, state } = makeQbo([{ id: "bank-fees-current", name: "Bank Fees", type: "Expense", subType: "BankCharges" }]);
   addRoutineRow(db, "txn-intuit-fee", {
@@ -541,12 +617,12 @@ test("suspense intent can resolve to an active compatible QBO account before fal
   const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
   const row = db.rows.transaction_categorizations[0];
 
-  assert.equal(result.promoted, 1);
-  assert.equal(row.status, "auto_approved");
-  assert.equal(row.final_qbo_account_id, "bank-fees-current");
-  assert.equal(row.final_qbo_account_name, "Bank Fees");
-  assert.equal(row.meta.semantic_coa_resolved, true);
-  assert.equal(row.decided_by, "bizzi");
+  assert.equal(result.promoted, 0);
+  assert.equal(row.status, "needs_review");
+  assert.equal(row.final_qbo_account_id, null);
+  assert.equal(row.suggested_qbo_account_name, "Bank Fees");
+  assert.equal(row.meta.safe_to_auto_handle, false);
+  assert.ok(row.meta.auto_handle_decision.reason);
   assert.equal(state.createCount, 0);
 });
 

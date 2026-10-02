@@ -1,3 +1,4 @@
+/* global process */
 import {
   findPaymentProcessingFeeAccount,
   isPaymentProcessingFeeIntent,
@@ -320,6 +321,9 @@ export function mapIntentToCoa({ businessId, intent, coaAccounts, allowSemanticF
   if (!intent || !coaAccounts?.length) return null;
   const rawKey = intent.toLowerCase();
   const intentKey = resolveIntentKey(rawKey);
+  // Equipment Rental requires an explicit merchant-specific business rule or
+  // deliberate manual selection. Generic intent scoring may not infer it.
+  if (intentKey === "equipment_rental") return null;
   if (!INTENT_KEYWORDS[intentKey]) {
     if (process.env.NODE_ENV !== "production") {
       console.info("[intentToCoaMapper] unknown_intent", { raw_intent: rawKey, resolved_intent: intentKey });

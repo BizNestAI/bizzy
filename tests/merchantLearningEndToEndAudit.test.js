@@ -209,6 +209,11 @@ test("merchant-rule learner updates Chex-shaped rules without unordered update l
       calls.push({ op: "update", patch });
       return this;
     }
+    upsert(patch) {
+      this.patch = patch;
+      calls.push({ op: "upsert", patch });
+      return this;
+    }
     maybeSingle() {
       if (this.limited && !this.ordered) throw new Error("A 'limit' was applied without an explicit 'order'");
       if (this.patch) Object.assign(this.rows[0], this.patch);
@@ -239,6 +244,7 @@ test("merchant-rule learner updates Chex-shaped rules without unordered update l
   assert.equal(result.ok, true);
   assert.equal(result.rule.id, "rule-chex");
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].op, "upsert");
   assert.equal(calls[0].patch.usage_count, 2);
 });
 

@@ -170,6 +170,14 @@ function BookkeepingTransactionMirrorRow({
   const manualPostBusy = isActionBusy("post") || isActionBusy("retry");
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
+  const hasFinalAccount = Boolean(row.final_qbo_account_id || row.finalQboAccountId);
+  const suggestionSource = row.suggestion_source || row.meta?.suggestion_source || null;
+  const blockerReason = row.auto_handle_decision?.reason || row.meta?.auto_handle_decision?.reason || row.post_block_reason || row.meta?.post_block_reason || null;
+  const accountStateLabel = selectedChanged
+    ? "User-selected · Not saved"
+    : hasFinalAccount
+      ? "Final approved account"
+      : `Suggested account${suggestionSource ? ` · ${String(suggestionSource).replaceAll("_", " ")}` : ""}`;
   const protectedReason = getProtectedWorkflowReason(row);
   const incomingMatch = incomingDepositMatchState(row);
   const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(row, displayResolution);
@@ -289,6 +297,7 @@ function BookkeepingTransactionMirrorRow({
             ) : null}
           </>
         ) : (
+          <>
           <CoaDropdown
             value={selectedAccountId}
             suggestedId={row.suggestedAccountId || row.suggested_qbo_account_id || ""}
@@ -314,6 +323,10 @@ function BookkeepingTransactionMirrorRow({
               if (accountId && resolution !== "categorize_new") changeResolution("categorize_new");
             }}
           />
+          <div className={`mt-1 truncate text-[10px] ${selectedChanged ? "text-amber-100/75" : hasFinalAccount ? "text-emerald-100/65" : "text-white/40"}`} title={blockerReason || accountStateLabel}>
+            {accountStateLabel}{!hasFinalAccount && blockerReason ? ` · Blocked: ${String(blockerReason).replaceAll("_", " ")}` : ""}
+          </div>
+          </>
         )}
       </div>
 

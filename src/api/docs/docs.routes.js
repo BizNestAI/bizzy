@@ -1,5 +1,4 @@
 // File: /src/api/docs/docs.routes.js
-/* global process */
 import { Router } from 'express';
 import {
   deleteAccountingDocController,
@@ -37,34 +36,23 @@ function cryptoRandomId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-/**
- * Normalize IDs (query or headers)
- *  - In production: require valid UUIDs, else 400
- *  - In dev: fall back to a stable UUID so routes don’t crash
- */
+/** Normalize the already-authorized request context. Never accept identity from request input. */
 function normalizeIds(req, res, next) {
-  const q = req.query || {};
-  const h = req.headers || {};
   const isUuid =
     (v) =>
       typeof v === 'string' &&
       /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(v);
 
-  const dev = process.env.NODE_ENV !== 'production';
-  const fallback = '00000000-0000-0000-0000-000000000001';
-
   const adminView = req.tenantContext?.mode === 'admin_view';
-  const userIdRaw = req.auth?.userId || req.user?.id || (adminView ? fallback : null) || q.user_id || q.userId || h['x-user-id'] || process.env.DEV_USER_ID;
-  const bizIdRaw  = req.tenantContext?.businessId || req.business?.id || req.auth?.businessId || q.business_id || q.businessId || h['x-business-id'] || process.env.DEV_BUSINESS_ID;
+  const userIdRaw = req.auth?.userId || req.user?.id || req.tenantContext?.staffUserId || null;
+  const bizIdRaw = req.tenantContext?.businessId || req.business?.id || req.auth?.businessId || null;
 
-  if (!dev) {
-    if (!adminView && !isUuid(userIdRaw)) return res.status(400).json({ error: 'missing_or_invalid_user_id', request_id: req.requestId });
-    if (!isUuid(bizIdRaw))  return res.status(400).json({ error: 'missing_or_invalid_business_id', request_id: req.requestId });
-  }
+  if (!adminView && !isUuid(userIdRaw)) return res.status(401).json({ error: 'missing_or_invalid_user_id', request_id: req.requestId });
+  if (!isUuid(bizIdRaw)) return res.status(400).json({ error: 'missing_or_invalid_business_id', request_id: req.requestId });
 
   req.ctx = {
-    userId:     isUuid(userIdRaw) ? userIdRaw : fallback,
-    businessId: isUuid(bizIdRaw)  ? bizIdRaw  : (process.env.DEV_BUSINESS_ID || fallback),
+    userId: isUuid(userIdRaw) ? userIdRaw : null,
+    businessId: bizIdRaw,
   };
   next();
 }
@@ -188,7 +176,7 @@ docsRouter.post(
   async (req, res) => {
     try {
       return await summarizeAndSaveDoc(req, res);
-    } catch (e) {
+    } catch {
       console.warn('[docs:summarize] unavailable', { request_id: req.requestId });
       return res.status(500).json({ error: 'summarize_failed', request_id: req.requestId });
     }
@@ -248,7 +236,7 @@ docsRouter.post(
         (summary?.title && summary.title.trim()) ||
         (business_name ? `Bizzi notes — ${business_name}` : 'Bizzi notes');
       return res.json({ summary: { title, sections: normalized } });
-    } catch (e) {
+    } catch {
       console.warn('[docs:thread-summary] unavailable', { request_id: req.requestId });
       return res.status(500).json({ error: 'summary_failed', request_id: req.requestId });
     }

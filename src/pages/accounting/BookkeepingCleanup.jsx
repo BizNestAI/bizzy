@@ -1587,6 +1587,18 @@ function BookkeepingCleanup() {
       const serverRow = Array.isArray(approvalResult?.rows)
         ? approvalResult.rows.find((row) => String(row.transaction_id || row.id || "") === String(id))
         : null;
+      const ruleFailure = (approvalResult?.vendor_rule_results || []).find((result) => result?.ok === false);
+      if (ruleFailure) {
+        window.dispatchEvent(new CustomEvent("bizzy:toast", {
+          detail: {
+            severity: "warning",
+            title: "Approved; merchant learning will retry",
+            body: ruleFailure.queued
+              ? "This transaction is approved. Bizzi queued the reusable merchant rule for retry."
+              : "This transaction is approved, but the reusable merchant rule could not be saved. Try confirming the rule again later.",
+          },
+        }));
+      }
       setApprovalLedgerEntry(id, {
         status: "confirmed",
         serverRow,
@@ -2493,6 +2505,16 @@ function BookkeepingCleanup() {
         }))
       );
       const serverRows = Array.isArray(approvalResult?.rows) ? approvalResult.rows : [];
+      const ruleFailures = (approvalResult?.vendor_rule_results || []).filter((result) => result?.ok === false);
+      if (ruleFailures.length) {
+        window.dispatchEvent(new CustomEvent("bizzy:toast", {
+          detail: {
+            severity: "warning",
+            title: "Approved; some merchant rules will retry",
+            body: `${ruleFailures.length} reusable merchant rule${ruleFailures.length === 1 ? " was" : "s were"} queued for retry.`,
+          },
+        }));
+      }
       selectedTxnIds.forEach((txnId) => {
         setApprovalLedgerEntry(txnId, {
           status: "confirmed",

@@ -128,3 +128,61 @@ test("Auto-post off still means handled not posted after auto approval, without 
   assert.equal(decision.auto_handle, true);
   assert.equal(lifecycle.key, "handled_not_posted");
 });
+
+function decideDuke(overrides = {}) {
+  return decideBookkeepingCategorization({
+    transaction: {
+      id: "duke-1",
+      name: "BILL PAY DUKEENERGY 5612",
+      merchant_name: "Duke Energy",
+      merchant_entity_id: "duke-entity",
+      direction: "OUTFLOW",
+      amount: -63.38,
+      pending: false,
+      ...overrides.transaction,
+    },
+    account: { id: "qbo-electric-1", name: "Electric", type: "Expense", ...overrides.account },
+    evidence: {
+      source: "universal_hint",
+      confidenceTier: "high",
+      safeToAutoHandle: true,
+      canonicalAccountResolved: true,
+      canonicalAccountKey: "electric",
+      canonicalVendorReliable: true,
+      merchantEvidenceStrong: true,
+      inBookkeepingScope: true,
+      ...overrides.evidence,
+    },
+    businessContext: { suspenseIds: new Set(["qbo-suspense"]) },
+  });
+}
+
+test("Duke resolves to stable Electric and is handled when every safety gate passes", () => {
+  const decision = decideDuke();
+  assert.equal(decision.auto_handle, true);
+  assert.equal(decision.final_qbo_account_id, "qbo-electric-1");
+  assert.equal(decision.final_qbo_account_name, "Electric");
+  assert.equal(decision.block_reason, null);
+});
+
+test("each Duke safety blocker independently remains Needs Review with a reason", () => {
+  const cases = [
+    ["pending", { transaction: { pending: true } }, "pending_transaction_not_postable"],
+    ["unsupported date", { evidence: { inBookkeepingScope: false } }, "outside_bookkeeping_scope"],
+    ["check", { evidence: { isCheck: true } }, "check_requires_review"],
+    ["duplicate", { evidence: { possibleQboDuplicate: true } }, "possible_qbo_duplicate"],
+    ["transfer", { evidence: { taxonomyType: "transfer_internal" } }, "transfer_internal_requires_review"],
+    ["unverified card payment", { evidence: { taxonomyType: "cc_payment", verifiedCcPayment: false } }, "cc_payment_mapping_not_safe"],
+    ["review account", { account: { id: "qbo-suspense", name: "Ask My Accountant" } }, "review_or_suspense_account"],
+    ["invalid account type", { account: { type: "Bank" } }, "qbo_account_type_incompatible"],
+    ["accounting review", { transaction: { accounting_review_required: true } }, "plaid_accounting_review_required"],
+    ["archived", { transaction: { is_archived: true } }, "archived_transaction"],
+    ["superseded", { transaction: { superseded: true } }, "superseded_transaction"],
+  ];
+  for (const [label, overrides, expected] of cases) {
+    const decision = decideDuke(overrides);
+    assert.equal(decision.auto_handle, false, label);
+    assert.equal(decision.needsReview, true, label);
+    assert.equal(decision.block_reason, expected, label);
+  }
+});
