@@ -3,6 +3,7 @@
  * Returns a JSON object with { title, sections:[{heading, body}], tags:[], format, plain_excerpt }
  */
 import OpenAI from 'openai';
+import { secondaryAiRequestOptions } from '../_shared/openaiSafety.js';
 
 const hasOpenAI = !!process.env.OPENAI_API_KEY;
 const client = hasOpenAI ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -10,7 +11,8 @@ const client = hasOpenAI ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : 
 // Hard caps for safety / cost control
 const MAX_TOTAL_CHARS = 14_000; // ~nearest to a safe token window for small models
 const MAX_MESSAGE_CHARS = 2_000; // per message cap to avoid huge single turns
-const RETRIES = 2;
+const SUMMARY_MODEL = 'gpt-4o-mini';
+const SUMMARY_OUTPUT_TOKENS = 700;
 
 function compactMessages(messages = []) {
   // Trim each message and then trim overall
@@ -89,16 +91,17 @@ export async function summarizeWithLLM(title, category, messages) {
   const { system, userInstruction } = buildPrompt({ title, category, convoText });
 
   let lastError = null;
-  for (let attempt = 0; attempt <= RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= 1; attempt++) {
     try {
       const completion = await client.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        model: SUMMARY_MODEL,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: userInstruction }
         ],
         temperature: 0.2,
-      });
+        max_completion_tokens: SUMMARY_OUTPUT_TOKENS,
+      }, secondaryAiRequestOptions());
 
       const raw = completion.choices?.[0]?.message?.content?.trim() || '';
       const parsed = safeJsonParse(raw);

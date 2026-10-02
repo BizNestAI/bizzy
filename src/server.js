@@ -72,7 +72,6 @@ import { startTaxScheduler } from "./services/tax/scheduling/taxScheduler.servic
 // Tax (router)
 import taxRouter from "./api/tax/index.js";
 
-import bizzyInsightRouter from "./api/gpt/brain/bizzyInsight.js";
 import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from "./api/_shared/tenantAuth.js";
 import plaidIntegrationsRouter from "./api/integrations/plaid.routes.js";
 import { buildSafeErrorResponse, redactErrorForLog } from "./api/_shared/safeErrorResponse.js";
@@ -156,7 +155,7 @@ app.use((req, res, next) => {
   const headerSet = new Set(
     (reqHeaders && typeof reqHeaders === "string"
       ? reqHeaders.split(",").map((h) => h.trim())
-      : ["Content-Type", "Authorization", "x-data-mode", "x-debug", "x-user-id", "x-business-id", "x-bizzi-admin-view"]
+          : ["Content-Type", "Authorization", "x-data-mode", "x-user-id", "x-business-id", "x-bizzi-admin-view"]
     ).filter(Boolean)
   );
   headerSet.add("x-data-mode");
@@ -264,13 +263,8 @@ app.use("/api/ar", ...requireCustomerOrAdminView, requireSubscribedMutation, arR
 app.use("/api/bookkeeping", ...requireCustomerOrAdminView, requireSubscribedMutation, bookkeepingPlaidRouter);
 app.post("/api/accounting/affordabilityCheck", ...requireCustomerOrAdminView, requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PAID_COMPUTE), affordabilityCheckHandler);
 
-/* ----------------------- Bizzy Insight (paid tenant compute) ----------------------- */
-app.use(
-  "/api/gpt/brain/bizzyInsight",
-  ...requireCustomerOrAdminView,
-  requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PAID_COMPUTE),
-  bizzyInsightRouter
-);
+// Legacy arbitrary-prompt Bizzy Insight is intentionally not mounted for launch.
+// Supported customer chat runs only through the quota-protected /api/gpt routes.
 
 /* ------------------------------------ Marketing ------------------------------------ */
 app.use("/api/marketing", ...requireCustomerOrAdminView, requireSubscribedMutation, marketingRouter);

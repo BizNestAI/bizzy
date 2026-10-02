@@ -34,6 +34,8 @@ export const BizzyChatProvider = ({ children }) => {
     followUpPrompt,
     clarify,
     usageCount,
+    quota,
+    updateQuota,
     error,
     hydrate,
   } = useBizzyChat(adminView.active ? null : user?.id);
@@ -84,6 +86,7 @@ export const BizzyChatProvider = ({ children }) => {
       access = await safeFetch(url.toString(), {
         headers: { 'x-business-id': resolvedBusinessId },
       });
+      updateQuota(access);
     } catch (err) {
       const notice = {
         blocked: true,
@@ -95,22 +98,26 @@ export const BizzyChatProvider = ({ children }) => {
     }
 
     if (!access?.subscription_active) {
-      const used = Number(access?.usage_count || 0);
-      const limit = Number(access?.trial_limit || access?.limit || 2);
-      const remaining = Math.max(0, Number(access?.remaining ?? (limit - used)));
       setChatGateNotice({
-        blocked: !access?.allowed,
-        title: access?.allowed ? 'Bizzi test questions' : 'Subscription required',
-        message: access?.allowed
-          ? `You have ${remaining} of ${limit} test questions left before a monthly subscription is required.`
-          : 'You have used both test questions. Start a monthly subscription to keep asking Bizzi questions.',
+        blocked: true,
+        title: 'Subscription required',
+        message: 'An active or trialing subscription is required to ask Bizzi questions.',
       });
+    } else if (Number(access?.remaining || 0) <= 0) {
+      setChatGateNotice({ blocked: true, title: 'Monthly limit reached', message: 'You have used all 300 questions. Your credits reset next month.' });
     } else {
-      setChatGateNotice(null);
+      const used = Number(access?.consumed_count || 0);
+      const limit = Number(access?.credit_limit || 300);
+      const reset = access?.reset_at ? new Date(access.reset_at).toLocaleDateString() : null;
+      setChatGateNotice(used >= 250 ? {
+        blocked: false,
+        title: `${used} of ${limit} questions used`,
+        message: `${Math.max(0, Number(access?.remaining || 0))} questions remaining${reset ? ` until ${reset}` : ''}.`,
+      } : null);
     }
 
     return access;
-  }, [adminView.active, businessId, currentBusiness?.id]);
+  }, [adminView.active, businessId, currentBusiness?.id, updateQuota]);
 
   const dismissChatGateNotice = useCallback(() => {
     setChatGateNotice(null);
@@ -365,6 +372,7 @@ export const BizzyChatProvider = ({ children }) => {
       isGenerating,
       isFetchingThread,
       usageCount,
+      quota,
       error,
       followUpPrompt,
       suggestedActions,
@@ -417,7 +425,7 @@ export const BizzyChatProvider = ({ children }) => {
     [
       adminView.active,
       adminView.readOnly,
-      messages, isLoading, isGenerating, isFetchingThread, usageCount, error,
+      messages, isLoading, isGenerating, isFetchingThread, usageCount, quota, error,
       followUpPrompt, suggestedActions, clarify, chatGateNotice,
       threadId, threadsRefreshKey,
       isChatOpen, isChatMinimized,

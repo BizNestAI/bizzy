@@ -17,6 +17,7 @@ export default function ChatCanvasBar({
     checkChatAccess,
     chatGateNotice,
     chatReadOnly,
+    quota,
     dismissChatGateNotice,
   } = useBizzyChatContext();
 
@@ -80,13 +81,19 @@ export default function ChatCanvasBar({
             className="mb-2"
           />
         ) : null}
+        {quota?.credit_limit ? (
+          <div className="mb-1 px-2 text-right text-[11px] text-white/55" data-testid="chat-quota-status">
+            {quota.consumed_count} of {quota.credit_limit} questions used
+            {quota.reset_at ? ` · resets ${new Date(quota.reset_at).toLocaleDateString()}` : ''}
+          </div>
+        ) : null}
         <BizzyChatComposer
           input={input}
           setInput={setInput}
           onSubmit={handleSubmit}
           placeholder={placeholder || "Talk to Bizzi about your books, cash flow, jobs, or taxes…"}
-          disabled={chatReadOnly}
-          readOnly={chatReadOnly}
+          disabled={chatReadOnly || Number(quota?.remaining) === 0}
+          readOnly={chatReadOnly || Number(quota?.remaining) === 0}
           isLoading={!!isLoading}
           inputId="bizzy-canvas-chat-input"
           quickPromptModule={currentModule}

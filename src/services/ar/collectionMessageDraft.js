@@ -1,5 +1,5 @@
 const clean = (value) => {
-  const text = String(value ?? '').trim();
+  const text = String(value ?? '').trim().slice(0, 160);
   if (!text || /^\(?unknown|^n\/a$/i.test(text)) return '';
   return text;
 };

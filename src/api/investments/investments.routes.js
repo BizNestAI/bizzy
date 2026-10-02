@@ -11,7 +11,6 @@ import {
   getAccountsHoldings,
 } from './plaid.controller.js';
 import { runRetirementProjection } from './retirement.controller.js';
-import { getWealthMoves, refreshWealthMoves } from './wealthMoves.controller.js';
 import { fetchWealthPulse, refreshWealthPulseHandler } from './wealthPulse.controller.js';
 import { runMonthlyJobIfFirstOfMonth } from './wealthPulse.service.js';
 import { requireBusinessAccess } from '../_shared/tenantAuth.js';
@@ -268,17 +267,9 @@ router.post('/retirement-projection', ensureAuthIds, runRetirementProjection);
 /* ──────────────────────────────────────────────────────────────
  * WEALTH MOVES
  * ────────────────────────────────────────────────────────────── */
-router.get('/wealth-moves', ensureAuthIds, async (req, res) => {
-  try {
-    noStore(res);
-    return getWealthMoves(req, res);
-  } catch (e) {
-    if (USE_MOCKS) { noStore(res); return res.json(mockWealthMoves()); }
-    console.error('[INV][wealth-moves] error:', e);
-    return res.status(500).json({ error: 'load_failed' });
-  }
-});
-router.post('/wealth-moves/refresh', ensureAuthIds, refreshWealthMoves);
+router.all(['/wealth-moves', '/wealth-moves/refresh'], (_req, res) =>
+  res.status(410).json({ error: 'wealth_moves_retired' })
+);
 
 /* ──────────────────────────────────────────────────────────────
  * WEALTH PULSE

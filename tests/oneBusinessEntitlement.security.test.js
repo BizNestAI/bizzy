@@ -155,9 +155,9 @@ test("migrations enforce subscription and provider cardinality and revoke browse
   assert.match(providers, /plaid_accounts_business_env_item_fkey/i);
 });
 
-test("paid Bizzy Insight mount uses canonical tenant and paid-compute middleware", () => {
+test("legacy arbitrary-prompt Bizzy Insight is not mounted for launch", () => {
   const server = fs.readFileSync(path.join(root, "src/server.js"), "utf8");
-  assert.match(server, /\/api\/gpt\/brain\/bizzyInsight[\s\S]{0,300}requireCustomerOrAdminView[\s\S]{0,300}PAID_COMPUTE/);
+  assert.doesNotMatch(server, /app\.use\(\s*["']\/api\/gpt\/brain\/bizzyInsight/);
 });
 
 test("Plaid Item upsert uses the migrated business/environment/item key", () => {

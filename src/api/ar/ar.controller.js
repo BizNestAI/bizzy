@@ -251,6 +251,9 @@ export async function draftFollowupHandler(req, res) {
     if (!businessId) return sendError(res, 400, "business_id is required");
     const { qbo_invoice_id: qboInvoiceId } = req.body || {};
     if (!qboInvoiceId) return sendError(res, 400, "qbo_invoice_id is required");
+    if (typeof qboInvoiceId !== 'string' || qboInvoiceId.length > 200) {
+      return sendError(res, 400, "invalid_qbo_invoice_id");
+    }
 
     const round = clampRound(req.body?.round);
     const invoice = await fetchOpenInvoiceForFollowup(businessId, qboInvoiceId);
@@ -285,7 +288,7 @@ export async function draftFollowupHandler(req, res) {
 
     return res.status(200).json({ ok: true, followup: data });
   } catch (err) {
-    console.error("[ar] draft followup error", err?.message, err?.stack);
-    return sendError(res, 500, err.message || "Failed to draft AR follow-up", err);
+    console.warn("[ar] collection draft unavailable");
+    return sendError(res, 500, "Failed to draft AR follow-up");
   }
 }

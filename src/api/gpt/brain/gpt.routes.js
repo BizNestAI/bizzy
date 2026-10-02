@@ -1,5 +1,6 @@
 // File: /src/api/gpt/gpt.routes.js
 import { Router } from 'express';
+/* global process */
 import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from '../../_shared/tenantAuth.js';
 import { createRateLimiter } from '../../_shared/rateLimit.js';
 import { ENTITLEMENT_CAPABILITIES, requireEntitlementCapability } from '../../_shared/entitlementAuth.js';
@@ -8,16 +9,6 @@ import { ENTITLEMENT_CAPABILITIES, requireEntitlementCapability } from '../../_s
 import { generateBizzyResponseHandler, getBizzyChatAccessHandler } from './generateBizzyResponse.js';
 
 // Compatibility pipeline; final prompt compilation still occurs only in generateBizzyResponse.
-import {
-  normalizeRequest,
-  attachIntent,
-  attachContext,
-  finalizeContext,
-  clarifyGate,
-  runLLM,
-  postProcess,
-  finalize,
-} from '../middlewares/index.js';
 
 const router = Router();
 const privateBusinessRoute = [requireAuthOrAdminView, requireBusinessAccess(), rejectAdminViewWrites()];
@@ -37,17 +28,7 @@ router.get('/chat-access', ...privateBusinessRoute, getBizzyChatAccessHandler);
 router.post('/generate',          ...privateBusinessRoute, aiGenerateRateLimit, paidChat, generateBizzyResponseHandler);
 router.post('/generate-response', ...privateBusinessRoute, aiGenerateRateLimit, paidChat, generateBizzyResponseHandler);
 
-// Optional legacy pipeline
-const chain = [
-  normalizeRequest,
-  attachIntent,
-  attachContext,
-  finalizeContext,
-  clarifyGate,
-  runLLM,
-  postProcess,
-  finalize,
-];
-router.post('/pipeline', ...privateBusinessRoute, aiGenerateRateLimit, paidChat, ...chain);
+// Legacy alias intentionally shares the exact same quota and generation authority.
+router.post('/pipeline', ...privateBusinessRoute, aiGenerateRateLimit, paidChat, generateBizzyResponseHandler);
 
 export default router;

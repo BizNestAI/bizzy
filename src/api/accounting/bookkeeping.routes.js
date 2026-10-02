@@ -7,6 +7,7 @@ import OpenAI from "openai";
 import { getBookkeepingHealth, upsertBookkeepingHealth } from "./bookkeepingHealth.js";
 import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 import { fetchChartOfAccounts } from "../../services/bookkeeping/qboAccounts.js";
+import { secondaryAiRequestOptions, safeProviderLog } from "../_shared/openaiSafety.js";
 
 const router = express.Router();
 // DEPRECATED: Legacy QBO-only bookkeeping APIs. Plaid-first flows live under /api/bookkeeping.
@@ -94,7 +95,7 @@ async function fetchUncategorizedTransactions({ businessId, sinceDate, limit = 5
 
     return { items, count: items.length };
   } catch (e) {
-    console.error("[bookkeeping] uncategorized fetch failed", e);
+    console.warn("[bookkeeping] uncategorized fetch failed", safeProviderLog(e));
     throw e;
   }
 }
@@ -143,6 +144,14 @@ router.post("/uncategorized/suggest", requireAuth, async (req, res) => {
     const transactions = Array.isArray(req.body?.transactions) ? req.body.transactions : [];
     if (!businessId) return res.status(400).json({ error: "missing businessId" });
     if (!transactions.length) return res.json([]);
+    if (transactions.length > 25) return res.status(400).json({ error: "too_many_transactions" });
+
+    const authoritative = await fetchUncategorizedTransactions({ businessId, limit: 500 });
+    const byId = new Map(authoritative.items.map((transaction) => [String(transaction.id), transaction]));
+    const authorizedTransactions = transactions.map((transaction) => byId.get(String(transaction?.id || '')));
+    if (authorizedTransactions.some((transaction) => !transaction)) {
+      return res.status(403).json({ error: "transaction_not_authorized" });
+    }
 
     const coa = await fetchChartOfAccounts(businessId);
 
@@ -153,8 +162,7 @@ router.post("/uncategorized/suggest", requireAuth, async (req, res) => {
     const system =
       "You are Bizzi, an AI bookkeeping assistant for home service and construction businesses. You help categorize QuickBooks bank transactions into the correct Chart of Accounts, and explain your reasoning concisely.";
     const coaLines = coa.map((c) => `${c.name} (${c.type}${c.subType ? ` – ${c.subType}` : ""})`).join("; ");
-    const txnLines = transactions
-      .slice(0, 25)
+    const txnLines = authorizedTransactions
       .map((t) => `${t.id} | ${t.date} | ${t.payee || t.description} | ${t.amount}`)
       .join("\n");
 
@@ -174,7 +182,7 @@ router.post("/uncategorized/suggest", requireAuth, async (req, res) => {
       ],
       temperature: 0.2,
       max_tokens: 700,
-    });
+    }, secondaryAiRequestOptions());
 
     const raw = completion?.choices?.[0]?.message?.content || "[]";
     let parsed = [];
@@ -199,7 +207,7 @@ router.post("/uncategorized/suggest", requireAuth, async (req, res) => {
 
     res.json(suggestions);
   } catch (e) {
-    console.error("[bookkeeping] suggest error", e);
+    console.warn("[bookkeeping] suggestion provider failure", safeProviderLog(e));
     res.status(500).json({ error: "failed_to_suggest" });
   }
 });

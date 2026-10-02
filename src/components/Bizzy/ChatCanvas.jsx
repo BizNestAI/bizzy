@@ -1283,7 +1283,14 @@ function MessageStream({
               <div className="chat-row" key={key}>
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <div className="row-wrap row-wrap--user">
-                    <UserMessageBubble>{m.text}</UserMessageBubble>
+                    <div>
+                      <UserMessageBubble>{m.text}</UserMessageBubble>
+                      {m.deliveryStatus === 'failed' ? (
+                        <div className="mt-1 text-right text-xs text-rose-300" role="status">
+                          Not sent{m.retryable ? ' — retry to send again.' : ' — wait before retrying.'}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               </div>

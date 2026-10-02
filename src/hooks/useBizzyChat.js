@@ -1,6 +1,5 @@
 // File: /src/hooks/useBizzyChat.js
-import { useCallback, useEffect, useState, useRef } from 'react';
-import { supabase } from '../services/supabaseClient.js';
+import { useCallback, useState, useRef } from 'react';
 import { getDemoMode, shouldUseDemoData } from '../services/demo/demoClient.js';
 import { apiUrl, safeFetch } from '../utils/safeFetch.js';
 
@@ -13,6 +12,10 @@ const PNL_RE = /\b(p&l|pnl|profit and loss|profit & loss|income statement|financ
 const detectSaveIntent = (text = '') => SAVE_INTENT_RE.test(text);
 const detectNavigationIntent = (text = '') => NAV_INTENT_RE.test(text) || WHERE_TO_SEE_RE.test(text);
 const detectPnlContext = (text = '') => PNL_RE.test(text);
+const createRequestId = () => globalThis.crypto?.randomUUID?.() || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+  const value = Math.floor(Math.random() * 16);
+  return (char === 'x' ? value : (value & 0x3) | 0x8).toString(16);
+});
 
 const normalizeDocSuggestion = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -38,12 +41,8 @@ export const useBizzyChat = (user_id) => {
   const [suggestedActions, setSuggestedActions] = useState([]);
   const [followUpPrompt, setFollowUpPrompt] = useState(null);
   const [error, setError] = useState(null);
-  const [usageCount, setUsageCount] = useState(0);
-  const getCurrentMonth = () => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  };
-  const hasValidUser = user_id && user_id !== 'undefined';
+  const [quota, setQuota] = useState(null);
+  const usageCount = Number(quota?.consumed_count || 0);
 
   // Clarifier support
   const [clarify, setClarify] = useState(null); // { question, options, note }
@@ -56,40 +55,9 @@ export const useBizzyChat = (user_id) => {
   const lastUserMessageRef = useRef('');
 
   /* ────────────────────────────── Usage tracking ───────────────────────────── */
-  const fetchUsage = async () => {
-    if (!hasValidUser) return;
-    const currentMonth = getCurrentMonth();
-    try {
-      const { data, error } = await supabase
-        .from('gpt_usage')
-        .select('query_count')
-        .eq('user_id', user_id)
-        .eq('month', currentMonth)
-        .maybeSingle();
-      if (error && error.code !== 'PGRST116') throw error;
-      setUsageCount(data?.query_count || 0);
-    } catch (err) {
-      if (import.meta?.env?.DEV) {
-        console.warn('[useBizzyChat] Failed to fetch usage:', err.message);
-      }
-    }
-  };
-
-  const incrementUsage = async () => {
-    if (!hasValidUser) return;
-    try {
-      await fetchUsage();
-    } catch (err) {
-      if (import.meta?.env?.DEV) {
-        console.warn('[useBizzyChat] Failed to increment usage:', err.message);
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (hasValidUser) fetchUsage();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasValidUser, user_id]);
+  const updateQuota = useCallback((next) => {
+    if (next && typeof next === 'object') setQuota(next);
+  }, []);
 
   const getActiveDataMode = () => {
     try {
@@ -262,10 +230,20 @@ export const useBizzyChat = (user_id) => {
     userRequestedSaveRef.current = userRequestedSave;
     userRequestedNavigationRef.current = userRequestedNavigation;
 
+    const bizId = business_id || localStorage.getItem('currentBusinessId') || null;
+    const pendingStorageKey = `bizzy:pending-chat:${bizId || 'unknown'}:${threadId || 'new'}`;
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem(pendingStorageKey) || 'null'); } catch { pending = null; }
+    const requestId = pending?.text === trimmedInput && pending?.request_id
+      ? pending.request_id
+      : createRequestId();
+    try { sessionStorage.setItem(pendingStorageKey, JSON.stringify({ request_id: requestId, text: trimmedInput })); } catch { /* storage is best-effort */ }
     const newUserMessage = {
-      id: Date.now(),
+      id: requestId,
+      request_id: requestId,
       sender: 'user',
       text: trimmedInput,
+      deliveryStatus: 'sending',
     };
 
     // Optimistic UI: show user message immediately
@@ -279,7 +257,6 @@ export const useBizzyChat = (user_id) => {
     setFollowUpPrompt(null);
 
     try {
-      const bizId = business_id || localStorage.getItem('currentBusinessId') || null;
       const dataMode = getActiveDataMode();
 
       const payload = {
@@ -295,6 +272,7 @@ export const useBizzyChat = (user_id) => {
         },
         opts: { depth },
         thread_id: threadId || null,
+        request_id: requestId,
       };
 
       const headers = {
@@ -302,20 +280,34 @@ export const useBizzyChat = (user_id) => {
         'x-current-route': (typeof window !== 'undefined' && window.location?.pathname) || '',
         'x-bizzy-data-mode': dataMode,
         'x-bizzy-depth': depth,
-        'x-debug': '1',  // TEMP only
+        'x-idempotency-key': requestId,
       };
 
       // Prefer primary route; alias for backward compatibility
       const primary = apiUrl('/api/gpt/generate');
       const alias = apiUrl('/api/gpt/generate-response');
 
+      const callChat = async () => {
+        try {
+          return await safeFetch(primary, { method: 'POST', headers, body: payload });
+        } catch (primaryErr) {
+          if (primaryErr?.status !== 404) throw primaryErr;
+          return safeFetch(alias, { method: 'POST', headers, body: payload });
+        }
+      };
       let data;
-      try {
-        data = await safeFetch(primary, { method: 'POST', headers, body: payload });
-      } catch (primaryErr) {
-        if (primaryErr?.status !== 404) throw primaryErr;
-        data = await safeFetch(alias, { method: 'POST', headers, body: payload });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          data = await callChat();
+          break;
+        } catch (requestError) {
+          if (requestError?.status || attempt === 1) throw requestError;
+        }
       }
+
+      updateQuota(data?.quota || data?.meta?.quota);
+      setMessages((prev) => prev.map((item) => item.request_id === requestId ? { ...item, deliveryStatus: 'sent' } : item));
+      try { sessionStorage.removeItem(pendingStorageKey); } catch { /* storage is best-effort */ }
 
       // If the server created a thread on the first turn, inform parent
       if (!threadId && data?.meta?.thread_id && typeof onThreadCreated === 'function') {
@@ -341,9 +333,15 @@ export const useBizzyChat = (user_id) => {
         setFollowUpPrompt(data.followUpPrompt || null);
       }
 
-      incrementUsage();
     } catch (err) {
       console.error('🔥 Bizzy chat error:', err);
+      updateQuota(err?.body?.quota || err?.body?.meta?.quota);
+      if (err?.status) {
+        try { sessionStorage.removeItem(pendingStorageKey); } catch { /* storage is best-effort */ }
+      }
+      setMessages((prev) => prev.map((item) => item.request_id === requestId
+        ? { ...item, deliveryStatus: 'failed', retryable: err?.body?.meta?.retryable !== false }
+        : item));
       setError(err.message || 'Something went wrong. Please try again.');
     } finally {
       userRequestedSaveRef.current = false;
@@ -377,6 +375,8 @@ export const useBizzyChat = (user_id) => {
     suggestedActions,
     followUpPrompt,
     usageCount,
+    quota,
+    updateQuota,
     error,
     clarify,
   };

@@ -2,7 +2,6 @@ import express from 'express';
 import { sendOk, sendErr } from '../_shared/apiResponder.js';
 import { createRateLimiter } from '../_shared/rateLimit.js';
 import captionsRouter from './generate-social-caption.js';
-import emailRouter from './generate-email-campaign.js';
 
 const router = express.Router();
 const marketingGenerationRateLimit = createRateLimiter({
@@ -62,8 +61,11 @@ router.get(['/insights', '/generate-insights'], (_req, res) =>
   sendErr(res, 405, 'Use POST for /api/marketing/insights')
 );
 
+router.all('/email/generate', (_req, res) =>
+  res.status(410).json({ ok: false, error: 'marketing_email_generation_retired' })
+);
+
 // Mount feature routers
 router.use(marketingGenerationRateLimit, captionsRouter);     // POST /captions/generate
-router.use(marketingGenerationRateLimit, emailRouter);        // POST /email/generate
 
 export default router;

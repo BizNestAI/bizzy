@@ -13,7 +13,6 @@ import useIntegrationManager from "../../hooks/useIntegrationManager";
 import AccountCards from "../../components/Investments/AccountCards";
 import HoldingsTable from "../../components/Investments/HoldingsTable";
 import WealthPulseCard from "../../components/Investments/WealthPulseCard";
-import WealthMovesPanel from "../../components/Investments/WealthMovesPanel";
 
 import {
   getBalances,
@@ -263,20 +262,6 @@ export default function InvestmentsDashboard({
     />
   </Card>
 </section>
-
-{/* Moves (own row, frameless to avoid double border) */}
-<section className="mt-4 sm:mt-6">
-  <Card variant="frameless" className="lg:max-w-[100%]">
-    <WealthMovesPanel
-      userId={userId || undefined}
-      onAskBizzy={handleAskBizzy}
-      onApplyMove={(move) =>
-        handleAskBizzy(`Apply this move to my plan: ${move.move_title}`)
-      }
-    />
-  </Card>
-</section>
-
 
             {/* Holdings */}
 <section id="holdings-table" className="mt-4 sm:mt-6">

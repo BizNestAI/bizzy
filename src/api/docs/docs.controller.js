@@ -15,8 +15,13 @@ const summarizePayload = z.object({
   category: z.enum(['financials','tax','marketing','investments','general']).default('general'),
   messages: z.array(z.object({
     role: z.enum(['user','assistant']),
-    content: z.string().min(1)
-  })).min(1).max(100) // hard cap on message count
+    content: z.string().min(1).max(2_000)
+  })).min(1).max(24)
+}).superRefine((value, ctx) => {
+  const totalChars = value.messages.reduce((sum, message) => sum + message.content.length, 0);
+  if (totalChars > 14_000) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['messages'], message: 'summary_input_too_large' });
+  }
 });
 
 const listQuery = z.object({
@@ -190,7 +195,7 @@ export async function summarizeAndSaveDoc(req, res) {
     try {
       content = await summarizeWithLLM(title, category, messages);
     } catch (e) {
-      console.warn('[docs] LLM unavailable, using cheap fallback:', e?.message);
+      console.warn('[docs] LLM unavailable; using bounded fallback');
       content = cheapSummary(messages);
       content.title = title;
     }
@@ -219,13 +224,13 @@ export async function summarizeAndSaveDoc(req, res) {
       .single();
 
     if (error) {
-      console.error('[docs] insert error', error);
+      console.warn('[docs] summary save failed');
       return fail(req, res, 500, 'insert_failed');
     }
 
     return ok(req, res, { ok: true, id: data.id });
   } catch (err) {
-    console.error('[docs] summarizeAndSaveDoc error', err);
+    console.warn('[docs] summarize request rejected or unavailable');
     const status = err?.status || 400;
     return fail(req, res, status, err?.message || 'invalid_request');
   }

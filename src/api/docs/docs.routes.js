@@ -189,7 +189,7 @@ docsRouter.post(
     try {
       return await summarizeAndSaveDoc(req, res);
     } catch (e) {
-      console.error('[docs:summarize] error:', e, 'req_id=', req.requestId);
+      console.warn('[docs:summarize] unavailable', { request_id: req.requestId });
       return res.status(500).json({ error: 'summarize_failed', request_id: req.requestId });
     }
   }
@@ -203,12 +203,22 @@ docsRouter.post(
   async (req, res) => {
     try {
       const { thread_id, snippet = '', business_name } = req.body || {};
+      if (!thread_id) return res.status(400).json({ error: 'thread_id_required', request_id: req.requestId });
       let messages = [];
       if (thread_id) {
+        const { data: thread, error: threadError } = await supabase
+          .from('gpt_threads')
+          .select('id')
+          .eq('id', thread_id)
+          .eq('business_id', req.ctx.businessId)
+          .maybeSingle();
+        if (threadError) throw new Error('thread_lookup_failed');
+        if (!thread) return res.status(404).json({ error: 'thread_not_found', request_id: req.requestId });
         const { data, error } = await supabase
           .from('gpt_messages')
           .select('role,content,created_at,message_role_position,message_sequence')
           .eq('thread_id', thread_id)
+          .eq('business_id', req.ctx.businessId)
           .order('created_at', { ascending: true })
           .order('message_role_position', { ascending: true })
           .order('message_sequence', { ascending: true })
@@ -239,7 +249,7 @@ docsRouter.post(
         (business_name ? `Bizzi notes — ${business_name}` : 'Bizzi notes');
       return res.json({ summary: { title, sections: normalized } });
     } catch (e) {
-      console.error('[docs:thread-summary] error:', e, 'req_id=', req.requestId);
+      console.warn('[docs:thread-summary] unavailable', { request_id: req.requestId });
       return res.status(500).json({ error: 'summary_failed', request_id: req.requestId });
     }
   }

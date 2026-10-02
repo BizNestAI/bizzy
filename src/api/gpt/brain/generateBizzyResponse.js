@@ -28,6 +28,13 @@ import {
 import { buildChatContext } from '../orchestration/chatContextService.js';
 import { loadRecentStructuredReferences, shouldPersistStructuredReferences } from '../orchestration/recentStructuredReferences.js';
 import { invokeBizzyChatCompletion } from './openaiInvocation.js';
+import {
+  consumeChatCredit,
+  getChatCreditStatus,
+  quotaMeta,
+  releaseChatCredit,
+  reserveChatCredit,
+} from './chatCreditAuthority.js';
 import { HISTORY_AUTHORITY_INSTRUCTION, labelOlderConversationDigest, sortConversationMessages } from '../../../utils/conversationMessageOrder.js';
 
 // 👉 NEW: demo-mode helpers
@@ -43,13 +50,12 @@ console.info('[bizzy-openai] configuration', {
   timeout_ms: 45_000,
   max_retries: 1,
 });
-const FREE_CHAT_LIMIT = 2;
 const PAID_CHAT_LIMIT = 300;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_CHAT_MESSAGE_CHARS = Number(process.env.BIZZY_CHAT_MAX_MESSAGE_CHARS || 20_000);
 
 function getCurrentUsageMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return new Date().toISOString().slice(0, 7);
 }
 
 function readModeScopedBillingValue(row, key, fallbackValue = null) {
@@ -83,18 +89,6 @@ function hasActiveMonthlySubscription(billing) {
     if (!Number.isNaN(end.getTime()) && end.getTime() <= Date.now()) return false;
   }
   return true;
-}
-
-async function getMonthlyUsageCount(userId, month = getCurrentUsageMonth()) {
-  if (!userId) return 0;
-  const { data, error } = await supabase
-    .from('gpt_usage')
-    .select('query_count')
-    .eq('user_id', userId)
-    .eq('month', month)
-    .maybeSingle();
-  if (error && error.code !== 'PGRST116') throw error;
-  return Number(data?.query_count || 0);
 }
 
 async function getBusinessBillingForUser(userId, businessId) {
@@ -136,7 +130,6 @@ async function getBusinessBillingForUser(userId, businessId) {
 }
 
 export async function getBizzyChatAccess({ user_id, business_id } = {}) {
-  const month = getCurrentUsageMonth();
   const billingResult = await getBusinessBillingForUser(user_id, business_id);
   if (!billingResult.ok) {
     return {
@@ -145,35 +138,30 @@ export async function getBizzyChatAccess({ user_id, business_id } = {}) {
       status: billingResult.status,
       error: billingResult.error,
       message: billingResult.message,
-      month,
-      usage_count: 0,
-      limit: FREE_CHAT_LIMIT,
+      period_start: null,
+      credit_limit: PAID_CHAT_LIMIT,
+      consumed_count: 0,
+      reserved_count: 0,
       remaining: 0,
       subscription_active: false,
     };
   }
 
-  const usageCount = await getMonthlyUsageCount(user_id, month);
   const subscriptionActive = hasActiveMonthlySubscription(billingResult.billing);
-  const limit = subscriptionActive ? PAID_CHAT_LIMIT : FREE_CHAT_LIMIT;
-  const remaining = Math.max(0, limit - usageCount);
-  const allowed = usageCount < limit;
+  const status = await getChatCreditStatus(supabase, business_id);
+  const quota = quotaMeta(status, billingResult.billing.subscription_status);
+  const allowed = subscriptionActive && quota.remaining > 0;
   return {
     ok: true,
     allowed,
-    month,
-    usage_count: usageCount,
-    limit,
-    remaining,
+    ...quota,
     subscription_active: subscriptionActive,
     subscription_status: billingResult.billing.subscription_status,
-    trial_limit: FREE_CHAT_LIMIT,
-    paid_limit: PAID_CHAT_LIMIT,
     message: allowed
       ? null
-      : subscriptionActive
+      : subscriptionActive && quota.remaining <= 0
         ? "You've reached the current 300-query monthly limit."
-        : 'Your two test questions are used. Subscribe to keep asking Bizzi questions.',
+        : 'An active or trialing subscription is required to ask Bizzi questions.',
   };
 }
 
@@ -345,12 +333,13 @@ export async function generateBizzyResponse({
   threadId = null,
   business_id: businessIdFromHandler = null,
   dataMode = 'auto',
+  requestId: stableRequestId = null,
 }) {
   const started = Date.now();
   const requestedDataMode = normalizeDataMode(dataMode);
   const effectiveDemoMode = requestedDataMode === 'demo' || (requestedDataMode !== 'live' && isDemoMode());
   console.log('[gpt] start', { user_id, threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode, demoMode: effectiveDemoMode });
-  const requestId = randomUUID();
+  const requestId = stableRequestId || randomUUID();
   const llmInvocation = {
     requested_model: BIZZY_CHAT_MODEL,
     method: /^gpt-5\.6(?:-|$)/i.test(BIZZY_CHAT_MODEL) ? 'responses' : 'chat.completions',
@@ -378,34 +367,11 @@ export async function generateBizzyResponse({
         return await generateBizzyResponse({
           user_id, message, type: 'affordability_check',
           parsedInput: { ...parsedInput, affordHint: parsed },
-          threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode,
+          threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode, requestId,
         });
       }
     }
     const intent = type || 'general';
-
-    // Usage soft cap (unchanged)
-    console.log('[gpt] usage-check ok');
-    const currentMonth = getCurrentUsageMonth();
-    try {
-      const { data: usageData } = await supabase
-        .from('gpt_usage')
-        .select('query_count, last_used')
-        .eq('user_id', user_id)
-        .eq('month', currentMonth)
-        .maybeSingle();
-      const currentCount = usageData?.query_count || 0;
-      if (currentCount >= 300) {
-        return {
-          responseText:
-            "You've reached the current 300-query monthly limit. Try again next month or contact support to raise the cap.",
-          suggestedActions: [],
-          followUpPrompt: '',
-        };
-      }
-    } catch {
-      // Usage lookup is best-effort; the handler-level billing gate remains authoritative.
-    }
 
     // Resolve business id (unchanged)
     console.log('[gpt] business resolved', { businessId: businessIdFromHandler });
@@ -835,15 +801,14 @@ export async function generateBizzyResponse({
     console.log('[gpt] persisting messages');
 
     let persistedUserMessageId = null;
-    // Persist turn (unchanged)
-    try {
+    // Operational failures are not conversation history or durable memory.
+    if (!operationalError) try {
       const userEmbeddingText  = `User said: ${message}`;
       const bizzyEmbeddingText = `Bizzy replied: ${bizzyReply}`;
 
-      const [uVec, aVec] = await Promise.allSettled([
-        getEmbedding(userEmbeddingText),
-        operationalError ? Promise.resolve(null) : getEmbedding(bizzyEmbeddingText),
-      ]);
+      const [uVec, aVec] = await Promise.allSettled(operationalError
+        ? [Promise.resolve(null), Promise.resolve(null)]
+        : [getEmbedding(userEmbeddingText), getEmbedding(bizzyEmbeddingText)]);
 
       const userEmb = normalizeVec(uVec);
       const asstEmb = normalizeVec(aVec);
@@ -867,6 +832,7 @@ export async function generateBizzyResponse({
             embedding     : userEmb,
             message_kind  : 'conversation',
             message_role_position: 0,
+            request_id: requestId,
           },
           {
             thread_id     : localThreadId,
@@ -880,6 +846,7 @@ export async function generateBizzyResponse({
             message_kind  : operationalError ? 'operational_error' : 'conversation',
             message_role_position: 1,
             structured_references: persistedStructuredReferences,
+            request_id: requestId,
           },
         ])
         .select('id,thread_id,role');
@@ -985,6 +952,9 @@ export async function generateBizzyResponse({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function generateBizzyResponseHandler(req, res) {
+  let reservedCredit = null;
+  let reservedBusinessId = null;
+  let stableRequestId = null;
   try {
     const { message, type } = req.body ?? {};
     const user_id = req.auth?.userId || req.user?.id || null;
@@ -996,6 +966,20 @@ export async function generateBizzyResponseHandler(req, res) {
 
     const incomingThreadId = req.body?.thread_id || null;
     const business_id = req.business?.id || req.auth?.businessId || null;
+    stableRequestId = String(req.body?.request_id || req.header('x-idempotency-key') || '').trim();
+    if (typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ ok: false, error: 'missing_message', responseText: 'Enter a question for Bizzi.' });
+    }
+    if (message.length > MAX_CHAT_MESSAGE_CHARS) {
+      return res.status(413).json({ ok: false, error: 'message_too_large', responseText: 'That question is too long to send.' });
+    }
+    const clientContextChars = JSON.stringify(req.body?.context || req.body?.parsedInput || {}).length;
+    if (clientContextChars > 120_000) {
+      return res.status(413).json({ ok: false, error: 'context_too_large', responseText: 'That request includes too much context.' });
+    }
+    if (!UUID_RE.test(stableRequestId)) {
+      return res.status(400).json({ ok: false, error: 'invalid_request_id', responseText: 'A valid request ID is required.' });
+    }
     const dataMode = normalizeDataMode(
       req.body?.data_mode ||
       req.body?.dataMode ||
@@ -1004,26 +988,34 @@ export async function generateBizzyResponseHandler(req, res) {
       parsedInput?.dataMode
     );
 
-    const access = await getBizzyChatAccess({ user_id, business_id });
-    if (!access.allowed) {
-      const blockedStatus = access.ok
-        ? access.subscription_active ? 429 : 402
-        : (access.status || 403);
-      return res.status(blockedStatus).json({
-        ok: false,
-        error: access.ok
-          ? access.subscription_active ? 'monthly_chat_limit_reached' : 'chat_subscription_required'
-          : access.error,
-        responseText: access.message || 'Subscribe to keep asking Bizzi questions.',
-        suggestedActions: [],
-        followUpPrompt: '',
-        meta: {
-          billing_gate: access,
-          thread_id: incomingThreadId || null,
-          intent: normalizedType || 'general',
-        },
-      });
+    // The route entitlement middleware has already rejected every non-active/non-trialing
+    // status and Admin View. Reserve before context compilation, embeddings, or AI work.
+    reservedCredit = await reserveChatCredit(supabase, {
+      businessId: business_id,
+      requestId: stableRequestId,
+      userId: user_id,
+      threadId: incomingThreadId,
+    });
+    reservedBusinessId = business_id;
+    const entitlementStatus = req.entitlement?.status || null;
+    const reservedQuota = quotaMeta(reservedCredit, entitlementStatus);
+    if (reservedCredit?.outcome === 'duplicate_consumed') {
+      const replay = reservedCredit.response_payload;
+      if (!replay || typeof replay !== 'object') {
+        return res.status(409).json({ ok: false, error: 'completed_response_unavailable', quota: reservedQuota });
+      }
+      return res.json({ ...replay, quota: reservedQuota, meta: { ...(replay.meta || {}), quota: reservedQuota, idempotent_replay: true } });
     }
+    if (reservedCredit?.outcome === 'duplicate_in_progress') {
+      return res.status(409).json({ ok: false, error: 'request_in_progress', responseText: 'This question is still being processed.', quota: reservedQuota });
+    }
+    if (reservedCredit?.outcome === 'duplicate_released') {
+      return res.status(409).json({ ok: false, error: 'request_released', responseText: 'Retry this question to create a new request.', quota: reservedQuota });
+    }
+    if (reservedCredit?.outcome === 'exhausted') {
+      return res.status(429).json({ ok: false, error: 'monthly_chat_limit_reached', responseText: "You've reached the 300-question monthly limit.", quota: reservedQuota });
+    }
+    if (reservedCredit?.outcome !== 'reserved') throw new Error('chat_credit_reservation_failed');
 
     let threadIdToUse = incomingThreadId;
     let fallbackTitleUsed = null;
@@ -1071,6 +1063,7 @@ export async function generateBizzyResponseHandler(req, res) {
         error_class: 'context_compilation_failure',
         message: contextError?.message || String(contextError),
       });
+      const released = await releaseChatCredit(supabase, { businessId: business_id, requestId: stableRequestId, failureClassification: 'context_compilation_failure' });
       return res.status(503).json({
         responseText: 'I’m having trouble generating a response right now. Your QuickBooks and Plaid connections may still be working.',
         artifacts: [],
@@ -1079,7 +1072,8 @@ export async function generateBizzyResponseHandler(req, res) {
         suggestedActions: [],
         followUpPrompt: '',
         error: 'context_compilation_failed',
-        meta: { operational_error: true, request_id: requestId, thread_id: incomingThreadId || null },
+        quota: quotaMeta(released, req.entitlement?.status || null),
+        meta: { operational_error: true, request_id: requestId, thread_id: incomingThreadId || null, retryable: true },
       });
     }
     parsedInput = { ...parsedInput, chatContext: orchestration };
@@ -1117,6 +1111,7 @@ export async function generateBizzyResponseHandler(req, res) {
       threadId: threadIdToUse || null,
       business_id,
       dataMode,
+      requestId: stableRequestId,
     });
     const { internalTelemetry, ...publicResult } = result || {};
 
@@ -1126,7 +1121,52 @@ export async function generateBizzyResponseHandler(req, res) {
       thread_id: threadIdToUse || publicResult.meta?.thread_id || null,
     };
 
+    if (publicResult?.meta?.operational_error || publicResult?.meta?.error) {
+      const released = await releaseChatCredit(supabase, {
+        businessId: business_id,
+        requestId: stableRequestId,
+        failureClassification: publicResult?.meta?.error || 'provider_operational_failure',
+      });
+      const quota = quotaMeta(released, req.entitlement?.status || null);
+      return res.status(503).json({
+        ...publicResult,
+        ok: false,
+        error: publicResult?.meta?.error || 'chat_generation_failed',
+        quota,
+        meta: { ...(publicResult.meta || {}), quota, retryable: true },
+      });
+    }
+
     // Auto-title (unchanged)
+    let consumption;
+    let consumeError = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        consumption = await consumeChatCredit(supabase, {
+          businessId: business_id,
+          requestId: stableRequestId,
+          threadId: publicResult?.meta?.thread_id || threadIdToUse || null,
+          responsePayload: publicResult,
+        });
+        consumeError = null;
+        break;
+      } catch (error) {
+        consumeError = error;
+      }
+    }
+    if (consumeError || !['consumed', 'already_consumed'].includes(consumption?.outcome)) {
+      console.error('[gpt handler] credit finalization failed', { request_id: stableRequestId, business_id, error_class: 'credit_finalize_failure' });
+      return res.status(503).json({
+        ok: false,
+        error: 'credit_finalization_pending',
+        responseText: 'Your response was generated but could not be finalized safely. Please wait before retrying.',
+        meta: { request_id: stableRequestId, operational_error: true, retryable: false },
+      });
+    }
+    const authoritativeQuota = quotaMeta(consumption, req.entitlement?.status || null);
+    publicResult.quota = authoritativeQuota;
+    publicResult.meta = { ...(publicResult.meta || {}), quota: authoritativeQuota, request_id: stableRequestId };
+
     try {
       if (!incomingThreadId && threadIdToUse) {
         const title = await generateThreadTitle({
@@ -1162,7 +1202,7 @@ export async function generateBizzyResponseHandler(req, res) {
           businessId: business_id,
           month: getCurrentUsageMonth(),
           telemetry: internalTelemetry?.openai_usage || {},
-          requestId: internalTelemetry?.request_id || null,
+          requestId: stableRequestId,
         });
         maybeLogMainChatCostWarning({
           userId: user_id,
@@ -1179,7 +1219,14 @@ export async function generateBizzyResponseHandler(req, res) {
 
     return res.json({ ...publicResult });
   } catch (e) {
-    const debug = req.headers['x-debug'] === '1' || req.query.debug === '1';
+    if (reservedCredit?.outcome === 'reserved' && reservedBusinessId && stableRequestId) {
+      try {
+        await releaseChatCredit(supabase, { businessId: reservedBusinessId, requestId: stableRequestId, failureClassification: 'handler_failure' });
+      } catch {
+        // Leave the reservation for conservative stale reconciliation.
+      }
+    }
+    const debug = process.env.NODE_ENV !== 'production' && process.env.BIZZY_SERVER_DEBUG === 'true';
     console.error('[gpt handler] hard error:', e);
     return res
       .status(500)
@@ -1206,7 +1253,9 @@ export async function getBizzyChatAccessHandler(req, res) {
       allowed: false,
       error: 'chat_access_failed',
       message: 'Failed to load chat access.',
-      limit: FREE_CHAT_LIMIT,
+      credit_limit: PAID_CHAT_LIMIT,
+      consumed_count: 0,
+      reserved_count: 0,
       remaining: 0,
       subscription_active: false,
     });

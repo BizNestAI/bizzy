@@ -1,7 +1,6 @@
 // File: /src/api/chats/chats.routes.js
 import { Router } from 'express';
 import { supabase } from '../../services/supabaseAdmin.js';
-import { generateThreadTitle } from './title.util.js';
 import { sortConversationMessages } from '../../utils/conversationMessageOrder.js';
 
 const router = Router();
@@ -230,40 +229,7 @@ router.get('/:id/messages', tenantGuard, async (req, res) => {
 
 // Manual re-title (concise)
 router.post('/:id/auto-title', tenantGuard, async (req, res) => {
-  try {
-    const { business_id } = req.tenant;
-    const id = req.params.id;
-
-    const { data: thread, error: tErr } = await supabase
-      .from('gpt_threads')
-      .select('id,business_id,title')
-      .eq('id', id)
-      .single();
-    if (tErr) return res.status(404).json({ error: 'not_found' });
-    if (thread.business_id !== business_id) return res.status(403).json({ error: 'forbidden' });
-
-    const { data: msgs } = await supabase
-      .from('gpt_messages')
-      .select('role,content,created_at,message_role_position,message_sequence')
-      .eq('thread_id', id)
-      .order('created_at', { ascending: true })
-      .order('message_role_position', { ascending: true })
-      .order('message_sequence', { ascending: true })
-      .limit(8);
-
-    const userText = (msgs || []).filter(m => m.role === 'user').map(m => m.content).join('\n').slice(0, 1000);
-    const assistantText = (msgs || []).filter(m => m.role === 'assistant').map(m => m.content).join('\n').slice(0, 1000);
-
-    const title = await generateThreadTitle({ userText, assistantText });
-
-    await supabase.from('gpt_threads')
-      .update({ title, updated_at: new Date().toISOString() })
-      .eq('id', id);
-
-    res.json({ ok: true, title });
-  } catch (e) {
-    res.status(500).json({ error: 'auto_title_failed', details: e.message });
-  }
+  return res.status(410).json({ error: 'auto_title_direct_route_disabled' });
 });
 
 export default router;
