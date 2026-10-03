@@ -5,6 +5,10 @@ import {
   extractAdminViewToken,
   getAdminViewSession,
 } from "../../services/adminViewSessionService.js";
+import {
+  hasAdminBookkeepingWriteCapability,
+  matchAdminBookkeepingWrite,
+} from "../../services/adminBookkeepingAccess.js";
 
 export const TENANT_AUTH_CODES = Object.freeze({
   AUTH_REQUIRED: "AUTH_REQUIRED",
@@ -167,6 +171,7 @@ async function resolveAdminViewBusiness({ req, businessId: explicitBusinessId = 
     adminViewSource: context.source || "monthly_review",
     adminViewExpiresAt: context.expires_at || null,
     adminViewReturnUrl: context.return_url || null,
+    adminViewCapabilities: Array.isArray(context.capabilities) ? context.capabilities : [],
   };
 }
 
@@ -246,6 +251,10 @@ export function attachAuthorizedBusiness(req, business) {
   req.auth ||= {};
   req.auth.businessId = business.id;
   req.auth.tenantMode = business.tenantMode || "customer";
+  if (business.tenantMode === "admin_view") {
+    req.auth.userId = business.staffUserId || null;
+    req.auth.staffUserId = business.staffUserId || null;
+  }
 
   req.tenantContext = {
     mode: business.tenantMode || "customer",
@@ -260,6 +269,7 @@ export function attachAuthorizedBusiness(req, business) {
     source: business.adminViewSource || null,
     expiresAt: business.adminViewExpiresAt || null,
     returnUrl: business.adminViewReturnUrl || null,
+    capabilities: Array.isArray(business.adminViewCapabilities) ? business.adminViewCapabilities : [],
   };
 
   // Compatibility only for legacy controllers. This field is attached only
@@ -323,6 +333,19 @@ export function rejectAdminViewWrites(options = {}) {
   const allowed = new Set((options.allowMethods || ["GET", "HEAD", "OPTIONS"]).map((method) => String(method).toUpperCase()));
   return function rejectAdminViewWritesMiddleware(req, res, next) {
     if (req.tenantContext?.mode === "admin_view" && !allowed.has(String(req.method || "").toUpperCase())) {
+      const authorizedWrite = hasAdminBookkeepingWriteCapability(req.tenantContext)
+        ? matchAdminBookkeepingWrite(req)
+        : null;
+      if (authorizedWrite) {
+        req.adminBookkeepingAccess = {
+          ...authorizedWrite,
+          actorId: req.tenantContext.staffUserId || null,
+          businessId: req.tenantContext.businessId || null,
+          sessionId: req.tenantContext.adminViewSessionId || null,
+          source: "admin_customer_app",
+        };
+        return next();
+      }
       return res.status(403).json({
         ok: false,
         error: TENANT_AUTH_CODES.ADMIN_VIEW_READ_ONLY,

@@ -687,6 +687,7 @@ function BookkeepingCleanup() {
   const { status: billingStatus, loading: loadingBillingStatus } = useBillingStatus(businessId, userId);
   const billingAccess = getBillingAccess(resolveStatusValue(billingStatus));
   const canRunAI = adminView.active ? false : (usingDemo ? true : billingAccess.canRunAI);
+  const canBookkeepingWrite = adminView.bookkeepingAccess === true || canRunAI;
   const [accounts, setAccounts] = useState(usingDemo ? DEMO_ACCOUNT_LIST : []);
   const [chartAccounts, setChartAccounts] = useState(() => {
     if (!usingDemo) return [];
@@ -1521,7 +1522,7 @@ function BookkeepingCleanup() {
   }, [totalCount, pendingCount, filteredTransactions.length]);
 
   const toggleRow = (id) => {
-    if (!canRunAI || !selectableIdSet.has(id)) return;
+    if (!canBookkeepingWrite || !selectableIdSet.has(id)) return;
     const next = new Set(selectedIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -1529,7 +1530,7 @@ function BookkeepingCleanup() {
   };
 
   const toggleSelectAll = () => {
-    if (!canRunAI) return;
+    if (!canBookkeepingWrite) return;
     if (allVisibleSelected) {
       setSelectedIds(new Set());
     } else {
@@ -1538,7 +1539,7 @@ function BookkeepingCleanup() {
   };
 
   const handleApprove = async (id, newAccountId = null) => {
-    if (!canRunAI) return;
+    if (!canBookkeepingWrite) return;
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -1622,7 +1623,7 @@ function BookkeepingCleanup() {
   };
 
   const handleUndo = async (id) => {
-    if (!canRunAI) return;
+    if (!canBookkeepingWrite) return;
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) => {
@@ -1699,7 +1700,7 @@ function BookkeepingCleanup() {
   };
 
   const handleExclude = async (id) => {
-    if (!businessId || !canRunAI) return;
+    if (!businessId || !canBookkeepingWrite) return;
     const exclusionKey = String(id || "");
     if (!exclusionKey || exclusionInFlightRef.current.has(exclusionKey)) return false;
     const txn = transactions.find((row) => String(row.id) === String(id));
@@ -1776,7 +1777,7 @@ function BookkeepingCleanup() {
   };
 
   const handleRejectCreditCardPayment = async (id) => {
-    if (!canRunAI) return;
+    if (!canBookkeepingWrite) return;
     const discoveryKey = String(id || "");
     ccDiscoveryAbortRef.current.get(discoveryKey)?.abort?.();
     ccDiscoveryAbortRef.current.delete(discoveryKey);
@@ -1829,7 +1830,7 @@ function BookkeepingCleanup() {
   };
 
   const handleMarkCreditCardPayment = async (id) => {
-    if (!canRunAI) return;
+    if (!canBookkeepingWrite) return;
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -1899,7 +1900,7 @@ function BookkeepingCleanup() {
   }, []);
 
   const startCreditCardPaymentDiscovery = useCallback(async (txnId, targetQboAccountId) => {
-    if (!canRunAI || usingDemo || !businessId || !txnId || !targetQboAccountId) {
+    if (!canBookkeepingWrite || usingDemo || !businessId || !txnId || !targetQboAccountId) {
       clearCreditCardPaymentDiscovery(txnId);
       return;
     }
@@ -1966,7 +1967,7 @@ function BookkeepingCleanup() {
         ccDiscoveryAbortRef.current.delete(key);
       }
     }
-  }, [businessId, canRunAI, clearCreditCardPaymentDiscovery, usingDemo]);
+  }, [businessId, canBookkeepingWrite, clearCreditCardPaymentDiscovery, usingDemo]);
 
   const buildMatchedCreditCardPaymentTxn = useCallback((txn = {}, pair = {}) => {
     const txnId = String(txn.id || "");
@@ -2018,7 +2019,7 @@ function BookkeepingCleanup() {
 
   const handleConfirmCreditCardPaymentMatch = async (id, targetQboAccountId, targetTransactionIdArg = null) => {
     const clickStartedAt = performance.now();
-    if (!canRunAI || !businessId || !id || !targetQboAccountId) return;
+    if (!canBookkeepingWrite || !businessId || !id || !targetQboAccountId) return;
     const key = String(id);
     if (ccConfirmInFlightRef.current.has(key)) return;
     const ccAction = ccPaymentActionState[key] || {};
@@ -2274,7 +2275,7 @@ function BookkeepingCleanup() {
   };
 
   const withIncomingDepositMatchAction = async (id, action) => {
-    if (!canRunAI || !businessId || !id || usingDemo) return;
+    if (!canBookkeepingWrite || !businessId || !id || usingDemo) return;
     const key = String(id);
     if (incomingDepositActionInFlightRef.current.has(key)) return;
     incomingDepositActionInFlightRef.current.add(key);
@@ -2407,7 +2408,7 @@ function BookkeepingCleanup() {
   };
 
   const handleResolutionChange = async (id, resolution, systemSuggestedResolution) => {
-    if (!canRunAI || !businessId || !id) return;
+    if (!canBookkeepingWrite || !businessId || !id) return;
     const selectedAt = new Date().toISOString();
     const applySelection = (savedMeta = null) => setTransactions((rows) => rows.map((row) => row.id === id ? {
       ...row,
@@ -2453,7 +2454,7 @@ function BookkeepingCleanup() {
   };
 
   const handleBulkApprove = async () => {
-    if (!canRunAI || !selectedTransactions.length || !bulkAccountId) return;
+    if (!canBookkeepingWrite || !selectedTransactions.length || !bulkAccountId) return;
     const account = chartAccounts.find((a) => String(a.id) === String(bulkAccountId));
     const accountName = account?.name || bulkAccountId;
     const selectedTxnIds = selectedTransactions
@@ -2660,6 +2661,7 @@ function BookkeepingCleanup() {
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     const txn = transactions.find((t) => t.id === txnId);
     if (!txn) return;
+    if (adminView.bookkeepingAccess && !txn.post_error && !txn.postError) return;
     manualPostTriggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
     setManualPostResult(null);
     setManualPostTxn(txn);
@@ -2852,7 +2854,7 @@ function BookkeepingCleanup() {
   }, [usingDemo]);
 
   const handleAccountChange = async (txnId, accountId) => {
-    if (!canRunAI) return;
+    if (!canBookkeepingWrite) return;
     const accountName = chartAccounts.find((a) => a.id === accountId)?.name || accountId || null;
     const txn = transactions.find((t) => t.id === txnId);
     if (txn?.status === "posted") {
@@ -3280,8 +3282,8 @@ function BookkeepingCleanup() {
   }, [accountFilter, activeTab, dateRange, rowsPerPage, showCategorized]);
 
   useEffect(() => {
-    if (!canRunAI) setSelectedIds(new Set());
-  }, [canRunAI]);
+    if (!canBookkeepingWrite) setSelectedIds(new Set());
+  }, [canBookkeepingWrite]);
 
   return (
     <div className="pt-0 pb-8 text-slate-100 min-h-screen">
@@ -3477,7 +3479,7 @@ function BookkeepingCleanup() {
               </button>
               <button
                 type="button"
-                disabled={savingAutoPost || loadingAutoPost}
+                disabled={adminView.active || savingAutoPost || loadingAutoPost}
                 onClick={handleToggleAutoPost}
                 role="switch"
                 aria-checked={autoPostStatus?.auto_post_to_quickbooks === true}
@@ -3486,9 +3488,11 @@ function BookkeepingCleanup() {
                   autoPostStatus?.auto_post_to_quickbooks === true
                     ? "border-emerald-300/45 bg-emerald-400/[0.12] text-emerald-50 hover:border-emerald-200/65 hover:bg-emerald-400/[0.16]"
                     : "border-white/12 bg-white/[0.035] text-slate-200 hover:border-white/22 hover:bg-white/[0.06]"
-                } ${savingAutoPost || loadingAutoPost ? "cursor-not-allowed opacity-60" : ""}`}
+                } ${adminView.active || savingAutoPost || loadingAutoPost ? "cursor-not-allowed opacity-60" : ""}`}
                 title={
-                  autoPostStatus?.auto_post_to_quickbooks === true
+                  adminView.active
+                    ? "Auto-post settings remain unavailable in Admin Bookkeeping Access."
+                    : autoPostStatus?.auto_post_to_quickbooks === true
                     ? "Eligible handled transactions can post to QuickBooks after the grace period."
                     : "Handled transactions will not be automatically posted to QuickBooks."
                 }
@@ -3563,7 +3567,7 @@ function BookkeepingCleanup() {
                 }}
                 accountTypes={qboAccountTypes}
                 status="needs_review"
-                disabled={!canRunAI}
+                disabled={!canBookkeepingWrite}
               />
             </div> : null}
             <div
@@ -3574,7 +3578,7 @@ function BookkeepingCleanup() {
             </div>
             <button
               onClick={bulkAction === "approve" ? handleBulkApprove : openBulkPostConfirmation}
-              disabled={!canRunAI || bulkPosting || (bulkAction === "approve" && !bulkAccountId)}
+              disabled={(bulkAction === "approve" ? !canBookkeepingWrite : !canRunAI) || bulkPosting || (bulkAction === "approve" && !bulkAccountId)}
               className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {bulkAction === "approve" ? "Approve Selected" : "Post Selected"}
@@ -3743,12 +3747,14 @@ function BookkeepingCleanup() {
               onPageChange={(next) => setPage(next)}
               panelBg={PANEL_BG}
               panelBorder={PANEL_BORDER}
-              readOnly={adminView.active || !canRunAI}
+              readOnly={(adminView.active && !adminView.bookkeepingAccess) || (!adminView.active && !canRunAI)}
               showQboSchedule={isHandledTab}
               allowCreditCardPaymentUndo={isHandledTab || isMatchedTab}
               allowIncomingDepositUndo={isMatchedTab}
               allowExclude={["needs_review", "handled", "pending"].includes(activeTab)}
-              showRestoreExcluded={isExcludedTab}
+              showRestoreExcluded={isExcludedTab && !adminView.active}
+              allowedResolutionIds={adminView.bookkeepingAccess ? ["categorize_new", "match_existing_qbo", "match_credit_card_payment", "merchant_refund", "credit_card_statement_credit", "credit_card_credit_other"] : null}
+              adminBookkeepingAccess={adminView.bookkeepingAccess === true}
             />
           )}
         </motion.div>

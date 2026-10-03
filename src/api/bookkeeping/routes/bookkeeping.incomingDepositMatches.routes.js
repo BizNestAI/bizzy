@@ -26,7 +26,11 @@ const incomingDepositMatchWriteRateLimit = createRateLimiter({
 });
 
 function actorId(req) {
-  return req.user?.id || req.user?.sub || null;
+  return req.tenantContext?.staffUserId || req.user?.id || req.user?.sub || null;
+}
+
+function actorRole(req, fallback = "user") {
+  return req.tenantContext?.mode === "admin_view" ? "internal_admin" : fallback;
 }
 
 function requestCorrelationId(req) {
@@ -72,8 +76,10 @@ router.get("/incoming-deposit-matches/:transactionId", requireAuth, async (req, 
       businessId,
       bankTransactionId: req.params.transactionId,
       actor: actorId(req),
-      actorRole: "user",
-      persist: req.query?.persist !== "false",
+      actorRole: actorRole(req),
+      // GET remains read-only for Admin View. Explicit refresh is the audited
+      // capability-gated discovery operation.
+      persist: req.tenantContext?.mode === "admin_view" ? false : req.query?.persist !== "false",
       correlationId: req.matchCorrelationId,
     });
     return res.json({ ok: true, result });
@@ -91,7 +97,7 @@ router.post("/incoming-deposit-matches/:transactionId/refresh", requireAuth, inc
     const refresh = await refreshProcessorFeeQboEvidence({ businessId, bankTransactionId: req.params.transactionId, db: supabase });
     const result = await discoverIncomingDepositQboMatch({
       db: supabase, businessId, bankTransactionId: req.params.transactionId,
-      actor: actorId(req), actorRole: "user_targeted_refresh", persist: true, correlationId: req.matchCorrelationId,
+      actor: actorId(req), actorRole: actorRole(req, "user_targeted_refresh"), persist: true, correlationId: req.matchCorrelationId,
     });
     const status = result.status === "needs_confirmation" ? "match_found"
       : result.status === "ambiguous" ? "multiple_matches"
@@ -161,7 +167,7 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/confirm", require
       bankTransactionId: req.params.transactionId,
       matchId: req.params.matchId,
       actor: actorId(req),
-      actorRole: "user",
+      actorRole: actorRole(req),
       idempotencyKey: req.body?.idempotency_key || req.get("Idempotency-Key") || null,
       expectedBankUpdatedAt: req.body?.expected_bank_updated_at || req.body?.expectedBankUpdatedAt || null,
       selectedQboEntityId: req.body?.qbo_entity_id || req.body?.qboEntityId || null,
@@ -186,7 +192,7 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/reject", requireA
       bankTransactionId: req.params.transactionId,
       matchId: req.params.matchId,
       actor: actorId(req),
-      actorRole: "user",
+      actorRole: actorRole(req),
       reason: req.body?.reason || "human_rejected",
     });
     return res.json({ ok: true, result });
@@ -207,7 +213,7 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/undo", requireAut
       bankTransactionId: req.params.transactionId,
       matchId: req.params.matchId,
       actor: actorId(req),
-      actorRole: "user",
+      actorRole: actorRole(req),
       reason: req.body?.reason || "human_undo",
       idempotencyKey: req.body?.idempotency_key || req.get("Idempotency-Key") || null,
       expectedBankUpdatedAt: req.body?.expected_bank_updated_at || req.body?.expectedBankUpdatedAt || null,

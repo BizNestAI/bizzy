@@ -43,11 +43,16 @@ function AdminViewBanner() {
       <div className="mx-auto flex max-w-[1400px] items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200">
-            Admin View · Read Only
+            {adminView.bookkeepingAccess ? "Admin View · Bookkeeping Access" : "Admin View · Read Only"}
           </div>
           <div className="truncate text-sm font-semibold text-white/88">
             Viewing: {adminView.businessName || "Selected business"}
           </div>
+          {adminView.bookkeepingAccess ? (
+            <div className="truncate text-[11px] text-emerald-100/75">
+              Bookkeeping actions are enabled. Chat, billing, integrations, memberships, and security settings remain unavailable.
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <button
@@ -123,6 +128,7 @@ const MainLayoutCore = ({ children }) => {
           business_name: adminView.businessName || 'Selected business',
           admin_view: true,
           read_only: true,
+          bookkeeping_access: adminView.bookkeepingAccess === true,
         });
         setIsProfileComplete(true);
         return;

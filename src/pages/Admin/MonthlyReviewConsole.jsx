@@ -2378,11 +2378,11 @@ export default function MonthlyReviewConsole() {
                       type="button"
                       onClick={openCustomerApp}
                       disabled={!selectedBusinessId || busyAction === "customer-view"}
-                      title={selectedBusinessId ? "Open this customer workspace in read-only Admin View." : "Select a business first."}
+                      title={selectedBusinessId ? "Open this customer's Books Review with controlled Admin Bookkeeping Access." : "Select a business first."}
                       className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/12 bg-white/[0.045] px-4 py-2 text-sm font-semibold text-white/82 shadow-sm transition hover:border-white/22 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       {busyAction === "customer-view" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-                      View Customer App
+                      Open Bookkeeping Access
                     </button>
                     <button
                       type="button"

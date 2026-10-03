@@ -15,9 +15,12 @@ function apiUrl(path) {
 }
 
 function parseContext(context = {}) {
+  const capabilities = Array.isArray(context.capabilities) ? context.capabilities : [];
   return {
     active: context.admin_view === true,
     readOnly: context.read_only === true,
+    capabilities,
+    bookkeepingAccess: capabilities.includes("admin_bookkeeping_write"),
     businessId: context.business_id || null,
     businessName: context.business_name || null,
     staffRole: context.staff_role || null,

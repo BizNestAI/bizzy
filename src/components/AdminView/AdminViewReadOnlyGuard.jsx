@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
+import { useLocation } from "react-router-dom";
 
 const MUTATION_LABEL_RE =
   /\b(approve|post|retry|save|generate|connect|disconnect|relink|sync|create|delete|remove|submit|send|mark sent|convert|dismiss|reopen|void|archive|edit|update)\b/i;
@@ -25,9 +26,12 @@ export function isAdminViewMutationControl(element) {
 
 export default function AdminViewReadOnlyGuard() {
   const adminView = useAdminView();
+  const location = useLocation();
+  const bookkeepingRoute = location.pathname.startsWith("/dashboard/accounting/bookkeeping");
+  const allowBookkeepingControls = adminView.bookkeepingAccess === true && bookkeepingRoute;
 
   useEffect(() => {
-    if (!adminView.active || !adminView.readOnly || typeof document === "undefined") return undefined;
+    if (!adminView.active || !adminView.readOnly || allowBookkeepingControls || typeof document === "undefined") return undefined;
 
     const disabled = new WeakMap();
     const apply = () => {
@@ -74,7 +78,7 @@ export default function AdminViewReadOnlyGuard() {
         element.removeAttribute("data-admin-view-read-only");
       });
     };
-  }, [adminView.active, adminView.readOnly]);
+  }, [adminView.active, adminView.readOnly, allowBookkeepingControls]);
 
   return null;
 }

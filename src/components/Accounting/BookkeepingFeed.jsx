@@ -949,9 +949,9 @@ const RESOLUTION_OPTIONS = [
   ["split_transaction", "Split transaction"],
 ];
 
-export function TransactionResolutionSelector({ transactionId, value, suggested, disabled = false, busy = false, error = "", onChange }) {
+export function TransactionResolutionSelector({ transactionId, value, suggested, disabled = false, busy = false, error = "", onChange, options = RESOLUTION_OPTIONS }) {
   const labelId = `resolution-label-${transactionId}`;
-  const selected = RESOLUTION_OPTIONS.find(([id]) => id === value) || RESOLUTION_OPTIONS[0];
+  const selected = options.find(([id]) => id === value) || options[0] || RESOLUTION_OPTIONS[0];
   return (
     <div className="rounded-lg border border-white/10 bg-black/15 p-3" onClick={(event) => event.stopPropagation()}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -965,7 +965,7 @@ export function TransactionResolutionSelector({ transactionId, value, suggested,
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
           </ListboxButton>
           <ListboxOptions anchor={{ to: "bottom", gap: 6, padding: 12 }} portal transition className="z-[10030] w-[var(--button-width)] overflow-hidden rounded-xl border border-emerald-400/25 bg-[rgba(13,16,18,0.985)] p-1.5 text-white shadow-[0_22px_52px_rgba(0,0,0,0.72)] backdrop-blur-md outline-none transition duration-150 ease-out data-[closed]:translate-y-[-5px] data-[closed]:opacity-0">
-            {RESOLUTION_OPTIONS.map(([id, label]) => (
+            {options.map(([id, label]) => (
               <ListboxOption key={id} value={id} className="group flex cursor-default select-none items-center justify-between gap-3 rounded-lg px-3 py-2 text-[11px] font-medium text-slate-100 outline-none data-[focus]:bg-emerald-400/10 data-[focus]:text-emerald-100 data-[selected]:text-emerald-200">
                 <span>{label}</span>
                 <Check className="invisible h-3.5 w-3.5 shrink-0 text-emerald-300 group-data-[selected]:visible" aria-hidden="true" />
@@ -1033,6 +1033,8 @@ export default function BookkeepingFeed({
   allowIncomingDepositUndo = false,
   allowExclude = false,
   showRestoreExcluded = false,
+  allowedResolutionIds = null,
+  adminBookkeepingAccess = false,
 }) {
   // Column widths (px) — draggable like QuickBooks
   const initialColWidths = React.useMemo(
@@ -1500,9 +1502,13 @@ export default function BookkeepingFeed({
               ["credit_card_statement_credit", "Cash back or statement credit"],
               ["credit_card_credit_other", "Something else"],
             ] : RESOLUTION_OPTIONS;
+            const permittedRowResolutionOptions = Array.isArray(allowedResolutionIds)
+              ? rowResolutionOptions.filter(([id]) => allowedResolutionIds.includes(id))
+              : rowResolutionOptions;
             const showCanonicalCoa = ["needs_review", "handled"].includes(String(activeFeed || "").toLowerCase()) && !isPending && !isPosted;
             const coaEditingProtected = effectiveResolution === "match_credit_card_payment" || Boolean(ccWorkflowStatus || ccTransferLabel);
             const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly && (!selectableIds || selectableIds.has(txn.id));
+            const adminPostingRetryEligible = !adminBookkeepingAccess || Boolean(txn.post_error || txn.postError);
 
             return (
               <React.Fragment key={txn.id}>
@@ -1707,7 +1713,7 @@ export default function BookkeepingFeed({
                     }
                     disabledReason={coaEditingProtected ? "Resolve this transaction through the protected credit-card payment matching workflow." : null}
                     resolution={effectiveResolution}
-                    resolutionOptions={rowResolutionOptions}
+                    resolutionOptions={permittedRowResolutionOptions}
                     onResolutionChange={(nextResolution) => changeResolution(txn, nextResolution)}
                     onChange={(id) => {
                       handleAccountSelect(txn.id, id);
@@ -1775,12 +1781,13 @@ export default function BookkeepingFeed({
                     </button>
                     <button
                       className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-100/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-emerald-300/65 hover:bg-emerald-500/16 disabled:cursor-not-allowed disabled:opacity-45"
-                      disabled={readOnly || isPosting || incomingMatchAction.loading === true}
+                      disabled={readOnly || isPosting || incomingMatchAction.loading === true || !adminPostingRetryEligible}
                       onClick={() => {
-                        if (readOnly || isPosting) return;
+                        if (readOnly || isPosting || !adminPostingRetryEligible) return;
                         onManualPost?.(txn.id);
                       }}
-                      aria-label="Post to QuickBooks"
+                      title={adminBookkeepingAccess && !adminPostingRetryEligible ? "Admin Bookkeeping Access can retry failed postings, but cannot start a new manual post." : undefined}
+                      aria-label={adminBookkeepingAccess ? "Retry failed QuickBooks posting" : "Post to QuickBooks"}
                     >
                       <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
                       {isPosting || incomingMatchAction.loading === true ? (
@@ -1792,7 +1799,7 @@ export default function BookkeepingFeed({
                             <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "240ms" }}>.</span>
                           </span>
                         </span>
-                      ) : "Post"}
+                      ) : adminBookkeepingAccess ? "Retry" : "Post"}
                     </button>
                   </div>
                 ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (
@@ -1999,6 +2006,7 @@ export default function BookkeepingFeed({
                      busy={resolutionAction.busy === true}
                      error={resolutionAction.error || ""}
                      onChange={(resolution) => changeResolution(txn, resolution)}
+                     options={permittedRowResolutionOptions}
                    />
                  </div> : null}
                  {effectiveResolution === "match_existing_qbo" && !incomingMatch.active ? (

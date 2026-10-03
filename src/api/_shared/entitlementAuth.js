@@ -89,7 +89,22 @@ export function requireEntitlementCapability(capability, options = {}) {
     try {
       if (req.tenantContext?.mode === "admin_view") {
         if (capability === ENTITLEMENT_CAPABILITIES.HISTORICAL_READ) return next();
-        throw new EntitlementError("admin_view_read_only", 403);
+        if (!req.adminBookkeepingAccess || capability !== ENTITLEMENT_CAPABILITIES.FINANCIAL_WRITE) {
+          throw new EntitlementError("admin_view_read_only", 403);
+        }
+        const businessId = req.tenantContext.businessId;
+        const entitlement = await resolveBusinessEntitlement({
+          businessId,
+          role: "staff",
+          db: options.db || defaultSupabase,
+          mode: options.mode || MODE,
+        });
+        req.entitlement = entitlement;
+        req.tenantContext.entitlement = entitlement;
+        if (!FULL_ENTITLEMENT_STATUSES.has(entitlement.status)) {
+          throw new EntitlementError("entitlement_capability_denied", 402, { capability, status: entitlement.status });
+        }
+        return next();
       }
       const businessId = req.business?.id || req.auth?.businessId || req.tenantContext?.businessId || null;
       const role = req.business?.membershipRole || req.tenantContext?.membershipRole || "staff";

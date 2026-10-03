@@ -1,10 +1,14 @@
 import crypto from "node:crypto";
+/* global process */
 import { supabase as defaultSupabase } from "./supabaseAdmin.js";
+import { ADMIN_BOOKKEEPING_WRITE_CAPABILITY } from "./adminBookkeepingAccess.js";
 
 export const ADMIN_VIEW_HEADER = "x-bizzi-admin-view";
 export const ADMIN_VIEW_HANDOFF_TTL_SECONDS = Number(process.env.ADMIN_VIEW_HANDOFF_TTL_SECONDS || 5 * 60);
 export const ADMIN_VIEW_SESSION_TTL_SECONDS = Number(process.env.ADMIN_VIEW_SESSION_TTL_SECONDS || 4 * 60 * 60);
 export const ADMIN_VIEW_ALLOWED_ROLES = Object.freeze(["owner_admin", "accountant", "operator"]);
+export const ADMIN_VIEW_ALLOWED_CAPABILITIES = Object.freeze([ADMIN_BOOKKEEPING_WRITE_CAPABILITY]);
+export const ADMIN_BOOKKEEPING_SESSION_TTL_SECONDS = Number(process.env.ADMIN_BOOKKEEPING_SESSION_TTL_SECONDS || 60 * 60);
 
 const TOKEN_BYTES = 32;
 const TABLE = "internal_admin_view_sessions";
@@ -18,6 +22,7 @@ const SESSION_COLUMNS = [
   "business_id",
   "source",
   "read_only",
+  "capabilities",
   "handoff_token_hash",
   "handoff_expires_at",
   "handoff_used_at",
@@ -125,12 +130,23 @@ function publicContext(row, business) {
     business_name: business?.businessName || business?.business_name || null,
     staff_role: row.staff_role,
     read_only: row.read_only === true,
+    capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
     admin_view: true,
     source: row.source || "monthly_review",
     started_at: row.started_at || null,
     expires_at: row.expires_at || null,
     return_url: row.return_url || null,
   };
+}
+
+function normalizeCapabilities(values = []) {
+  const requested = Array.isArray(values) ? values : [];
+  const allowed = new Set(ADMIN_VIEW_ALLOWED_CAPABILITIES);
+  const normalized = [...new Set(requested.map((value) => String(value || "").trim()).filter(Boolean))];
+  if (normalized.some((value) => !allowed.has(value))) {
+    throw new AdminViewSessionError("admin_view_capability_invalid", "Admin view capability is not allowed.", 403);
+  }
+  return normalized;
 }
 
 function assertSessionActive(row, now) {
@@ -160,6 +176,7 @@ export async function createAdminViewHandoff({
   ip = null,
   userAgent = null,
   metadata = {},
+  capabilities = [],
   handoffTtlSeconds = ADMIN_VIEW_HANDOFF_TTL_SECONDS,
   db = defaultSupabase,
   now = new Date(),
@@ -170,6 +187,7 @@ export async function createAdminViewHandoff({
   }
   const business = await fetchBusiness({ db, businessId });
   const handoffToken = generateOpaqueToken();
+  const grantedCapabilities = normalizeCapabilities(capabilities);
   const handoffTokenHash = hashAdminViewToken(handoffToken);
   const createdAt = isoNow(now);
   const handoffExpiresAt = addSeconds(now, handoffTtlSeconds);
@@ -180,12 +198,18 @@ export async function createAdminViewHandoff({
     business_id: business.id,
     source: String(source || "monthly_review"),
     read_only: true,
+    capabilities: grantedCapabilities,
     handoff_token_hash: handoffTokenHash,
     handoff_expires_at: handoffExpiresAt,
     created_ip: ip || null,
     created_user_agent: userAgent || null,
     return_url: returnUrl || null,
-    metadata: metadata && typeof metadata === "object" ? metadata : {},
+    metadata: {
+      ...(metadata && typeof metadata === "object" ? metadata : {}),
+      ...(grantedCapabilities.includes(ADMIN_BOOKKEEPING_WRITE_CAPABILITY)
+        ? { session_ttl_seconds: ADMIN_BOOKKEEPING_SESSION_TTL_SECONDS }
+        : {}),
+    },
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -251,7 +275,11 @@ export async function redeemAdminViewHandoff({
   const business = await fetchBusiness({ db, businessId: found.business_id });
   const adminViewSessionToken = generateOpaqueToken();
   const sessionTokenHash = hashAdminViewToken(adminViewSessionToken);
-  const expiresAt = addSeconds(now, sessionTtlSeconds);
+  const boundedSessionTtl = Math.min(
+    Number(sessionTtlSeconds || ADMIN_VIEW_SESSION_TTL_SECONDS),
+    Number(found.metadata?.session_ttl_seconds || sessionTtlSeconds || ADMIN_VIEW_SESSION_TTL_SECONDS)
+  );
+  const expiresAt = addSeconds(now, boundedSessionTtl);
 
   const { data: redeemed, error: updateError } = await db
     .from(TABLE)

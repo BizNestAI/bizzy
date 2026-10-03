@@ -7,12 +7,14 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 
 const {
   ADMIN_VIEW_HEADER,
+  ADMIN_BOOKKEEPING_SESSION_TTL_SECONDS,
   createAdminViewHandoff,
   endAdminViewSession,
   getAdminViewSession,
   hashAdminViewToken,
   redeemAdminViewHandoff,
 } = await import("../src/services/adminViewSessionService.js");
+const { ADMIN_BOOKKEEPING_WRITE_CAPABILITY } = await import("../src/services/adminBookkeepingAccess.js");
 
 const STAFF_ID = "00000000-0000-4000-8000-000000000001";
 const CUSTOMER_ID = "00000000-0000-4000-8000-000000000002";
@@ -263,6 +265,40 @@ test("handoff redemption is single-use, expiry-bound, and mints a distinct activ
   await assert.rejects(
     () => redeemAdminViewHandoff({ token: expired.handoffToken, db, now: new Date("2026-08-23T12:00:02.000Z") }),
     (err) => err.code === "admin_view_handoff_expired"
+  );
+});
+
+test("Monthly Review can grant only the bounded bookkeeping capability with a shorter session", async () => {
+  const db = makeDb();
+  const handoff = await createAdminViewHandoff({
+    staffUserId: STAFF_ID,
+    staffRole: "owner_admin",
+    businessId: BUSINESS_ID,
+    capabilities: [ADMIN_BOOKKEEPING_WRITE_CAPABILITY],
+    db,
+    now: NOW,
+  });
+  assert.deepEqual(handoff.context.capabilities, [ADMIN_BOOKKEEPING_WRITE_CAPABILITY]);
+  const redeemed = await redeemAdminViewHandoff({
+    token: handoff.handoffToken,
+    db,
+    now: new Date("2026-08-23T12:01:00.000Z"),
+  });
+  assert.deepEqual(redeemed.context.capabilities, [ADMIN_BOOKKEEPING_WRITE_CAPABILITY]);
+  assert.equal(
+    new Date(redeemed.context.expires_at).getTime() - new Date("2026-08-23T12:01:00.000Z").getTime(),
+    ADMIN_BOOKKEEPING_SESSION_TTL_SECONDS * 1000
+  );
+
+  await assert.rejects(
+    () => createAdminViewHandoff({
+      staffUserId: STAFF_ID,
+      businessId: BUSINESS_ID,
+      capabilities: ["client_supplied_admin"],
+      db: makeDb(),
+      now: NOW,
+    }),
+    (err) => err.code === "admin_view_capability_invalid"
   );
 });
 

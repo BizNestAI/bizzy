@@ -1,10 +1,12 @@
 import express from "express";
+/* global process */
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../_shared/internalStaffAuth.js";
 import {
   AdminViewSessionError,
   createAdminViewHandoff,
 } from "../../services/adminViewSessionService.js";
+import { ADMIN_BOOKKEEPING_WRITE_CAPABILITY } from "../../services/adminBookkeepingAccess.js";
 
 const router = express.Router();
 
@@ -73,10 +75,11 @@ router.post("/sessions", async (req, res) => {
       staffRole: req.internalStaff.role,
       businessId,
       source: "monthly_review",
+      capabilities: [ADMIN_BOOKKEEPING_WRITE_CAPABILITY],
       returnUrl: safeReturnUrl(req.body?.return_url || req.body?.returnUrl),
       ip: clientIp(req),
       userAgent: req.headers["user-agent"] || null,
-      metadata: { route: "/api/admin/customer-view/sessions" },
+      metadata: { route: "/api/admin/customer-view/sessions", access_mode: "bookkeeping" },
     });
 
     const handoffUrl = new URL("/admin-view/redeem", getCustomerAppOrigin());

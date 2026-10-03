@@ -73,6 +73,7 @@ import { startTaxScheduler } from "./services/tax/scheduling/taxScheduler.servic
 import taxRouter from "./api/tax/index.js";
 
 import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from "./api/_shared/tenantAuth.js";
+import { auditAdminBookkeepingMutation, validateAdminBookkeepingMutation } from "./api/_shared/adminBookkeepingAudit.js";
 import plaidIntegrationsRouter from "./api/integrations/plaid.routes.js";
 import { buildSafeErrorResponse, redactErrorForLog } from "./api/_shared/safeErrorResponse.js";
 import { ENTITLEMENT_CAPABILITIES, requireEntitlementCapability, requirePaidMutation } from "./api/_shared/entitlementAuth.js";
@@ -221,6 +222,8 @@ const DEV_BYPASS =
 
 const requireBusinessContext = requireBusinessAccess();
 const requireCustomerOrAdminView = [requireAuthOrAdminView, requireBusinessContext, rejectAdminViewWrites()];
+const recordAdminBookkeepingMutation = auditAdminBookkeepingMutation();
+const validateAdminBookkeepingWrite = validateAdminBookkeepingMutation();
 const requireSubscribedMutation = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.FINANCIAL_WRITE });
 const requireSubscribedCompute = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.PAID_COMPUTE });
 const requireProviderSyncMutation = requirePaidMutation({ capability: ENTITLEMENT_CAPABILITIES.PROVIDER_SYNC });
@@ -250,11 +253,11 @@ app.use("/api/accounting/pnl", ...requireCustomerOrAdminView, pnlPdfRouter);
 app.use("/api/accounting/forecast", ...requireCustomerOrAdminView, requireSubscribedCompute, forecastRouter);
 app.use("/api/accounting/forecast-accuracy", ...requireCustomerOrAdminView, forecastAccuracyRouter);
 app.use("/api/accounting/scenarios", ...requireCustomerOrAdminView, requireSubscribedMutation, scenariosRouter);
-app.use("/api/accounting", ...requireCustomerOrAdminView, requireSubscribedMutation, bookkeepingRouter);
+app.use("/api/accounting", ...requireCustomerOrAdminView, requireSubscribedMutation, validateAdminBookkeepingWrite, recordAdminBookkeepingMutation, bookkeepingRouter);
 app.use("/api/qbo", ...requireCustomerOrAdminView, requireProviderSyncMutation, qboSyncRouter);
 app.use("/api/qbo/backfill", ...requireCustomerOrAdminView, requireProviderSyncMutation, qboBackfillRouter);
 app.use("/api/ar", ...requireCustomerOrAdminView, requireSubscribedMutation, arRouter);
-app.use("/api/bookkeeping", ...requireCustomerOrAdminView, requireSubscribedMutation, bookkeepingPlaidRouter);
+app.use("/api/bookkeeping", ...requireCustomerOrAdminView, requireSubscribedMutation, validateAdminBookkeepingWrite, recordAdminBookkeepingMutation, bookkeepingPlaidRouter);
 app.post("/api/accounting/affordabilityCheck", ...requireCustomerOrAdminView, requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PAID_COMPUTE), affordabilityCheckHandler);
 
 // Legacy arbitrary-prompt Bizzy Insight is intentionally not mounted for launch.
