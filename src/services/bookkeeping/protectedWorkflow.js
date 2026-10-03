@@ -31,6 +31,48 @@ export function isProtectedLoanPaymentWorkflow(row = {}) {
   return taxonomy === "loan_payment" || taxonomy === "loan_movement" || Boolean(meta.loan_payment_profile_id || meta.loan_payment_split_id);
 }
 
+const AUTOMATIC_P2P_TAXONOMY = "peer_to_peer_transfer";
+const FINAL_SPECIAL_WORKFLOW_STATUSES = new Set(["posted", "matched", "matched_existing_qbo"]);
+const STALE_TRANSFER_META_KEYS = [
+  "taxonomy_type", "taxonomy_subtype", "taxonomy_confidence", "taxonomy_flags",
+  "protected_workflow", "protected_review_required", "protected_review_reason",
+  "post_block_reason", "auto_post_block_reason", "transfer_pair_txn_id",
+  "transfer_pair_id", "transfer_pair_status", "transfer_pair_confidence",
+  "transfer_pair_notes", "transfer_pair_historical_context_only",
+  "transfer_target_qbo_account_id", "transfer_target_qbo_account_name",
+  "peer_to_peer_provider", "peer_to_peer_counterparty", "peer_to_peer_workflow_id",
+];
+
+export function isUnconfirmedAutomaticPeerToPeerWorkflow(row = {}) {
+  const meta = row.meta || {};
+  const taxonomy = String(row.taxonomy_type || meta.taxonomy_type || "").toLowerCase();
+  const status = String(row.status || row.cat_status || "").toLowerCase();
+  if (taxonomy !== AUTOMATIC_P2P_TAXONOMY || FINAL_SPECIAL_WORKFLOW_STATUSES.has(status)) return false;
+  if (row.qbo_txn_id || row.posted_at || row.matched_existing_qbo === true || meta.matched_existing_qbo === true) return false;
+  if (meta.incoming_deposit_match_status === "confirmed" || meta.transfer_pair_status === "confirmed") return false;
+  if (meta.taxonomy_confirmed_at || meta.taxonomy_confirmed_by || meta.special_workflow_confirmed_at || meta.special_workflow_confirmed_by) return false;
+  if (meta.peer_to_peer_workflow_id || meta.peer_to_peer_confirmed === true) return false;
+  return meta.taxonomy_override !== AUTOMATIC_P2P_TAXONOMY && meta.user_confirmed_special_workflow !== true;
+}
+
+export function clearAutomaticTransferWorkflowMeta(meta = {}, audit = {}) {
+  const next = { ...(meta || {}) };
+  const priorClassification = String(next.taxonomy_type || AUTOMATIC_P2P_TAXONOMY);
+  for (const key of STALE_TRANSFER_META_KEYS) delete next[key];
+  if (next.suggestion_debug?.taxonomy_type === AUTOMATIC_P2P_TAXONOMY) delete next.suggestion_debug;
+  next.automatic_special_workflow_override = {
+    transaction_id: audit.transactionId || null,
+    actor: audit.actor || null,
+    overridden_at: audit.timestamp || new Date().toISOString(),
+    prior_classification: priorClassification,
+    selected_resolution: audit.selectedResolution || "categorize_new",
+    selected_qbo_account_id: audit.selectedQboAccountId || null,
+    source: audit.source || "monthly_review",
+    reason: audit.reason || "automatic_classification_not_corroborated",
+  };
+  return next;
+}
+
 export function getProtectedWorkflowReason(row = {}) {
   const meta = row.meta || {};
   const taxonomy = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
@@ -82,7 +124,9 @@ export function getProtectedWorkflowReason(row = {}) {
 }
 
 export default {
+  clearAutomaticTransferWorkflowMeta,
   getProtectedWorkflowReason,
+  isUnconfirmedAutomaticPeerToPeerWorkflow,
   isProtectedCreditCardPaymentWorkflow,
   isProtectedLoanPaymentWorkflow,
 };

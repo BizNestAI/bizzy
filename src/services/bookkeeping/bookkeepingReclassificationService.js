@@ -2,6 +2,7 @@
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { getQBOClient as defaultGetQBOClient } from "../../utils/qboClient.js";
 import { isCheck } from "./checkDetector.js";
+import { classifyTaxonomy } from "./taxonomyClassifier.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { fetchQboAccountByIdForBusiness } from "./qboAccounts.js";
 import {
@@ -9,7 +10,11 @@ import {
   BookkeepingApprovalError,
 } from "./bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
-import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
+import {
+  clearAutomaticTransferWorkflowMeta,
+  isProtectedCreditCardPaymentWorkflow,
+  isUnconfirmedAutomaticPeerToPeerWorkflow,
+} from "./protectedWorkflow.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../tax/taxChangeEvents.js";
 import { learnVendorRuleFromTransaction } from "./vendorRuleLearner.js";
 
@@ -27,6 +32,7 @@ const GENERIC_RECLASS_BLOCKED_TAXONOMIES = new Set([
   "cc_payment",
   "transfer_internal",
   "bank_transfer",
+  "peer_to_peer_transfer",
   "owner_draw",
   "owner_contribution",
   "owner_distribution",
@@ -71,6 +77,7 @@ export async function reclassifyBookkeepingTransaction({
   getQBOClient = defaultGetQBOClient,
   learnReusableRule = true,
   validateApprovalSelectedAccountsFn = undefined,
+  allowAutomaticSpecialWorkflowOverride = false,
 } = {}) {
   if (!businessId) throw new BookkeepingReclassificationError("missing_business_id", 400);
   if (!transactionId) throw new BookkeepingReclassificationError("missing_transaction_id", 400);
@@ -78,12 +85,27 @@ export async function reclassifyBookkeepingTransaction({
 
   const targetAccount = await resolveTargetAccount({ businessId, targetQboAccountId, validateQboAccount });
   const context = await loadReclassificationContext({ db, businessId, transactionId });
-  assertGenericReclassificationAllowed(context);
+  const automaticSpecialWorkflowOverride = validateAutomaticSpecialWorkflowOverride({
+    ...context,
+    enabled: allowAutomaticSpecialWorkflowOverride,
+  });
+  assertGenericReclassificationAllowed(context, { automaticSpecialWorkflowOverride });
 
   const previous = context.categorization || null;
   const previousStatus = String(previous?.status || "needs_review").toLowerCase();
   const posted = Boolean(previous?.qbo_txn_id);
   const now = new Date().toISOString();
+  const overriddenMeta = automaticSpecialWorkflowOverride
+    ? clearAutomaticTransferWorkflowMeta(previous?.meta, {
+        transactionId,
+        actor: actor?.id || actor?.userId || actor || null,
+        timestamp: now,
+        selectedResolution: "categorize_new",
+        selectedQboAccountId: targetAccount.id,
+        source,
+        reason: "authorized_monthly_review_false_positive_override",
+      })
+    : null;
 
   if (posted) {
     assertTargetAccountCompatibleWithPostedTxn(previous?.qbo_txn_type, targetAccount);
@@ -155,12 +177,13 @@ export async function reclassifyBookkeepingTransaction({
           learn_reusable_rule: learnReusableRule !== false,
           only_this_transaction: learnReusableRule === false,
         }],
-        actor,
+        actor: actor?.id || actor?.userId || actor,
+        actorType: actor?.role || (source === "monthly_review" ? "admin" : "user"),
         reason,
         requireNeedsReview: true,
         allowCcPaymentRejection: false,
         extraMetaByTransactionId: {
-          [transactionId]: buildDecisionMeta(previous?.meta, {
+          [transactionId]: buildDecisionMeta(overriddenMeta || previous?.meta, {
             actor,
             source,
             reason,
@@ -170,6 +193,7 @@ export async function reclassifyBookkeepingTransaction({
             qboUpdated: false,
           }),
         },
+        ...(overriddenMeta ? { existingMetaOverrideByTransactionId: { [transactionId]: overriddenMeta } } : {}),
         db,
         ...(validateApprovalSelectedAccountsFn ? { validateSelectedAccountsFn: validateApprovalSelectedAccountsFn } : {}),
       });
@@ -380,7 +404,7 @@ function assertTargetAccountCompatibleWithPostedTxn(qboTxnType, targetAccount = 
 async function loadReclassificationContext({ db, businessId, transactionId }) {
   const { data: bankTxn, error: bankErr } = await db
     .from("bank_transactions")
-    .select("id,business_id,date,name,merchant_name,counterparty_name,amount,signed_amount,direction,plaid_transaction_id,transaction_type,check_number,pending,is_archived,accounting_review_required,accounting_review_reason")
+    .select("id,business_id,date,name,merchant_name,counterparty_name,counterparties,amount,signed_amount,direction,plaid_transaction_id,transaction_type,check_number,payment_channel,pending,is_archived,accounting_review_required,accounting_review_reason,category_primary,category_detailed,personal_finance_category,raw")
     .eq("business_id", businessId)
     .eq("id", transactionId)
     .maybeSingle();
@@ -406,7 +430,7 @@ async function loadReclassificationContext({ db, businessId, transactionId }) {
   return { bankTxn, categorization, bookkeepingStartDate };
 }
 
-function assertGenericReclassificationAllowed({ bankTxn, categorization }) {
+function assertGenericReclassificationAllowed({ bankTxn, categorization }, { automaticSpecialWorkflowOverride = false } = {}) {
   if (bankTxn?.pending === true) {
     throw new BookkeepingReclassificationError("pending_transaction_not_postable", 400, { transaction_id: bankTxn.id });
   }
@@ -421,7 +445,7 @@ function assertGenericReclassificationAllowed({ bankTxn, categorization }) {
       cc_payment_pair_id: meta.cc_payment_pair_id || null,
     });
   }
-  if (taxonomyType && taxonomyType !== "cc_payment" && GENERIC_RECLASS_BLOCKED_TAXONOMIES.has(taxonomyType)) {
+  if (taxonomyType && taxonomyType !== "cc_payment" && GENERIC_RECLASS_BLOCKED_TAXONOMIES.has(taxonomyType) && !automaticSpecialWorkflowOverride) {
     throw new BookkeepingReclassificationError("special_workflow_reclassification_not_supported", 409, {
       transaction_id: bankTxn.id,
       taxonomy_type: taxonomyType,
@@ -438,6 +462,15 @@ function assertGenericReclassificationAllowed({ bankTxn, categorization }) {
       transaction_id: bankTxn.id,
     });
   }
+}
+
+function validateAutomaticSpecialWorkflowOverride({ bankTxn, categorization, enabled }) {
+  if (!enabled || !isUnconfirmedAutomaticPeerToPeerWorkflow(categorization || {})) return false;
+  const status = String(categorization?.status || "needs_review").toLowerCase();
+  if (!["", "needs_review", "uncategorized"].includes(status)) return false;
+  if (categorization?.qbo_txn_id || categorization?.posted_at) return false;
+  const fresh = classifyTaxonomy(bankTxn || {});
+  return String(fresh?.type || "").toLowerCase() !== "peer_to_peer_transfer";
 }
 
 function isNeedsReviewStatus(status = "") {

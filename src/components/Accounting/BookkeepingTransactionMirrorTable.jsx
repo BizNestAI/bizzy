@@ -4,7 +4,7 @@ import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, 
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
-import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
+import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason, isUnconfirmedAutomaticPeerToPeerWorkflow } from "../../services/bookkeeping/protectedWorkflow.js";
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import {
@@ -184,6 +184,7 @@ function BookkeepingTransactionMirrorRow({
   const ccOrientation = deriveCreditCardPaymentOrientation(row);
   const isPending = row.pending === true;
   const genericActionsBlocked = Boolean(protectedReason) && !ccWorkflowStatus;
+  const automaticP2pOverrideAvailable = isUnconfirmedAutomaticPeerToPeerWorkflow(row);
   const bankAccountLabel = formatBankAccountLabel(row);
   const bankAccountMeta = formatBankAccountMeta(row);
   const glAccountLabel = ccWorkflowStatus
@@ -364,7 +365,7 @@ function BookkeepingTransactionMirrorRow({
               ) : null}
             </>
           ) : null}
-          {isNeedsReviewFeed && resolution === "categorize_new" && !genericActionsBlocked && !isPending ? (
+          {isNeedsReviewFeed && resolution === "categorize_new" && (!genericActionsBlocked || automaticP2pOverrideAvailable) && !isPending ? (
             <>
               <div className="basis-full text-[11px] text-white/42">
                 {learnReusableRule

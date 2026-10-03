@@ -1515,6 +1515,7 @@ export default function MonthlyReviewConsole() {
           body: {
             final_qbo_account_id: accountId,
             reason: "Approved from Monthly Review Needs Review feed.",
+            resolution: "categorize_new",
             learn_reusable_rule: learnReusableRule,
             only_this_transaction: learnReusableRule === false,
           },

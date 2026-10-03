@@ -128,6 +128,7 @@ export async function approveBookkeepingTransactions({
   requireNeedsReview = false,
   allowCcPaymentRejection = true,
   extraMetaByTransactionId = {},
+  existingMetaOverrideByTransactionId = {},
   db = defaultSupabase,
   validateSelectedAccountsFn = validateSelectedAccounts,
 } = {}) {
@@ -153,7 +154,9 @@ export async function approveBookkeepingTransactions({
   const suggestedNameMap = {};
   const suggestedCanonicalMap = {};
   (existingMetaRows || []).forEach((row) => {
-    existingMetaMap[row.transaction_id] = row.meta || {};
+    existingMetaMap[row.transaction_id] = Object.prototype.hasOwnProperty.call(existingMetaOverrideByTransactionId, row.transaction_id)
+      ? existingMetaOverrideByTransactionId[row.transaction_id] || {}
+      : row.meta || {};
     statusMap[row.transaction_id] = row.status || null;
     suggestedIdMap[row.transaction_id] = row.suggested_qbo_account_id || null;
     suggestedNameMap[row.transaction_id] = row.suggested_qbo_account_name || null;

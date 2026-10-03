@@ -63,6 +63,48 @@ test("Duke payment-channel text is neither P2P nor a vendor-rule landmine", asyn
   assert.equal(looksLikeTaxonomyLandmineMemo(duke), false);
 });
 
+test("automatic P2P metadata can be invalidated while confirmed transfer evidence remains protected", async () => {
+  const {
+    clearAutomaticTransferWorkflowMeta,
+    isUnconfirmedAutomaticPeerToPeerWorkflow,
+  } = await import("../src/services/bookkeeping/protectedWorkflow.js");
+  const stale = {
+    status: "needs_review",
+    meta: {
+      taxonomy_type: "peer_to_peer_transfer",
+      taxonomy_subtype: "payment",
+      taxonomy_confidence: "high",
+      protected_review_reason: "peer_to_peer_transfer_requires_review",
+      post_block_reason: "peer_to_peer_transfer_requires_review",
+      transfer_pair_txn_id: "stale-pair",
+    },
+  };
+  assert.equal(isUnconfirmedAutomaticPeerToPeerWorkflow(stale), true);
+  const cleaned = clearAutomaticTransferWorkflowMeta(stale.meta, {
+    transactionId: "9e169843-1295-4aae-a5ba-c76e8b750d7b",
+    actor: "admin-1",
+    timestamp: "2026-10-03T12:00:00.000Z",
+    selectedResolution: "classifier_revalidation",
+  });
+  assert.equal(cleaned.taxonomy_type, undefined);
+  assert.equal(cleaned.protected_review_reason, undefined);
+  assert.equal(cleaned.post_block_reason, undefined);
+  assert.equal(cleaned.transfer_pair_txn_id, undefined);
+  assert.deepEqual(cleaned.automatic_special_workflow_override, {
+    transaction_id: "9e169843-1295-4aae-a5ba-c76e8b750d7b",
+    actor: "admin-1",
+    overridden_at: "2026-10-03T12:00:00.000Z",
+    prior_classification: "peer_to_peer_transfer",
+    selected_resolution: "classifier_revalidation",
+    selected_qbo_account_id: null,
+    source: "monthly_review",
+    reason: "automatic_classification_not_corroborated",
+  });
+  assert.equal(isUnconfirmedAutomaticPeerToPeerWorkflow({ ...stale, meta: { ...stale.meta, transfer_pair_status: "confirmed" } }), false);
+  assert.equal(isUnconfirmedAutomaticPeerToPeerWorkflow({ ...stale, status: "posted", qbo_txn_id: "qbo-1" }), false);
+  assert.equal(isUnconfirmedAutomaticPeerToPeerWorkflow({ ...stale, meta: { ...stale.meta, taxonomy_confirmed_by: "admin-1" } }), false);
+});
+
 test("authoritative suggestion refresh replaces stale universal account pairs atomically", () => {
   const source = fs.readFileSync(new URL("../src/api/bookkeeping/routes/bookkeeping.suggest.routes.js", import.meta.url), "utf8");
   assert.match(source, /strongFreshUniversalEvidence\s*\n\s*\)/);

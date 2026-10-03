@@ -26,6 +26,19 @@ function makeDb(initial = {}) {
   };
   return {
     tables,
+    async rpc(name, args) {
+      assert.equal(name, "approve_bookkeeping_transactions_atomic");
+      const saved = (args.p_approvals || []).map((payload) => {
+        const row = tables.transaction_categorizations.find((candidate) =>
+          String(candidate.business_id) === String(args.p_business_id) &&
+          String(candidate.transaction_id) === String(payload.transaction_id)
+        );
+        if (!row) return null;
+        Object.assign(row, payload);
+        return { ...row };
+      }).filter(Boolean);
+      return { data: { rows: saved, idempotent: false }, error: null };
+    },
     from(table) {
       return new Query(tables, table);
     },
@@ -922,6 +935,7 @@ test("Monthly Review generic reclassification rejects protected special workflow
     ["transfer_internal", "special_workflow_reclassification_not_supported"],
     ["owner_draw", "special_workflow_reclassification_not_supported"],
     ["refund", "special_workflow_reclassification_not_supported"],
+    ["peer_to_peer_transfer", "special_workflow_reclassification_not_supported"],
   ]) {
     const db = makeDb({
       bank_transactions: [bankTxn()],
@@ -972,6 +986,90 @@ test("Monthly Review generic reclassification allows stale cc_payment taxonomy w
   assert.equal(result.mode, "handled_unposted_reclassification");
   assert.equal(result.categorization.final_qbo_account_id, "acct-meals");
   assert.equal(result.categorization.qbo_txn_id, null);
+});
+
+test("Monthly Review explicitly overrides an unconfirmed automatic Duke P2P false positive and audits the decision", async () => {
+  const db = makeDb({
+    bank_transactions: [bankTxn({
+      name: "BILL PAY DUKEENERGY ********5612 RECURRING INTERNET PAYMENT",
+      merchant_name: "Duke Energy",
+      amount: -63.38,
+      direction: "OUTFLOW",
+      personal_finance_category: { primary: "RENT_AND_UTILITIES", detailed: "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY" },
+    })],
+    transaction_categorizations: [cat({ status: "needs_review", meta: {
+      taxonomy_type: "peer_to_peer_transfer",
+      taxonomy_confidence: "high",
+      protected_review_reason: "peer_to_peer_transfer_requires_review",
+      post_block_reason: "peer_to_peer_transfer_requires_review",
+      transfer_pair_txn_id: "stale-pair",
+      user_selected_resolution: "categorize_new",
+    } })],
+  });
+  let approvalInput = null;
+  const result = await reclassifyBookkeepingTransaction({
+    businessId: "biz-1",
+    transactionId: "txn-1",
+    targetQboAccountId: "22",
+    actor: "admin-1",
+    source: "monthly_review",
+    allowAutomaticSpecialWorkflowOverride: true,
+    db,
+    validateQboAccount: validAccount({ id: "22", name: "Electric" }),
+    approveTransactions: async (input) => {
+      approvalInput = input;
+      const meta = input.extraMetaByTransactionId["txn-1"];
+      return { rows: [{ transaction_id: "txn-1", status: "approved", final_qbo_account_id: "22", final_qbo_account_name: "Electric", post_after: "2026-10-04T12:00:00.000Z", meta }] };
+    },
+  });
+  assert.equal(result.mode, "needs_review_approval");
+  assert.equal(result.categorization.final_qbo_account_id, "22");
+  assert.equal(result.categorization.post_after, "2026-10-04T12:00:00.000Z");
+  const meta = approvalInput.existingMetaOverrideByTransactionId["txn-1"];
+  assert.equal(meta.taxonomy_type, undefined);
+  assert.equal(meta.protected_review_reason, undefined);
+  assert.equal(meta.post_block_reason, undefined);
+  assert.equal(meta.transfer_pair_txn_id, undefined);
+  assert.equal(meta.automatic_special_workflow_override.actor, "admin-1");
+  assert.equal(meta.automatic_special_workflow_override.transaction_id, "txn-1");
+  assert.equal(meta.automatic_special_workflow_override.prior_classification, "peer_to_peer_transfer");
+  assert.equal(meta.automatic_special_workflow_override.selected_resolution, "categorize_new");
+  assert.equal(meta.automatic_special_workflow_override.selected_qbo_account_id, "22");
+});
+
+test("Monthly Review override cannot bypass a real P2P provider, confirmed workflow, final state, or tenant scope", async () => {
+  const scenarios = [
+    { bank: bankTxn({ name: "ZELLE PAYMENT TO JANE", merchant_name: "Zelle" }), cat: cat({ status: "needs_review", meta: { taxonomy_type: "peer_to_peer_transfer" } }) },
+    { bank: bankTxn({ name: "BILL PAY DUKEENERGY", merchant_name: "Duke Energy" }), cat: cat({ status: "needs_review", meta: { taxonomy_type: "peer_to_peer_transfer", taxonomy_confirmed_by: "admin-2" } }) },
+    { bank: bankTxn({ name: "BILL PAY DUKEENERGY", merchant_name: "Duke Energy" }), cat: cat({ status: "posted", qbo_txn_id: "qbo-1", meta: { taxonomy_type: "peer_to_peer_transfer" } }) },
+  ];
+  for (const scenario of scenarios) {
+    const db = makeDb({ bank_transactions: [scenario.bank], transaction_categorizations: [scenario.cat] });
+    await assert.rejects(reclassifyBookkeepingTransaction({
+      businessId: "biz-1", transactionId: "txn-1", targetQboAccountId: "22", actor: "admin-1",
+      allowAutomaticSpecialWorkflowOverride: true, db, validateQboAccount: validAccount({ id: "22", name: "Electric" }),
+    }), (err) => err.error === "special_workflow_reclassification_not_supported");
+  }
+  const crossBusinessDb = makeDb({
+    bank_transactions: [bankTxn({ business_id: "biz-2" })],
+    transaction_categorizations: [cat({ business_id: "biz-2", meta: { taxonomy_type: "peer_to_peer_transfer" } })],
+  });
+  await assert.rejects(reclassifyBookkeepingTransaction({
+    businessId: "biz-1", transactionId: "txn-1", targetQboAccountId: "22", actor: "admin-1",
+    allowAutomaticSpecialWorkflowOverride: true, db: crossBusinessDb, validateQboAccount: validAccount({ id: "22", name: "Electric" }),
+  }), (err) => err.error === "transaction_not_found");
+});
+
+test("Monthly Review UI and route expose the validated automatic P2P override only through Categorize as new approval", () => {
+  const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  assert.match(table, /automaticP2pOverrideAvailable/);
+  assert.match(table, /resolution === "categorize_new"[\s\S]*automaticP2pOverrideAvailable/);
+  assert.match(page, /resolution:\s*"categorize_new"/);
+  assert.match(route, /allowAutomaticSpecialWorkflowOverride:\s*req\.body\?\.resolution === "categorize_new"/);
+  assert.match(route, /router\.use\(requireAuth\)/);
+  assert.match(route, /router\.use\(requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)\)/);
 });
 
 test("Monthly Review route is thin and no longer owns provider update or forced unposted posting", () => {

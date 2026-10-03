@@ -44,6 +44,10 @@ import {
   isPaymentProcessingFeeIntent,
   isStrongIntuitPaymentProcessingFeeDescriptor,
 } from "../../../services/bookkeeping/paymentProcessingFeeIntent.js";
+import {
+  clearAutomaticTransferWorkflowMeta,
+  isUnconfirmedAutomaticPeerToPeerWorkflow,
+} from "../../../services/bookkeeping/protectedWorkflow.js";
 
 const router = Router();
 
@@ -1473,7 +1477,7 @@ export async function runBookkeepingSuggestionPass({
             taxonomy_flags: { ...(metaBase?.taxonomy_flags || {}), is_check: true },
           }
         : {};
-      const baseMetaWithCheck = { ...metaBase, ...checkMeta };
+      let baseMetaWithCheck = { ...metaBase, ...checkMeta };
       const plaidAcctForTxn = plaidAccountMap.get(String(row.plaid_account_id)) || null;
       const ccPaymentPairResult = ccPaymentRejected
         ? { status: "no_match", reason: "cc_payment_rejected_by_user" }
@@ -1532,6 +1536,20 @@ export async function runBookkeepingSuggestionPass({
         targetAccountTypes: ccPaymentPair?.txnId ? ["credit"] : [],
       };
       const freshTaxHit = classifyTaxonomy(row, rowTaxonomyContext);
+      if (
+        canonicalResolutionSource === "internal_monthly_review" &&
+        isUnconfirmedAutomaticPeerToPeerWorkflow({ ...existingCat, meta: baseMetaWithCheck }) &&
+        String(freshTaxHit?.type || "").toLowerCase() !== "peer_to_peer_transfer"
+      ) {
+        baseMetaWithCheck = clearAutomaticTransferWorkflowMeta(baseMetaWithCheck, {
+          transactionId: row.id,
+          actor: user?.id || user?.sub || user?.email || "internal_admin",
+          timestamp: nowIso,
+          selectedResolution: "classifier_revalidation",
+          source: "monthly_review_reconsideration",
+          reason: "fresh_authoritative_evidence_disproved_automatic_peer_to_peer",
+        });
+      }
       const freshUniversalHint = await getUniversalVendorHintForTransaction({ bankTxn: row });
       const vendorRule = await getVendorRuleForTransaction({ businessId, bankTransaction: row });
       const exactApprovedBusinessRule = isExactApprovedBusinessVendorRule(vendorRule);
