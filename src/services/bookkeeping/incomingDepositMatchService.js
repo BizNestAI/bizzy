@@ -285,18 +285,26 @@ async function fetchMapping({ db, businessId, plaidAccountId }) {
     .maybeSingle());
 }
 
-async function fetchFreshness({ db, businessId, nowMs = Date.now(), freshnessMinutes = DEFAULT_FRESHNESS_MINUTES }) {
+async function fetchFreshness({ db, businessId, nowMs = Date.now(), freshnessMinutes = DEFAULT_FRESHNESS_MINUTES, requirePurchase = false }) {
   try {
-    const latest = await selectRows(db
+    const runs = await selectRows(db
       .from("qbo_entity_sync_runs")
       .select("id,realm_id,mode,status,entity_counts,started_at,finished_at,created_at")
       .eq("business_id", businessId)
       .order("started_at", { ascending: false })
-      .limit(1));
-    if (!latest.length) return { ok: false, reason: "qbo_match_cache_never_synced", source_freshness_at: null };
-    const run = latest[0];
-    if (run.status !== "succeeded") {
-      return { ok: false, reason: "qbo_match_cache_latest_sync_not_successful", source_freshness_at: run.finished_at || run.started_at || run.created_at || null };
+      .limit(10));
+    if (!runs.length) return { ok: false, reason: "qbo_match_cache_never_synced", source_freshness_at: null };
+    // A CDC run may be in progress while the prior completed snapshot remains
+    // authoritative. Do not turn that ordinary overlap into an unavailable
+    // result; use the newest completed snapshot. A completed failure remains an
+    // operational failure and must never be translated to "no match".
+    const latestCompleted = runs.find((candidate) => candidate.status !== "running");
+    if (latestCompleted && latestCompleted.status !== "succeeded") {
+      return { ok: false, reason: "qbo_match_cache_latest_sync_failed", source_freshness_at: latestCompleted.finished_at || latestCompleted.started_at || latestCompleted.created_at || null };
+    }
+    const run = runs.find((candidate) => candidate.status === "succeeded");
+    if (!run) {
+      return { ok: false, reason: "qbo_match_cache_sync_in_progress", source_freshness_at: runs[0].started_at || runs[0].created_at || null };
     }
     const at = run.finished_at || run.started_at || run.created_at || null;
     const time = at ? new Date(at).getTime() : NaN;
@@ -305,7 +313,7 @@ async function fetchFreshness({ db, businessId, nowMs = Date.now(), freshnessMin
       return { ok: false, reason: "qbo_match_cache_stale", source_freshness_at: at };
     }
     const mode = String(run.mode || "").toLowerCase();
-    const purchaseWasSearched = !["webhook", "cdc"].includes(mode) || Object.hasOwn(run.entity_counts || {}, "Purchase");
+    const purchaseWasSearched = !requirePurchase || !["webhook", "cdc"].includes(mode) || Object.hasOwn(run.entity_counts || {}, "Purchase");
     if (!purchaseWasSearched) return { ok: false, reason: "qbo_expense_cache_search_incomplete", source_freshness_at: at, realm_id: run.realm_id || null };
     return { ok: true, reason: "qbo_match_cache_fresh", source_freshness_at: at, realm_id: run.realm_id || null };
   } catch (err) {
@@ -1361,7 +1369,7 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
 
   const mapping = await fetchMapping({ db, businessId, plaidAccountId: bankTxn.plaid_account_id });
   const mappingInfo = mappingEvidence(mapping);
-  const freshness = await fetchFreshness({ db, businessId, nowMs });
+  const freshness = await fetchFreshness({ db, businessId, nowMs, requirePurchase: processorFee });
   if (!freshness.ok) {
     const result = schemaUnavailableResult(freshness.reason);
     let match = null;

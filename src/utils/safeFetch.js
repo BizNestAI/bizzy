@@ -123,6 +123,7 @@ export async function safeFetch(input, init = {}) {
     // Surface network errors clearly
     const err = new Error(`Network error calling ${url}: ${e?.message || e}`);
     err.cause = e;
+    err.code = e?.name === "AbortError" || e?.name === "TimeoutError" ? "REQUEST_TIMEOUT" : "NETWORK_ERROR";
     err.url = url;
     throw err;
   } finally {
@@ -132,11 +133,13 @@ export async function safeFetch(input, init = {}) {
   // 2) Retry once on 401 with a forced refresh
   if (res.status === 401) {
     try {
-      // getSession typically refreshes automatically; call again to force refresh path
-      const { data: { session } } = await supabase.auth.getSession();
+      // A server-side verifier outage or an access token rejected near expiry can
+      // leave getSession() returning the same cached token. Force one refresh so
+      // an authenticated admin action gets exactly one clean retry.
+      const { data: { session } } = await supabase.auth.refreshSession();
       const newToken = session?.access_token || null;
 
-      if (newToken && newToken !== cachedToken) {
+      if (newToken) {
         cachedToken = newToken;
         const retryHeaders = new Headers(headers);
         retryHeaders.set('Authorization', `Bearer ${newToken}`);

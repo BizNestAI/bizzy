@@ -67,6 +67,7 @@ import {
   discoverIncomingDepositQboMatch,
   rejectIncomingDepositQboMatch,
 } from "../../services/bookkeeping/incomingDepositMatchService.js";
+import { canonicalIncomingDepositLookupOutcome } from "../../services/bookkeeping/incomingDepositMatchOutcome.js";
 import { persistCreditCardInflowResolution, persistTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import {
   BookkeepingReclassificationError,
@@ -866,10 +867,25 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/inc
       actorRole: "admin_monthly_review_targeted_refresh",
       persist: true,
     });
-    return res.json({ ok: true, workflow_state: result.workflow_state || "no_confirmable_match", result, qbo_provider_writes: false, qbo_transaction_writes: false });
+    return res.json({
+      ok: true,
+      lookup_outcome: canonicalIncomingDepositLookupOutcome(result),
+      workflow_state: result.workflow_state || "no_confirmable_match",
+      result,
+      qbo_provider_writes: false,
+      qbo_transaction_writes: false,
+    });
   } catch (e) {
     console.error("[monthly-review] incoming match refresh failed", e?.message || e);
-    sendMonthlyReviewError(res, "monthly_review_incoming_match_refresh_failed", "Could not refresh the QuickBooks match.", e);
+    return res.status(e?.status || 503).json({
+      ok: false,
+      error: "monthly_review_incoming_match_refresh_failed",
+      code: e?.code || "database_failure",
+      lookup_outcome: /timed out/i.test(String(e?.message || "")) ? "request_timed_out" : "database_failure",
+      message: /timed out/i.test(String(e?.message || ""))
+        ? "The QuickBooks match check timed out. Try again."
+        : "The QuickBooks match check could not be completed. Try again.",
+    });
   }
 });
 

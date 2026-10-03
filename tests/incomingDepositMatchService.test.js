@@ -19,6 +19,10 @@ const {
   undoIncomingDepositQboMatch,
 } = await import("../src/services/bookkeeping/incomingDepositMatchService.js");
 const {
+  canonicalIncomingDepositLookupOutcome,
+  incomingDepositLookupFailure,
+} = await import("../src/services/bookkeeping/incomingDepositMatchOutcome.js");
+const {
   fetchBookkeepingTransactions,
   incomingDepositOverlayFromResult,
   matchesTransactionStatusFilter,
@@ -329,6 +333,91 @@ test("stale or failed QBO cache blocks income posting without fabricating a matc
   assert.equal(result.candidates.length, 0);
   assert.equal(db.tables.transaction_categorizations[0].post_error, null);
   assert.equal(db.tables.transaction_categorizations[0].meta.post_block_reason, "quickbooks_payments_match_required");
+});
+
+test("July 6 $475 deposit proposes one authoritative Deposit linked to invoices 1092 and 1093", async () => {
+  const tables = baseMatchTables();
+  Object.assign(tables.bank_transactions[0], {
+    id: "txn-475",
+    date: "2026-07-06",
+    amount: 475,
+    signed_amount: 475,
+    name: "DEPOSIT INTUIT 87040463 OPTIMIST BOOKKEEPING ACH CREDIT",
+  });
+  tables.transaction_categorizations[0].transaction_id = "txn-475";
+  Object.assign(tables.job_revenue_evidence[0], {
+    qbo_txn_id: "1271",
+    qbo_txn_date: "2026-07-05",
+    amount_minor: 47500,
+    linked_payment_ids: ["1269", "1270"],
+  });
+  tables.job_payment_records = [
+    { ...tables.job_payment_records[0], id: "p-1269", external_payment_id: "1269", amount_minor: 35000, linked_invoice_ids: ["1266"] },
+    { ...tables.job_payment_records[0], id: "p-1270", external_payment_id: "1270", amount_minor: 12500, linked_invoice_ids: ["1265"] },
+  ];
+  tables.job_revenue_documents = [
+    { ...tables.job_revenue_documents[0], id: "i-1092", external_document_id: "1265", document_number: "1092", amount_minor: 12500, linked_payment_ids: ["1270"] },
+    { ...tables.job_revenue_documents[0], id: "i-1093", external_document_id: "1266", document_number: "1093", amount_minor: 35000, linked_payment_ids: ["1269"] },
+  ];
+  tables.qbo_entity_sync_runs[0].started_at = "2026-07-06T12:00:00Z";
+  tables.qbo_entity_sync_runs[0].finished_at = "2026-07-06T12:01:00Z";
+
+  const result = await discoverIncomingDepositQboMatch({
+    db: fakeDb(tables),
+    businessId: "b1",
+    bankTransactionId: "txn-475",
+    persist: true,
+    nowMs: Date.parse("2026-07-06T12:02:00Z"),
+  });
+
+  assert.equal(result.status, "needs_confirmation");
+  assert.equal(result.primary.qbo_entity_type, "Deposit");
+  assert.equal(result.primary.qbo_entity_id, "1271");
+  assert.deepEqual(result.primary.invoice_refs.map((row) => row.document_number).sort(), ["1092", "1093"]);
+  assert.equal(canonicalIncomingDepositLookupOutcome(result), "candidate_found");
+});
+
+test("an in-progress sync uses the newest fresh completed cache snapshot", async () => {
+  const tables = baseMatchTables();
+  tables.qbo_entity_sync_runs.unshift({
+    id: "sync-running",
+    business_id: "b1",
+    status: "running",
+    started_at: "2026-09-11T16:00:30Z",
+    finished_at: null,
+    created_at: "2026-09-11T16:00:30Z",
+  });
+  const result = await discoverIncomingDepositQboMatch({
+    db: fakeDb(tables),
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: false,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+  assert.equal(result.status, "needs_confirmation");
+});
+
+test("incoming deposits do not require Purchase in a CDC revenue cache run", async () => {
+  const tables = baseMatchTables();
+  tables.qbo_entity_sync_runs[0].mode = "cdc";
+  tables.qbo_entity_sync_runs[0].entity_counts = { Deposit: { fetched: 1 }, Payment: { fetched: 1 }, Invoice: { fetched: 1 } };
+  const result = await discoverIncomingDepositQboMatch({
+    db: fakeDb(tables),
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: false,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+  assert.equal(result.status, "needs_confirmation");
+  assert.equal(result.primary.qbo_entity_type, "Deposit");
+});
+
+test("lookup outcomes distinguish unavailable cache, timeout, and no-match", () => {
+  assert.equal(canonicalIncomingDepositLookupOutcome({ status: "candidate", reason_codes: [] }), "no_existing_qbo_payment_or_deposit_found");
+  assert.equal(canonicalIncomingDepositLookupOutcome({ status: "match_check_unavailable", reason_codes: ["qbo_match_cache_stale"] }), "cached_data_stale_or_missing");
+  assert.equal(canonicalIncomingDepositLookupOutcome({ status: "match_check_unavailable", reason_codes: ["qbo_match_cache_sync_in_progress"] }), "qbo_data_unavailable");
+  assert.equal(incomingDepositLookupFailure({ code: "REQUEST_TIMEOUT" }).outcome, "request_timed_out");
+  assert.equal(incomingDepositLookupFailure({ code: "XX000" }).outcome, "database_failure");
 });
 
 test("inferred account mappings cannot produce Tier 1 and remain blocked with visible candidate evidence", async () => {

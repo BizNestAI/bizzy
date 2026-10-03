@@ -26,6 +26,7 @@ import {
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { buildMerchantGroupApprovalRequest, postingReviewGroupStateKey } from "../../contracts/merchantGroupApprovalContract.js";
 import { buildPaymentAccountDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
+import { incomingDepositLookupFailure } from "../../services/bookkeeping/incomingDepositMatchOutcome.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -1390,13 +1391,22 @@ export default function MonthlyReviewConsole() {
       const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(transactionId)}/incoming-deposit-match/refresh`, {
         method: "POST",
         body: { month, resolution: "match_existing_qbo" },
+        timeoutMs: 20_000,
       });
       if (result?.ok === false) throw new Error(result.message || result.error || "Could not refresh the QuickBooks match.");
       const proposalState = result?.result?.status || result?.workflow_state || "idle";
       setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: proposalState, workflowState: result?.workflow_state || null, error: "" } }));
       await refreshExpandedBookkeepingFeeds();
     } catch (error) {
-      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, error: error?.message || "Could not refresh the QuickBooks match." } }));
+      const failure = incomingDepositLookupFailure({
+        code: error?.body?.code || error?.body?.error || error?.code,
+        name: error?.name,
+        message: error?.message,
+      });
+      setIncomingDepositMatchActionState((current) => ({
+        ...current,
+        [transactionId]: { loading: false, status: failure.outcome, error: failure.message },
+      }));
     }
   }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
 
