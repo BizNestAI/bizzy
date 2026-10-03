@@ -229,6 +229,8 @@ export function looksLikeLoanPayment(tx = {}) {
 
 export function looksLikePeerToPeerTransfer(tx = {}) {
   const memo = getMemo(tx);
+  const pfcPrimary = String(tx.personal_finance_category?.primary || tx.category_primary || "").toUpperCase();
+  const pfcDetailed = String(tx.personal_finance_category?.detailed || tx.category_detailed || "").toUpperCase();
   const issuerOrCardPayment =
     /\b(?:credit card|credit crd|card payment|payment thank you|mobile payment - thank you|internet payment - thank you|amex|american express|discover|chase|visa|mastercard|master card|epay|epayment|e-payment|autopay)\b/.test(memo);
 
@@ -238,11 +240,26 @@ export function looksLikePeerToPeerTransfer(tx = {}) {
     return { confidence: "high", notes: "Peer-to-peer payment rail language" };
   }
 
-  if (/\bpayment id\b/.test(memo)) {
+  const transferPlaidEvidence =
+    pfcPrimary.startsWith("TRANSFER") ||
+    pfcDetailed.includes("TRANSFER") ||
+    pfcDetailed.includes("PEER_TO_PEER");
+  const transferAccountEvidence =
+    tx.transfer_account_id ||
+    tx.counterpart_account_id ||
+    tx.raw?.transfer_account_id ||
+    tx.raw?.counterpart_account_id;
+
+  if (/\bpayment id\b/.test(memo) && (transferPlaidEvidence || transferAccountEvidence)) {
     return { confidence: "high", notes: "Payment ID transfer language without card issuer evidence" };
   }
 
-  if (/\b[a-z]{2,}\s+[a-z]{2,}\s+payment\b/.test(memo)) {
+  const genericChannelWords = /\b(?:internet|online|bill|recurring|mobile|electronic|ach)\s+payment\b/;
+  if (
+    /\b[a-z]{2,}\s+[a-z]{2,}\s+payment\b/.test(memo) &&
+    !genericChannelWords.test(memo) &&
+    (transferPlaidEvidence || transferAccountEvidence)
+  ) {
     return { confidence: "high", notes: "Person-name payment language without card issuer evidence" };
   }
 

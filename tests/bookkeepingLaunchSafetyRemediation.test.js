@@ -44,6 +44,25 @@ test("Amazon and Duke deterministic evidence stays authoritative", async () => {
   }
 });
 
+test("Duke payment-channel text is neither P2P nor a vendor-rule landmine", async () => {
+  const { classifyTaxonomy } = await import("../src/services/bookkeeping/taxonomyClassifier.js");
+  const { looksLikeTaxonomyLandmineMemo } = await import("../src/services/bookkeeping/vendorRuleLearner.js");
+  const duke = {
+    name: "BILL PAY DUKEENERGY ********5612 RECURRING INTERNET PAYMENT",
+    merchant_name: "Duke Energy",
+    merchant_entity_id: "duke-provider-id",
+    amount: -63.38,
+    direction: "OUTFLOW",
+    personal_finance_category: {
+      primary: "RENT_AND_UTILITIES",
+      detailed: "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY",
+      confidence_level: "HIGH",
+    },
+  };
+  assert.equal(classifyTaxonomy(duke), null);
+  assert.equal(looksLikeTaxonomyLandmineMemo(duke), false);
+});
+
 test("authoritative suggestion refresh replaces stale universal account pairs atomically", () => {
   const source = fs.readFileSync(new URL("../src/api/bookkeeping/routes/bookkeeping.suggest.routes.js", import.meta.url), "utf8");
   assert.match(source, /strongFreshUniversalEvidence\s*\n\s*\)/);

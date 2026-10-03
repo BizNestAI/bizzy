@@ -1085,10 +1085,18 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
     }).length;
     const handledIds = new Set(afterHandled.map((row) => String(row.id)));
     const remainingIds = new Set(afterNeedsReview.map((row) => String(row.id)));
-    const movedToHandled = canonicalIds.filter((id) => handledIds.has(id)).length;
-    const remainedNeedsReview = canonicalIds.filter((id) => remainingIds.has(id)).length;
-    const failed = Number(result?.row_error_count || 0);
-    const skippedFinalPostedMatched = Number(result?.skipped || 0);
+    const failuresById = new Map((result?.row_errors || []).filter((item) => item?.transaction_id).map((item) => [String(item.transaction_id), item]));
+    const primaryOutcomeById = new Map(canonicalIds.map((id) => {
+      if (failuresById.has(id)) return [id, "failed"];
+      if (handledIds.has(id)) return [id, "moved_to_handled"];
+      if (remainingIds.has(id)) return [id, "remained_needs_review"];
+      return [id, "skipped"];
+    }));
+    const countOutcome = (outcome) => [...primaryOutcomeById.values()].filter((value) => value === outcome).length;
+    const movedToHandled = countOutcome("moved_to_handled");
+    const remainedNeedsReview = countOutcome("remained_needs_review");
+    const failed = countOutcome("failed");
+    const skippedFinalPostedMatched = countOutcome("skipped");
     const reasonCounts = canonicalIds.reduce((counts, id) => {
       const row = afterById.get(id) || {};
       const reason = row.auto_handle_decision?.reason
@@ -1108,7 +1116,8 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
         suggested_qbo_account_id: row.suggested_qbo_account_id || row.suggestedAccountId || null,
         suggested_qbo_account_name: row.suggested_qbo_account_name || row.suggestedAccountName || null,
         suggested_canonical_account_key: row.suggested_canonical_account_key || row.meta?.canonical_account_key || null,
-        outcome: handledIds.has(id) ? "moved_to_handled" : remainingIds.has(id) ? "remained_needs_review" : "not_in_review_feeds",
+        outcome: primaryOutcomeById.get(id),
+        error: failuresById.get(id) || null,
         reason: row.auto_handle_decision?.reason
           || row.meta?.auto_handle_decision?.reason
           || row.post_block_reason
@@ -1145,7 +1154,7 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       reason_details: reasonDetails,
       processed: canonicalIds.length,
       promoted: movedToHandled,
-      skipped: Number(result?.skipped || 0),
+      skipped: skippedFinalPostedMatched,
       reviewed_this_month: canonicalIds.length,
       moved_to_handled_this_month: movedToHandled,
       remaining_needs_review_this_month: remainingNeedsReviewThisMonth,

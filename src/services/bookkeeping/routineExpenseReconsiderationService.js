@@ -48,12 +48,27 @@ const SAFE_SEMANTIC_FALLBACK_INTENTS = new Set([
   "fuel",
   "meals",
   "software",
-  "supplies_materials",
-  "materials",
-  "supplies",
   "sales",
   "other_income",
 ]);
+
+function isExactAmazonMarketplaceHint(hint = null) {
+  return Boolean(
+    hint &&
+    String(hint.primary_intent || "") === "supplies_materials" &&
+    /amazon|amzn/i.test(String(hint.canonical_vendor || hint.matched_value || hint.matched_rule_key || ""))
+  );
+}
+
+function clearSupersededSuggestionMeta(meta = {}) {
+  const next = { ...(meta || {}) };
+  for (const key of [
+    "taxonomy_type", "taxonomy_subtype", "taxonomy_confidence", "taxonomy_flags",
+    "semantic_coa_resolved", "semantic_coa_match", "semantic_intent", "semantic_intent_source",
+    "protected_review_required", "protected_review_reason", "post_block_reason",
+  ]) delete next[key];
+  return next;
+}
 
 async function getDefaultDb() {
   const mod = await import("../supabaseAdmin.js");
@@ -329,6 +344,8 @@ function hasDeterministicIntentAutoHandleEvidence({ bankTxn = {}, intent, univer
   const pfcPrimary = String(bankTxn.personal_finance_category?.primary || bankTxn.category_primary || "").toUpperCase();
   const pfcDetailed = String(bankTxn.personal_finance_category?.detailed || bankTxn.category_detailed || "").toUpperCase();
   const categoryText = `${pfcPrimary} ${pfcDetailed}`;
+
+  if (isExactAmazonMarketplaceHint(universalHint)) return true;
 
   if (normalizedIntent === "software" || normalizedIntent === "software_subscription") {
     return (
@@ -1266,7 +1283,11 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         businessId,
         intent: universalHint.primary_intent,
         transactionId: cat.transaction_id,
-        source: deterministicPaymentProcessingFee ? "internal_payment_processing_fee" : options.source || "backlog_reconsideration",
+        source: deterministicPaymentProcessingFee
+          ? "internal_payment_processing_fee"
+          : isExactAmazonMarketplaceHint(universalHint)
+          ? "internal_monthly_review"
+          : options.source || "backlog_reconsideration",
         allowCreate: deterministicPaymentProcessingFee && options.allowQboAccountCreate !== false,
         dependencies: {
           ...(dependencies || {}),
@@ -1292,7 +1313,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           }) || { id: null, name: null }
         : { id: null, name: null };
       let semanticResolution = null;
-      if (!account.id) {
+      if (!account.id && !isExactAmazonMarketplaceHint(universalHint)) {
         semanticResolution = await resolveStrongSemanticCoaAccount({
           businessId,
           intent: universalHint.primary_intent,
@@ -1385,7 +1406,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         businessContext: {},
       });
       const decisionMeta = withCategorizationPolicyVersion({
-        ...meta,
+        ...(isExactAmazonMarketplaceHint(universalHint) ? clearSupersededSuggestionMeta(meta) : meta),
         suggestion_source: "universal_hint",
         universal_bootstrap_mode: true,
         universal_hint: {
@@ -1446,6 +1467,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           final_qbo_account_name: account.name,
           final_canonical_account_key: semanticAccountResolved ? null : canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
           confidence: universalHint.confidence || "high",
+          reason: `Deterministic universal merchant rule: ${universalHint.canonical_vendor} -> ${canonicalResolution?.canonical?.preferred_account_name || account.name}`,
           status: "auto_approved",
           post_after: postAfter,
           decided_by: "bizzi",
@@ -1489,6 +1511,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         final_qbo_account_name: null,
         final_canonical_account_key: null,
         confidence: universalHint.confidence || "high",
+        reason: canonicalResolution?.reason || decision.block_reason || decision.reason || "canonical_account_not_found",
         status: "needs_review",
         post_after: null,
         decided_by: categorizationProvenance(cat, "universal_hint"),

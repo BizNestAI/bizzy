@@ -585,6 +585,16 @@ function hasUserApprovedVendorRuleMatch({ vendorRule, similarUserApproval }) {
   return vendorRuleAccountId === approvalAccountId;
 }
 
+function isExactApprovedBusinessVendorRule(vendorRule = null) {
+  return Boolean(
+    vendorRule?.default_qbo_account_id &&
+    vendorRule.source_type === "business_merchant_rule" &&
+    ["exact_provider_merchant_id", "exact_normalized_merchant", "exact_descriptor_fingerprint", "memo_fingerprint"].includes(
+      vendorRule.match_specificity
+    )
+  );
+}
+
 /* ----------------------- Chart of Accounts (QBO) ----------------------- */
 async function fetchChartOfAccounts(businessId, opts = {}) {
   const includeSubaccounts = opts?.includeSubaccounts === true;
@@ -1497,6 +1507,8 @@ export async function runBookkeepingSuggestionPass({
       };
       const freshTaxHit = classifyTaxonomy(row, rowTaxonomyContext);
       const freshUniversalHint = await getUniversalVendorHintForTransaction({ bankTxn: row });
+      const vendorRule = await getVendorRuleForTransaction({ businessId, bankTransaction: row });
+      const exactApprovedBusinessRule = isExactApprovedBusinessVendorRule(vendorRule);
       const existingStatusLower = String(existingCat?.status || "").toLowerCase();
       const existingProtected = ["approved", "auto_approved", "posted", "matched", "matched_existing_qbo"].includes(existingStatusLower) || existingCat?.meta?.matched_existing_qbo === true || existingCat?.meta?.incoming_deposit_match_status === "confirmed";
       const confirmedCcPaymentPair =
@@ -2025,7 +2037,9 @@ export async function runBookkeepingSuggestionPass({
       }
 
       rowBranch = "taxonomy";
-      const taxHit = freshTaxHit;
+      const taxHit = exactApprovedBusinessRule && freshTaxHit?.type === "peer_to_peer_transfer"
+        ? null
+        : freshTaxHit;
       if (taxHit) {
         const taxonomyMeta = buildTaxonomyMeta(taxHit);
         let mergedMeta = {
@@ -2285,11 +2299,10 @@ export async function runBookkeepingSuggestionPass({
 
       // Business-learned vendor rules are the strongest category signal and should win before global hints.
       rowBranch = "vendor_rule";
-      const vendorRule = await getVendorRuleForTransaction({ businessId, bankTransaction: row });
       const vendorRuleApprovalBacked = hasUserApprovedVendorRuleMatch({
         vendorRule,
         similarUserApproval,
-      });
+      }) || exactApprovedBusinessRule;
       if (vendorRule && vendorRule.default_qbo_account_id && vendorRuleApprovalBacked) {
         if (!looksLikeTaxonomyLandmineMemo(row)) {
           const txnDir = canonicalTxnDirection(row);

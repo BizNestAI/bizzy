@@ -225,15 +225,27 @@ test("generic payment, payroll, Zelle, and Venmo memos do not become credit-card
     "ZELLE PAYMENT JOHN SMITH",
     "VENMO PAYMENT JOHN SMITH",
   ]) {
-    const hit = classifyTaxonomy({ name, amount: -100, direction: "OUTFLOW" });
+    const hit = classifyTaxonomy({
+      name,
+      amount: -100,
+      direction: "OUTFLOW",
+      transfer_account_id: "known-counterpart-account",
+    });
     assert.equal(hit?.type, "peer_to_peer_transfer", name);
   }
 
   assert.equal(classifyTaxonomy({ name: "PAYMENT FROM CUSTOMER 123", amount: 100, direction: "INFLOW" }), null);
 });
 
-test("generic payment strings are insufficient while issuer-specific card payments still match", () => {
-  assert.equal(classifyTaxonomy({ name: "PAYMENT ID BBT408971626", amount: -25, direction: "OUTFLOW" })?.type, "peer_to_peer_transfer");
+test("generic payment strings are insufficient while corroborated transfers and issuer-specific card payments still match", () => {
+  assert.equal(classifyTaxonomy({ name: "PAYMENT ID BBT408971626", amount: -25, direction: "OUTFLOW" }), null);
+  assert.equal(classifyTaxonomy({
+    name: "PAYMENT ID BBT408971626",
+    amount: -25,
+    direction: "OUTFLOW",
+    transfer_account_id: "known-counterpart-account",
+  })?.type, "peer_to_peer_transfer");
+  assert.equal(classifyTaxonomy({ name: "BILL PAY DUKEENERGY ********5612 RECURRING INTERNET PAYMENT", merchant_name: "Duke Energy", amount: -63.38, direction: "OUTFLOW", personal_finance_category: { primary: "RENT_AND_UTILITIES", detailed: "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY" } }), null);
   assert.equal(classifyTaxonomy({ name: "ACH CREDIT", amount: 100, direction: "INFLOW" }), null);
   assert.equal(classifyTaxonomy({ name: "EPAY CHASE CREDIT CRD", amount: -219, direction: "OUTFLOW" }).type, "cc_payment");
   assert.equal(classifyTaxonomy({ name: "ACH PMT AMEX EPAYMENT M3358 INTERNET", amount: -32, direction: "OUTFLOW" }).type, "cc_payment");

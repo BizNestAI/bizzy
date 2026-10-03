@@ -149,10 +149,8 @@ export function looksLikeTaxonomyLandmineMemo(tx = {}) {
     memo.includes("credit card payment") ||
     memo.includes("card payment") ||
     ((memo.includes("payment") || memo.includes("card") || memo.includes("credit")) && memo.includes("thank you")) ||
-    memo.includes("autopay") ||
-    memo.includes("auto pay") ||
-    memo.includes("online payment") ||
-    memo.includes("automatic payment");
+    (/\b(?:amex|american express|discover|chase|visa|mastercard|master card|credit crd)\b/.test(memo) &&
+      /\b(?:autopay|auto pay|online payment|internet payment|automatic payment|epay|epayment)\b/.test(memo));
   const refundHit =
     memo.includes("refund") ||
     memo.includes("chargeback") ||

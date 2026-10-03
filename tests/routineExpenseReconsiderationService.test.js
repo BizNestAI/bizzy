@@ -288,8 +288,9 @@ test("old stale suggestion is replaced by current canonical COA mapping before p
   assert.equal(row.post_after, null);
 });
 
-test("explicit reevaluation replaces stale Amazon Equipment Rental without immediate posting", async () => {
+test("explicit reevaluation replaces stale Amazon Equipment Rental with deterministic Supplies and delayed handling", async () => {
   const db = makeDb();
+  db.rows.business_profiles[0].auto_post_to_quickbooks = true;
   const { qbo } = makeQbo([{ id: "supplies-current", name: "Supplies & Materials", type: "Expense", subType: "SuppliesMaterialsCogs" }]);
   addRoutineRow(db, "txn-amazon-stale", {
     bankTxn: {
@@ -316,15 +317,19 @@ test("explicit reevaluation replaces stale Amazon Equipment Rental without immed
     dependencies: deps(db, qbo),
   });
   const row = db.rows.transaction_categorizations[0];
-  assert.equal(result.promoted, 0);
+  assert.equal(result.promoted, 1);
   assert.equal(row.suggested_qbo_account_id, "supplies-current");
   assert.equal(row.suggested_qbo_account_name, "Supplies & Materials");
   assert.notEqual(row.suggested_qbo_account_name, "Equipment Rental");
-  assert.equal(row.final_qbo_account_id, null);
-  assert.equal(row.status, "needs_review");
-  assert.equal(row.post_after, null);
+  assert.equal(row.final_qbo_account_id, "supplies-current");
+  assert.equal(row.final_qbo_account_name, "Supplies & Materials");
+  assert.equal(row.status, "auto_approved");
+  assert.ok(row.post_after);
   assert.equal(row.qbo_txn_id || null, null);
   assert.equal(row.meta.auto_handle_decision.reconsideration_source, "explicit_launch_reevaluation");
+  assert.equal(row.meta.protected_review_reason, null);
+  assert.equal(row.meta.semantic_coa_resolved, false);
+  assert.equal(row.meta.semantic_coa_match, null);
 });
 
 test("explicit reevaluation maps Duke to Electric and schedules only through normal auto-post delay", async () => {
