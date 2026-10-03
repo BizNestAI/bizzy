@@ -83,7 +83,8 @@ export async function persistTransactionResolution({ db, businessId, transaction
     error.status = 409;
     throw error;
   }
-  if (String(current?.meta?.protected_workflow || "").startsWith("quickbooks_payments_") && normalized !== "match_existing_qbo") {
+  const confirmedIncomingMatch = current?.meta?.matched_existing_qbo === true || current?.meta?.incoming_deposit_match_status === "confirmed";
+  if (String(current?.meta?.protected_workflow || "").startsWith("quickbooks_payments_") && normalized !== "match_existing_qbo" && confirmedIncomingMatch) {
     const error = new Error("quickbooks_payments_match_required");
     error.code = "quickbooks_payments_match_required";
     error.status = 409;

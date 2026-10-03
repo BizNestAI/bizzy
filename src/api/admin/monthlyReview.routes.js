@@ -1963,6 +1963,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       reason: req.body?.reason || "Approved from Monthly Review Needs Review feed.",
       learnReusableRule: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false ? false : true,
       allowAutomaticSpecialWorkflowOverride: req.body?.resolution === "categorize_new",
+      confirmPossibleQboDuplicateRisk: req.body?.duplicate_risk_acknowledged === true,
     });
     if (result.mode !== "needs_review_approval") {
       return res.status(409).json({

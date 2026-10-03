@@ -256,7 +256,11 @@ export async function approveBookkeepingTransactions({
 
   const protectedQuickBooksPayments = (bankTxns || [])
     .map((row) => ({ row, detection: detectQuickBooksPaymentsProtectedWorkflow(row) }))
-    .filter(({ row, detection }) => detection && !hasAuthoritativeQuickBooksMatch({ status: statusMap[row.id], meta: existingMetaMap[row.id] }));
+    .filter(({ row, detection }) => {
+      if (!detection || hasAuthoritativeQuickBooksMatch({ status: statusMap[row.id], meta: existingMetaMap[row.id] })) return false;
+      const item = items.find((candidate) => String(txnIdFromItem(candidate)) === String(row.id));
+      return item?.duplicate_risk_acknowledged !== true;
+    });
   if (protectedQuickBooksPayments.length) {
     for (const { row, detection } of protectedQuickBooksPayments) {
       const meta = quickBooksPaymentsProtectedMeta(existingMetaMap[row.id], detection);
@@ -522,6 +526,9 @@ export async function approveBookkeepingTransactions({
     const explicitlyCategorizedAsNew =
       String(approval.meta?.user_selected_resolution || "categorize_new") === "categorize_new" &&
       Boolean(approval.final_qbo_account_id);
+    const approvalItem = items.find((item) => String(txnIdFromItem(item)) === String(approval.transaction_id));
+    const duplicateRiskAcknowledged = approvalItem?.duplicate_risk_acknowledged === true;
+    const authoritativeMatch = guard.result?.status === "confirmed" || approval.meta?.matched_existing_qbo === true;
     const matchCheckUnavailable = String(guard.reason || "").includes("match_check_unavailable");
     if (explicitlyCategorizedAsNew && matchCheckUnavailable) {
       approval.meta = {
@@ -531,6 +538,10 @@ export async function approveBookkeepingTransactions({
         incoming_deposit_reason_codes: guard.result?.reason_codes || [],
       };
       warnings.push({ transaction_id: approval.transaction_id, code: "match_check_unavailable_manual_override" });
+      continue;
+    }
+    if (explicitlyCategorizedAsNew && duplicateRiskAcknowledged && !authoritativeMatch) {
+      warnings.push({ transaction_id: approval.transaction_id, code: "possible_qbo_match_manual_override" });
       continue;
     }
     approval.status = "needs_review";

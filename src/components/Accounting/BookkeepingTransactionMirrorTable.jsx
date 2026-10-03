@@ -7,6 +7,7 @@ import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/posti
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason, isUnconfirmedAutomaticPeerToPeerWorkflow } from "../../services/bookkeeping/protectedWorkflow.js";
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
+import { deriveMonthlyReviewActionState } from "../../services/bookkeeping/monthlyReviewActionState.js";
 import {
   deriveCreditCardPaymentOrientation,
   deriveResolutionAwareCreditCardPaymentStatus,
@@ -156,12 +157,14 @@ function BookkeepingTransactionMirrorRow({
   const [resolution, setResolution] = React.useState(() => effectiveTransactionResolution(row));
   const [resolutionError, setResolutionError] = React.useState("");
   const [resolutionBusy, setResolutionBusy] = React.useState(false);
+  const [duplicateRiskAcknowledged, setDuplicateRiskAcknowledged] = React.useState(false);
   const displayResolution = recoverOrphanedSplitResolution(resolution, Boolean(loanSplitDraft));
 
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
     setResolution(effectiveTransactionResolution(row));
-  }, [initialAccountId, row.id]);
+    setDuplicateRiskAcknowledged(false);
+  }, [initialAccountId, row.id, row.updated_at]);
 
   const persistedQboStatus = deriveMirrorQboPostingStatus(row);
   const isNeedsReviewFeed = feedStatus === "needs_review";
@@ -217,8 +220,20 @@ function BookkeepingTransactionMirrorRow({
   });
   const ccAction = ccPaymentActionState?.[row.id] || {};
   const incomingAction = incomingDepositMatchActionState?.[row.id] || {};
+  const duplicateRisk = incomingMatch.active && !incomingMatch.confirmed;
+  const actionControl = deriveMonthlyReviewActionState({
+    row,
+    resolution: displayResolution,
+    selectedAccountId,
+    selectedMatchCandidate: Boolean(incomingMatch.matchId && incomingMatch.primary?.qbo_entity_id),
+    selectedCreditCardCounterpart: Boolean(selectedAccountId),
+    activeOperation: Object.keys(busyActions || {}).some((key) => key.endsWith(`:${row.id}`)),
+    duplicateRisk,
+    duplicateRiskAcknowledged,
+  });
   const changeResolution = async (nextResolution) => {
     setResolution(nextResolution);
+    setDuplicateRiskAcknowledged(false);
     setResolutionBusy(true);
     setResolutionError("");
     if (nextResolution === "categorize_new") {
@@ -337,9 +352,6 @@ function BookkeepingTransactionMirrorRow({
               if (accountId && resolution !== "categorize_new") changeResolution("categorize_new");
             }}
           />
-          <div className={`mt-1 truncate text-[10px] ${selectedChanged ? "text-amber-100/75" : hasFinalAccount ? "text-emerald-100/65" : "text-white/40"}`} title={blockerReason || accountStateLabel}>
-            {accountStateLabel}{!hasFinalAccount && blockerReason ? ` · Blocked: ${String(blockerReason).replaceAll("_", " ")}` : ""}
-          </div>
           </>
         )}
       </div>
@@ -378,7 +390,7 @@ function BookkeepingTransactionMirrorRow({
               ) : null}
             </>
           ) : null}
-          {isNeedsReviewFeed && resolution === "categorize_new" && (!genericActionsBlocked || automaticP2pOverrideAvailable) && !isPending ? (
+          {isNeedsReviewFeed && actionControl.kind === "approve_categorization" ? (
             <>
               <div className="basis-full text-[11px] text-white/42">
                 {learnReusableRule
@@ -393,14 +405,21 @@ function BookkeepingTransactionMirrorRow({
                 />
                 Only this transaction
               </label>
+              {duplicateRisk ? (
+                <label className="flex basis-full items-start gap-2 rounded-lg border border-amber-300/20 bg-amber-300/[0.07] px-2 py-2 text-[11px] leading-4 text-amber-50/90">
+                  <input type="checkbox" className="mt-0.5" checked={duplicateRiskAcknowledged} onChange={(event) => setDuplicateRiskAcknowledged(event.target.checked)} />
+                  <span>This transaction may already exist in QuickBooks. Categorizing it as new could create a duplicate. Continue?</span>
+                </label>
+              ) : null}
               <button
                 type="button"
-                onClick={() => onApprove?.(row, selectedAccountId)}
-                disabled={!selectedAccountId || isActionBusy("approve")}
+                onClick={() => onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged })}
+                disabled={!actionControl.enabled || isActionBusy("approve")}
                 className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
               >
                 {isActionBusy("approve") ? "Approving..." : "Approve"}
               </button>
+              {!actionControl.enabled && actionControl.instruction ? <div className="basis-full text-[10px] text-white/45">{actionControl.instruction}</div> : null}
             </>
           ) : null}
           {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && !isPending ? (

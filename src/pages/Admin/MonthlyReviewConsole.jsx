@@ -1531,7 +1531,7 @@ export default function MonthlyReviewConsole() {
     }
   }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
 
-  const runBookkeepingFeedAction = useCallback(async (actionKey, row, accountId = null) => {
+  const runBookkeepingFeedAction = useCallback(async (actionKey, row, accountId = null, options = {}) => {
     if (!detail?.run?.id || !row?.id) return;
     const transactionId = row.id;
     const routeBase = `/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(transactionId)}`;
@@ -1551,6 +1551,7 @@ export default function MonthlyReviewConsole() {
             final_qbo_account_id: accountId,
             reason: "Approved from Monthly Review Needs Review feed.",
             resolution: "categorize_new",
+            duplicate_risk_acknowledged: options?.duplicateRiskAcknowledged === true,
             learn_reusable_rule: learnReusableRule,
             only_this_transaction: learnReusableRule === false,
           },
@@ -2466,7 +2467,7 @@ export default function MonthlyReviewConsole() {
                   onLearningPreferenceChange={(transactionId, enabled) => {
                     setBookkeepingRulePreferences((current) => ({ ...current, [transactionId]: enabled }));
                   }}
-                  onApprove={(row, accountId) => runBookkeepingFeedAction("approve", row, accountId)}
+                  onApprove={(row, accountId, options) => runBookkeepingFeedAction("approve", row, accountId, options)}
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
                   onPost={(row) => openManualPostingWorkflow("post", row)}
                   onRetry={(row) => openManualPostingWorkflow("retry", row)}

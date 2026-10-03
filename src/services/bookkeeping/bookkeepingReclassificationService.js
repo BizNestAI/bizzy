@@ -78,6 +78,7 @@ export async function reclassifyBookkeepingTransaction({
   learnReusableRule = true,
   validateApprovalSelectedAccountsFn = undefined,
   allowAutomaticSpecialWorkflowOverride = false,
+  confirmPossibleQboDuplicateRisk = false,
 } = {}) {
   if (!businessId) throw new BookkeepingReclassificationError("missing_business_id", 400);
   if (!transactionId) throw new BookkeepingReclassificationError("missing_transaction_id", 400);
@@ -95,7 +96,7 @@ export async function reclassifyBookkeepingTransaction({
   const previousStatus = String(previous?.status || "needs_review").toLowerCase();
   const posted = Boolean(previous?.qbo_txn_id);
   const now = new Date().toISOString();
-  const overriddenMeta = automaticSpecialWorkflowOverride
+  let overriddenMeta = automaticSpecialWorkflowOverride
     ? clearAutomaticTransferWorkflowMeta(previous?.meta, {
         transactionId,
         actor: actor?.id || actor?.userId || actor || null,
@@ -106,6 +107,15 @@ export async function reclassifyBookkeepingTransaction({
         reason: "authorized_monthly_review_false_positive_override",
       })
     : null;
+  const hasUnconfirmedQboProposal = hasUnconfirmedIncomingDepositProposal(previous?.meta);
+  if (hasUnconfirmedQboProposal && confirmPossibleQboDuplicateRisk) {
+    overriddenMeta = clearUnconfirmedIncomingDepositProposalMeta(overriddenMeta || previous?.meta, {
+      actor: actor?.id || actor?.userId || actor || null,
+      timestamp: now,
+      selectedQboAccountId: targetAccount.id,
+      source,
+    });
+  }
 
   if (posted) {
     assertTargetAccountCompatibleWithPostedTxn(previous?.qbo_txn_type, targetAccount);
@@ -176,6 +186,7 @@ export async function reclassifyBookkeepingTransaction({
           reason,
           learn_reusable_rule: learnReusableRule !== false,
           only_this_transaction: learnReusableRule === false,
+          duplicate_risk_acknowledged: confirmPossibleQboDuplicateRisk === true,
         }],
         actor: actor?.id || actor?.userId || actor,
         actorType: actor?.role || (source === "monthly_review" ? "admin" : "user"),
@@ -471,6 +482,38 @@ function validateAutomaticSpecialWorkflowOverride({ bankTxn, categorization, ena
   if (categorization?.qbo_txn_id || categorization?.posted_at) return false;
   const fresh = classifyTaxonomy(bankTxn || {});
   return String(fresh?.type || "").toLowerCase() !== "peer_to_peer_transfer";
+}
+
+export function hasUnconfirmedIncomingDepositProposal(meta = {}) {
+  const status = String(meta?.incoming_deposit_match_status || "").toLowerCase();
+  if (meta?.matched_existing_qbo === true || status === "confirmed") return false;
+  return Boolean(meta?.incoming_deposit_match_id || (meta?.incoming_deposit_candidates || []).length || ["candidate", "needs_confirmation", "ambiguous", "match_check_unavailable", "superseded"].includes(status));
+}
+
+export function clearUnconfirmedIncomingDepositProposalMeta(meta = {}, audit = {}) {
+  if (!hasUnconfirmedIncomingDepositProposal(meta)) return { ...(meta || {}) };
+  const next = { ...(meta || {}) };
+  const abandoned = {
+    match_id: next.incoming_deposit_match_id || null,
+    status: next.incoming_deposit_match_status || null,
+    confidence_tier: next.incoming_deposit_confidence_tier || null,
+    candidates: next.incoming_deposit_candidates || [],
+    reason_codes: next.incoming_deposit_reason_codes || [],
+    ...audit,
+  };
+  next.abandoned_incoming_deposit_matches = [...(next.abandoned_incoming_deposit_matches || []), abandoned].slice(-10);
+  for (const key of [
+    "incoming_deposit_match_id", "incoming_deposit_match_status", "incoming_deposit_confidence_tier",
+    "incoming_deposit_reason_codes", "incoming_deposit_candidates", "incoming_deposit_confirmable",
+    "incoming_deposit_confirmability_reason", "incoming_deposit_independent_candidate_count",
+    "incoming_deposit_match_check",
+  ]) delete next[key];
+  if (["possible_existing_qbo_match", "incoming_deposit_needs_match", "quickbooks_payments_match_required", "match_check_unavailable"].includes(String(next.post_block_reason || ""))) delete next.post_block_reason;
+  delete next.protected_workflow;
+  next.possible_qbo_duplicate_risk_acknowledged = true;
+  next.possible_qbo_duplicate_risk_acknowledged_at = audit.timestamp || new Date().toISOString();
+  next.possible_qbo_duplicate_risk_acknowledged_by = audit.actor || null;
+  return next;
 }
 
 function isNeedsReviewStatus(status = "") {
