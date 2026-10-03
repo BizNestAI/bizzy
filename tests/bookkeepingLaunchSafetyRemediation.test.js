@@ -32,6 +32,26 @@ test("Amazon and Duke deterministic evidence stays authoritative", async () => {
   assert.notEqual(amazon.primary_intent, "equipment_rental");
   assert.equal(duke.primary_intent, "electric");
   assert.equal(duke.confidence, "high");
+  for (const bankTxn of [
+    { merchant_name: "DUKE ENERGY" },
+    { counterparty_name: "DUKEENERGY" },
+    { name: "BILL PAY DUKEENERGY" },
+    { name: "BILL PAY DUKEENERGY ********5612 RE" },
+  ]) {
+    const hint = getUniversalVendorHintForTransaction({ bankTxn });
+    assert.equal(hint?.primary_intent, "electric");
+    assert.equal(hint?.canonical_vendor, "Duke Energy");
+  }
+});
+
+test("authoritative suggestion refresh replaces stale universal account pairs atomically", () => {
+  const source = fs.readFileSync(new URL("../src/api/bookkeeping/routes/bookkeeping.suggest.routes.js", import.meta.url), "utf8");
+  assert.match(source, /strongFreshUniversalEvidence\s*\n\s*\)/);
+  assert.doesNotMatch(source, /strongFreshUniversalEvidence\s*&&\s*\(\s*existingSuggestedSuspense/);
+  assert.match(source, /if \(!coaAccount\) return \{ id: null, name: "", type: null, subType: null \}/);
+  assert.match(source, /suggested_qbo_account_id:\s*hintSuggested\.id/);
+  assert.match(source, /suggested_qbo_account_name:\s*hintSuggested\.name/);
+  assert.match(source, /suggested_canonical_account_key:\s*canonicalResolution\.canonical\?\.canonical_account_key/);
 });
 
 test("Rollin Out and Shahin normalize to stable distinct merchant identities", async () => {

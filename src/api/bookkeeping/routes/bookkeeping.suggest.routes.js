@@ -373,21 +373,15 @@ function findCoaAccountById(coa = [], id) {
   return (coa || []).find((a) => String(a.id || a.Id) === target) || null;
 }
 
-function ensureAccountName({ acctId, acctName, coa }) {
+function ensureAccountName({ acctId, coa }) {
   if (!acctId) return { id: null, name: "", type: null, subType: null };
   const coaAccount = findCoaAccountById(coa, acctId);
-  const trimmed = String(acctName || "").trim();
-  if (trimmed.length > 1) {
-    return {
-      id: acctId,
-      name: trimmed,
-      type: coaAccount?.type || coaAccount?.AccountType || null,
-      subType: coaAccount?.subType || coaAccount?.AccountSubType || null,
-    };
-  }
-  const resolved = coaAccount?.name || coaAccount?.Name || findCoaNameById(coa, acctId);
+  // Never combine an arbitrary/local row id with a separately persisted name.
+  // The provider id and display name must come from the same authorized COA row.
+  if (!coaAccount) return { id: null, name: "", type: null, subType: null };
+  const resolved = coaAccount.name || coaAccount.Name || findCoaNameById(coa, acctId);
   return {
-    id: acctId,
+    id: String(coaAccount.id || coaAccount.Id),
     name: resolved || "",
     type: coaAccount?.type || coaAccount?.AccountType || null,
     subType: coaAccount?.subType || coaAccount?.AccountSubType || null,
@@ -1522,32 +1516,12 @@ export async function runBookkeepingSuggestionPass({
         freshUniversalHint &&
         isUniversalIntentAllowlisted(freshUniversalHint.primary_intent) &&
         isStrongUniversalVendorEvidence(freshUniversalHint);
-      const existingSuggested = ensureAccountName({
-        acctId: existingCat?.suggested_qbo_account_id || null,
-        acctName: existingCat?.suggested_qbo_account_name || null,
-        coa,
-      });
-      const existingSuggestedSuspense = isSuspenseAccount({
-        acctId: existingSuggested.id,
-        acctName: existingSuggested.name,
-        suspenseIds,
-      });
-      const existingCanonicalKey = existingCat?.suggested_canonical_account_key || metaBase?.canonical_account_key || null;
-      const freshIntentKey = freshUniversalHint?.primary_intent ? resolveIntentKey(freshUniversalHint.primary_intent) : null;
       const bypassExistingForFreshEvidence =
         !existingProtected &&
         (
           authoritativeSpecialWorkflow ||
           checkHit.is_check ||
-          (
-            strongFreshUniversalEvidence &&
-            (
-              existingSuggestedSuspense ||
-              !existingCanonicalKey ||
-              String(existingCanonicalKey).toLowerCase() !== String(freshIntentKey || "").toLowerCase() ||
-              String(metaBase?.suggestion_source || "") !== "universal_hint"
-            )
-          )
+          strongFreshUniversalEvidence
         );
       rowBranch = "existing_categorization";
         if (existingCat && existingCat.suggested_qbo_account_id && !bypassExistingForFreshEvidence) {

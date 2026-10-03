@@ -1132,6 +1132,7 @@ export default function BookkeepingFeed({
     "after:pointer-events-none after:absolute after:content-[''] after:h-2 after:w-1 after:border-b-2 after:border-r-2 after:border-white after:rotate-45 after:left-[6px] after:top-[2px] after:opacity-0 after:transition-opacity " +
     "checked:after:opacity-100";
   const [accountSelections, setAccountSelections] = React.useState(() => new Map());
+  const dirtyAccountSelectionsRef = React.useRef(new Set());
   const [splitDrafts, setSplitDrafts] = React.useState(() => new Map());
   const [resolutionSelections, setResolutionSelections] = React.useState(() => new Map());
   const [resolutionActionState, setResolutionActionState] = React.useState(() => new Map());
@@ -1153,16 +1154,24 @@ export default function BookkeepingFeed({
 	            ""
 	          : "";
 	      const suggested = txn.glAccountId || txn.suggestedAccountId || ccTarget || "";
-	      if (!next.has(txn.id) || next.get(txn.id) !== suggested) {
+	      if (!dirtyAccountSelectionsRef.current.has(String(txn.id)) && (!next.has(txn.id) || next.get(txn.id) !== suggested)) {
 	        next.set(txn.id, suggested);
 	        changed = true;
       }
     });
+    for (const txnId of next.keys()) {
+      if (!transactions.some((txn) => String(txn.id) === String(txnId))) {
+        next.delete(txnId);
+        dirtyAccountSelectionsRef.current.delete(String(txnId));
+        changed = true;
+      }
+    }
     if (changed) setAccountSelections(next);
   }, [transactions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAccountSelect = (txnId, accountId) => {
     if (readOnly) return;
+    dirtyAccountSelectionsRef.current.add(String(txnId));
     setAccountSelections((prev) => {
       const next = new Map(prev);
       next.set(txnId, accountId);
@@ -1457,8 +1466,6 @@ export default function BookkeepingFeed({
                 String(account.connectedAccountId || account.plaidAccountId || "") !== String(txn.plaid_account_id || txn.account_id || "")
               ));
             const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (readOnly ? "" : txn.accountId) ?? "";
-            const suggestionSource = txn.suggestion_source || txn.meta?.suggestion_source || null;
-            const blockerReason = txn.auto_handle_decision?.reason || txn.meta?.auto_handle_decision?.reason || txn.post_block_reason || txn.meta?.post_block_reason || null;
             const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
             const qboSchedule = showQboSchedule ? formatQboPostingSchedule(txn) : null;
             const readOnlyGlLabel =
@@ -1703,12 +1710,6 @@ export default function BookkeepingFeed({
                   <button type="button" disabled className="inline-flex h-7 w-full items-center justify-between rounded-lg border border-white/10 bg-[#101312] px-3 text-[10px] font-medium text-slate-400">
                     <span>{selectedAccountValue ? readOnlyGlLabel : "Account unavailable"}</span><span>▾</span>
                   </button>
-                ) : null}
-                {showCanonicalCoa && (suggestionSource || blockerReason) ? (
-                  <div className={`mt-1 whitespace-normal text-[11px] leading-4 ${blockerReason ? "text-amber-100/80" : "text-white/55"}`} title={blockerReason || suggestionSource}>
-                    {`Suggested account${suggestionSource ? ` · ${String(suggestionSource).replaceAll("_", " ")}` : ""}`}
-                    {blockerReason ? ` · Blocked: ${String(blockerReason).replaceAll("_", " ")}` : ""}
-                  </div>
                 ) : null}
                 {txn.status === "auto_approved" && !isCcPaymentWorkflow ? (
                   <span className="inline-flex w-fit items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-wide text-emerald-200/90">

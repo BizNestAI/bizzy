@@ -29,9 +29,13 @@ test("Admin Monthly Review reconsideration uses the authoritative suggestion con
   assert.match(body, /reason_counts:\s*reasonCounts/);
   assert.match(body, /reason_details:\s*reasonDetails/);
   assert.match(body, /transaction_id:\s*id/);
+  assert.match(body, /suggested_qbo_account_id:/);
+  assert.match(body, /suggested_qbo_account_name:/);
+  assert.match(body, /suggestion_source:/);
+  assert.match(body, /outcome:/);
 });
 
-test("active Admin mirror surfaces suggestion provenance and blocker reason", () => {
+test("Admin retains diagnostics while customer Books Review omits persistent diagnostic text", () => {
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   const booksFeed = read("src/components/Accounting/BookkeepingFeed.jsx");
@@ -40,8 +44,13 @@ test("active Admin mirror surfaces suggestion provenance and blocker reason", ()
   assert.match(table, /row\.auto_handle_decision\?\.reason \|\| row\.meta\?\.auto_handle_decision\?\.reason/);
   assert.match(table, /Suggested account/);
   assert.match(table, /Blocked:/);
-  assert.match(booksFeed, /txn\.suggestion_source \|\| txn\.meta\?\.suggestion_source/);
-  assert.match(booksFeed, /txn\.auto_handle_decision\?\.reason \|\| txn\.meta\?\.auto_handle_decision\?\.reason/);
-  assert.match(booksFeed, /whitespace-normal text-\[11px\]/);
-  assert.match(booksFeed, /Blocked:/);
+  assert.doesNotMatch(booksFeed, /Suggested account\$\{suggestionSource/);
+  assert.doesNotMatch(booksFeed, /Blocked:\s*\$\{String\(blockerReason\)/);
+});
+
+test("customer feed refresh syncs persisted QBO ids without overwriting dirty user selections", () => {
+  const booksFeed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  assert.match(booksFeed, /dirtyAccountSelectionsRef = React\.useRef\(new Set\(\)\)/);
+  assert.match(booksFeed, /!dirtyAccountSelectionsRef\.current\.has\(String\(txn\.id\)\)/);
+  assert.match(booksFeed, /dirtyAccountSelectionsRef\.current\.add\(String\(txnId\)\)/);
 });

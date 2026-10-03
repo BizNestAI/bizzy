@@ -1104,6 +1104,11 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       return {
         transaction_id: id,
         payee: row.payee || row.vendor || row.merchant_name || null,
+        suggestion_source: row.suggestion_source || row.meta?.suggestion_source || null,
+        suggested_qbo_account_id: row.suggested_qbo_account_id || row.suggestedAccountId || null,
+        suggested_qbo_account_name: row.suggested_qbo_account_name || row.suggestedAccountName || null,
+        suggested_canonical_account_key: row.suggested_canonical_account_key || row.meta?.canonical_account_key || null,
+        outcome: handledIds.has(id) ? "moved_to_handled" : remainingIds.has(id) ? "remained_needs_review" : "not_in_review_feeds",
         reason: row.auto_handle_decision?.reason
           || row.meta?.auto_handle_decision?.reason
           || row.post_block_reason

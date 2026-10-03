@@ -62,6 +62,42 @@ test("stale suggestion response cannot overwrite a newer approval", async () => 
   assert.equal(current.final_qbo_account_id, "manual-42");
 });
 
+test("unresolved reevaluation replaces every stale suggestion field in one guarded update", async () => {
+  const current = {
+    transaction_id: "amazon-1",
+    status: "needs_review",
+    qbo_txn_id: null,
+    suggested_qbo_account_id: "qbo-rental-old",
+    suggested_qbo_account_name: "Equipment Rental",
+    suggested_canonical_account_key: "equipment_rental",
+    confidence: "low",
+    reason: "old",
+    meta: { suggestion_source: "old" },
+  };
+  const db = casDb(current);
+  await persistUnresolvedCategorizationRows({
+    db,
+    businessId: "biz-1",
+    knownExistingIds: ["amazon-1"],
+    rows: [{
+      business_id: "biz-1",
+      transaction_id: "amazon-1",
+      suggested_qbo_account_id: "qbo-supplies-live",
+      suggested_qbo_account_name: "Supplies",
+      suggested_canonical_account_key: "materials_supplies",
+      confidence: "high",
+      reason: "Amazon deterministic supplies hint",
+      status: "needs_review",
+      meta: { suggestion_source: "universal_hint", auto_handle_decision: { reason: "business_personal_ambiguity" } },
+    }],
+  });
+  assert.equal(current.suggested_qbo_account_id, "qbo-supplies-live");
+  assert.equal(current.suggested_qbo_account_name, "Supplies");
+  assert.equal(current.suggested_canonical_account_key, "materials_supplies");
+  assert.equal(current.meta.suggestion_source, "universal_hint");
+  assert.notEqual(current.suggested_qbo_account_name, "Equipment Rental");
+});
+
 test("same-lineage pending-to-posted replacement preserves the internal id", () => {
   const plaid = read("src/services/plaid/plaidSyncService.js");
   assert.match(plaid, /id: existing\.id/);
