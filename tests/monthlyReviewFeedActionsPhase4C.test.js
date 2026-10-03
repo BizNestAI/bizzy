@@ -209,4 +209,9 @@ test("Monthly Review existing-QBO matching is an explicit proposal then approval
   assert.match(panel, /Not a Match/);
   assert.match(panel, /QBO transaction/);
   assert.match(panel, /displayPrimary\.qbo_entity_id/);
+  const confirmStart = page.indexOf("const handleMirrorConfirmIncomingDepositMatch");
+  const confirmEnd = page.indexOf("const handleMirrorResolutionChange", confirmStart);
+  const confirm = page.slice(confirmStart, confirmEnd);
+  assert.match(confirm, /loadBookkeepingFeed\("needs_review", \{ reset: true \}\)/);
+  assert.match(confirm, /loadBookkeepingFeed\("matched", \{ reset: true \}\)/);
 });

@@ -21,6 +21,10 @@ import {
   matchesTransactionStatusFilter,
 } from "../../services/bookkeeping/bookkeepingTransactionFeedService.js";
 import {
+  CANONICAL_BOOKKEEPING_FEED_STATUSES,
+  canonicalBookkeepingFeedStatus,
+} from "../../services/bookkeeping/bookkeepingFeedStatusContract.js";
+import {
   getCanonicalPostingBacklogSummary,
   getMerchantBacklogGroups,
   getPostingBacklogReviewDetails,
@@ -99,7 +103,6 @@ const SECTION_DEFS = [
 ];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set(["needs_review", "handled", "pending"]);
 const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_DEFAULT = 25;
 const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX = 100;
 const MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_DEFAULT = 100;
@@ -556,29 +559,10 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
     if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
 
     const [rangeStart, rangeEnd] = monthBounds(month);
-    const [needsReview, handled, pending] = await Promise.all([
-      countBookkeepingTransactions({
-        businessId,
-        statusFilter: "needs_review",
-        accountId,
-        rangeStart,
-        rangeEnd,
-      }),
-      countBookkeepingTransactions({
-        businessId,
-        statusFilter: "handled",
-        accountId,
-        rangeStart,
-        rangeEnd,
-      }),
-      countBookkeepingTransactions({
-        businessId,
-        statusFilter: "pending",
-        accountId,
-        rangeStart,
-        rangeEnd,
-      }),
-    ]);
+    const counts = Object.fromEntries(await Promise.all(CANONICAL_BOOKKEEPING_FEED_STATUSES.map(async (status) => [
+      status,
+      await countBookkeepingTransactions({ businessId, statusFilter: status, accountId, rangeStart, rangeEnd }),
+    ])));
 
     return res.json({
       ok: true,
@@ -586,11 +570,7 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
       month,
       range_start: rangeStart,
       range_end: rangeEnd,
-      counts: {
-        needs_review: needsReview,
-        handled,
-        pending,
-      },
+      counts,
       source_contract: {
         service: "bookkeepingTransactionFeedService",
         selected_month_bounds: "server-side [range_start, range_end)",
@@ -607,9 +587,11 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
   try {
     const businessId = req.params.businessId;
     if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
-    const statusFilter = String(req.query?.status || "needs_review").toLowerCase();
-    if (!MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES.has(statusFilter)) {
-      return res.status(400).json({ ok: false, error: "invalid_bookkeeping_feed_status" });
+    const requestedStatus = String(req.query?.status || "needs_review").toLowerCase();
+    const statusFilter = canonicalBookkeepingFeedStatus(requestedStatus);
+    if (!statusFilter) {
+      console.warn("[monthly-review] rejected bookkeeping feed status", { requested_status: requestedStatus, diagnostic_code: "invalid_bookkeeping_feed_status" });
+      return res.status(400).json({ ok: false, error: "invalid_bookkeeping_feed_status", message: "Could not load this bookkeeping feed." });
     }
     const month = normalizeMonth(req.query.month);
     const accountId = req.query?.account_id || req.query?.plaid_account_id || null;

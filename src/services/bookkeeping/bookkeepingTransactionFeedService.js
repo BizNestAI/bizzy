@@ -16,6 +16,7 @@ import {
   quickBooksPaymentsProtectedMeta,
 } from "./quickBooksPaymentsProtectedWorkflow.js";
 import { normalizeTransactionResolution } from "./transactionResolutionService.js";
+import { requireCanonicalBookkeepingFeedStatus } from "./bookkeepingFeedStatusContract.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -75,11 +76,7 @@ export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
 }
 
 function rpcStatusFilter(statusFilter = "needs_review") {
-  const statusKey = String(statusFilter || "needs_review").toLowerCase();
-  // Matched and Posted are distinct primary lifecycles. Never route Matched
-  // through the legacy Reconciled predicate, which historically included both.
-  if (statusKey === "reconciled") return "matched";
-  return statusKey;
+  return requireCanonicalBookkeepingFeedStatus(statusFilter);
 }
 
 function normalizeOperatorRequest(row = null) {

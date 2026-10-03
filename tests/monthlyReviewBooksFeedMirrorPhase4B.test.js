@@ -15,6 +15,23 @@ const migration = readFileSync(join(root, "supabase/migrations/20260909_bookkeep
 
 const servicePromise = import("../src/services/bookkeeping/bookkeepingTransactionFeedService.js");
 const workflowPromise = import("../src/services/bookkeeping/protectedWorkflow.js");
+const statusContractPromise = import("../src/services/bookkeeping/bookkeepingFeedStatusContract.js");
+
+test("customer and Admin routes share the canonical external feed-status contract", async () => {
+  const {
+    CANONICAL_BOOKKEEPING_FEED_STATUSES,
+    canonicalBookkeepingFeedStatus,
+    requireCanonicalBookkeepingFeedStatus,
+  } = await statusContractPromise;
+
+  assert.ok(CANONICAL_BOOKKEEPING_FEED_STATUSES.includes("matched"));
+  assert.equal(canonicalBookkeepingFeedStatus("matched"), "matched");
+  assert.equal(canonicalBookkeepingFeedStatus("reconciled"), "matched");
+  assert.equal(canonicalBookkeepingFeedStatus("not_a_feed"), null);
+  assert.throws(() => requireCanonicalBookkeepingFeedStatus("not_a_feed"), /invalid_bookkeeping_feed_status/);
+  assert.match(adminRoute, /canonicalBookkeepingFeedStatus\(requestedStatus\)/);
+  assert.match(customerRoute, /canonicalBookkeepingFeedStatus\(requestedStatus\)/);
+});
 
 test("shared feed service preserves Books Review status semantics", async () => {
   const { matchesTransactionStatusFilter } = await servicePromise;
@@ -31,6 +48,10 @@ test("shared feed service preserves Books Review status semantics", async () => 
   assert.equal(matchesTransactionStatusFilter("posted", { status: "approved", qbo_txn_id: "qbo-1" }), false);
   assert.equal(matchesTransactionStatusFilter("matched", { status: "matched_existing_qbo" }), true);
   assert.equal(matchesTransactionStatusFilter("matched", { status: "needs_review", meta: { incoming_deposit_match_status: "confirmed" } }), true);
+  assert.equal(matchesTransactionStatusFilter("matched", { status: "needs_review", meta: { incoming_deposit_match_status: "needs_confirmation" } }), false);
+  assert.equal(matchesTransactionStatusFilter("matched", { status: "failed", meta: { incoming_deposit_match_status: "match_check_unavailable" } }), false);
+  assert.equal(matchesTransactionStatusFilter("matched", { status: "needs_review", meta: { cc_payment_pair_id: "pair-1", cc_payment_pair_status: "confirmed" } }), true);
+  assert.equal(matchesTransactionStatusFilter("matched", { status: "needs_review", meta: { cc_payment_pair_id: "pair-2", cc_payment_pair_status: "proposed" } }), false);
   assert.equal(matchesTransactionStatusFilter("needs_review", { status: "matched_existing_qbo" }), false);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "matched_existing_qbo" }), false);
   assert.equal(matchesTransactionStatusFilter("posted", { status: "matched_existing_qbo", qbo_txn_id: null }), false);
@@ -243,13 +264,17 @@ test("admin Monthly Review exposes internal-only bounded mirror endpoints", () =
   assert.match(adminRoute, /selected_month_bounds:\s*"server-side \[range_start, range_end\)"/);
   assert.match(adminRoute, /qbo_provider_writes:\s*false/);
   assert.match(adminRoute, /qbo_transaction_writes:\s*false/);
-  assert.match(adminRoute, /MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set\(\["needs_review", "handled", "pending"\]\)/);
+  assert.match(adminRoute, /CANONICAL_BOOKKEEPING_FEED_STATUSES/);
+  assert.match(adminRoute, /canonicalBookkeepingFeedStatus\(requestedStatus\)/);
+  assert.match(adminRoute, /CANONICAL_BOOKKEEPING_FEED_STATUSES\.map/);
+  assert.match(adminRoute, /message: "Could not load this bookkeeping feed\."/);
   assert.match(adminRoute, /const \[rangeStart, rangeEnd\] = monthBounds\(month\)/);
-  assert.match(adminRoute, /statusFilter:\s*"needs_review"[\s\S]*rangeStart[\s\S]*rangeEnd/);
-  assert.match(adminRoute, /statusFilter:\s*"handled"[\s\S]*rangeStart[\s\S]*rangeEnd/);
+  assert.match(adminRoute, /countBookkeepingTransactions\(\{ businessId, statusFilter: status, accountId, rangeStart, rangeEnd \}\)/);
   assert.match(adminRoute, /page_size:\s*pageSize/);
   assert.match(adminRoute, /provider_calls:\s*false/);
   assert.doesNotMatch(adminRoute, /getPlaid|runQboSync\([^)]*bookkeeping\/transactions/);
+  assert.match(monthlyReviewUi, /diagnostic_code: e\?\.body\?\.error/);
+  assert.match(monthlyReviewUi, />Retry<\/button>/);
 });
 
 test("Monthly Review renders collapsible Needs Review and Handled mirrors with bounded load-more paging", () => {

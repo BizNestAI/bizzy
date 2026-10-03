@@ -775,12 +775,16 @@ export default function MonthlyReviewConsole() {
         };
       });
     } catch (e) {
+      console.warn("[monthly-review][bookkeeping-feed] load failed", {
+        status,
+        diagnostic_code: e?.body?.error || "monthly_review_bookkeeping_feed_load_failed",
+      });
       setBookkeepingFeeds((current) => ({
         ...current,
         [status]: {
           ...current[status],
           loading: false,
-          error: e?.body?.message || e?.message || "Could not load bookkeeping transactions.",
+          error: "Could not load this bookkeeping feed. Retry to try again.",
         },
       }));
     }
@@ -1429,11 +1433,15 @@ export default function MonthlyReviewConsole() {
       });
       if (result?.ok === false) throw new Error(result.message || result.error || "Could not confirm the QuickBooks match.");
       setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: "success", matchedAt: new Date().toISOString(), error: "" } }));
-      await refreshExpandedBookkeepingFeeds();
+      await loadBookkeepingFeedCounts();
+      await Promise.all([
+        loadBookkeepingFeed("needs_review", { reset: true }),
+        loadBookkeepingFeed("matched", { reset: true }),
+      ]);
     } catch (error) {
       setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, error: error?.message || "Could not confirm the QuickBooks match." } }));
     }
-  }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
+  }, [loadBookkeepingFeed, loadBookkeepingFeedCounts, month, selectedBusinessId]);
 
   const handleMirrorResolutionChange = useCallback(async (row, resolution, systemSuggestedResolution) => {
     if (!selectedBusinessId || !row?.id) return;
@@ -2679,6 +2687,7 @@ function BookkeepingFeedMirrorPanels({
             loadingCounts={loadingCounts}
             onToggle={() => onToggle(status)}
             onLoadMore={() => onLoadMore(status)}
+            onRetryLoad={onRefresh}
             accounts={accounts}
             paymentAccountsLoaded={paymentAccountsLoaded}
             loadingPaymentAccounts={loadingPaymentAccounts}
@@ -3152,6 +3161,7 @@ function BookkeepingFeedMirrorSection({
   loadingCounts,
   onToggle,
   onLoadMore,
+  onRetryLoad,
   accounts,
   paymentAccountsLoaded,
   loadingPaymentAccounts,
@@ -3207,8 +3217,9 @@ function BookkeepingFeedMirrorSection({
       {expanded ? (
         <div className="space-y-3 border-t border-white/10 p-3">
           {feed?.error ? (
-            <div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-xs text-amber-100">
-              {feed.error}
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-xs text-amber-100">
+              <span>{feed.error}</span>
+              <button type="button" onClick={onRetryLoad} disabled={feed?.loading} className="shrink-0 rounded-lg border border-amber-200/25 px-2.5 py-1 font-semibold hover:bg-amber-200/10 disabled:opacity-45">Retry</button>
             </div>
           ) : null}
           {feed?.loading && !feed?.loaded ? (

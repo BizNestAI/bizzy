@@ -17,6 +17,7 @@ import {
   normalizePostedBookTransaction,
   rangeStartDateForBookkeeping,
 } from "../../../services/bookkeeping/bookkeepingTransactionFeedService.js";
+import { canonicalBookkeepingFeedStatus } from "../../../services/bookkeeping/bookkeepingFeedStatusContract.js";
 
 /* global process */
 const router = Router();
@@ -210,7 +211,12 @@ router.get("/transactions", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
 
-  const statusFilter = (req.query?.status || "needs_review").toLowerCase();
+  const requestedStatus = (req.query?.status || "needs_review").toLowerCase();
+  const statusFilter = canonicalBookkeepingFeedStatus(requestedStatus);
+  if (!statusFilter) {
+    console.warn("[bookkeeping][transactions] rejected feed status", { requested_status: requestedStatus, diagnostic_code: "invalid_bookkeeping_feed_status" });
+    return res.status(400).json({ ok: false, error: "invalid_bookkeeping_feed_status", message: "Could not load this bookkeeping feed." });
+  }
   const accountId = req.query?.account_id || req.query?.plaid_account_id || null;
   const rangeParam = (req.query?.range || "this_month").toLowerCase();
   const page = Math.max(parseInt(req.query?.page, 10) || 1, 1);
