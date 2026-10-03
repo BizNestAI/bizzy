@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const {
+  clearIncompatibleLoanWorkflowMeta,
   effectiveTransactionResolution,
   normalizeTransactionResolution,
   persistTransactionResolution,
@@ -137,6 +138,54 @@ test("reselecting credit-card payment clears a prior rejection atomically", asyn
   assert.equal(db.stored.meta.cc_payment_rejected_pair_id, undefined);
 });
 
+test("credit-card payment selection atomically removes stale loan workflow metadata", async () => {
+  const db = resolutionDb({
+    status: "needs_review",
+    meta: {
+      taxonomy_type: "loan_payment",
+      taxonomy_subtype: "loan_payment",
+      loan_payment_profile_id: "loan-profile-1",
+      loan_payment_split_id: "loan-split-1",
+      loan_payment_split_status: "needs_split",
+      loan_payment_split_reason: "stale_classifier_result",
+      loan_payment_evidence: { source: "description" },
+      loan_payment_candidate: true,
+      post_block_reason: "loan_payment_split_required",
+      auto_post_block_reason: "loan_payment_split_required",
+    },
+  });
+
+  await persistTransactionResolution({
+    db,
+    businessId: "biz-1",
+    transactionId: "checking-payment-stale-loan",
+    resolution: "match_credit_card_payment",
+    actor: "user-1",
+  });
+
+  assert.equal(db.stored.meta.taxonomy_type, "cc_payment");
+  assert.equal(db.stored.meta.taxonomy_subtype, "credit_card_payment");
+  assert.equal(db.stored.meta.loan_payment_profile_id, undefined);
+  assert.equal(db.stored.meta.loan_payment_split_id, undefined);
+  assert.equal(db.stored.meta.loan_payment_split_status, undefined);
+  assert.equal(db.stored.meta.loan_payment_split_reason, undefined);
+  assert.equal(db.stored.meta.loan_payment_evidence, undefined);
+  assert.equal(db.stored.meta.loan_payment_candidate, undefined);
+  assert.equal(db.stored.meta.auto_post_block_reason, undefined);
+  assert.equal(db.stored.meta.post_block_reason, "cc_payment_pair_requires_confirmation");
+});
+
+test("loan cleanup preserves unrelated metadata and non-loan blockers", () => {
+  assert.deepEqual(clearIncompatibleLoanWorkflowMeta({
+    merchant_name: "Chase",
+    post_block_reason: "manual_review_required",
+    loan_payment_split_id: "stale",
+  }), {
+    merchant_name: "Chase",
+    post_block_reason: "manual_review_required",
+  });
+});
+
 test("switching an approved categorization to card-payment matching reopens review and clears posting state", async () => {
   const db = resolutionDb({
     status: "approved",
@@ -213,6 +262,20 @@ test("resolution and COA menus share an accessible dark non-native command surfa
   assert.match(coa, /Add new account/);
   assert.match(coa, /Search accounts/);
   assert.match(coa, /onResolutionChange\?\.\("categorize_new"\)/);
+  assert.ok(
+    coa.indexOf('onResolutionChange?.("categorize_new")') < coa.indexOf("onChange(acct.id)"),
+    "the explicit account selection must run after the resolution reset"
+  );
+});
+
+test("Monthly Review presents credit-card matching instead of a stale loan badge", () => {
+  const mirror = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  assert.match(mirror, /const persistedQboStatus = deriveMirrorQboPostingStatus\(row\)/);
+  assert.match(mirror, /displayResolution === "match_credit_card_payment" && ccWorkflowStatus/);
+  assert.match(mirror, /Select and confirm the opposite-side credit-card payment/);
+
+  const pairService = read("src/services/bookkeeping/creditCardPaymentPairService.js");
+  assert.match(pairService, /clearIncompatibleLoanWorkflowMeta\(existing\?\.meta \|\| \{\}\)/);
 });
 
 test("resolution selection renders immediately before persistence and workflow loading", () => {

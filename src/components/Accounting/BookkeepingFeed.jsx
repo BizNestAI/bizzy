@@ -284,8 +284,10 @@ export function CoaDropdown({
                             active ? "text-emerald-300 bg-white/5" : "text-slate-100 hover:bg-white/5"
                           }`}
                           onClick={() => {
-                            onChange(acct.id);
                             onResolutionChange?.("categorize_new");
+                            // Resolution changes may restore the prior suggestion.
+                            // Apply the explicit account choice last.
+                            onChange(acct.id);
                             setOpen(false);
                           }}
                         >

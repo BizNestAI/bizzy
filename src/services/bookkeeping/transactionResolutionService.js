@@ -44,6 +44,22 @@ export function effectiveTransactionResolution(transaction = {}) {
   return suggestedTransactionResolution(transaction);
 }
 
+export function clearIncompatibleLoanWorkflowMeta(meta = {}) {
+  const next = { ...(meta || {}) };
+  for (const key of [
+    "loan_payment_profile_id",
+    "loan_payment_split_id",
+    "loan_payment_split_status",
+    "loan_payment_split_confidence",
+    "loan_payment_split_reason",
+    "loan_payment_evidence",
+    "loan_payment_candidate",
+  ]) delete next[key];
+  if (next.post_block_reason === "loan_payment_split_required") delete next.post_block_reason;
+  if (next.auto_post_block_reason === "loan_payment_split_required") delete next.auto_post_block_reason;
+  return next;
+}
+
 export function recoverOrphanedSplitResolution(resolution, hasActiveSplitDraft = false) {
   const normalized = normalizeTransactionResolution(resolution) || "categorize_new";
   return normalized === "split_transaction" && !hasActiveSplitDraft ? "categorize_new" : normalized;
@@ -76,7 +92,9 @@ export async function persistTransactionResolution({ db, businessId, transaction
   const systemSuggested = suggestedTransactionResolution({ ...current, meta: current?.meta || {} });
   const now = new Date().toISOString();
   const nextMeta = {
-    ...(current?.meta || {}),
+    ...(normalized === "match_credit_card_payment"
+      ? clearIncompatibleLoanWorkflowMeta(current?.meta || {})
+      : current?.meta || {}),
     system_suggested_resolution: current?.meta?.system_suggested_resolution || systemSuggested,
     user_selected_resolution: normalized,
     resolution_selected_by: actor,

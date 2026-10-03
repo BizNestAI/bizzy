@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { validateBusinessQboPaymentAccountType } from "./qboAccounts.js";
 import { getMemo as getTaxonomyMemo, isDefinitelyNotCreditCardPayment } from "./taxonomyClassifier.js";
+import { clearIncompatibleLoanWorkflowMeta } from "./transactionResolutionService.js";
 
 const DATE_WINDOW_DAYS = 7;
 
@@ -640,7 +641,7 @@ export async function markTransactionAsCreditCardPayment({ db = defaultSupabase,
 
   const nowIso = new Date().toISOString();
   const meta = {
-    ...(existing?.meta || {}),
+    ...clearIncompatibleLoanWorkflowMeta(existing?.meta || {}),
     taxonomy_type: "cc_payment",
     taxonomy_subtype: "credit_card_payment",
     taxonomy_override: "cc_payment",

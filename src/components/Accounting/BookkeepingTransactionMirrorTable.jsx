@@ -160,12 +160,9 @@ function BookkeepingTransactionMirrorRow({
     setResolution(effectiveTransactionResolution(row));
   }, [initialAccountId, row.id]);
 
-  const qboStatus = deriveMirrorQboPostingStatus(row);
-  const qboLabel = qboStatus.label;
+  const persistedQboStatus = deriveMirrorQboPostingStatus(row);
   const isNeedsReviewFeed = feedStatus === "needs_review";
   const isHandledFeed = feedStatus === "handled";
-  const isPosted = qboStatus.key === "posted";
-  const isFailed = qboStatus.key === "failed";
   const isActionBusy = (action) => Boolean(busyActions?.[`${action}:${row.id}`]) || busyAction === `${action}:${row.id}`;
   const manualPostBusy = isActionBusy("post") || isActionBusy("retry");
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
@@ -181,6 +178,19 @@ function BookkeepingTransactionMirrorRow({
   const protectedReason = getProtectedWorkflowReason(row);
   const incomingMatch = incomingDepositMatchState(row);
   const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(row, displayResolution);
+  const qboStatus = displayResolution === "match_credit_card_payment" && ccWorkflowStatus
+    ? {
+        key: ccWorkflowStatus.key,
+        label: ccWorkflowStatus.label,
+        tone: ccWorkflowStatus.tone,
+        detail: ccWorkflowStatus.matched
+          ? "Credit-card payment match confirmed."
+          : "Select and confirm the opposite-side credit-card payment.",
+      }
+    : persistedQboStatus;
+  const qboLabel = qboStatus.label;
+  const isPosted = qboStatus.key === "posted";
+  const isFailed = qboStatus.key === "failed";
   const ccOrientation = deriveCreditCardPaymentOrientation(row);
   const isPending = row.pending === true;
   const genericActionsBlocked = Boolean(protectedReason) && !ccWorkflowStatus;
