@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   approveExistingQboAccountForCanonical,
   createPreferredQboAccountForCanonical,
   fetchCanonicalAccountMappingsForBusiness,
+  normalizeCanonicalMappingSource,
   resolveCanonicalQboAccount,
 } from "../src/services/bookkeeping/canonicalQboAccountResolver.js";
 import { getCanonicalAccountForIntent } from "../src/services/bookkeeping/canonicalCoaRegistry.js";
@@ -222,6 +224,69 @@ test("background Software recommendation records exact QBO candidate for interna
   assert.equal(result.account.name, "Software");
   assert.equal(state.createCount, 0);
   assert.equal(supabase.db.business_canonical_qbo_account_mappings[0].status, "needs_review");
+});
+
+test("production canonical mapping constraint and runtime use the same closed source vocabulary", () => {
+  const migration = readFileSync(new URL("../supabase/migrations/20260827_canonical_chart_of_accounts.sql", import.meta.url), "utf8");
+  assert.match(
+    migration,
+    /business_canonical_qbo_account_mappings_source_check[\s\S]*mapping_source in \('resolver', 'manual', 'seed', 'qbo_sync', 'creation_intent', 'monthly_review'\)/
+  );
+  assert.equal(normalizeCanonicalMappingSource("internal_monthly_review"), "monthly_review");
+  assert.equal(normalizeCanonicalMappingSource("internal_payment_processing_fee"), "monthly_review");
+  assert.equal(normalizeCanonicalMappingSource("internal_admin"), "manual");
+  assert.equal(normalizeCanonicalMappingSource("untrusted_client_value"), "resolver");
+});
+
+test("internal Monthly Review persists only the allowed monthly_review source", async () => {
+  const supabase = makeSupabase();
+  const { qbo } = makeQbo([{ id: "supplies-1", name: "Supplies", type: "Expense" }]);
+  const result = await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "supplies_materials",
+    source: "internal_monthly_review",
+    allowCreate: false,
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.account.id, "supplies-1");
+  assert.equal(supabase.db.business_canonical_qbo_account_mappings[0].mapping_source, "monthly_review");
+});
+
+test("canonical mapping constraint failures return database diagnostics and never report a resolved account", async () => {
+  const supabase = makeSupabase();
+  const originalFrom = supabase.from.bind(supabase);
+  supabase.from = (table) => {
+    const query = originalFrom(table);
+    if (table !== "business_canonical_qbo_account_mappings") return query;
+    query.upsert = () => ({
+      select() { return this; },
+      maybeSingle() {
+        return Promise.resolve({
+          data: null,
+          error: {
+            code: "23514",
+            message: "new row violates check constraint business_canonical_qbo_account_mappings_source_check",
+            constraint: "business_canonical_qbo_account_mappings_source_check",
+          },
+        });
+      },
+    });
+    return query;
+  };
+  const { qbo } = makeQbo([{ id: "supplies-1", name: "Supplies", type: "Expense" }]);
+  const result = await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "supplies_materials",
+    source: "internal_monthly_review",
+    allowCreate: false,
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.account, null);
+  assert.equal(result.reason, "canonical_mapping_write_failed");
+  assert.equal(result.database_error.code, "23514");
+  assert.equal(result.database_error.constraint, "business_canonical_qbo_account_mappings_source_check");
 });
 
 test("Software absent creates Software only from explicit internal Monthly Review approval", async () => {

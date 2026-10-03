@@ -27,6 +27,56 @@ const ACTIVE_RESOLVED_STATUSES = new Set([
   CANONICAL_MAPPING_STATUSES.CREATED_BY_BIZZI,
 ]);
 
+export const CANONICAL_MAPPING_SOURCES = new Set([
+  "resolver",
+  "manual",
+  "seed",
+  "qbo_sync",
+  "creation_intent",
+  "monthly_review",
+]);
+
+export function normalizeCanonicalMappingSource(source = "resolver") {
+  const value = String(source || "resolver").trim().toLowerCase();
+  if (CANONICAL_MAPPING_SOURCES.has(value)) return value;
+  if (["internal_monthly_review", "internal_payment_processing_fee"].includes(value)) return "monthly_review";
+  if (value === "internal_admin") return "manual";
+  return "resolver";
+}
+
+function databaseErrorDiagnostics(error) {
+  if (!error) return null;
+  return {
+    code: error.code || null,
+    message: error.message || String(error),
+    details: error.details || null,
+    hint: error.hint || null,
+    constraint: error.constraint || null,
+  };
+}
+
+function canonicalMappingWriteFailure({ canonical, account = null, intent = null, source, error }) {
+  const databaseError = databaseErrorDiagnostics(error);
+  return {
+    ok: false,
+    status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW,
+    canonical,
+    account: null,
+    reason: "canonical_mapping_write_failed",
+    review_required: true,
+    diagnostics: {
+      canonical_intent: intent || null,
+      canonical_account_key: canonical?.canonical_account_key || null,
+      candidate_qbo_account_id: account?.id || null,
+      candidate_qbo_account_name: account?.name || null,
+      requested_source: source || null,
+      mapping_source: normalizeCanonicalMappingSource(source),
+      database_error: databaseError,
+    },
+    database_error: databaseError,
+  };
+}
+
 async function getDefaultSupabase() {
   const mod = await import("../supabaseAdmin.js");
   return mod.supabase;
@@ -258,7 +308,7 @@ async function upsertMapping({ supabase, businessId, realmId, qboEnv, canonical,
     qbo_account_type: account?.type || canonical.qbo_account_type || null,
     qbo_account_subtype: account?.subType || canonical.qbo_account_subtype || null,
     status,
-    mapping_source: source,
+    mapping_source: normalizeCanonicalMappingSource(source),
     created_by: metadata?.created_by || "bizzi",
     mapped_by: metadata?.mapped_by || "bizzi",
     mapped_at: nowIso,
@@ -310,7 +360,7 @@ async function markNeedsReview({ supabase, businessId, realmId, qboEnv, canonica
     qbo_account_type: candidate?.type || canonical.qbo_account_type || null,
     qbo_account_subtype: candidate?.subType || canonical.qbo_account_subtype || null,
     status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW,
-    mapping_source: source,
+    mapping_source: normalizeCanonicalMappingSource(source),
     review_reason: reason,
     first_transaction_id: transactionId || null,
     first_intent_key: intent || null,
@@ -793,19 +843,23 @@ export async function resolveCanonicalQboAccount({
         source,
       });
     }
-    await upsertMapping({
-      supabase,
-      businessId,
-      realmId,
-      qboEnv,
-      canonical,
-      account: exact,
-      status: CANONICAL_MAPPING_STATUSES.EXISTING_EXACT,
-      source,
-      transactionId,
-      intent,
-      metadata: { reason: "exact_canonical_name" },
-    });
+    try {
+      await upsertMapping({
+        supabase,
+        businessId,
+        realmId,
+        qboEnv,
+        canonical,
+        account: exact,
+        status: CANONICAL_MAPPING_STATUSES.EXISTING_EXACT,
+        source,
+        transactionId,
+        intent,
+        metadata: { reason: "exact_canonical_name" },
+      });
+    } catch (error) {
+      return canonicalMappingWriteFailure({ canonical, account: exact, intent, source, error });
+    }
     return { ok: true, status: CANONICAL_MAPPING_STATUSES.EXISTING_EXACT, canonical, account: exact, created: false, review_required: false };
   }
 
@@ -836,19 +890,23 @@ export async function resolveCanonicalQboAccount({
         source,
       });
     }
-    await upsertMapping({
-      supabase,
-      businessId,
-      realmId,
-      qboEnv,
-      canonical,
-      account: equivalent,
-      status: CANONICAL_MAPPING_STATUSES.EXISTING_APPROVED_EQUIVALENT,
-      source,
-      transactionId,
-      intent,
-      metadata: { reason: "approved_equivalent_name" },
-    });
+    try {
+      await upsertMapping({
+        supabase,
+        businessId,
+        realmId,
+        qboEnv,
+        canonical,
+        account: equivalent,
+        status: CANONICAL_MAPPING_STATUSES.EXISTING_APPROVED_EQUIVALENT,
+        source,
+        transactionId,
+        intent,
+        metadata: { reason: "approved_equivalent_name" },
+      });
+    } catch (error) {
+      return canonicalMappingWriteFailure({ canonical, account: equivalent, intent, source, error });
+    }
     return { ok: true, status: CANONICAL_MAPPING_STATUSES.EXISTING_APPROVED_EQUIVALENT, canonical, account: equivalent, created: false, review_required: false };
   }
 

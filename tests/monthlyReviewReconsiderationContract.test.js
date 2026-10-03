@@ -33,6 +33,20 @@ test("Admin Monthly Review reconsideration uses the authoritative suggestion con
   assert.match(body, /suggested_qbo_account_name:/);
   assert.match(body, /suggestion_source:/);
   assert.match(body, /outcome:/);
+  assert.match(body, /failuresById/);
+  assert.match(body, /error:\s*failuresById\.get\(id\) \|\| null/);
+  assert.match(body, /countOutcome\("failed"\)/);
+});
+
+test("canonical mapping failure clears stale Amazon account fields and remains an admin-visible failure", () => {
+  const route = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
+  assert.match(route, /mappingWriteFailed = canonicalResolution\?\.reason === "canonical_mapping_write_failed"/);
+  assert.match(route, /suggested_qbo_account_id:\s*null/);
+  assert.match(route, /suggested_qbo_account_name:\s*null/);
+  assert.match(route, /final_qbo_account_id:\s*null/);
+  assert.match(route, /canonical_mapping_database_error:/);
+  assert.match(route, /rowErrors\.push\(\{[\s\S]*branch:\s*"universal_hint"/);
+  assert.match(route, /clearSupersededAmazonSuggestionMeta/);
 });
 
 test("Admin retains diagnostics while customer Books Review omits persistent diagnostic text", () => {

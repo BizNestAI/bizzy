@@ -128,6 +128,32 @@ function isUniversalIntentAutoApproveAllowed(intent = "") {
   return UNIVERSAL_AUTO_APPROVE_ALLOWLIST.has(resolveIntentKey(intent));
 }
 
+function isExactAmazonMarketplaceHint(hint = null) {
+  return Boolean(
+    hint &&
+    resolveIntentKey(hint.primary_intent) === "supplies_materials" &&
+    /amazon|amzn/i.test(String(hint.canonical_vendor || hint.matched_value || hint.matched_rule_key || ""))
+  );
+}
+
+function clearSupersededAmazonSuggestionMeta(meta = {}) {
+  const next = { ...(meta || {}) };
+  for (const key of [
+    "taxonomy_type",
+    "taxonomy_subtype",
+    "taxonomy_confidence",
+    "taxonomy_flags",
+    "semantic_coa_resolved",
+    "semantic_coa_match",
+    "semantic_intent",
+    "semantic_intent_source",
+    "protected_review_required",
+    "protected_review_reason",
+    "post_block_reason",
+  ]) delete next[key];
+  return next;
+}
+
 function intentToStandardAccountName(intent = "") {
   const key = resolveIntentKey(intent);
   const map = {
@@ -2575,7 +2601,9 @@ export async function runBookkeepingSuggestionPass({
             Boolean(row.merchant_entity_id) ||
             (Boolean(row.merchant_name) && safeUniversalHint === true);
           const hintMeta = {
-            ...baseMetaWithCheck,
+            ...(isExactAmazonMarketplaceHint(universalHint)
+              ? clearSupersededAmazonSuggestionMeta(baseMetaWithCheck)
+              : baseMetaWithCheck),
             suggestion_source: "universal_hint",
             user_approval_backed: hasSimilarUserApproval,
             user_approval_match_type: similarUserApproval?.match_type || null,
@@ -2739,8 +2767,11 @@ export async function runBookkeepingSuggestionPass({
               canonicalResolution?.canonical?.canonical_account_key ||
               resolveIntentToCanonicalKey(universalHint.primary_intent) ||
               null;
+            const mappingWriteFailed = canonicalResolution?.reason === "canonical_mapping_write_failed";
             const meta = {
-              ...baseMetaWithCheck,
+              ...(isExactAmazonMarketplaceHint(universalHint)
+                ? clearSupersededAmazonSuggestionMeta(baseMetaWithCheck)
+                : baseMetaWithCheck),
               suggestion_source: "universal_hint",
               universal_bootstrap_mode: true,
               universal_hint: {
@@ -2763,6 +2794,7 @@ export async function runBookkeepingSuggestionPass({
                 ? "payment_processing_account_unavailable"
                 : canonicalResolution?.reason || "canonical_account_not_found",
               canonical_resolution_diagnostics: canonicalResolution?.diagnostics || null,
+              canonical_mapping_database_error: canonicalResolution?.database_error || null,
               safe_to_auto_handle: false,
               safe_to_auto_post: false,
               auto_handle_decision: {
@@ -2801,6 +2833,17 @@ export async function runBookkeepingSuggestionPass({
               confidenceOverride: universalHint.confidence || "high",
               suggestionSource: "universal_hint",
             });
+            if (mappingWriteFailed) {
+              rowErrors.push({
+                transaction_id: row.id,
+                plaid_transaction_id: row.plaid_transaction_id || null,
+                branch: "universal_hint",
+                error: canonicalResolution?.database_error?.message || "canonical_mapping_write_failed",
+                code: canonicalResolution?.database_error?.code || null,
+                constraint: canonicalResolution?.database_error?.constraint || null,
+                details: canonicalResolution?.database_error?.details || null,
+              });
+            }
             continue;
           }
         }
