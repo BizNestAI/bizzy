@@ -215,3 +215,12 @@ test("Monthly Review existing-QBO matching is an explicit proposal then approval
   assert.match(confirm, /loadBookkeepingFeed\("needs_review", \{ reset: true \}\)/);
   assert.match(confirm, /loadBookkeepingFeed\("matched", \{ reset: true \}\)/);
 });
+
+test("Monthly Review unresolved QuickBooks payments expose Match before Approve Match", () => {
+  const feed = readFileSync(join(root, "src/components/Accounting/BookkeepingFeed.jsx"), "utf8");
+  assert.match(feed, /!state\.matchId \? \(/);
+  assert.match(feed, /Finding match…/);
+  assert.match(feed, /transitionMatching \? "Finding match…" : "Match"/);
+  assert.match(feed, /const primaryActionLabel = "Approve Match"/);
+  assert.match(feed, /onClick=\{\(\) => onInspect\?\.\(txn\.id, null, txn\)\}/);
+});

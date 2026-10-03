@@ -905,7 +905,12 @@ export function IncomingDepositMatchPanel({
           <span className="rounded-md border border-rose-300/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-semibold text-rose-100">Posting receipt protected</span>
         ) : (
           <>
-            {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && canConfirmSelected && !matchNoLongerConfirmable ? (
+            {!state.matchId ? (
+              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="inline-flex min-w-[116px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
+                {transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                {transitionMatching ? "Finding match…" : "Match"}
+              </button>
+            ) : state.matchId && primary.qbo_entity_type && !state.invoiceOnly && canConfirmSelected && !matchNoLongerConfirmable ? (
               <button type="button" disabled={readOnly || transitionMatching} onClick={() => onConfirm?.(txn.id, state.matchId, txn, { qboEntities: selectedCandidates.map((candidate) => ({ qboEntityId: candidate.qbo_entity_id, qboEntityType: candidate.qbo_entity_type })) })} className="inline-flex min-w-[190px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
                 {transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
                 {transitionMatching ? "Confirming…" : action.reason === "qbo_match_details_changed" ? "Confirm updated match" : primaryActionLabel}
