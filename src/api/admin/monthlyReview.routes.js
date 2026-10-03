@@ -104,6 +104,20 @@ const SECTION_DEFS = [
 ];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function monthlyReviewApprovalErrorMessage(error) {
+  const code = error instanceof BookkeepingApprovalError ? error.error : error?.code;
+  const messages = {
+    quickbooks_payments_match_required: "This deposit still has an authoritative QuickBooks Payments match that must be resolved before categorizing it as new.",
+    transaction_not_needs_review: "This transaction is no longer in Needs Review. Refresh the feed before trying again.",
+    transaction_already_posted: "This transaction has already posted to QuickBooks and cannot be approved again.",
+    pending_transaction_not_postable: "Pending bank transactions cannot be approved until they settle.",
+    transaction_excluded: "Excluded transactions cannot be approved through this action.",
+    invalid_qbo_account: "The selected QuickBooks account is not active for this business.",
+    incoming_deposit_match_required: "Review the possible QuickBooks match or confirm the duplicate-risk warning before categorizing this deposit as new.",
+  };
+  return messages[code] || (error?.status && error?.message ? error.message : "Could not approve transaction. The transaction remains in Needs Review.");
+}
 const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_DEFAULT = 25;
 const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX = 100;
 const MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_DEFAULT = 100;
@@ -1954,25 +1968,24 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       });
     }
 
-    const result = await reclassifyBookkeepingTransaction({
+    const approval = await approveBookkeepingTransactions({
       businessId: run.business_id,
-      transactionId,
-      targetQboAccountId: accountId,
-      actor: req.user?.id || req.user?.email || "internal_admin",
+      items: [{
+        txnId: transactionId,
+        resolution: "categorize_new",
+        newAccountId: accountId,
+        duplicate_risk_acknowledged: req.body?.duplicate_risk_acknowledged === true,
+        learn_reusable_rule: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false ? false : true,
+        only_this_transaction: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false,
+        reason: req.body?.reason || "Approved from Monthly Review Needs Review feed.",
+      }],
+      actorId: req.user?.id,
+      actorType: "admin",
       source: "monthly_review",
-      reason: req.body?.reason || "Approved from Monthly Review Needs Review feed.",
-      learnReusableRule: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false ? false : true,
-      allowAutomaticSpecialWorkflowOverride: req.body?.resolution === "categorize_new",
-      confirmPossibleQboDuplicateRisk: req.body?.duplicate_risk_acknowledged === true,
+      requireNeedsReview: true,
+      db: supabase,
     });
-    if (result.mode !== "needs_review_approval") {
-      return res.status(409).json({
-        ok: false,
-        error: "transaction_not_needs_review",
-        message: "This transaction is no longer in Needs Review.",
-        mode: result.mode,
-      });
-    }
+    const categorization = approval.rows?.find((row) => String(row.transaction_id) === String(transactionId)) || approval.rows?.[0] || null;
 
     await logAuditEvent({
       run,
@@ -1981,16 +1994,16 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       sectionKey: "books_review_mirror",
       previousValue: {
         transaction_id: transactionId,
-        final_qbo_account_id: result.previous?.final_qbo_account_id || null,
-        final_qbo_account_name: result.previous?.final_qbo_account_name || null,
-        status: result.previous?.status || null,
+        final_qbo_account_id: null,
+        final_qbo_account_name: null,
+        status: "needs_review",
       },
       nextValue: {
         transaction_id: transactionId,
-        final_qbo_account_id: result.target_account?.id || null,
-        final_qbo_account_name: result.target_account?.name || null,
-        status: result.categorization?.status || "approved",
-        operator_response_resolution: result.operator_response_resolution || null,
+        final_qbo_account_id: categorization?.final_qbo_account_id || accountId,
+        final_qbo_account_name: categorization?.final_qbo_account_name || null,
+        status: categorization?.status || "approved",
+        operator_response_resolution: null,
       },
       notes: req.body?.reason || "Approved selected-month Needs Review transaction from Monthly Review.",
     }).catch(() => null);
@@ -2000,20 +2013,25 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
     res.json({
       ok: true,
       transaction_id: transactionId,
-      mode: result.mode,
-      categorization: result.categorization,
-      target_account: result.target_account,
-      operator_response_resolution: result.operator_response_resolution || null,
-      reusable_rule: result.reusable_rule || null,
+      mode: "needs_review_approval",
+      categorization,
+      target_account: {
+        id: categorization?.final_qbo_account_id || accountId,
+        name: categorization?.final_qbo_account_name || null,
+      },
+      operator_response_resolution: null,
+      warnings: approval.warnings || [],
+      vendor_rule_results: approval.vendor_rule_results || [],
     });
   } catch (e) {
     console.error("[monthly-review] feed approval failed", e?.message || e);
-    const status = e instanceof BookkeepingReclassificationError ? e.status || 400 : e?.status || 500;
+    const status = e instanceof BookkeepingApprovalError ? e.status || 400 : e?.status || 500;
     res.status(status).json({
       ok: false,
-      error: e instanceof BookkeepingReclassificationError ? e.error : e?.code || "monthly_review_feed_approval_failed",
-      message: e?.message || "Could not approve transaction.",
-      details: e instanceof BookkeepingReclassificationError ? e.details || {} : undefined,
+      error: e instanceof BookkeepingApprovalError ? e.error : e?.code || "monthly_review_feed_approval_failed",
+      reason_code: e instanceof BookkeepingApprovalError ? e.error : e?.code || "monthly_review_feed_approval_failed",
+      message: monthlyReviewApprovalErrorMessage(e),
+      details: e instanceof BookkeepingApprovalError ? e.details || {} : undefined,
     });
   }
 });

@@ -82,9 +82,7 @@ router.post("/approve", requireAuth, async (req, res) => {
   const raw = req.body || {};
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
-  const actorId = req.tenantContext?.mode === "admin_view"
-    ? req.tenantContext.staffUserId
-    : req.auth?.userId || req.user?.id || null;
+  const actorId = req.auth?.userId || req.user?.id || null;
   if (!actorId || !UUID_RE.test(String(actorId))) {
     return res.status(401).json({
       ok: false,
@@ -99,7 +97,8 @@ router.post("/approve", requireAuth, async (req, res) => {
       businessId,
       items,
       actorId,
-      actorType: req.tenantContext?.mode === "admin_view" ? "internal_admin" : "user",
+      actorType: req.tenantContext?.mode === "admin_view" ? "admin" : "user",
+      source: req.tenantContext?.mode === "admin_view" ? "admin_customer_app" : "books_review",
       requireNeedsReview: true,
       db: supabase,
     });
@@ -112,7 +111,7 @@ router.post("/approve", requireAuth, async (req, res) => {
       business_id: businessId,
       transaction_ids: items.map((item) => item?.txnId || item?.transaction_id || item?.id).filter(Boolean),
       actor_id: actorId,
-      actor_type: req.tenantContext?.mode === "admin_view" ? "internal_admin" : "user",
+      actor_type: req.tenantContext?.mode === "admin_view" ? "admin" : "user",
       endpoint: "/api/bookkeeping/approve",
       request_id: req.headers["x-request-id"] || req.headers["x-correlation-id"] || null,
       deploy_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,

@@ -69,6 +69,44 @@ function approvalIdempotencyKey({ businessId, approval, actorType }) {
   })).digest("hex");
 }
 
+const UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS = [
+  "incoming_deposit_match_id",
+  "incoming_deposit_match_status",
+  "incoming_deposit_confidence_tier",
+  "incoming_deposit_reason_codes",
+  "incoming_deposit_confirmable",
+  "incoming_deposit_confirmability_reason",
+  "incoming_deposit_independent_candidate_count",
+  "incoming_deposit_candidates",
+  "incoming_deposit_match_check",
+];
+
+export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId, actorType, source, nowIso } = {}) {
+  if (hasAuthoritativeQuickBooksMatch({ meta })) return meta;
+  const proposal = Object.fromEntries(
+    UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS
+      .filter((key) => meta[key] !== undefined)
+      .map((key) => [key, meta[key]])
+  );
+  const next = { ...meta };
+  for (const key of UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS) delete next[key];
+  delete next.post_block_reason;
+  delete next.auto_post_block_reason;
+  if (Object.keys(proposal).length) {
+    next.abandoned_match_proposal = {
+      ...proposal,
+      superseded_at: nowIso,
+      superseded_by: actorId || null,
+      superseded_by_type: actorType || "user",
+      resolution: "categorize_new",
+      source: source || "books_review",
+    };
+  }
+  next.incoming_deposit_resolution = "categorized_as_new";
+  next.duplicate_risk_acknowledged = true;
+  return next;
+}
+
 async function persistVendorRuleLearningRetry({ db, businessId, transactionId, actorId, actorType, error }) {
   const row = {
     business_id: businessId,
@@ -124,6 +162,7 @@ export async function approveBookkeepingTransactions({
   actor = null,
   actorId = actor,
   actorType = "user",
+  source = "books_review",
   reason = null,
   requireNeedsReview = false,
   allowCcPaymentRejection = true,
@@ -541,6 +580,12 @@ export async function approveBookkeepingTransactions({
       continue;
     }
     if (explicitlyCategorizedAsNew && duplicateRiskAcknowledged && !authoritativeMatch) {
+      approval.meta = supersedeUnconfirmedIncomingDepositProposal(approval.meta || {}, {
+        actorId,
+        actorType,
+        source,
+        nowIso,
+      });
       warnings.push({ transaction_id: approval.transaction_id, code: "possible_qbo_match_manual_override" });
       continue;
     }

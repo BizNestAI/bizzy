@@ -1060,14 +1060,17 @@ test("Monthly Review override cannot bypass a real P2P provider, confirmed workf
   }), (err) => err.error === "transaction_not_found");
 });
 
-test("Monthly Review UI and route expose the validated automatic P2P override only through Categorize as new approval", () => {
+test("Monthly Review routes Categorize as new through the canonical approval authority", () => {
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const route = read("src/api/admin/monthlyReview.routes.js");
-  assert.match(table, /automaticP2pOverrideAvailable/);
-  assert.match(table, /resolution === "categorize_new"[\s\S]*automaticP2pOverrideAvailable/);
+  assert.match(table, /actionControl\.kind === "approve_categorization"/);
+  assert.match(table, /duplicateRiskAcknowledged/);
   assert.match(page, /resolution:\s*"categorize_new"/);
-  assert.match(route, /allowAutomaticSpecialWorkflowOverride:\s*req\.body\?\.resolution === "categorize_new"/);
+  const approvalRoute = route.slice(route.indexOf('router.post("/runs/:runId/transactions/:transactionId/approve"'), route.indexOf('router.post("/runs/:runId/transactions/:transactionId/post-qbo"'));
+  assert.match(approvalRoute, /approveBookkeepingTransactions\(/);
+  assert.doesNotMatch(approvalRoute, /reclassifyBookkeepingTransaction\(/);
+  assert.match(approvalRoute, /duplicate_risk_acknowledged/);
   assert.match(route, /router\.use\(requireAuth\)/);
   assert.match(route, /router\.use\(requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)\)/);
 });

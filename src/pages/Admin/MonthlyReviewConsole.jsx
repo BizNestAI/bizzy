@@ -1586,7 +1586,11 @@ export default function MonthlyReviewConsole() {
         }));
       }
     } catch (e) {
-      const message = e?.body?.message || e?.message || "Could not complete bookkeeping action.";
+      const reasonCode = e?.body?.reason_code || e?.body?.error || "";
+      const explanation = e?.body?.message || e?.message || "Could not complete bookkeeping action.";
+      const message = reasonCode && !explanation.includes(reasonCode)
+        ? `${explanation} (${reasonCode})`
+        : explanation;
       if (actionKey === "approve" || actionKey === "reclassify") {
         setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: message }));
       } else {
