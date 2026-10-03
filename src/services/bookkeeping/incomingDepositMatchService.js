@@ -1356,7 +1356,7 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
       throw err;
     });
   if (activeConfirmed.length) {
-    return addConfirmability({ ok: true, status: "confirmed", posting_eligibility: "blocked_existing_qbo_match", match: activeConfirmed[0], candidates: [], primary: null, reason_codes: ["already_matched_to_existing_qbo"] });
+    return addConfirmability({ ok: true, status: "confirmed", workflow_state: "confirmed_match", posting_eligibility: "blocked_existing_qbo_match", match: activeConfirmed[0], candidates: [], primary: null, reason_codes: ["already_matched_to_existing_qbo"] });
   }
 
   const mapping = await fetchMapping({ db, businessId, plaidAccountId: bankTxn.plaid_account_id });
@@ -1426,7 +1426,13 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
     const reason = !mappingInfo.verified && !processorFee ? "incoming_deposit_bank_account_mapping_unverified" : result.status === "ambiguous" ? "incoming_deposit_needs_match" : "possible_existing_qbo_match";
     await writeCategorizationBlockMeta({ db, businessId, bankTxn, result, match, reason });
   }
-  return { ok: true, ...result, posting_eligibility: quickBooksPayments ? "blocked_confirmation_required" : !mappingInfo.verified && !processorFee ? "blocked_unverified_bank_account_mapping" : result.status === "ambiguous" ? "blocked_needs_match" : "blocked_confirmation_required", match };
+  return {
+    ok: true,
+    ...result,
+    workflow_state: ["needs_confirmation", "ambiguous"].includes(result.status) ? "proposed_match" : "no_confirmable_match",
+    posting_eligibility: quickBooksPayments ? "blocked_confirmation_required" : !mappingInfo.verified && !processorFee ? "blocked_unverified_bank_account_mapping" : result.status === "ambiguous" ? "blocked_needs_match" : "blocked_confirmation_required",
+    match,
+  };
 }
 
 export async function evaluateIncomingDepositPostingGuard(args = {}) {
@@ -1867,7 +1873,9 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
     hasAuthoritativeQuickBooksMatch(unresolvedCategorization || {}) ||
     unresolvedCategorization?.qbo_txn_id ||
     unresolvedCategorization?.posted_at ||
-    String(unresolvedCategorization?.status || "").toLowerCase() === "posted"
+    ["posted", "excluded", "ignored"].includes(String(unresolvedCategorization?.status || "").toLowerCase()) ||
+    unresolvedCategorization?.meta?.finalized === true ||
+    unresolvedCategorization?.meta?.review_finalized === true
   ) {
     throw new IncomingDepositMatchError("transaction_already_resolved", 409);
   }
@@ -2011,6 +2019,7 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
   return {
     ok: true,
     status: "confirmed",
+    workflow_state: "confirmed_match",
     match_id: matchId,
     transaction_patch: {
       id: bankTransactionId,

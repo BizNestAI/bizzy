@@ -720,7 +720,7 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(client, /rejectIncomingDepositMatch/);
   assert.match(client, /undoIncomingDepositMatch/);
   assert.match(feed, /Possible QBO match/);
-  assert.match(feed, /Match existing QuickBooks deposit/);
+  assert.match(feed, /Approve Match/);
   assert.match(feed, /Match confirmed/);
   assert.match(feed, /View in Matched/);
   assert.match(feed, /Confirming…/);
@@ -730,7 +730,7 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(feed, /independentCandidateCount/);
   assert.match(feed, /Matched to existing QuickBooks/);
   assert.match(feed, /View match details/);
-  assert.match(feed, /Reject match/);
+  assert.match(feed, /Not a Match/);
   assert.match(feed, /Match needs to be refreshed/);
   assert.match(feed, /Refresh match/);
   assert.match(feed, /Match check unavailable/);

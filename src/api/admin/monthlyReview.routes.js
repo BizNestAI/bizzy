@@ -61,8 +61,8 @@ import {
 import {
   confirmIncomingDepositQboMatch,
   discoverIncomingDepositQboMatch,
+  rejectIncomingDepositQboMatch,
 } from "../../services/bookkeeping/incomingDepositMatchService.js";
-import { refreshProcessorFeeQboEvidence } from "../../services/bookkeeping/processorFeeQboRefreshService.js";
 import { persistCreditCardInflowResolution, persistTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import {
   BookkeepingReclassificationError,
@@ -876,7 +876,6 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/inc
     if (!UUID_RE.test(String(transactionId))) return res.status(400).json({ ok: false, error: "invalid_transaction_id" });
     const month = normalizeMonth(req.body?.month || req.query?.month);
     await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
-    const refresh = await refreshProcessorFeeQboEvidence({ businessId, bankTransactionId: transactionId, db: supabase });
     const result = await discoverIncomingDepositQboMatch({
       db: supabase,
       businessId,
@@ -885,10 +884,34 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/inc
       actorRole: "admin_monthly_review_targeted_refresh",
       persist: true,
     });
-    return res.json({ ok: true, refresh, result, qbo_provider_writes: false, qbo_transaction_writes: false });
+    return res.json({ ok: true, workflow_state: result.workflow_state || "no_confirmable_match", result, qbo_provider_writes: false, qbo_transaction_writes: false });
   } catch (e) {
     console.error("[monthly-review] incoming match refresh failed", e?.message || e);
     sendMonthlyReviewError(res, "monthly_review_incoming_match_refresh_failed", "Could not refresh the QuickBooks match.", e);
+  }
+});
+
+router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/incoming-deposit-match/:matchId/reject", async (req, res) => {
+  try {
+    const { businessId, transactionId, matchId } = req.params;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    if (!UUID_RE.test(String(transactionId))) return res.status(400).json({ ok: false, error: "invalid_transaction_id" });
+    if (!UUID_RE.test(String(matchId))) return res.status(400).json({ ok: false, error: "invalid_match_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
+    const result = await rejectIncomingDepositQboMatch({
+      db: supabase,
+      businessId,
+      bankTransactionId: transactionId,
+      matchId,
+      actor: req.user?.id || req.user?.sub || null,
+      actorRole: "admin_monthly_review",
+      reason: "admin_monthly_review_not_a_match",
+    });
+    return res.json({ ok: true, workflow_state: "rejected_match", result, business_id: businessId, month, qbo_provider_writes: false, qbo_transaction_writes: false });
+  } catch (e) {
+    console.error("[monthly-review] incoming match rejection failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_incoming_match_reject_failed", "Could not reject the QuickBooks match.", e);
   }
 });
 

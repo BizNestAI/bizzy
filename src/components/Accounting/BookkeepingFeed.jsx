@@ -790,7 +790,7 @@ export function IncomingDepositMatchPanel({
   const selectionDifferenceMinor = bankAmountMinor - selectedTotalMinor;
   const canConfirmSelected = state.confirmable || (state.ambiguous && selectedCandidates.length > 0 && selectionDifferenceMinor === 0);
   const matchNoLongerConfirmable = ["qbo_entity_already_matched", "qbo_match_candidate_missing", "qbo_match_candidate_invalid_status"].includes(action.reason);
-  const primaryActionLabel = isProcessorFee ? "Confirm match" : primary.qbo_entity_type === "Deposit" ? "Match existing QuickBooks deposit" : "Match existing payment";
+  const primaryActionLabel = "Approve Match";
   const refreshable = ["primary_match_item_missing", "fresh_match_check_required", "stale_match_refresh_required"].includes(String(state.confirmabilityReason || action.reason || ""));
   const bankEvidence = primary.bank_account_match === "verified_same_account" ? "Verified bank account" : "Bank account could not be fully verified";
   const customerName = primary.customer_ref?.name || primary.customer_ref?.Name || null;
@@ -825,7 +825,8 @@ export function IncomingDepositMatchPanel({
           <div><span className="text-slate-400">Bank amount</span><br />{formatMinorMoney(Math.round(Math.abs(Number(txn.amount || 0)) * 100), primary.currency || "USD") || "Not available"}</div>
           <div><span className="text-slate-400">Bank date</span><br />{formatNumericCalendarDate(txn.date, { fallback: "Not available" })}</div>
           <div><span className="text-slate-400">Bank description</span><br />{txn.description || txn.payee || txn.vendor || "Not available"}</div>
-          <div><span className="text-slate-400">QBO {displayPrimary.qbo_entity_type}</span><br />{formatMinorMoney(displayPrimary.amount_minor, displayPrimary.currency || "USD") || "Not available"}</div>
+          <div><span className="text-slate-400">QBO transaction</span><br />{displayPrimary.qbo_entity_type} · {displayPrimary.qbo_entity_id}</div>
+          <div><span className="text-slate-400">QBO amount</span><br />{formatMinorMoney(displayPrimary.amount_minor, displayPrimary.currency || "USD") || "Not available"}</div>
           {displayPrimary.txn_date ? <div><span className="text-slate-400">QBO date</span><br />{formatNumericCalendarDate(displayPrimary.txn_date)}</div> : null}
           {primary.account_names?.length ? <div><span className="text-slate-400">QBO account</span><br />{primary.account_names.join(", ")}</div> : null}
           {primary.description ? <div><span className="text-slate-400">QBO description</span><br />{primary.description}</div> : null}
@@ -916,9 +917,9 @@ export function IncomingDepositMatchPanel({
               </button>
             ) : null}
             {state.matchId ? (
-              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">Reject match</button>
+              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">Not a Match</button>
             ) : null}
-            {candidateCount > 1 && !state.ambiguous ? <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Review other matches</span> : null}
+            {candidateCount > 1 && !state.ambiguous ? <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Choose another match</span> : null}
           </>
         )}
       </div> : null}

@@ -178,3 +178,35 @@ test("Monthly Review feed actions preserve Phase 4B bounded mirror source", () =
   assert.match(service, /p_range_end:\s*normalizeBookkeepingDate\(rangeEnd\)/);
   assert.match(service, /matchesTransactionStatusFilter/);
 });
+
+test("Monthly Review existing-QBO matching is an explicit proposal then approval workflow", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  const panel = read("src/components/Accounting/BookkeepingFeed.jsx");
+
+  const inspectStart = page.indexOf("const handleMirrorInspectIncomingDepositMatch");
+  const inspectEnd = page.indexOf("const handleMirrorRejectIncomingDepositMatch", inspectStart);
+  const inspect = page.slice(inspectStart, inspectEnd);
+  assert.match(inspect, /resolution: "match_existing_qbo"/);
+  assert.match(inspect, /proposalState/);
+  assert.doesNotMatch(inspect, /status: "success"/);
+
+  const discovery = routeBody(
+    route,
+    'router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/incoming-deposit-match/refresh"',
+    '\nrouter.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/incoming-deposit-match/:matchId/reject"'
+  );
+  assert.match(discovery, /discoverIncomingDepositQboMatch/);
+  assert.doesNotMatch(discovery, /refreshProcessorFeeQboEvidence|confirmIncomingDepositQboMatch/);
+  assert.match(discovery, /qbo_provider_writes: false/);
+  assert.match(discovery, /qbo_transaction_writes: false/);
+
+  assert.match(route, /incoming-deposit-match\/:matchId\/confirm/);
+  assert.match(route, /incoming-deposit-match\/:matchId\/reject/);
+  assert.match(table, /onReject=\{onRejectIncomingDepositMatch\}/);
+  assert.match(panel, /Approve Match/);
+  assert.match(panel, /Not a Match/);
+  assert.match(panel, /QBO transaction/);
+  assert.match(panel, /displayPrimary\.qbo_entity_id/);
+});

@@ -1385,13 +1385,30 @@ export default function MonthlyReviewConsole() {
     try {
       const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(transactionId)}/incoming-deposit-match/refresh`, {
         method: "POST",
-        body: { month, resolution: "match_credit_card_payment" },
+        body: { month, resolution: "match_existing_qbo" },
       });
       if (result?.ok === false) throw new Error(result.message || result.error || "Could not refresh the QuickBooks match.");
-      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: "success", error: "" } }));
+      const proposalState = result?.result?.status || result?.workflow_state || "idle";
+      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: proposalState, workflowState: result?.workflow_state || null, error: "" } }));
       await refreshExpandedBookkeepingFeeds();
     } catch (error) {
       setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, error: error?.message || "Could not refresh the QuickBooks match." } }));
+    }
+  }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
+
+  const handleMirrorRejectIncomingDepositMatch = useCallback(async (transactionId, matchId) => {
+    if (!selectedBusinessId || !transactionId || !matchId) return;
+    setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: true, status: "matching", error: "" } }));
+    try {
+      const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(transactionId)}/incoming-deposit-match/${encodeURIComponent(matchId)}/reject`, {
+        method: "POST",
+        body: { month },
+      });
+      if (result?.ok === false) throw new Error(result.message || result.error || "Could not reject the QuickBooks match.");
+      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: "rejected", error: "" } }));
+      await refreshExpandedBookkeepingFeeds();
+    } catch (error) {
+      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: "error", error: error?.message || "Could not reject the QuickBooks match." } }));
     }
   }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
 
@@ -2445,6 +2462,7 @@ export default function MonthlyReviewConsole() {
                   incomingDepositMatchActionState={incomingDepositMatchActionState}
                   onInspectIncomingDepositMatch={handleMirrorInspectIncomingDepositMatch}
                   onConfirmIncomingDepositMatch={handleMirrorConfirmIncomingDepositMatch}
+                  onRejectIncomingDepositMatch={handleMirrorRejectIncomingDepositMatch}
                   onResolutionChange={handleMirrorResolutionChange}
                   onCreateAccount={createMonthlyReviewQboAccount}
                   onCreatedAccountSelect={injectSourceLedgerAccount}
@@ -2596,6 +2614,7 @@ function BookkeepingFeedMirrorPanels({
   incomingDepositMatchActionState,
   onInspectIncomingDepositMatch,
   onConfirmIncomingDepositMatch,
+  onRejectIncomingDepositMatch,
   onResolutionChange,
   onCreateAccount,
   onCreatedAccountSelect,
@@ -2683,6 +2702,7 @@ function BookkeepingFeedMirrorPanels({
             incomingDepositMatchActionState={incomingDepositMatchActionState}
             onInspectIncomingDepositMatch={onInspectIncomingDepositMatch}
             onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
+            onRejectIncomingDepositMatch={onRejectIncomingDepositMatch}
             onResolutionChange={onResolutionChange}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
@@ -3155,6 +3175,7 @@ function BookkeepingFeedMirrorSection({
   incomingDepositMatchActionState,
   onInspectIncomingDepositMatch,
   onConfirmIncomingDepositMatch,
+  onRejectIncomingDepositMatch,
   onResolutionChange,
   onCreateAccount,
   onCreatedAccountSelect,
@@ -3222,6 +3243,7 @@ function BookkeepingFeedMirrorSection({
               incomingDepositMatchActionState={incomingDepositMatchActionState}
               onInspectIncomingDepositMatch={onInspectIncomingDepositMatch}
               onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
+              onRejectIncomingDepositMatch={onRejectIncomingDepositMatch}
               onResolutionChange={onResolutionChange}
               onCreateAccount={onCreateAccount}
               onCreatedAccountSelect={onCreatedAccountSelect}

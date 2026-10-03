@@ -43,6 +43,7 @@ export default function BookkeepingTransactionMirrorTable({
   incomingDepositMatchActionState = {},
   onInspectIncomingDepositMatch,
   onConfirmIncomingDepositMatch,
+  onRejectIncomingDepositMatch,
   onCreateAccount,
   onCreatedAccountSelect,
   onResolutionChange,
@@ -96,6 +97,7 @@ export default function BookkeepingTransactionMirrorTable({
             incomingDepositMatchActionState={incomingDepositMatchActionState}
             onInspectIncomingDepositMatch={onInspectIncomingDepositMatch}
             onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
+            onRejectIncomingDepositMatch={onRejectIncomingDepositMatch}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
             onResolutionChange={onResolutionChange}
@@ -133,6 +135,7 @@ function BookkeepingTransactionMirrorRow({
   incomingDepositMatchActionState,
   onInspectIncomingDepositMatch,
   onConfirmIncomingDepositMatch,
+  onRejectIncomingDepositMatch,
   onCreateAccount,
   onCreatedAccountSelect,
   onResolutionChange,
@@ -478,6 +481,7 @@ function BookkeepingTransactionMirrorRow({
           resolutionOverride={resolution}
           onInspect={onInspectIncomingDepositMatch}
           onConfirm={onConfirmIncomingDepositMatch}
+          onReject={onRejectIncomingDepositMatch}
         />
       </div>
     ) : null}
