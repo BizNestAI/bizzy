@@ -8,6 +8,7 @@ import ManualQuickBooksPostingWorkflow from "../../components/Accounting/ManualQ
 import { ADMIN_VIEW_RETURN_MESSAGE } from "../../services/adminViewReturn.js";
 import { normalizeExpectedQboAccountCreationResult } from "../../services/bookkeeping/qboAccountCreationErrors.js";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
+import { formatPostingFailureLabel } from "../../services/bookkeeping/postingFailureClassification.js";
 import { deriveTraceReconciliationStatus } from "../../services/bookkeeping/postingTraceDisplay.js";
 import {
   derivePipelineStatus,
@@ -3165,7 +3166,7 @@ function formatPostingReviewItemStatus(item = {}) {
     return `Retry scheduled · ${reason}${next}`;
   }
   if (item.bucket === "active_posting") return "Posting to QuickBooks";
-  if (item.bucket === "failed") return item.post_error || "Posting failed";
+  if (item.bucket === "failed") return formatPostingFailureLabel(item.last_error_code || item.post_error || item.reason);
   return item.plain_status || item.reason || "Needs review";
 }
 

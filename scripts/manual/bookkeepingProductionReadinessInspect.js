@@ -116,7 +116,7 @@ async function selectOptional(table, select, buildQuery = (query) => query) {
 async function fetchHandledRows() {
   const { data: cats, error } = await supabase
     .from("transaction_categorizations")
-    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id")
+    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,last_post_attempt_at,meta,qbo_txn_id")
     .eq("business_id", businessId)
     .in("status", ["approved", "auto_approved", "failed"])
     .is("qbo_txn_id", null)
@@ -161,15 +161,22 @@ async function fetchPostedAndIntents(rows) {
   const ids = rows.map((row) => row.cat.transaction_id).filter(Boolean);
   const posted = await selectOptional("qbo_posted_transactions", "*", (query) => query.eq("business_id", businessId).in("transaction_id", ids).limit(5000));
   const attempts = await selectOptional("bookkeeping_post_attempts", "*", (query) => query.eq("business_id", businessId).order("created_at", { ascending: false }).limit(1000));
+  const jobs = await selectOptional(
+    "bookkeeping_posting_jobs",
+    "id,business_id,transaction_id,state,scheduled_at,next_attempt_at,attempt_count,lease_owner,lease_expires_at,blocking_code,last_error_code,qbo_request_id,qbo_txn_id,qbo_txn_type,updated_at",
+    (query) => query.eq("business_id", businessId).in("transaction_id", ids).limit(5000)
+  );
   return {
     posted,
     attempts,
+    jobs,
     postedMap: new Map(
       asArray(posted.data)
         .filter((row) => row.qbo_txn_id || String(row.status || "").toLowerCase() === "posted")
         .map((row) => [row.transaction_id, row])
     ),
     intentMap: new Map(asArray(posted.data).map((row) => [row.transaction_id, row])),
+    jobMap: new Map(asArray(jobs.data).map((row) => [row.transaction_id, row])),
   };
 }
 
@@ -249,7 +256,7 @@ function canaryCandidate(row, mappings, accounts, postedMap, intentMap) {
 const rows = await fetchHandledRows();
 const mappings = await fetchMappings(rows);
 const accounts = await fetchAccountCache(rows);
-const { posted, attempts, postedMap, intentMap } = await fetchPostedAndIntents(rows);
+const { posted, attempts, jobs, postedMap, intentMap, jobMap } = await fetchPostedAndIntents(rows);
 
 const buckets = {};
 const reasons = {};
@@ -271,6 +278,8 @@ for (const row of rows) {
   const key = `${canonical.bucket}:${schedule}`;
   increment(crossTab, key);
   const skip = workerSkipReason(row, mappings);
+  const job = jobMap.get(row.cat.transaction_id) || null;
+  const intent = intentMap.get(row.cat.transaction_id) || null;
   if (workerVisibility(row)) {
     worker.due_rows_visible_to_worker += 1;
     if (skip === "preclaim_candidate") worker.preclaim_candidates += 1;
@@ -285,6 +294,16 @@ for (const row of rows) {
     bucket: canonical.bucket,
     reason: canonical.reason,
     worker_skip_reason: skip,
+    posting_operation_id: job?.id || intent?.id || null,
+    attempt_count: job?.attempt_count ?? intent?.attempt_count ?? 0,
+    claim_state: intent?.status || null,
+    lease_expires_at: job?.lease_expires_at || intent?.lease_expires_at || null,
+    last_attempt_at: row.cat.last_post_attempt_at || intent?.last_attempt_at || null,
+    next_attempt_at: job?.next_attempt_at || row.cat.meta?.next_post_attempt_at || null,
+    blocker_code: job?.blocking_code || row.cat.meta?.post_block_reason || null,
+    provider_error_class: job?.last_error_code || row.cat.meta?.posting_failure_code || row.cat.post_error || null,
+    qbo_request_issued: Boolean(job?.qbo_request_id || intent?.request_id),
+    qbo_record_known: Boolean(job?.qbo_txn_id || intent?.qbo_txn_id || row.cat.qbo_txn_id),
   });
 }
 
@@ -294,12 +313,16 @@ const canaryCandidates = evaluations
   .filter(Boolean)
   .slice(0, 3);
 
-let health = null;
-try {
-  const res = await fetch("https://bizzy-production.up.railway.app/healthz");
-  health = { ok: res.ok, status: res.status, body: await res.json().catch(() => null) };
-} catch (error) {
-  health = { ok: false, error: error?.message || "health_fetch_failed" };
+// Network inspection is opt-in. The default audit is database-only and cannot
+// accidentally call the deployed application or a provider.
+let health = { skipped: true, reason: "network_checks_not_authorized" };
+if (process.env.BOOKKEEPING_AUDIT_ALLOW_HEALTH_CHECK === "true") {
+  try {
+    const res = await fetch("https://bizzy-production.up.railway.app/healthz");
+    health = { ok: res.ok, status: res.status, body: await res.json().catch(() => null) };
+  } catch (error) {
+    health = { ok: false, error: error?.message || "health_fetch_failed" };
+  }
 }
 
 console.log(JSON.stringify({
@@ -315,6 +338,7 @@ console.log(JSON.stringify({
     ...worker,
     attempts_table_available: attempts.unavailable !== true,
     posted_intents_table_available: posted.unavailable !== true,
+    posting_jobs_table_available: jobs.unavailable !== true,
     attempt_summary: attemptSummary,
     qbo_posted_transactions_for_backlog_count: asArray(posted.data).length,
     active_intent_like_rows: asArray(posted.data).filter((row) => ["claimed", "pending", "processing", "posting"].includes(String(row.status || "").toLowerCase())).length,

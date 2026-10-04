@@ -1,5 +1,6 @@
 import { hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
 import { deriveCreditCardPaymentStatus } from "./creditCardPaymentStatus.js";
+import { classifyPostingFailure, formatPostingFailureLabel } from "./postingFailureClassification.js";
 
 function formatShortDateTime(value) {
   if (!value) return "";
@@ -131,11 +132,20 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
     (row.post_error === "cc_payment_post_not_supported" || meta.post_block_reason === "cc_payment_post_not_supported");
 
   if (!unsupportedUnpairedCcPayment && hasProvenPostingFailure(row)) {
+    const failure = classifyPostingFailure(postingJob.last_error_code || row.post_error || meta.post_error);
     return {
       key: "failed",
-      label: "Posting failed",
+      label: formatPostingFailureLabel(failure.code),
       tone: "danger",
-      detail: row.post_error || "QBO posting failed.",
+      detail: failure.detail,
+      code: failure.code,
+      retryable: failure.retryable,
+      last_attempt_at: row.last_post_attempt_at || postingJob.updated_at || null,
+      technical: {
+        reason: failure.code,
+        last_attempt_at: row.last_post_attempt_at || postingJob.updated_at || null,
+        operation_id: postingJob.qbo_request_id || meta.qbo_request_id || null,
+      },
     };
   }
 
@@ -237,9 +247,12 @@ export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) 
   if (lifecycle.key === "failed") {
     return {
       key: "failed",
-      label: "Posting failed",
+      label: lifecycle.label || "Posting failed",
       tone: "danger",
       detail: lifecycle.detail || "QuickBooks posting failed.",
+      code: lifecycle.code || null,
+      retryable: lifecycle.retryable === true,
+      technical: lifecycle.technical || null,
     };
   }
   if (lifecycle.key === "posting") {

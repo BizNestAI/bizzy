@@ -40,7 +40,10 @@ export function normalizePostingError(error, context = {}) {
   let code = firstString(context.internalCode, error?.internalCode, error?.code, "posting_internal_failure");
   let httpStatus = Number(error?.httpStatus || error?.status) || 500;
   let userMessage = "Bizzi could not post this transaction to QuickBooks.";
-  let retryable = false;
+  // `null` means the caller must classify an internal/transport failure. Using
+  // false as the default incorrectly dead-lettered every unrecognized transient
+  // database or worker error after its first attempt.
+  let retryable = null;
   let qboWriteMayHaveOccurred = context.qboWriteStarted === true;
   if (explicitProviderRejection) {
     code = "qbo_transaction_rejected";
@@ -51,11 +54,13 @@ export function normalizePostingError(error, context = {}) {
       ? "QuickBooks rejected the deposit because it did not contain a valid line item."
       : "QuickBooks rejected this transaction. Review its account and transaction details, then try again.";
     qboWriteMayHaveOccurred = false;
+    retryable = false;
   } else if (authFailed) {
     code = "qbo_authentication_failed";
     httpStatus = 401;
     userMessage = "QuickBooks must be reconnected before this transaction can be posted.";
     qboWriteMayHaveOccurred = false;
+    retryable = false;
   } else if (rateLimited) {
     code = "qbo_rate_limited";
     httpStatus = 503;
@@ -72,21 +77,25 @@ export function normalizePostingError(error, context = {}) {
     httpStatus = 409;
     userMessage = "Bizzi could not check QuickBooks for an existing transaction.";
     qboWriteMayHaveOccurred = false;
+    retryable = false;
   } else if (lower.includes("existing_qbo_match_found") || lower.includes("possible_qbo_duplicate")) {
     code = "qbo_duplicate_found";
     httpStatus = 409;
     userMessage = "Bizzi found a possible existing QuickBooks transaction and did not create a duplicate.";
     qboWriteMayHaveOccurred = false;
+    retryable = false;
   } else if (lower.includes("credit_card_inflow_resolution_required") || lower.includes("credit_card_inflow_requires_review")) {
     code = "credit_card_inflow_resolution_required";
     httpStatus = 409;
     userMessage = "Identify this credit as a merchant refund, credit-card payment, or cash back/statement credit before posting.";
     qboWriteMayHaveOccurred = false;
+    retryable = false;
   } else if (context.stage && context.qboWriteStarted !== true) {
     code = firstString(context.internalCode, "posting_validation_failed");
     httpStatus = 422;
     userMessage = "Bizzi could not validate this transaction for QuickBooks.";
     qboWriteMayHaveOccurred = false;
+    retryable = false;
   }
   return {
     code, internal_code: code, message: text, user_message: userMessage,

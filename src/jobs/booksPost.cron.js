@@ -44,6 +44,7 @@ import {
 import { decideManualPostingGate, hasAuthorizedMonthlyReviewApproval } from "../services/bookkeeping/manualPostingAuthority.js";
 import { hashManualPostOverrideContext } from "../services/bookkeeping/manualPostOverrideToken.js";
 import { createPostingError, normalizePostingError } from "../services/bookkeeping/postingErrorNormalizer.js";
+import { classifyPostingFailure } from "../services/bookkeeping/postingFailureClassification.js";
 import {
   buildLoanPaymentPurchasePayload,
   fetchConfirmedLoanPaymentSplit,
@@ -2625,11 +2626,12 @@ export async function handleItem(item, options = {}) {
       evaluateIncomingDepositPostingGuard({ businessId, bankTransactionId: txnId, actorRole: manual ? "manual_post" : "auto_post" })
     );
     if (!depositGuard.allowed) {
+      const blockCode = depositGuard.reason || "incoming_deposit_match_required";
       await insertPostAttempt({
         businessId,
         transactionId: txnId,
         status: "skipped",
-        errorMessage: depositGuard.reason || "incoming_deposit_match_required",
+        errorMessage: blockCode,
         retryCount: Number(item?.meta?.post_retry_count || 0) || null,
         postAfter: item?.post_after || null,
         payloadSummary: summarizePayload(item, bank, mapping),
@@ -2649,6 +2651,20 @@ export async function handleItem(item, options = {}) {
         status: "blocked",
         failureCode: depositGuard.reason || "incoming_deposit_match_required",
       });
+      await supabase
+        .from("transaction_categorizations")
+        .update({
+          post_after: null,
+          post_error: null,
+          meta: {
+            ...(item.meta || {}),
+            posting_in_progress: false,
+            post_block_reason: blockCode,
+            next_post_attempt_at: null,
+          },
+        })
+        .eq("business_id", businessId)
+        .eq("transaction_id", txnId);
       return;
     }
   }
@@ -3143,13 +3159,24 @@ function taxYearFromDate(value) {
 }
 
 async function markFailed(item, message, { manual = false } = {}) {
+  const normalized = message?.postingError || normalizePostingError(message instanceof Error ? message : new Error(String(message || "post_failed")), {
+    qboWriteStarted: message?.qbo_write_may_have_occurred === true,
+  });
+  const classificationInput = normalized.code === "posting_internal_failure" && message?.message
+    ? message.message
+    : normalized;
+  const failure = classifyPostingFailure(classificationInput, {
+    retryable: normalized.retryable,
+    qboWriteMayHaveOccurred: normalized.qbo_write_may_have_occurred === true,
+  });
+  const failureCode = failure.code;
   const retries = Number(item?.meta?.post_retry_count || 0);
   const nextRetries = retries + 1;
   const nowIso = getNowIso();
   const backoffMs = computeBackoffMs(nextRetries);
   const nextAttemptIso = nowIso ? new Date(Date.parse(nowIso) + backoffMs).toISOString() : null;
   const unsupportedUnpairedCcPayment =
-    message === "cc_payment_post_not_supported" &&
+    failureCode === "cc_payment_post_not_supported" &&
     item?.meta?.taxonomy_type === "cc_payment" &&
     !item?.meta?.cc_payment_pair_id;
   if (unsupportedUnpairedCcPayment) {
@@ -3158,26 +3185,32 @@ async function markFailed(item, message, { manual = false } = {}) {
   }
   const shouldStop =
     manual === true ||
+    failure.terminal === true ||
+    failure.retryable !== true ||
     nextRetries >= MAX_RETRIES ||
-    message === "cc_payment_post_not_supported" ||
-    message === "cc_payment_mapping_not_safe" ||
-    message === "cc_charge_post_not_supported";
+    failureCode === "cc_payment_post_not_supported" ||
+    failureCode === "cc_payment_mapping_not_safe" ||
+    failureCode === "cc_charge_post_not_supported";
   const meta = {
     ...(item.meta || {}),
     post_retry_count: nextRetries,
     posting_in_progress: false,
     next_post_attempt_at: nextAttemptIso,
+    posting_failure_code: failureCode,
+    posting_failure_detail: failure.detail,
+    posting_failure_retryable: failure.retryable === true,
+    posting_reconcile_before_retry: failure.reconcile_before_retry === true,
     ...(hasAuthorizedMonthlyReviewApproval(item)
       ? { manual_approval_state: shouldStop ? "needs_attention" : "posting_failed" }
       : {}),
   };
-  if (message === "cc_payment_post_not_supported") {
+  if (failureCode === "cc_payment_post_not_supported") {
     meta.post_block_reason = "cc_payment_post_not_supported";
   }
-  if (message === "cc_payment_mapping_not_safe") {
+  if (failureCode === "cc_payment_mapping_not_safe") {
     meta.post_block_reason = "cc_payment_mapping_not_safe";
   }
-  if (message === "cc_charge_post_not_supported") {
+  if (failureCode === "cc_charge_post_not_supported") {
     meta.post_block_reason = "cc_charge_post_not_supported";
   }
   if (shouldStop) {
@@ -3187,15 +3220,15 @@ async function markFailed(item, message, { manual = false } = {}) {
     meta.merchant_group_operation_state = shouldStop ? "failed" : "retry_scheduled";
     meta.merchant_group_operation_stage = shouldStop ? "failed" : "retry_scheduled";
     meta.merchant_group_operation_lease_expires_at = null;
-    meta.merchant_group_operation_failure_code = message || "post_failed";
-    meta.merchant_group_operation_failure_message = message || "post_failed";
+    meta.merchant_group_operation_failure_code = failureCode;
+    meta.merchant_group_operation_failure_message = failure.detail;
     meta.merchant_group_operation_failed_at = nowIso;
   }
   await insertPostAttempt({
     businessId: item.business_id,
     transactionId: item.transaction_id,
     status: "failed",
-    errorMessage: message || "post_failed",
+    errorMessage: failureCode,
     retryCount: nextRetries,
     postAfter: item?.post_after || null,
     payloadSummary: {
@@ -3215,7 +3248,7 @@ async function markFailed(item, message, { manual = false } = {}) {
     .from("transaction_categorizations")
     .update({
       status: shouldStop ? "failed" : item.status,
-      post_error: message || "post_failed",
+      post_error: failureCode,
       last_post_attempt_at: nowIso,
       // The scheduler queries post_after. Persisting only the retry timestamp in
       // JSON left the original due time active and burned through every retry on
@@ -3748,7 +3781,7 @@ async function runOnce(options = {}) {
           error: sanitized,
         });
         if (err?.qbo_write_succeeded !== true) {
-          await markFailed(item, err?.message || "post_failed");
+          await markFailed(item, err);
         } else {
           logPostSuccessStage("local_finalize_pending", {
             businessId: item.business_id,

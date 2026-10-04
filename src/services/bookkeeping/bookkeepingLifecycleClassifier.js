@@ -9,7 +9,7 @@ const POSTING_BLOCK_REASONS = new Set([
   "merchant_ambiguous", "no_matching_vendor_rule", "credit_card_inflow_requires_review",
 ]);
 
-export function derivePostingOutcome(row = {}) {
+export function derivePostingOutcome(row = {}, nowMs = Date.now()) {
   const meta = row.meta || {};
   const status = String(row.posting_status || "").toLowerCase();
   const legacyStatus = String(row.status || row.categorization_status || "").toLowerCase();
@@ -26,7 +26,10 @@ export function derivePostingOutcome(row = {}) {
   let key = "not_requested";
   if (hasReceipt || status === "posted") key = "succeeded";
   else if (status === "posting" || meta.posting_in_progress === true) key = "processing";
-  else if (status === "scheduled" || row.post_after) key = "queued";
+  else if (status === "scheduled" || row.post_after) {
+    const dueAt = Date.parse(row.post_after || "");
+    key = Number.isFinite(dueAt) && dueAt <= nowMs ? "delayed" : "queued";
+  }
   else if (status === "posting_failed" || POSTING_FAILURE_STATUSES.has(legacyStatus)) key = "failed";
   else if (reason === "credit_card_inflow_resolution_required" || reason === "credit_card_inflow_requires_review") key = "needs_credit_type";
   else if (reason) key = POSTING_BLOCK_REASONS.has(reason) || !row.last_post_attempt_at ? "blocked" : "failed";
@@ -34,6 +37,7 @@ export function derivePostingOutcome(row = {}) {
   const labels = {
     not_requested: "Not requested",
     queued: "Waiting to post",
+    delayed: "Posting delayed",
     processing: "Posting",
     blocked: "Posting needs review",
     needs_credit_type: "Needs credit type",

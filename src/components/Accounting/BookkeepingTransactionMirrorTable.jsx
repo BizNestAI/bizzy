@@ -456,7 +456,7 @@ function BookkeepingTransactionMirrorRow({
           {displayResolution === "split_transaction" ? (
             <span className="text-[11px] text-amber-100/80">Split review</span>
           ) : null}
-          {isHandledFeed ? (
+          {isHandledFeed && !isFailed ? (
             <button
               type="button"
               onClick={() => onPost?.(row)}
@@ -468,7 +468,7 @@ function BookkeepingTransactionMirrorRow({
               {manualPostBusy ? "Posting…" : "Post"}
             </button>
           ) : null}
-          {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && isFailed ? (
+          {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && isFailed && qboStatus.retryable === true ? (
             <button
               type="button"
               onClick={() => onRetry?.(row)}

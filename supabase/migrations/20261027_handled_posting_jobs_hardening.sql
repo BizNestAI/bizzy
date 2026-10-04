@@ -68,7 +68,12 @@ begin
     v_state := 'cancelled';
   elsif v_feed <> 'handled' then
     v_state := 'cancelled';
+  elsif v_intent.status = 'posted' and v_intent.qbo_txn_id is not null then
+    v_state := 'reconciling';
   elsif v_intent.status = 'processing' and v_intent.lease_expires_at > now() then
+    v_state := 'processing';
+  elsif lower(coalesce(new.meta->>'posting_in_progress','false')) = 'true'
+    and new.last_post_attempt_at > now() - interval '15 minutes' then
     v_state := 'processing';
   elsif new.post_after is not null then
     v_state := case when coalesce(new.meta->>'post_retry_count','') ~ '^[0-9]+$'

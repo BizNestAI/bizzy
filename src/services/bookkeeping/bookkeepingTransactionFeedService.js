@@ -10,6 +10,7 @@ import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.j
 import { isCashBackRewardCredit, rewardCreditIntent } from "./rewardCreditPolicy.js";
 import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
 import { classifyBookkeepingLifecycle, derivePostingOutcome } from "./bookkeepingLifecycleClassifier.js";
+import { classifyPostingFailure, formatPostingFailureLabel } from "./postingFailureClassification.js";
 import {
   detectQuickBooksPaymentsProtectedWorkflow,
   hasAuthoritativeQuickBooksMatch,
@@ -441,22 +442,28 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
       technical: { job_id: job.id, blocking_code: job.blocking_code },
     };
   }
-  const postingOutcome = derivePostingOutcome(row);
-  if (["failed", "blocked", "processing", "queued"].includes(postingOutcome.key)) {
+  const postingOutcome = derivePostingOutcome(row, nowMs);
+  if (["failed", "blocked", "processing", "queued", "delayed"].includes(postingOutcome.key)) {
+    const failure = postingOutcome.key === "failed"
+      ? classifyPostingFailure(job.last_error_code || row.post_error || postingOutcome.reason)
+      : null;
     return {
       key: postingOutcome.key,
-      label: postingOutcome.label,
-      tone: postingOutcome.key === "failed" ? "danger" : postingOutcome.key === "blocked" ? "warning" : "info",
+      label: failure ? formatPostingFailureLabel(failure.code) : postingOutcome.label,
+      tone: postingOutcome.key === "failed" ? "danger" : ["blocked", "delayed"].includes(postingOutcome.key) ? "warning" : "info",
       detail: postingOutcome.key === "failed"
-        ? "QuickBooks did not accept the last posting attempt."
+        ? failure.detail
         : postingOutcome.key === "blocked"
           ? "A safety or evidence check requires review before posting."
-          : postingOutcome.label,
+          : postingOutcome.key === "delayed"
+            ? "The scheduled time has passed. The next healthy worker cycle will recover this transaction."
+            : postingOutcome.label,
       technical: {
-        reason: postingOutcome.reason,
+        reason: failure?.code || postingOutcome.reason,
         last_attempt_at: postingOutcome.lastAttemptAt,
         operation_id: postingOutcome.lastOperationId,
       },
+      ...(failure ? { code: failure.code, retryable: failure.retryable } : {}),
     };
   }
   if (row.pending === true) {
