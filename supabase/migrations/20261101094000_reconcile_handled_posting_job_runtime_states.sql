@@ -122,3 +122,51 @@ revoke all on table public.vendor_rule_learning_jobs from public, anon, authenti
 grant all on table public.bookkeeping_posting_jobs to service_role;
 grant all on table public.qbo_posted_transactions to service_role;
 grant all on table public.vendor_rule_learning_jobs to service_role;
+
+-- Service-only diagnostic population for bounded application recovery. This is
+-- intentionally a view, not an automatic data rewrite: it identifies legacy
+-- Handled rows whose posting disposition is contradictory without weakening
+-- legitimate manual/special-workflow blocks.
+create or replace view public.bookkeeping_handled_posting_disposition_violations
+with (security_invoker = true)
+as
+select
+  tc.business_id,
+  tc.transaction_id,
+  tc.status,
+  tc.final_qbo_account_id,
+  tc.post_after,
+  tc.post_error,
+  tc.updated_at,
+  case
+    when bt.pending is true then 'pending_transaction_not_postable'
+    when tc.final_qbo_account_id is null then 'missing_final_qbo_account'
+    when tc.status = 'auto_approved' and lower(coalesce(tc.meta->>'safe_to_auto_post','false')) <> 'true'
+      then 'automatic_posting_safety_not_established'
+    when tc.post_after is null and tc.post_error is null then 'missing_posting_disposition'
+    else 'contradictory_posting_disposition'
+  end as violation_code
+from public.transaction_categorizations tc
+join public.bank_transactions bt
+  on bt.business_id = tc.business_id
+ and bt.id = tc.transaction_id
+left join public.bookkeeping_posting_jobs bpj
+  on bpj.business_id = tc.business_id
+ and bpj.transaction_id = tc.transaction_id
+where tc.status in ('approved','auto_approved','handled','failed')
+  and tc.qbo_txn_id is null
+  and tc.posted_at is null
+  and tc.excluded_at is null
+  and coalesce(tc.is_archived, false) is false
+  and coalesce(bt.is_archived, false) is false
+  and (bpj.state is null or bpj.state in ('blocked','failed','cancelled'))
+  and (
+    tc.final_qbo_account_id is null
+    or (tc.status = 'auto_approved' and lower(coalesce(tc.meta->>'safe_to_auto_post','false')) <> 'true')
+    or (tc.post_after is null and tc.post_error is null)
+  );
+
+alter view public.bookkeeping_handled_posting_disposition_violations owner to postgres;
+revoke all on table public.bookkeeping_handled_posting_disposition_violations from public, anon, authenticated;
+revoke all on table public.bookkeeping_handled_posting_disposition_violations from service_role;
+grant select on table public.bookkeeping_handled_posting_disposition_violations to service_role;

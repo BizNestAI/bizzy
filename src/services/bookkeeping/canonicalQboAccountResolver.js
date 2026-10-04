@@ -688,6 +688,7 @@ async function reconsiderAffectedTransactionsAfterMapping({ supabase, businessId
       const nextMeta = {
         ...baseMeta,
         safe_to_auto_handle: autoApproved,
+        safe_to_auto_post: autoApproved,
         canonical_reconsideration_processed_at: nowIso,
         canonical_reconsideration_result: {
           status: autoApproved ? "auto_approved" : "needs_review",

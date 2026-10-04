@@ -264,6 +264,7 @@ function applyAutoApproval({
     const decidedAt = nowIso;
     const nextMeta = {
       ...decisionMeta,
+      safe_to_auto_post: true,
       auto_approve_reason: decisionMeta.auto_approve_reason || reason || decision.reason || "auto_handle_policy",
       auto_handled_reason: decision.reason,
     };

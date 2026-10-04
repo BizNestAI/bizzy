@@ -3822,15 +3822,30 @@ async function runOnce(options = {}) {
 
 export function startBooksPostingCron() {
   if (process.env.DISABLE_BOOKS_POST_CRON === "true") {
-    log.info("[books-post] cron disabled via env");
+    log.info("[books-post] worker configuration", {
+      enabled: false,
+      disabled_reason: "DISABLE_BOOKS_POST_CRON",
+      cadence_minutes: POLL_MINUTES,
+      batch_size: POSTING_BATCH_SIZE,
+      maximum_retries: MAX_RETRIES,
+      worker_instance: serviceIdentity(),
+    });
     return;
   }
   const intervalMs = Math.max(1, POLL_MINUTES) * 60 * 1000;
-  log.info("[books-post] cron started, interval mins:", POLL_MINUTES);
+  log.info("[books-post] worker configuration", {
+    enabled: true,
+    cadence_minutes: POLL_MINUTES,
+    batch_size: POSTING_BATCH_SIZE,
+    maximum_retries: MAX_RETRIES,
+    due_query_page_size: DUE_QUERY_PAGE_SIZE,
+    maximum_due_rows_per_sweep: MAX_DUE_ROWS_PER_SWEEP,
+    worker_instance: serviceIdentity(),
+  });
   // Do not leave already-due jobs waiting for the first interval after a deploy.
   booksPostSweepRunning = true;
-  runOnce()
-    .catch((err) => log.error("[books-post] startup sweep error", err))
+  runSweepWithDiagnostics("startup")
+    .catch((err) => log.error("[books-post] startup sweep error", { error_class: sanitizedErrorClass(err) }))
     .finally(() => {
       booksPostSweepRunning = false;
     });
@@ -3839,8 +3854,8 @@ export function startBooksPostingCron() {
   setInterval(() => {
     if (booksPostSweepRunning) return;
     booksPostSweepRunning = true;
-    runOnce()
-      .catch((err) => log.error("[books-post] interval error", err))
+    runSweepWithDiagnostics("interval")
+      .catch((err) => log.error("[books-post] interval error", { error_class: sanitizedErrorClass(err) }))
       .finally(() => {
         booksPostSweepRunning = false;
       });
@@ -3867,6 +3882,54 @@ export function startBooksPostingCron() {
         vendorRuleLearningQueueRunning = false;
       });
   }, Math.max(queueIntervalMs, 30_000));
+}
+
+function sanitizedErrorClass(error) {
+  return String(error?.code || error?.name || "books_post_sweep_failed").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 96);
+}
+
+async function runSweepWithDiagnostics(trigger) {
+  const startedAt = new Date().toISOString();
+  log.info("[books-post] sweep started", {
+    trigger,
+    started_at: startedAt,
+    worker_instance: serviceIdentity(),
+  });
+  try {
+    const summary = await runOnce();
+    log.info("[books-post] sweep completed", {
+      trigger,
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
+      worker_instance: serviceIdentity(),
+      eligible: summary?.eligible || 0,
+      claimed: summary?.attempted || 0,
+      posted: Math.max((summary?.attempted || 0) - (summary?.failed || 0), 0),
+      retried: summary?.retry_scheduled || 0,
+      blocked: summary?.blocked || 0,
+      failed: summary?.failed || 0,
+      deferred: summary?.deferred || 0,
+      ok: summary?.ok !== false,
+      error_class: summary?.ok === false ? sanitizedErrorClass({ code: summary?.error }) : null,
+    });
+    return summary;
+  } catch (error) {
+    log.error("[books-post] sweep completed", {
+      trigger,
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
+      worker_instance: serviceIdentity(),
+      eligible: 0,
+      claimed: 0,
+      posted: 0,
+      retried: 0,
+      blocked: 0,
+      failed: 1,
+      ok: false,
+      error_class: sanitizedErrorClass(error),
+    });
+    throw error;
+  }
 }
 
 export const runBooksPostOnce = runOnce;

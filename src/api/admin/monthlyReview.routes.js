@@ -69,6 +69,7 @@ import {
 } from "../../services/bookkeeping/incomingDepositMatchService.js";
 import { canonicalIncomingDepositLookupOutcome } from "../../services/bookkeeping/incomingDepositMatchOutcome.js";
 import { persistCreditCardInflowResolution, persistTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
+import { recoverHandledPostingDispositions } from "../../services/bookkeeping/handledPostingDispositionRecoveryService.js";
 import {
   BookkeepingReclassificationError,
   reclassifyBookkeepingTransaction,
@@ -2032,6 +2033,39 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       reason_code: e instanceof BookkeepingApprovalError ? e.error : e?.code || "monthly_review_feed_approval_failed",
       message: monthlyReviewApprovalErrorMessage(e),
       details: e instanceof BookkeepingApprovalError ? e.details || {} : undefined,
+    });
+  }
+});
+
+router.post("/runs/:runId/bookkeeping/recover-handled-posting-dispositions", async (req, res) => {
+  try {
+    const { runId } = req.params;
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    const run = await fetchRun(runId);
+    const result = await recoverHandledPostingDispositions({
+      db: supabase,
+      businessId: run.business_id,
+      limit: req.body?.limit,
+      graceHours: Number(process.env.BOOKS_POST_GRACE_HOURS || 24),
+    });
+    await logAuditEvent({
+      run,
+      actor: req.user,
+      eventType: "handled_posting_disposition_recovery",
+      sectionKey: "books_review_mirror",
+      previousValue: null,
+      nextValue: result,
+      notes: "Ran bounded bookkeeping disposition recovery; no QuickBooks calls were made.",
+    }).catch(() => null);
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error("[monthly-review] handled posting disposition recovery failed", {
+      error_class: error?.code || error?.name || "handled_posting_disposition_recovery_failed",
+    });
+    return res.status(error?.status || 500).json({
+      ok: false,
+      error: error?.code || "handled_posting_disposition_recovery_failed",
+      message: "Could not safely recover contradictory Handled transactions. No QuickBooks writes were attempted.",
     });
   }
 });
