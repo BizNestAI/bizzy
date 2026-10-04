@@ -187,8 +187,7 @@ test("failed manual QBO writes remain actionable in the handled feed", () => {
   assert.match(transactionsService, /classifyBookkeepingLifecycle/);
   assert.match(transactionsService, /\["approved", "auto_approved", "failed", "handled"\]\.includes/);
   assert.match(feed, /\["approved", "auto_approved", "handled", "failed"\]\.includes\(String\(txn\.status/);
-  assert.match(feed, /aria-label="Post to QuickBooks"/);
-  assert.doesNotMatch(feed, /Retry QuickBooks posting/);
+  assert.match(feed, /aria-label=\{adminBookkeepingAccess \? "Retry failed QuickBooks posting" : "Post to QuickBooks"\}/);
 });
 
 test("manual posting affects only the selected transaction row and prevents repeated clicks", () => {
@@ -202,7 +201,7 @@ test("manual posting affects only the selected transaction row and prevents repe
   const handlerStart = page.indexOf("const handleManualPostTransaction");
   const handlerEnd = page.indexOf("const handleManualPostResultPrimary", handlerStart);
   assert.doesNotMatch(page.slice(handlerStart, handlerEnd), /hasIncomingDepositMatchWorkflow/);
-  assert.match(feed, /disabled=\{readOnly \|\| isPosting \|\| incomingMatchAction\.loading === true\}/);
+  assert.match(feed, /disabled=\{readOnly \|\| isPosting \|\| incomingMatchAction\.loading === true \|\| !adminPostingRetryEligible\}/);
 });
 
 test("manual posting uses in-app confirmation and mapping guidance modals", () => {

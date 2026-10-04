@@ -38,6 +38,7 @@ test("worker recovery is bounded, idempotent, and isolates vendor learning", () 
   const worker = read("src/jobs/booksPost.cron.js");
   const intent = read("supabase/migrations/20260826_qbo_posting_idempotency_phase2.sql");
   const jobs = read("supabase/migrations/20261027_handled_posting_jobs_hardening.sql");
+  const reconciliation = read("supabase/migrations/20261101094000_reconcile_handled_posting_job_runtime_states.sql");
 
   assert.match(worker, /BOOKS_POST_MAX_RETRIES \|\| 5/);
   assert.match(worker, /BACKOFF_SCHEDULE_MS/);
@@ -47,7 +48,7 @@ test("worker recovery is bounded, idempotent, and isolates vendor learning", () 
   assert.match(intent, /lease_expires_at <=? p_now|v_row\.lease_expires_at > p_now/i);
   assert.match(intent, /already_posted/);
   assert.match(jobs, /handled_missing_posting_job/);
-  assert.match(jobs, /v_intent\.status = 'posted'[\s\S]*v_state := 'reconciling'/);
+  assert.match(reconciliation, /v_intent\.status = 'posted'[\s\S]*v_state := 'reconciling'/);
 });
 
 test("posting job storage is business scoped and does not expose customer writes", () => {

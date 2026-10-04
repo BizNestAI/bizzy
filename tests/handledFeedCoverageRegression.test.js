@@ -14,7 +14,7 @@ const migrationSource = readFileSync(new URL("../supabase/migrations/20261022_ha
 test("ordinary categorized transactions remain Handled through queued, blocked, retrying, and failed outcomes", () => {
   const fixtures = [
     { status: "approved" },
-    { status: "approved", posting_status: "scheduled", post_after: "2026-09-26T00:00:00Z" },
+    { status: "approved", posting_status: "scheduled", post_after: "2099-09-26T00:00:00Z" },
     { status: "approved", posting_status: "posting" },
     { status: "approved", meta: { post_block_reason: "weak_memo_evidence" } },
     { status: "failed", post_error: "qbo_rejected", last_post_attempt_at: "2026-09-25T00:00:00Z" },
@@ -29,7 +29,7 @@ test("authoritative lifecycle states remain mutually exclusive", () => {
   const fixtures = [
     [{ status: "needs_review" }, "needs_review"],
     [{ status: "approved" }, "handled"],
-    [{ status: "failed", qbo_txn_id: "qbo-1" }, "posted"],
+    [{ status: "failed", posting_status: "posted", qbo_txn_id: "qbo-1" }, "posted"],
     [{ status: "matched_existing_qbo", qbo_txn_id: "existing-qbo-1" }, "matched"],
     [{ pending: true, status: "approved" }, "pending"],
     [{ status: "excluded", pending: true }, "excluded"],

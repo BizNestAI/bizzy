@@ -10,6 +10,7 @@ import { normalizeMerchantIdentity } from "../../src/services/bookkeeping/mercha
 const businessId = process.env.BUSINESS_ID || process.env.BOOKKEEPING_AUDIT_BUSINESS_ID || "";
 const now = new Date();
 const nowIso = now.toISOString();
+const auditCutoffMs = Date.parse(process.env.BOOKKEEPING_AUDIT_CUTOFF || "2026-10-04T17:47:00.000Z");
 
 if (!businessId) {
   console.error("Set BUSINESS_ID. This script is read-only and will not infer a tenant.");
@@ -289,6 +290,7 @@ for (const row of rows) {
     transaction_id: row.cat.transaction_id,
     date: row.txn.date,
     amount: row.txn.amount,
+    description: row.txn.name || row.txn.merchant_name || row.txn.counterparty_name || null,
     status: row.cat.status,
     post_after: row.cat.post_after,
     bucket: canonical.bucket,
@@ -304,8 +306,43 @@ for (const row of rows) {
     provider_error_class: job?.last_error_code || row.cat.meta?.posting_failure_code || row.cat.post_error || null,
     qbo_request_issued: Boolean(job?.qbo_request_id || intent?.request_id),
     qbo_record_known: Boolean(job?.qbo_txn_id || intent?.qbo_txn_id || row.cat.qbo_txn_id),
+    saved_receipt: Boolean(
+      intent?.qbo_txn_id ||
+      row.cat.qbo_txn_id ||
+      (intent?.status === "posted" && intent?.response_summary)
+    ),
+    overdue_at_audit_cutoff: Boolean(
+      row.cat.post_after &&
+      Date.parse(row.cat.post_after) <= auditCutoffMs &&
+      !(job?.qbo_txn_id || intent?.qbo_txn_id || row.cat.qbo_txn_id)
+    ),
+    available_evidence_indicates_qbo_contacted: Boolean(
+      (intent?.request_id && intent?.last_attempt_at) ||
+      intent?.response_summary ||
+      intent?.qbo_txn_id ||
+      row.cat.qbo_txn_id
+    ),
+    safe_next_action: job?.qbo_txn_id || intent?.qbo_txn_id || row.cat.qbo_txn_id
+      ? "reconcile saved receipt without creating another QBO transaction"
+      : intent?.status === "processing" && Date.parse(intent?.lease_expires_at || "") > now.getTime()
+        ? "wait for the active lease; do not run a competing post"
+        : ["failed_requires_review", "protected_workflow"].includes(canonical.bucket)
+          ? "retain for bookkeeping review; do not blind-retry"
+          : skip === "preclaim_candidate"
+            ? "allow the idempotent worker to claim after deployment"
+            : "re-evaluate safety gates after deployment; do not force-post",
   });
 }
+
+const requestedProductionCases = new Set([
+  "2026-07-26|-25", "2026-09-27|-15", "2026-09-26|-15.67", "2026-09-25|-8.66",
+  "2026-08-06|1.63", "2026-06-29|-72", "2026-06-28|72", "2026-06-21|72",
+  "2026-06-19|-72", "2026-06-10|32.16", "2026-09-25|-10", "2026-08-22|-13.65",
+  "2026-06-06|0.76",
+]);
+const requestedProductionEvaluations = evaluations.filter((row) =>
+  requestedProductionCases.has(`${row.date}|${Number(row.amount)}`)
+);
 
 const attemptSummary = summarizeAttempts(asArray(attempts.data));
 const canaryCandidates = evaluations
@@ -345,5 +382,6 @@ console.log(JSON.stringify({
   },
   deployment_health: health,
   canary_candidates: canaryCandidates,
+  requested_production_evaluations: requestedProductionEvaluations,
   sample_evaluations: evaluations.slice(0, 25),
 }, null, 2));

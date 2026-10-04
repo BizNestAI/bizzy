@@ -36,7 +36,7 @@ test("Auto-post policy remains explicit and approval grace uses the configured 2
 
   assert.match(approvalService, /const autoPostEnabled = await getAutoPostToQuickBooks\(db,\s*businessId\)/);
   assert.match(approvalService, /resolveBookkeepingPostAfter/);
-  assert.match(autoPostRoute, /getAutoPostSettings\(\{ db: supabase, businessId, graceHours: POSTING_GRACE_HOURS \}\)/);
+  assert.match(autoPostRoute, /getAutoPostSettings\(\{[\s\S]*?db: supabase,[\s\S]*?businessId,[\s\S]*?graceHours: POSTING_GRACE_HOURS,[\s\S]*?includeBacklogSummary: false,[\s\S]*?includeBacklogPreview: false/);
   assert.match(autoPostRoute, /setAutoPostEnabled\(\{[\s\S]*graceHours: POSTING_GRACE_HOURS/);
   assert.match(autoPostService, /posting_grace_hours:\s*normalizedGraceHours/);
   assert.match(autoPostService, /scheduledBacklog = 0/);
@@ -50,7 +50,7 @@ test("Books Review no longer exposes page-level Run posting now control", () => 
   assert.doesNotMatch(page, /handleRunPostingNow/);
   assert.doesNotMatch(page, /runPostingNow/);
   assert.match(page, /onManualPost=\{handleManualPostTransaction\}/);
-  assert.match(page, /postTransactionToQuickBooks\(businessId, txnId\)/);
+  assert.match(page, /postTransactionToQuickBooks\(businessId, txnId, options\)/);
 });
 
 test("Monthly Review QBO labels distinguish Handled from Posted and scheduled queue state", () => {
