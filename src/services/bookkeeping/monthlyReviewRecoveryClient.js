@@ -20,7 +20,8 @@ export async function runMonthlyReviewTransactionRecovery({ request, runId, busi
   });
   if (!result?.ok) throw new Error(result?.message || result?.error || "bookkeeping_recovery_failed");
   await refreshPersistedFeeds?.();
-  return { result, message: describeMonthlyReviewRecovery(result) };
+  const requestSuffix = result.recovery_request_id ? ` Request ${result.recovery_request_id}.` : "";
+  return { result, message: `${describeMonthlyReviewRecovery(result)}${requestSuffix}` };
 }
 
 export default { describeMonthlyReviewRecovery, runMonthlyReviewTransactionRecovery };

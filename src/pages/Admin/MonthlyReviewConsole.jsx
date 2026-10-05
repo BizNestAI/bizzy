@@ -1453,6 +1453,14 @@ export default function MonthlyReviewConsole() {
       });
       if (result?.ok === false) throw new Error(result.message || result.error || "Could not confirm the QuickBooks match.");
       setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: "success", matchedAt: new Date().toISOString(), error: "" } }));
+      if (detail?.run?.id) {
+        await runMonthlyReviewTransactionRecovery({
+          request: safeFetch,
+          runId: detail.run.id,
+          businessId: selectedBusinessId,
+          transactionId,
+        });
+      }
       await loadBookkeepingFeedCounts();
       await Promise.all([
         loadBookkeepingFeed("needs_review", { reset: true }),
@@ -1461,7 +1469,7 @@ export default function MonthlyReviewConsole() {
     } catch (error) {
       setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, error: error?.message || "Could not confirm the QuickBooks match." } }));
     }
-  }, [loadBookkeepingFeed, loadBookkeepingFeedCounts, month, selectedBusinessId]);
+  }, [detail?.run?.id, loadBookkeepingFeed, loadBookkeepingFeedCounts, month, selectedBusinessId]);
 
   const handleMirrorResolutionChange = useCallback(async (row, resolution, systemSuggestedResolution) => {
     if (!selectedBusinessId || !row?.id) return;
@@ -1562,6 +1570,7 @@ export default function MonthlyReviewConsole() {
             reason: "Approved from Monthly Review Needs Review feed.",
             resolution: "categorize_new",
             duplicate_risk_acknowledged: options?.duplicateRiskAcknowledged === true,
+            duplicate_override: options?.duplicateOverride === true,
             learn_reusable_rule: learnReusableRule,
             only_this_transaction: learnReusableRule === false,
           },
@@ -1582,7 +1591,16 @@ export default function MonthlyReviewConsole() {
       } else if (actionKey === "retry") {
         await safeFetch(`${routeBase}/retry-qbo-sync`, { method: "POST" });
       }
-      if (actionKey === "approve") {
+      if (actionKey === "approve" && options?.duplicateOverride === true) {
+        const recovery = await runMonthlyReviewTransactionRecovery({
+          request: safeFetch,
+          runId: detail.run.id,
+          businessId: selectedBusinessId,
+          transactionId,
+          refreshPersistedFeeds: refreshAfterRecovery,
+        });
+        setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: recovery.message }));
+      } else if (actionKey === "approve") {
         patchBookkeepingFeedsAfterApproval(row, accountId, result);
       } else if (actionKey === "reclassify") {
         patchBookkeepingFeedsAfterReclassification(row, accountId, result);
@@ -1614,7 +1632,7 @@ export default function MonthlyReviewConsole() {
       });
       setBusyFeedAction("");
     }
-  }, [bookkeepingRulePreferences, detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction]);
+  }, [bookkeepingRulePreferences, detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction, refreshAfterRecovery, selectedBusinessId]);
 
   const recoverBookkeepingFeedRow = useCallback(async (event, row) => {
     event?.preventDefault?.();

@@ -19,7 +19,7 @@ test("MRP and Books Review invoke the same atomic approval service for categoriz
   assert.match(customerApprove, /approveBookkeepingTransactions\(/);
   assert.doesNotMatch(adminApprove, /reclassifyBookkeepingTransaction\(/);
   assert.match(adminApprove, /duplicate_risk_acknowledged/);
-  assert.match(adminApprove, /requireNeedsReview: true/);
+  assert.match(adminApprove, /requireNeedsReview: !isHandledDuplicateOverride/);
 });
 
 test("confirmed matches remain protected while an unconfirmed possible match is superseded with audit evidence", async () => {

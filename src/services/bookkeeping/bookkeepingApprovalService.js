@@ -82,6 +82,14 @@ const UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS = [
   "incoming_deposit_match_check",
   "match_confirmation_required",
   "possible_qbo_match_requires_review",
+  "possible_qbo_duplicate",
+  "qbo_duplicate_detection_confidence",
+  "qbo_duplicate_candidates",
+  "qbo_duplicate_challenge_id",
+  "qbo_duplicate_challenge_expires_at",
+  "qbo_duplicate_review_message",
+  "qbo_duplicate_review_actions",
+  "post_anyway_requires_confirmation",
 ];
 
 export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId, actorType, source, nowIso, selectedQboAccountId = null, duplicateRiskAcknowledged = false } = {}) {
@@ -113,9 +121,11 @@ export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId
     approved_by: actorId || null,
     actor_type: actorType || "user",
     source: source || "books_review",
-    decision_version: 1,
+    decision_version: 2,
     selected_qbo_account_id: selectedQboAccountId ? String(selectedQboAccountId) : null,
     duplicate_risk_acknowledged: duplicateRiskAcknowledged === true,
+    reviewed_duplicate_candidate: proposal.qbo_duplicate_candidates?.[0] || proposal.incoming_deposit_candidates?.[0] || null,
+    reviewed_blocker: proposal.possible_qbo_duplicate === true ? "possible_qbo_duplicate" : null,
   };
   next.duplicate_risk_acknowledged = duplicateRiskAcknowledged === true;
   return next;

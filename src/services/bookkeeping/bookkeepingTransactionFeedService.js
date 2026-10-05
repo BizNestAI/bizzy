@@ -144,6 +144,26 @@ function stripIncomingDepositReviewForRewardCredit(normalized = {}) {
 
 export function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, operatorRequest = null) {
   const meta = cat.meta || {};
+  const duplicateCandidates = Array.isArray(meta.qbo_duplicate_candidates)
+    ? meta.qbo_duplicate_candidates.slice(0, 5).map((candidate) => ({
+        qbo_entity_type: candidate?.qbo_txn_type || null,
+        qbo_entity_id: candidate?.qbo_txn_id || null,
+        txn_date: candidate?.txn_date || null,
+        amount_minor: Number.isFinite(Number(candidate?.amount)) ? Math.round(Math.abs(Number(candidate.amount)) * 100) : null,
+        currency: "USD",
+        document_number: candidate?.document_number || candidate?.doc_number || candidate?.ref_number || null,
+        description: candidate?.display_name || candidate?.payee_or_memo || null,
+        customer_ref: candidate?.customer_ref || null,
+        reason_codes: [
+          candidate?.amount_matches ? "amount_match" : null,
+          candidate?.date_matches ? "date_match" : null,
+          candidate?.account_matches ? "account_match" : null,
+          candidate?.payee_matches ? "payee_match" : null,
+          candidate?.payee_conflicts ? "payee_conflict" : null,
+        ].filter(Boolean),
+        consumed_by_another_transaction: typeof candidate?.consumed_by_another_transaction === "boolean" ? candidate.consumed_by_another_transaction : null,
+      }))
+    : [];
   const explicitResolution = normalizeTransactionResolution(meta.user_selected_resolution);
   const ccPaymentWorkflow = isCreditCardPaymentWorkflow({
     taxonomy_type: meta.taxonomy_type || null,
@@ -243,7 +263,7 @@ export function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = nul
     excluded_by: cat.excluded_by || meta.excluded_by || null,
     exclusion_reason: cat.exclusion_reason || meta.exclusion_reason || null,
     pre_exclusion_lifecycle: cat.pre_exclusion_lifecycle || meta.pre_exclusion_lifecycle || null,
-    meta: meta || null,
+    meta: meta ? { ...meta, qbo_duplicate_candidates: duplicateCandidates } : null,
     taxonomy_type: meta.taxonomy_type || null,
     cc_payment_pair_id: meta.cc_payment_pair_id || null,
     cc_payment_pair_role: meta.cc_payment_pair_role || null,
@@ -260,7 +280,10 @@ export function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = nul
     cc_payment_pair_counterpart_date: meta.cc_payment_pair_counterpart_date || null,
     cc_payment_pair_counterpart_account_name: meta.cc_payment_pair_counterpart_account_name || null,
     cc_payment_rejected: meta.cc_payment_rejected === true || meta.taxonomy_override === "not_cc_payment",
-    duplicate_risk: meta.duplicate_risk === true || meta.possible_duplicate === true || null,
+    duplicate_risk: meta.duplicate_risk === true || meta.possible_duplicate === true || meta.possible_qbo_duplicate === true || null,
+    possible_qbo_duplicate: meta.possible_qbo_duplicate === true,
+    qbo_duplicate_detection_confidence: meta.qbo_duplicate_detection_confidence || null,
+    qbo_duplicate_candidates: duplicateCandidates,
     relink_status: meta.relink_status || null,
     operator_request: normalizeOperatorRequest(operatorRequest),
     customer_answered: Boolean(operatorRequest?.answer_text && operatorRequest?.status === "answered" && !operatorRequest?.resolved_at),

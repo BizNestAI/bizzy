@@ -634,6 +634,8 @@ function independentCandidateCount(candidates = []) {
 
 export function incomingDepositMatchState(txn = {}) {
   const meta = txn.meta || {};
+  const duplicateCandidates = txn.qbo_duplicate_candidates || [];
+  const possibleQboDuplicate = txn.possible_qbo_duplicate === true || meta.possible_qbo_duplicate === true;
   const protectedWorkflow = String(meta.protected_workflow || "");
   const quickBooksPaymentsProtected = protectedWorkflow.startsWith("quickbooks_payments_");
   const processorActivity = detectProcessorSettlementActivity(txn);
@@ -643,20 +645,21 @@ export function incomingDepositMatchState(txn = {}) {
   const blockReason = meta.post_block_reason || txn.post_error || null;
   const confirmableValue = txn.incoming_deposit_confirmable ?? meta.incoming_deposit_confirmable;
   const active =
+    possibleQboDuplicate ||
     txn.status === "matched_existing_qbo" ||
     txn.matched_existing_qbo === true ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable", "confirmed"].includes(String(status || "")) ||
     ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required", "quickbooks_payments_match_required"].includes(String(blockReason || "")) ||
     quickBooksPaymentsProtected;
   if (!active && !isProbableProcessorFee) return { active: false };
-  const candidates = txn.incoming_deposit_candidates || meta.incoming_deposit_candidates || [];
+  const candidates = txn.incoming_deposit_candidates || meta.incoming_deposit_candidates || duplicateCandidates;
   const primary = candidates[0] || null;
   const hasQboCandidate = Boolean(primary?.qbo_entity_type && primary?.qbo_entity_id);
   const confirmed = txn.status === "matched_existing_qbo" || txn.matched_existing_qbo === true || status === "confirmed";
   const unavailable = status === "match_check_unavailable" || blockReason === "match_check_unavailable";
   const explicitIndependentCount = Number(txn.incoming_deposit_independent_candidate_count ?? meta.incoming_deposit_independent_candidate_count);
   const rootCount = Number.isFinite(explicitIndependentCount) ? explicitIndependentCount : independentCandidateCount(candidates);
-  const needsFreshCheck = blockReason === "incoming_deposit_needs_match" && (status === "unchecked" || status === "superseded" || !primary);
+  const needsFreshCheck = possibleQboDuplicate || (blockReason === "incoming_deposit_needs_match" && (status === "unchecked" || status === "superseded" || !primary));
   const ambiguous = status === "ambiguous" || (blockReason === "incoming_deposit_needs_match" && rootCount > 1);
   const invoiceOnly = candidates.length > 0 && candidates.every((candidate) => candidate.match_type === "qbo_invoice_only_context" || candidate.qbo_entity_type === "Invoice");
   return {
@@ -685,8 +688,8 @@ export function incomingDepositMatchState(txn = {}) {
     invoiceOnly,
     status,
     matchId: txn.incoming_deposit_match_id || meta.incoming_deposit_match_id || null,
-    tier: txn.incoming_deposit_confidence_tier || meta.incoming_deposit_confidence_tier || null,
-    reasons: txn.incoming_deposit_reason_codes || meta.incoming_deposit_reason_codes || [],
+    tier: txn.incoming_deposit_confidence_tier || meta.incoming_deposit_confidence_tier || txn.qbo_duplicate_detection_confidence || meta.qbo_duplicate_detection_confidence || null,
+    reasons: txn.incoming_deposit_reason_codes || meta.incoming_deposit_reason_codes || primary?.reason_codes || [],
     candidates,
     primary,
   };
@@ -829,6 +832,8 @@ export function IncomingDepositMatchPanel({
           <div><span className="text-slate-400">QBO transaction</span><br />{displayPrimary.qbo_entity_type} · {displayPrimary.qbo_entity_id}</div>
           <div><span className="text-slate-400">QBO amount</span><br />{formatMinorMoney(displayPrimary.amount_minor, displayPrimary.currency || "USD") || "Not available"}</div>
           {displayPrimary.txn_date ? <div><span className="text-slate-400">QBO date</span><br />{formatNumericCalendarDate(displayPrimary.txn_date)}</div> : null}
+          {displayPrimary.document_number ? <div><span className="text-slate-400">Reference / document</span><br />{displayPrimary.document_number}</div> : null}
+          <div><span className="text-slate-400">Used by another bank transaction</span><br />{displayPrimary.consumed_by_another_transaction === true ? "Yes — cannot match" : displayPrimary.consumed_by_another_transaction === false ? "No" : "Revalidated when approved"}</div>
           {primary.account_names?.length ? <div><span className="text-slate-400">QBO account</span><br />{primary.account_names.join(", ")}</div> : null}
           {primary.description ? <div><span className="text-slate-400">QBO description</span><br />{primary.description}</div> : null}
           {invoiceText ? <div><span className="text-slate-400">Invoice</span><br />{invoiceText}</div> : null}

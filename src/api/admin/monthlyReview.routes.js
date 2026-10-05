@@ -637,14 +637,42 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
       page,
       pageSize,
     });
+    const candidateIds = Array.from(new Set(rows.flatMap((row) => (row.qbo_duplicate_candidates || []).map((candidate) => candidate.qbo_entity_id).filter(Boolean))));
+    let candidateConsumers = new Map();
+    if (candidateIds.length) {
+      const { data: consumedRows, error: consumedError } = await supabase
+        .from("qbo_posted_transactions")
+        .select("qbo_txn_id,transaction_id")
+        .eq("business_id", businessId)
+        .eq("status", "posted")
+        .in("qbo_txn_id", candidateIds);
+      if (consumedError) throw consumedError;
+      candidateConsumers = (consumedRows || []).reduce((map, receipt) => {
+        const key = String(receipt.qbo_txn_id || "");
+        if (!map.has(key)) map.set(key, new Set());
+        map.get(key).add(String(receipt.transaction_id || ""));
+        return map;
+      }, new Map());
+    }
+    const rowsWithCandidateAvailability = rows.map((row) => {
+      const candidates = (row.qbo_duplicate_candidates || []).map((candidate) => ({
+        ...candidate,
+        consumed_by_another_transaction: Array.from(candidateConsumers.get(String(candidate.qbo_entity_id || "")) || []).some((transactionId) => transactionId !== String(row.id)),
+      }));
+      return {
+        ...row,
+        qbo_duplicate_candidates: candidates,
+        meta: row.meta ? { ...row.meta, qbo_duplicate_candidates: candidates } : row.meta,
+      };
+    });
 
     return res.json({
       ok: true,
       business_id: businessId,
       month,
       status: statusFilter,
-      rows,
-      items: rows,
+      rows: rowsWithCandidateAvailability,
+      items: rowsWithCandidateAvailability,
       totalCount,
       total_count: totalCount,
       next_cursor: page * pageSize < totalCount ? String(page + 1) : null,
@@ -1971,6 +1999,45 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       });
     }
 
+    const { data: currentCategorization, error: currentCategorizationError } = await supabase
+      .from("transaction_categorizations")
+      .select("status,qbo_txn_id,posted_at,post_error,meta")
+      .eq("business_id", run.business_id)
+      .eq("transaction_id", transactionId)
+      .maybeSingle();
+    if (currentCategorizationError) throw currentCategorizationError;
+    const duplicateOverride = req.body?.duplicate_override === true;
+    const isHandledDuplicateOverride = duplicateOverride &&
+      currentCategorization?.meta?.possible_qbo_duplicate === true &&
+      ["approved", "auto_approved", "failed", "handled"].includes(String(currentCategorization?.status || "").toLowerCase());
+    if (duplicateOverride && !isHandledDuplicateOverride) {
+      return res.status(409).json({ ok: false, error: "duplicate_override_not_available", message: "This duplicate-risk override is no longer available." });
+    }
+    if (isHandledDuplicateOverride && req.body?.duplicate_risk_acknowledged !== true) {
+      return res.status(409).json({ ok: false, error: "duplicate_risk_acknowledgement_required", message: "Review the possible QuickBooks match and acknowledge the duplicate risk before continuing." });
+    }
+    if (currentCategorization?.qbo_txn_id || currentCategorization?.posted_at || currentCategorization?.meta?.matched_existing_qbo === true || currentCategorization?.meta?.incoming_deposit_match_status === "confirmed") {
+      return res.status(409).json({ ok: false, error: "confirmed_or_posted_transaction_protected", message: "A confirmed match or posted transaction cannot be categorized as new." });
+    }
+    if (currentCategorization?.meta?.posting_in_progress === true || currentCategorization?.meta?.provider_write_started_at || currentCategorization?.meta?.qbo_write_started_at || currentCategorization?.meta?.qbo_receipt_confirmed_at) {
+      return res.status(409).json({ ok: false, error: "provider_write_ambiguity_requires_review", message: "This transaction has provider-write evidence and cannot be overridden here." });
+    }
+    if (isHandledDuplicateOverride) {
+      const candidateIds = (currentCategorization?.meta?.qbo_duplicate_candidates || []).map((candidate) => candidate?.qbo_txn_id).filter(Boolean);
+      if (candidateIds.length) {
+        const { data: consumedCandidates, error: consumedCandidatesError } = await supabase
+          .from("qbo_posted_transactions")
+          .select("qbo_txn_id,transaction_id")
+          .eq("business_id", run.business_id)
+          .eq("status", "posted")
+          .in("qbo_txn_id", candidateIds);
+        if (consumedCandidatesError) throw consumedCandidatesError;
+        if ((consumedCandidates || []).some((receipt) => String(receipt.transaction_id) !== String(transactionId))) {
+          return res.status(409).json({ ok: false, error: "qbo_duplicate_candidate_already_linked", message: "This QuickBooks candidate is already linked to another bank transaction and requires review." });
+        }
+      }
+    }
+
     const approval = await approveBookkeepingTransactions({
       businessId: run.business_id,
       items: [{
@@ -1985,7 +2052,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       actorId: req.user?.id,
       actorType: "admin",
       source: "monthly_review",
-      requireNeedsReview: true,
+      requireNeedsReview: !isHandledDuplicateOverride,
       db: supabase,
     });
     const categorization = approval.rows?.find((row) => String(row.transaction_id) === String(transactionId)) || approval.rows?.[0] || null;
@@ -2041,6 +2108,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
 
 router.post("/runs/:runId/bookkeeping/recover-handled-posting-dispositions", async (req, res) => {
   try {
+    const recoveryRequestId = crypto.randomUUID();
     const { runId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
     const run = await fetchRun(runId);
@@ -2076,7 +2144,8 @@ router.post("/runs/:runId/bookkeeping/recover-handled-posting-dispositions", asy
         : result.skipped > 0
           ? "still_blocked"
           : "unchanged";
-    return res.json({ ok: true, transaction_id: transactionIds[0], outcome, reason, ...result });
+    res.set("x-bizzi-recovery-request-id", recoveryRequestId);
+    return res.json({ ok: true, recovery_request_id: recoveryRequestId, transaction_id: transactionIds[0], outcome, reason, ...result });
   } catch (error) {
     console.error("[monthly-review] handled posting disposition recovery failed", {
       error_class: error?.code || error?.name || "handled_posting_disposition_recovery_failed",
