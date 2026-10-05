@@ -504,7 +504,7 @@ function BookkeepingTransactionMirrorRow({
           {isHandledFeed && ["review", "fix_issue"].includes(postingAction.permitted_action) ? (
             <button
               type="button"
-              onClick={() => onRecover?.(row)}
+              onClick={(event) => onRecover?.(event, row)}
               disabled={isActionBusy("recover")}
               title="Re-evaluate this transaction's local posting disposition without contacting QuickBooks."
               className="rounded-lg border border-violet-300/20 bg-violet-300/[0.1] px-2 py-1 text-[11px] font-semibold text-violet-100 hover:bg-violet-300/[0.16] disabled:opacity-45"

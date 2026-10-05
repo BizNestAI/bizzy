@@ -57,15 +57,16 @@ test("Handled action matrix keeps completion or resolution controls visible", ()
 });
 
 test("Monthly Review exposes bounded local recovery without a QuickBooks call", () => {
-  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   const route = read("src/api/admin/monthlyReview.routes.js");
+  const recoveryClient = read("src/services/bookkeeping/monthlyReviewRecoveryClient.js");
 
   assert.match(table, /Recover state/);
-  assert.match(table, /onRecover\?\.\(row\)/);
-  assert.match(page, /recover-handled-posting-dispositions/);
-  assert.match(page, /transaction_ids: \[transactionId\]/);
-  assert.match(route, /transactionIds\.length > 25/);
+  assert.match(table, /onRecover\?\.\(event, row\)/);
+  assert.match(recoveryClient, /recover-handled-posting-dispositions/);
+  assert.match(recoveryClient, /transaction_ids: \[transactionId\]/);
+  assert.match(recoveryClient, /business_id: businessId/);
+  assert.match(route, /transactionIds\.length !== 1/);
   assert.match(route, /no QuickBooks calls were made/i);
 });
 

@@ -64,7 +64,8 @@ test("Admin recovery endpoint delegates to the shared database-only service", ()
   const route = read("src/api/admin/monthlyReview.routes.js");
   assert.match(route, /recover-handled-posting-dispositions/);
   assert.match(route, /recoverHandledPostingDispositions/);
-  assert.match(route, /bounded_transaction_selection_required/);
+  assert.match(route, /single_transaction_recovery_required/);
+  assert.match(route, /recovery_business_scope_mismatch/);
   assert.match(route, /assertRunTransactionInSelectedMonth\(run, transactionId\)/);
   assert.match(route, /No QuickBooks writes were attempted/);
 });

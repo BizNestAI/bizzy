@@ -28,6 +28,7 @@ import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { buildMerchantGroupApprovalRequest, postingReviewGroupStateKey } from "../../contracts/merchantGroupApprovalContract.js";
 import { buildPaymentAccountDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
 import { incomingDepositLookupFailure } from "../../services/bookkeeping/incomingDepositMatchOutcome.js";
+import { runMonthlyReviewTransactionRecovery } from "../../services/bookkeeping/monthlyReviewRecoveryClient.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -1299,6 +1300,14 @@ export default function MonthlyReviewConsole() {
     )));
   }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadPostingReview, loadQboPnlSnapshot, loadSourceLedger]);
 
+  const refreshAfterRecovery = useCallback(async () => {
+    await Promise.all([
+      loadBookkeepingFeedCounts(),
+      loadBookkeepingFeed("handled", { reset: true }),
+      loadBookkeepingFeed("needs_review", { reset: true }),
+    ]);
+  }, [loadBookkeepingFeed, loadBookkeepingFeedCounts]);
+
   const patchBookkeepingFeedsAfterApproval = useCallback((row, accountId, result = {}) => {
     const transactionId = row?.id;
     if (!transactionId) return;
@@ -1572,11 +1581,6 @@ export default function MonthlyReviewConsole() {
         await safeFetch(`${routeBase}/post-qbo`, { method: "POST" });
       } else if (actionKey === "retry") {
         await safeFetch(`${routeBase}/retry-qbo-sync`, { method: "POST" });
-      } else if (actionKey === "recover") {
-        result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/bookkeeping/recover-handled-posting-dispositions`, {
-          method: "POST",
-          body: { transaction_ids: [transactionId] },
-        });
       }
       if (actionKey === "approve") {
         patchBookkeepingFeedsAfterApproval(row, accountId, result);
@@ -1611,6 +1615,49 @@ export default function MonthlyReviewConsole() {
       setBusyFeedAction("");
     }
   }, [bookkeepingRulePreferences, detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction]);
+
+  const recoverBookkeepingFeedRow = useCallback(async (event, row) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    const transactionId = row?.id || row?.transaction_id;
+    const runId = detail?.run?.id;
+    if (!runId || !selectedBusinessId || !transactionId) {
+      setBookkeepingFeedActionErrors((current) => ({
+        ...current,
+        [transactionId || "recovery"]: "Recovery scope is unavailable. Refresh Monthly Review and try again.",
+      }));
+      return;
+    }
+    const actionId = `recover:${transactionId}`;
+    if (busyFeedActions[actionId]) return;
+    setBusyFeedActions((current) => ({ ...current, [actionId]: true }));
+    setBusyFeedAction(actionId);
+    setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: "" }));
+    try {
+      const outcome = await runMonthlyReviewTransactionRecovery({
+        request: safeFetch,
+        runId,
+        businessId: selectedBusinessId,
+        transactionId,
+        refreshPersistedFeeds: refreshAfterRecovery,
+      });
+      setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: outcome.message }));
+    } catch (e) {
+      const reasonCode = e?.body?.reason_code || e?.body?.error || "";
+      const explanation = e?.body?.message || e?.message || "Could not recover this transaction.";
+      setBookkeepingFeedActionErrors((current) => ({
+        ...current,
+        [transactionId]: reasonCode && !explanation.includes(reasonCode) ? `${explanation} (${reasonCode})` : explanation,
+      }));
+    } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[actionId];
+        return next;
+      });
+      setBusyFeedAction("");
+    }
+  }, [busyFeedActions, detail?.run?.id, refreshAfterRecovery, selectedBusinessId]);
 
   const openManualPostingWorkflow = useCallback((intent, row) => {
     if (!selectedBusinessId || !row?.id) return;
@@ -2481,7 +2528,7 @@ export default function MonthlyReviewConsole() {
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
                   onPost={(row) => openManualPostingWorkflow("post", row)}
                   onRetry={(row) => openManualPostingWorkflow("retry", row)}
-                  onRecover={(row) => runBookkeepingFeedAction("recover", row)}
+                  onRecover={recoverBookkeepingFeedRow}
                   onConfirmCcPaymentMatch={handleMirrorConfirmCreditCardPaymentMatch}
                   onMarkCcPayment={handleMirrorMarkCreditCardPayment}
                   onRejectCcPayment={handleMirrorRejectCreditCardPayment}

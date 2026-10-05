@@ -2044,9 +2044,12 @@ router.post("/runs/:runId/bookkeeping/recover-handled-posting-dispositions", asy
     const { runId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
     const run = await fetchRun(runId);
+    if (!req.body?.business_id || String(req.body.business_id) !== String(run.business_id)) {
+      return res.status(403).json({ ok: false, error: "recovery_business_scope_mismatch", message: "Recovery is limited to the authorized Monthly Review business." });
+    }
     const transactionIds = Array.from(new Set((req.body?.transaction_ids || []).filter(Boolean).map(String)));
-    if (!transactionIds.length || transactionIds.length > 25) {
-      return res.status(400).json({ ok: false, error: "bounded_transaction_selection_required", message: "Select between 1 and 25 transactions to recover." });
+    if (transactionIds.length !== 1) {
+      return res.status(400).json({ ok: false, error: "single_transaction_recovery_required", message: "Select exactly one transaction to recover." });
     }
     for (const transactionId of transactionIds) await assertRunTransactionInSelectedMonth(run, transactionId);
     const result = await recoverHandledPostingDispositions({
@@ -2065,7 +2068,15 @@ router.post("/runs/:runId/bookkeeping/recover-handled-posting-dispositions", asy
       nextValue: result,
       notes: "Ran bounded bookkeeping disposition recovery; no QuickBooks calls were made.",
     }).catch(() => null);
-    return res.json({ ok: true, ...result });
+    const reason = Object.entries(result.reasons || {}).find(([, count]) => Number(count) > 0)?.[0] || null;
+    const outcome = result.scheduled > 0
+      ? "rescheduled"
+      : result.review_required > 0
+        ? "returned_to_needs_review"
+        : result.skipped > 0
+          ? "still_blocked"
+          : "unchanged";
+    return res.json({ ok: true, transaction_id: transactionIds[0], outcome, reason, ...result });
   } catch (error) {
     console.error("[monthly-review] handled posting disposition recovery failed", {
       error_class: error?.code || error?.name || "handled_posting_disposition_recovery_failed",
