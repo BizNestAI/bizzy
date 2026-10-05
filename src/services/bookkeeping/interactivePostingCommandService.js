@@ -248,6 +248,18 @@ export async function createInteractivePostingCommand({
   });
   const requestedIso = nowIso(requestedAt);
   const account = await fetchQboAccount(db, businessId, selectedQboAccountId);
+  if (!account?.qbo_account_id) {
+    const err = new Error("The approved QuickBooks account is unavailable for this business.");
+    err.code = "final_qbo_account_not_found";
+    err.status = 409;
+    throw err;
+  }
+  if (account.active === false) {
+    const err = new Error("The approved QuickBooks account is inactive.");
+    err.code = "final_qbo_account_inactive";
+    err.status = 409;
+    throw err;
+  }
   const snapshot = {
     ...(merchantSnapshot || {}),
     group_snapshot_token: groupSnapshotToken || merchantSnapshot?.group_snapshot_token || null,
@@ -259,7 +271,7 @@ export async function createInteractivePostingCommand({
     command_type: INTERACTIVE_POSTING_COMMAND_TYPE,
     transaction_ids: ids,
     selected_qbo_account_id: String(selectedQboAccountId),
-    selected_qbo_account_name: selectedQboAccountName || account?.name || null,
+    selected_qbo_account_name: account.name || selectedQboAccountName || null,
     selected_qbo_account_type: selectedQboAccountType || account?.account_type || null,
     merchant_snapshot: snapshot,
     expected_row_versions: expectedRowVersions || {},

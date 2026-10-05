@@ -1685,13 +1685,28 @@ export default function MonthlyReviewConsole() {
     }
   }, [busyFeedActions, detail?.run?.id, refreshAfterRecovery, selectedBusinessId]);
 
-  const openManualPostingWorkflow = useCallback((intent, row) => {
+  const openManualPostingWorkflow = useCallback(async (intent, row) => {
     if (!selectedBusinessId || !row?.id) return;
     const actionId = `${intent}:${row.id}`;
     if (busyFeedActions[actionId]) return;
     setBookkeepingFeedActionErrors((current) => ({ ...current, [row.id]: "" }));
-    setManualPostingRequest({ intent, transaction: row });
-  }, [busyFeedActions, selectedBusinessId]);
+    setBusyFeedActions((current) => ({ ...current, [actionId]: true }));
+    setBusyFeedAction(actionId);
+    try {
+      if (!detail?.run?.id) throw new Error("Monthly Review posting context is unavailable.");
+      const response = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(row.id)}/post-qbo-preview`);
+      setManualPostingRequest({ intent, transaction: { ...row, posting_preview: response?.preview || null } });
+    } catch (error) {
+      setBookkeepingFeedActionErrors((current) => ({ ...current, [row.id]: error?.body?.message || error?.message || "Could not prepare a safe QuickBooks posting preview." }));
+    } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[actionId];
+        return next;
+      });
+      setBusyFeedAction("");
+    }
+  }, [busyFeedActions, detail?.run?.id, selectedBusinessId]);
 
   useEffect(() => {
     const selected = manualPostingRequest?.transaction;
@@ -1730,6 +1745,7 @@ export default function MonthlyReviewConsole() {
     return safeFetch(route, {
       method: "POST",
       body: {
+        approved_final_account_id: options.approvedFinalAccountId || null,
         confirm_post_anyway: options.confirmPostAnyway === true,
         duplicate_challenge_id: options.duplicateChallengeId || null,
         duplicate_check_override_token: options.duplicateCheckOverrideToken || null,

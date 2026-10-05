@@ -1,5 +1,6 @@
 import React from "react";
-import { Loader2 } from "lucide-react";
+import { createPortal } from "react-dom";
+import { AlertTriangle, Loader2, X } from "lucide-react";
 import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, TransactionResolutionSelector, incomingDepositMatchState } from "./BookkeepingFeed.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
@@ -162,12 +163,14 @@ function BookkeepingTransactionMirrorRow({
   const [resolutionError, setResolutionError] = React.useState("");
   const [resolutionBusy, setResolutionBusy] = React.useState(false);
   const [duplicateRiskAcknowledged, setDuplicateRiskAcknowledged] = React.useState(false);
+  const [forcePostConfirmationOpen, setForcePostConfirmationOpen] = React.useState(false);
   const displayResolution = recoverOrphanedSplitResolution(resolution, Boolean(loanSplitDraft));
 
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
     setResolution(effectiveTransactionResolution(row));
     setDuplicateRiskAcknowledged(false);
+    setForcePostConfirmationOpen(false);
   }, [initialAccountId, row.id, row.updated_at]);
 
   const persistedQboStatus = deriveMirrorQboPostingStatus(row);
@@ -436,18 +439,7 @@ function BookkeepingTransactionMirrorRow({
               </label>
               <button
                 type="button"
-                onClick={() => {
-                  const candidate = row.qbo_duplicate_candidates?.[0] || {};
-                  const confirmed = globalThis.confirm?.([
-                    "Post to QuickBooks anyway?",
-                    `Bank transaction: ${formatMoney(row.amount)} on ${row.date || "unknown date"}`,
-                    `Destination bank account: ${bankAccountLabel || "unknown"}`,
-                    `Selected GL account: ${selectedAccountName(selectedAccountId, accounts) || selectedAccountId}`,
-                    `Suspected QBO candidate: ${candidate.qbo_entity_type || "Transaction"} ${candidate.qbo_entity_id || "unknown"} · ${candidate.txn_date || "unknown date"} · ${candidate.amount_minor == null ? "unknown amount" : formatMoney(Number(candidate.amount_minor) / 100)}`,
-                    "This candidate will be recorded as a distinct transaction and the durable posting pipeline will run once.",
-                  ].join("\n\n"));
-                  if (confirmed) onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged: true, duplicateOverride: true, postToQboAnyway: true });
-                }}
+                onClick={() => setForcePostConfirmationOpen(true)}
                 disabled={!selectedAccountId || !duplicateRiskAcknowledged || isActionBusy("approve")}
                 className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
               >
@@ -493,7 +485,8 @@ function BookkeepingTransactionMirrorRow({
             <button
               type="button"
               onClick={() => onPost?.(row)}
-              disabled={manualPostBusy || postingAction.posting_eligible === false && postingAction.permitted_action === "post_now"}
+              disabled={selectedChanged || manualPostBusy || postingAction.posting_eligible === false && postingAction.permitted_action === "post_now"}
+              title={selectedChanged ? "Save the selected GL account before posting." : undefined}
               aria-label={`Post ${row.payee || row.vendor || row.description || "transaction"} to QuickBooks`}
               className="inline-flex items-center gap-1 rounded-lg border border-sky-300/20 bg-sky-300/[0.1] px-2 py-1 text-[11px] font-semibold text-sky-100 hover:bg-sky-300/[0.16] disabled:cursor-not-allowed disabled:opacity-45"
             >
@@ -624,7 +617,116 @@ function BookkeepingTransactionMirrorRow({
       }}
       onClose={() => setLoanSplitDraft(null)}
     />
+    <ForcePostConfirmationModal
+      open={forcePostConfirmationOpen}
+      busy={isActionBusy("approve")}
+      row={row}
+      bankAccountLabel={bankAccountLabel}
+      selectedAccountLabel={selectedAccountName(selectedAccountId, accounts) || selectedAccountId}
+      candidate={row.qbo_duplicate_candidates?.[0] || null}
+      onCancel={() => setForcePostConfirmationOpen(false)}
+      onConfirm={() => {
+        setForcePostConfirmationOpen(false);
+        onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged: true, duplicateOverride: true, postToQboAnyway: true });
+      }}
+    />
     </>
+  );
+}
+
+function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selectedAccountLabel, candidate, onCancel, onConfirm }) {
+  const confirmButtonRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const priorOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    confirmButtonRef.current?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === "Escape" && !busy) onCancel?.();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = priorOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, busy, onCancel]);
+
+  if (!open || typeof document === "undefined") return null;
+  const candidateAmount = candidate?.amount_minor == null
+    ? "Amount unavailable"
+    : formatMoney(Number(candidate.amount_minor) / 100);
+
+  return createPortal(
+    <div
+      className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 py-6 backdrop-blur-sm"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onCancel?.();
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`force-post-title-${row.id}`}
+        aria-describedby={`force-post-description-${row.id}`}
+        className="w-full max-w-xl overflow-hidden rounded-2xl border border-amber-300/20 bg-[#0d100f] text-white shadow-[0_30px_100px_rgba(0,0,0,0.8)]"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-5 sm:px-6">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-xl border border-amber-300/20 bg-amber-300/[0.09] p-2.5 text-amber-200">
+              <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/75">Duplicate-risk override</div>
+              <h2 id={`force-post-title-${row.id}`} className="mt-1 text-xl font-semibold tracking-tight">Post to QuickBooks anyway?</h2>
+              <p id={`force-post-description-${row.id}`} className="mt-2 text-sm leading-5 text-white/55">
+                Review the bank transaction and suspected QuickBooks record before posting this as a distinct transaction.
+              </p>
+            </div>
+          </div>
+          <button type="button" onClick={onCancel} disabled={busy} className="rounded-lg p-2 text-white/45 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-40" aria-label="Close confirmation">
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="space-y-3 px-5 py-5 sm:px-6">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <ConfirmationDetail label="Bank transaction" value={`${formatMoney(row.amount)} · ${row.date || "Date unavailable"}`} />
+            <ConfirmationDetail label="Destination account" value={bankAccountLabel || "Account unavailable"} />
+            <ConfirmationDetail label="Selected GL account" value={selectedAccountLabel || "Account unavailable"} />
+            <ConfirmationDetail
+              label="Suspected QBO candidate"
+              value={`${candidate?.qbo_entity_type || "Transaction"} ${candidate?.qbo_entity_id || "ID unavailable"} · ${candidate?.txn_date || "Date unavailable"} · ${candidateAmount}`}
+              tone="warning"
+            />
+          </div>
+          <div className="rounded-xl border border-amber-300/15 bg-amber-300/[0.06] px-4 py-3 text-sm leading-5 text-amber-50/85">
+            The suspected candidate will remain in the audit history as rejected for this bank transaction. Posting will use the existing durable, idempotent posting pipeline.
+          </div>
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 border-t border-white/10 bg-white/[0.02] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+          <button type="button" onClick={onCancel} disabled={busy} className="rounded-xl border border-white/12 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-white/70 transition hover:bg-white/[0.08] disabled:opacity-45">
+            Cancel
+          </button>
+          <button ref={confirmButtonRef} type="button" onClick={onConfirm} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/[0.12] px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-300/[0.18] focus:outline-none focus:ring-2 focus:ring-emerald-300/35 disabled:opacity-45">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+            {busy ? "Requesting post..." : "Post to QuickBooks anyway"}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body
+  );
+}
+
+function ConfirmationDetail({ label, value, tone = "default" }) {
+  return (
+    <div className={`rounded-xl border px-3.5 py-3 ${tone === "warning" ? "border-amber-300/15 bg-amber-300/[0.045]" : "border-white/10 bg-white/[0.035]"}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">{label}</div>
+      <div className="mt-1.5 text-sm font-medium leading-5 text-white/85">{value}</div>
+    </div>
   );
 }
 

@@ -12,6 +12,7 @@ import {
 import { postSingleBookkeepingTransactionNow } from "../../jobs/booksPost.cron.js";
 import { signalInteractivePostingCommandWakeup } from "../../jobs/interactivePostingCommands.worker.js";
 import { requestInteractiveTransactionPosting } from "../../services/bookkeeping/interactivePostingCommandService.js";
+import { buildCanonicalPostingPreview } from "../../services/bookkeeping/canonicalPostingCompiler.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
@@ -2196,6 +2197,15 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
 
     const run = await fetchRun(runId);
     await assertRunTransactionInSelectedMonth(run, transactionId);
+    const preview = await buildCanonicalPostingPreview({ db: supabase, businessId: run.business_id, transactionId });
+    const approvedFinalAccountId = String(req.body?.approved_final_account_id || "").trim();
+    if (!approvedFinalAccountId || approvedFinalAccountId !== String(preview.approved_final_account_id)) {
+      return res.status(409).json({
+        ok: false,
+        error: "posting_preview_account_changed",
+        message: "The approved QuickBooks account changed. Review the refreshed posting preview before posting.",
+      });
+    }
 
     const { data: current, error: catErr } = await supabase
       .from("transaction_categorizations")
@@ -2249,6 +2259,25 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
       ok: false,
       error: e?.code || e?.message || "monthly_review_manual_post_failed",
       message: e?.message || "Could not post transaction to QuickBooks.",
+    });
+  }
+});
+
+router.get("/runs/:runId/transactions/:transactionId/post-qbo-preview", async (req, res) => {
+  try {
+    const { runId, transactionId } = req.params;
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+    const run = await fetchRun(runId);
+    await assertRunTransactionInSelectedMonth(run, transactionId);
+    const preview = await buildCanonicalPostingPreview({ db: supabase, businessId: run.business_id, transactionId });
+    setMonthlyReviewNoStore(res);
+    return res.json({ ok: true, preview });
+  } catch (error) {
+    return res.status(error?.status || 500).json({
+      ok: false,
+      error: error?.code || "posting_preview_failed",
+      message: error?.status ? error.message : "Could not safely compile the QuickBooks posting preview.",
     });
   }
 });

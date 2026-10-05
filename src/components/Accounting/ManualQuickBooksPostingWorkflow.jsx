@@ -16,11 +16,13 @@ function summaryFor(transaction = {}) {
   if (!transaction || typeof transaction !== "object") {
     throw new TypeError("manual_post_transaction_required");
   }
+  const preview = transaction.posting_preview || null;
   return {
     date: transaction.date || "Unknown",
     description: transaction.payee || transaction.vendor || transaction.description || "Transaction",
     amount: amountLabel(transaction.signed_amount ?? transaction.signedAmount ?? transaction.amount),
-    account: transaction.glAccountName || transaction.final_qbo_account_name || transaction.suggestedAccountName || "Unselected",
+    account: preview?.line_gl_account?.name || transaction.final_qbo_account_name || "Unselected",
+    preview,
   };
 }
 
@@ -164,13 +166,13 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
           </div>
         </div>
 
-        {step === "confirm" ? <div className="mt-4 grid grid-cols-[92px_1fr] gap-2 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-sm"><span className="text-slate-500">Date</span><span>{summary.date}</span><span className="text-slate-500">Payee</span><span>{summary.description}</span><span className="text-slate-500">Amount</span><span>{summary.amount}</span><span className="text-slate-500">Resolution</span><span>{summary.account}</span></div> : null}
+        {step === "confirm" ? <div className="mt-4 grid grid-cols-[132px_1fr] gap-2 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-sm"><span className="text-slate-500">QBO entity</span><span>{summary.preview?.entity_type || "Unavailable"}</span><span className="text-slate-500">Date</span><span>{summary.preview?.date || summary.date}</span><span className="text-slate-500">Amount</span><span>{summary.amount}</span><span className="text-slate-500">Destination bank</span><span>{summary.preview?.destination_bank_account?.name || "Unavailable"}</span><span className="text-slate-500">Line GL account</span><span>{summary.account}</span><span className="text-slate-500">Final account ID</span><span className="font-mono text-xs">{summary.preview?.approved_final_account_id || "Unavailable"}</span></div> : null}
         {result?.type === "fuzzy_duplicate" || result?.type === "fuzzy_confirm" ? <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3 text-sm"><div className="font-semibold">{candidate.display_name || candidate.payee_or_memo || "QuickBooks transaction"}</div><div className="mt-1 text-slate-400">{candidate.txn_date || "Unknown date"} · {amountLabel(candidate.amount)} · {candidate.qbo_txn_type} #{candidate.qbo_txn_id}</div><div className="mt-1 text-slate-400">{candidate.source_qbo_account_name || "Unknown source"} → {candidate.destination_qbo_account_name || "Unknown destination"}</div></div> : null}
         {result?.type === "credit_type" ? <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-sm">{summary.description} · {summary.amount}<br /><span className="text-slate-400">Selected account: {summary.account}</span></div> : null}
         {result?.detail ? <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3 text-sm text-amber-50">{result.detail}</div> : null}
 
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          {step === "confirm" ? <><button type="button" onClick={onClose} className="rounded-full border border-white/15 px-4 py-2 text-sm">Cancel</button><button type="button" onClick={() => post()} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-black">Post now</button></> : null}
+          {step === "confirm" ? <><button type="button" onClick={onClose} className="rounded-full border border-white/15 px-4 py-2 text-sm">Cancel</button><button type="button" disabled={!summary.preview?.approved_final_account_id} onClick={() => post({ approvedFinalAccountId: summary.preview.approved_final_account_id })} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-black disabled:opacity-40">Post now</button></> : null}
           {step === "posting" ? <button type="button" disabled className="rounded-full border border-white/10 px-4 py-2 text-sm text-slate-400">Posting…</button> : null}
           {result?.type === "fuzzy_duplicate" ? <><button type="button" onClick={onClose} className="rounded-full border border-white/15 px-4 py-2 text-sm">Cancel</button><button type="button" disabled={!candidate.qbo_txn_id} onClick={linkCandidate} className="rounded-full border border-white/15 px-4 py-2 text-sm disabled:opacity-40">Already in QuickBooks — link transaction</button><button type="button" onClick={() => setResult((value) => ({ ...value, type: "fuzzy_confirm" }))} className="rounded-full bg-amber-300 px-4 py-2 text-sm font-semibold text-black">Different transaction — post anyway</button></> : null}
           {result?.type === "fuzzy_confirm" ? <><button type="button" onClick={() => setResult((value) => ({ ...value, type: "fuzzy_duplicate" }))} className="rounded-full border border-white/15 px-4 py-2 text-sm">Back</button><button type="button" onClick={() => post({ confirmPostAnyway: true, duplicateChallengeId: result.challengeId }, txn)} className="rounded-full bg-rose-300 px-4 py-2 text-sm font-semibold text-black">Confirm duplicate risk and post</button></> : null}

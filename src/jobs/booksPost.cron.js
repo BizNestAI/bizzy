@@ -64,6 +64,7 @@ import {
   clearResolvedPostingTaxonomyMeta,
   taxonomyRequiresBookkeepingPostingReview,
 } from "../services/bookkeeping/postingDecisionAuthority.js";
+import { compileCanonicalDepositPosting } from "../services/bookkeeping/canonicalPostingCompiler.js";
 import { buildCreditCardCreditPayload } from "../services/bookkeeping/creditCardMerchantRefundPayload.js";
 import { businessHasPaidEntitlement, filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 import { processVendorRuleLearningRetryJobs } from "../services/bookkeeping/vendorRuleLearningRetryService.js";
@@ -1965,8 +1966,6 @@ async function postBankOutflowPurchase(item, bankTxn, qbo, mappedAccountId, cate
 }
 
 async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
-  const amount = Math.abs(Number(bankTxn.amount || 0));
-  const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "Bank transaction", requestId);
   const customerRef = getQboEntityRef(bankTxn, "customer");
   if (process.env.NODE_ENV !== "production") {
@@ -1977,27 +1976,16 @@ async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, catego
       attached_to: customerRef ? "deposit" : "none",
     });
   }
-  const buildPayload = (variant = "A") => ({
+  const buildPayload = (variant = "A") => compileCanonicalDepositPosting({
+    bankTransaction: bankTxn,
+    destinationAccount: { id: mappedAccountId, name: null },
+    approvedLineAccount: { id: categoryAccountId, name: item.final_qbo_account_name, active: true },
     requestId,
-    TxnDate: txnDate,
-    PrivateNote: note,
-    DepositToAccountRef: { value: String(mappedAccountId) },
-    Line: [
-      {
-        DetailType: "DepositLineDetail",
-        Amount: amount,
-        Description: lineDescription,
-        DepositLineDetail: {
-          AccountRef: { value: String(categoryAccountId) },
-          ...(customerRef
-            ? variant === "A"
-              ? { Entity: { value: customerRef.value, type: "Customer" } }
-              : { Entity: { Type: "Customer", EntityRef: { value: customerRef.value } } }
-            : {}),
-        },
-      },
-    ],
-  });
+    privateNote: note,
+    lineDescription,
+    customerRef,
+    customerEntityVariant: variant,
+  }).payload;
 
   const attempt = async (payload) => {
     await assertTransactionNotExcluded({ db: supabase, businessId: item.business_id, transactionId: item.transaction_id });
@@ -3350,6 +3338,26 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
     const err = new Error("missing_final_qbo_account");
     err.status = 400;
     throw err;
+  }
+  if (item.final_qbo_account_id && !confirmedSplit) {
+    const { data: approvedAccount, error: approvedAccountError } = await supabase
+      .from("qbo_accounts_cache")
+      .select("qbo_account_id,name,active")
+      .eq("business_id", businessId)
+      .eq("qbo_account_id", String(item.final_qbo_account_id))
+      .maybeSingle();
+    if (approvedAccountError) throw approvedAccountError;
+    if (!approvedAccount?.qbo_account_id) {
+      const err = new Error("final_qbo_account_not_found");
+      err.status = 409;
+      throw err;
+    }
+    if (approvedAccount.active === false) {
+      const err = new Error("final_qbo_account_inactive");
+      err.status = 409;
+      throw err;
+    }
+    item.final_qbo_account_name = approvedAccount.name || item.final_qbo_account_name || null;
   }
 
   try {

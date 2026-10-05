@@ -34,7 +34,9 @@ test("Admin force-post persists the reviewed decision then uses the durable comm
   assert.match(command, /createNewIncomeOverride: command\.merchant_snapshot\?\.force_soft_duplicate_override === true/);
   assert.match(worker, /candidatesForCheck = qboCandidates\.filter/);
   assert.match(ui, /Post to QuickBooks anyway/);
-  assert.match(ui, /globalThis\.confirm/);
+  assert.match(ui, /ForcePostConfirmationModal/);
+  assert.match(ui, /createPortal/);
+  assert.doesNotMatch(ui, /globalThis\.confirm/);
 });
 
 test("hard blocker checks remain before force-post command creation", () => {
