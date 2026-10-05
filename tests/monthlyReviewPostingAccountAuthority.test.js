@@ -13,13 +13,13 @@ test("canonical deposit compiler uses destination bank and approved final line a
   const compiled = compileCanonicalDepositPosting({
     bankTransaction: { date: "2026-06-09", amount: 500, direction: "INFLOW" },
     destinationAccount: { id: "bank-8626", name: "Checking 8626" },
-    approvedLineAccount: { id: "sales-product", name: "Sales of Product Income", active: true },
+    approvedLineAccount: { id: "12", name: "Sales of Product Income", active: true },
     requestId: "stable-request",
   });
   assert.equal(compiled.entity_type, "Deposit");
-  assert.equal(compiled.approved_final_account_id, "sales-product");
+  assert.equal(compiled.approved_final_account_id, "12");
   assert.equal(compiled.payload.DepositToAccountRef.value, "bank-8626");
-  assert.equal(compiled.payload.Line[0].DepositLineDetail.AccountRef.value, "sales-product");
+  assert.equal(compiled.payload.Line[0].DepositLineDetail.AccountRef.value, "12");
   assert.equal(compiled.line_account.name, "Sales of Product Income");
 });
 
@@ -46,4 +46,19 @@ test("MRP preview and post share final-account authority and block unsaved dropd
   assert.match(modal, /preview\?\.line_gl_account\?\.name \|\| transaction\.final_qbo_account_name/);
   assert.doesNotMatch(modal, /transaction\.glAccountName \|\| transaction\.final_qbo_account_name/);
   assert.match(worker, /compileCanonicalDepositPosting/);
+});
+
+test("MRP Post now immediately processes the exact durable operation and exposes polling", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const modal = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
+  assert.match(route, /requestInteractiveTransactionPosting\(\{/);
+  assert.match(route, /runInteractivePostingCommandWorkerOnce\(\{ operationId: result\.operation_id \}\)/);
+  assert.match(route, /getInteractivePostingCommandStatus\(\{/);
+  assert.match(route, /post-qbo-operations\/\$\{encodeURIComponent\(result\.operation_id\)\}/);
+  assert.match(page, /outcome\.response\?\.status_url/);
+  assert.match(page, /operation\?\.outcome === "processing"/);
+  assert.match(modal, /onClose\?\.\(\);\s*await onComplete\?\.\(outcome\)/);
+  assert.match(modal, /<button type="button"/);
+  assert.doesNotMatch(modal, /<button(?! type="button")/);
 });

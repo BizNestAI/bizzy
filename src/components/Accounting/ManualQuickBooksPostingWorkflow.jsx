@@ -67,8 +67,11 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
 
   const finish = useCallback(async (outcome) => {
     if (!mountedRef.current) return;
+    // Close the confirmation before any persisted-feed refresh. Keeping the
+    // selected transaction mounted during a workspace reload caused the same
+    // confirmation dialog to reappear even though its command was accepted.
+    onClose?.();
     await onComplete?.(outcome);
-    if (mountedRef.current) onClose?.();
   }, [onClose, onComplete]);
 
   const post = useCallback(async (options = {}, source = txn) => {
@@ -83,9 +86,24 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
       const rawResponse = postRequest
         ? await postRequest(source, options)
         : await postTransactionToQuickBooks(businessId, source.id, options);
-      const response = rawResponse?.posting_result || rawResponse?.posting_summary || rawResponse;
-      if (response?.accepted === true || response?.status === "accepted") {
+      const response = rawResponse?.outcome ? rawResponse : (rawResponse?.posting_result || rawResponse?.posting_summary || rawResponse);
+      if (response?.outcome === "processing" || response?.accepted === true || response?.status === "accepted") {
         await finish({ type: "queued", response, transaction: source });
+        return;
+      }
+      if (response?.outcome === "reconciliation_required") {
+        if (mountedRef.current) {
+          setResult({ type: "error", title: "QuickBooks reconciliation required", message: response.message || "Bizzi found provider-write evidence that must be reconciled before another attempt.", detail: "No additional QuickBooks request was issued.", transaction: source });
+          setStep("result");
+        }
+        return;
+      }
+      if (response?.outcome === "failed" || response?.ok === false) {
+        if (mountedRef.current) {
+          setResult({ type: "error", title: "QuickBooks did not post this transaction", message: response.message || response.operation?.failure_message || "Posting failed.", detail: response.operation?.failure_code || "Nothing was marked Posted.", transaction: source });
+          setStep("result");
+        }
+        await onComplete?.({ type: "failed", response, transaction: source });
         return;
       }
       if (response?.outcome === "confirmation_required" && response?.reason === "possible_qbo_match") {

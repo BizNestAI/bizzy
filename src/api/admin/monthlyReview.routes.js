@@ -10,8 +10,14 @@ import {
   qboManualAccountCreationErrorResponse,
 } from "../../services/bookkeeping/qboManualAccountCreationService.js";
 import { postSingleBookkeepingTransactionNow } from "../../jobs/booksPost.cron.js";
-import { signalInteractivePostingCommandWakeup } from "../../jobs/interactivePostingCommands.worker.js";
-import { requestInteractiveTransactionPosting } from "../../services/bookkeeping/interactivePostingCommandService.js";
+import {
+  runInteractivePostingCommandWorkerOnce,
+  signalInteractivePostingCommandWakeup,
+} from "../../jobs/interactivePostingCommands.worker.js";
+import {
+  getInteractivePostingCommandStatus,
+  requestInteractiveTransactionPosting,
+} from "../../services/bookkeeping/interactivePostingCommandService.js";
 import { buildCanonicalPostingPreview } from "../../services/bookkeeping/canonicalPostingCompiler.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
@@ -2230,7 +2236,15 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
       auditSource: "monthly_review",
       idempotencyKey: req.get("Idempotency-Key") || null,
     });
-    const wake = signalInteractivePostingCommandWakeup({ operationId: result.operation_id });
+    // The durable command is committed before this call. Explicit Post now must
+    // attempt the exact operation immediately rather than relying on the general
+    // sweep. The worker retains all receipt, lease, compiler and idempotency gates.
+    const execution = await runInteractivePostingCommandWorkerOnce({ operationId: result.operation_id });
+    const operation = await getInteractivePostingCommandStatus({
+      db: supabase,
+      businessId: run.business_id,
+      operationId: result.operation_id,
+    });
 
     await logAuditEvent({
       run,
@@ -2250,9 +2264,28 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
       notes: "Requested durable posting for a selected-month Handled transaction from Monthly Review.",
     }).catch(() => null);
 
-    const summaries = await buildSummaries(run.business_id, run.review_month);
-    await syncRunStatus(runId, summaries);
-    res.status(202).json({ ok: true, transaction_id: transactionId, posting_result: result, worker_wakeup: wake.queued ? "direct_exact_operation" : "periodic_recovery" });
+    const statusUrl = `/api/admin/monthly-review/runs/${encodeURIComponent(runId)}/post-qbo-operations/${encodeURIComponent(result.operation_id)}`;
+    const outcome = operation.state === "posted"
+      ? "posted"
+      : operation.ambiguous
+        ? "reconciliation_required"
+        : operation.terminal
+          ? "failed"
+          : "processing";
+    const httpStatus = outcome === "processing" ? 202 : 200;
+    res.status(httpStatus).json({
+      ok: outcome !== "failed",
+      outcome,
+      transaction_id: transactionId,
+      operation_id: result.operation_id,
+      status_url: statusUrl,
+      posting_result: result,
+      execution,
+      operation,
+      qbo_reference: operation.rows?.[0]?.qbo_txn_id || null,
+      qbo_entity_type: operation.rows?.[0]?.qbo_txn_type || null,
+      message: operation.user_message || (outcome === "processing" ? "Posting is in progress." : "Posting could not be completed."),
+    });
   } catch (e) {
     console.error("[monthly-review] manual post failed", e?.message || e);
     res.status(e?.status || 500).json({
@@ -2260,6 +2293,21 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
       error: e?.code || e?.message || "monthly_review_manual_post_failed",
       message: e?.message || "Could not post transaction to QuickBooks.",
     });
+  }
+});
+
+router.get("/runs/:runId/post-qbo-operations/:operationId", async (req, res) => {
+  try {
+    const { runId, operationId } = req.params;
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    if (!operationId) return res.status(400).json({ ok: false, error: "missing_operation_id" });
+    const run = await fetchRun(runId);
+    const operation = await getInteractivePostingCommandStatus({ db: supabase, businessId: run.business_id, operationId });
+    setMonthlyReviewNoStore(res);
+    const outcome = operation.state === "posted" ? "posted" : operation.ambiguous ? "reconciliation_required" : operation.terminal ? "failed" : "processing";
+    return res.json({ ok: outcome !== "failed", outcome, operation_id: operationId, operation, qbo_reference: operation.rows?.[0]?.qbo_txn_id || null, qbo_entity_type: operation.rows?.[0]?.qbo_txn_type || null, message: operation.user_message });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_operation_status_failed", message: "Could not load the posting operation status." });
   }
 });
 

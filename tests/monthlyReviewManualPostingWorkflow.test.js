@@ -36,7 +36,8 @@ test("Monthly Review manual posting preserves duplicate and credit-type decision
   assert.match(workflow, /match_credit_card_payment/);
   assert.match(workflow, /credit_card_statement_credit/);
   assert.match(route, /requestInteractiveTransactionPosting/);
-  assert.match(route, /signalInteractivePostingCommandWakeup/);
+  assert.match(route, /runInteractivePostingCommandWorkerOnce/);
+  assert.match(route, /getInteractivePostingCommandStatus/);
 });
 
 test("every Monthly Review Handled row renders the shared eligibility action", () => {
@@ -83,12 +84,14 @@ test("Monthly Review never mounts transaction modal content for a null selection
 
 test("Monthly Review closes manual posting safely on cancel, month changes, and stale refetch rows", () => {
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const workflow = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
 
   assert.match(page, /onClose=\{\(\) => setManualPostingRequest\(null\)\}/);
   assert.match(page, /const selectMonth = useCallback[\s\S]*?setManualPostingRequest\(null\)/);
   assert.match(page, /const selectBusiness = useCallback[\s\S]*?setManualPostingRequest\(null\)/);
   assert.match(page, /const stillPresent = \(handled\.rows \|\| \[\]\)\.some/);
   assert.match(page, /if \(!stillPresent && !requestBusy\)/);
+  assert.match(workflow, /onClose\?\.\(\);\s*await onComplete\?\.\(outcome\)/);
 });
 
 test("Monthly Review posting workflow contains malformed rows and active-request unmounts", () => {

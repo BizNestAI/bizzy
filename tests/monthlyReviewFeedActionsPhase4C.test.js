@@ -46,7 +46,8 @@ test("Monthly Review feed handled post uses the durable shared command and block
   assert.match(postBody, /requestInteractiveTransactionPosting\(\{/);
   assert.match(postBody, /businessId:\s*run\.business_id/);
   assert.match(postBody, /transactionId/);
-  assert.match(postBody, /signalInteractivePostingCommandWakeup/);
+  assert.match(postBody, /runInteractivePostingCommandWorkerOnce/);
+  assert.match(postBody, /getInteractivePostingCommandStatus/);
   assert.doesNotMatch(postBody, /auto_post_to_quickbooks|runBooksPostOnce|createQbo|updateQbo|postSingleBookkeepingTransactionNow\(\{/);
 });
 
