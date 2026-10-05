@@ -1,4 +1,5 @@
 import { getAccountingDateFromBankTransaction } from "./accountingDatePolicy.js";
+import crypto from "crypto";
 
 function postingError(code, message, status = 409) {
   const error = new Error(message || code);
@@ -97,7 +98,7 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
     destinationAccount: { id: mapping.qbo_account_id, name: mapping.qbo_account_name },
     approvedLineAccount: { id: approvedAccount.qbo_account_id, name: approvedAccount.name, active: approvedAccount.active },
   });
-  return {
+  const preview = {
     transaction_id: transactionId,
     row_version: item.updated_at || null,
     entity_type: compiled.entity_type,
@@ -107,4 +108,14 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
     amount: compiled.amount,
     date: compiled.date,
   };
+  preview.preview_token = crypto.createHash("sha256").update(JSON.stringify({
+    transaction_id: preview.transaction_id,
+    row_version: preview.row_version,
+    entity_type: preview.entity_type,
+    destination_account_id: preview.destination_bank_account.id,
+    final_account_id: preview.approved_final_account_id,
+    amount: preview.amount,
+    date: preview.date,
+  })).digest("hex");
+  return preview;
 }

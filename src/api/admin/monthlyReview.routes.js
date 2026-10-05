@@ -2204,6 +2204,12 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
     const run = await fetchRun(runId);
     await assertRunTransactionInSelectedMonth(run, transactionId);
     const preview = await buildCanonicalPostingPreview({ db: supabase, businessId: run.business_id, transactionId });
+    if (req.body?.confirmed_execution !== true) {
+      return res.status(400).json({ ok: false, error: "posting_execution_confirmation_required", message: "Confirm the posting preview before posting." });
+    }
+    if (!req.body?.preview_token || String(req.body.preview_token) !== String(preview.preview_token)) {
+      return res.status(409).json({ ok: false, error: "posting_preview_changed", message: "The posting preview changed. Review it again before posting." });
+    }
     const approvedFinalAccountId = String(req.body?.approved_final_account_id || "").trim();
     if (!approvedFinalAccountId || approvedFinalAccountId !== String(preview.approved_final_account_id)) {
       return res.status(409).json({

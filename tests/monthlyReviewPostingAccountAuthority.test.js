@@ -42,6 +42,8 @@ test("MRP preview and post share final-account authority and block unsaved dropd
   assert.match(route, /posting_preview_account_changed/);
   assert.match(page, /posting_preview: response\?\.preview/);
   assert.match(page, /approved_final_account_id: options\.approvedFinalAccountId/);
+  assert.match(page, /confirmed_execution: options\.confirmedExecution === true/);
+  assert.match(page, /preview_token: options\.previewToken/);
   assert.match(table, /disabled=\{selectedChanged \|\| manualPostBusy/);
   assert.match(modal, /preview\?\.line_gl_account\?\.name \|\| transaction\.final_qbo_account_name/);
   assert.doesNotMatch(modal, /transaction\.glAccountName \|\| transaction\.final_qbo_account_name/);
@@ -58,7 +60,8 @@ test("MRP Post now immediately processes the exact durable operation and exposes
   assert.match(route, /post-qbo-operations\/\$\{encodeURIComponent\(result\.operation_id\)\}/);
   assert.match(page, /outcome\.response\?\.status_url/);
   assert.match(page, /operation\?\.outcome === "processing"/);
-  assert.match(modal, /onClose\?\.\(\);\s*await onComplete\?\.\(outcome\)/);
+  assert.match(modal, /onClose\?\.\(\);\s*await onComplete\?\.\(\{ \.\.\.outcome, intent \}\)/);
+  assert.match(page, /finally \{\s*setManualPostingRequest\(null\);\s*if \(transactionId\) setManualPostingBusy/);
   assert.match(modal, /<button type="button"/);
   assert.doesNotMatch(modal, /<button(?! type="button")/);
 });

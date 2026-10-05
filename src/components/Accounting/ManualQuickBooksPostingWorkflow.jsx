@@ -71,8 +71,8 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
     // selected transaction mounted during a workspace reload caused the same
     // confirmation dialog to reappear even though its command was accepted.
     onClose?.();
-    await onComplete?.(outcome);
-  }, [onClose, onComplete]);
+    await onComplete?.({ ...outcome, intent });
+  }, [intent, onClose, onComplete]);
 
   const post = useCallback(async (options = {}, source = txn) => {
     if (!businessId || !source?.id || activeIds.current.has(source.id)) return;
@@ -103,7 +103,7 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
           setResult({ type: "error", title: "QuickBooks did not post this transaction", message: response.message || response.operation?.failure_message || "Posting failed.", detail: response.operation?.failure_code || "Nothing was marked Posted.", transaction: source });
           setStep("result");
         }
-        await onComplete?.({ type: "failed", response, transaction: source });
+        await onComplete?.({ type: "failed", response, transaction: source, intent });
         return;
       }
       if (response?.outcome === "confirmation_required" && response?.reason === "possible_qbo_match") {
@@ -126,7 +126,7 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
         setResult(postingError(error, source));
         setStep("result");
       }
-      if (mountedRef.current) await onComplete?.({ type: "failed", error, transaction: source });
+      if (mountedRef.current) await onComplete?.({ type: "failed", error, transaction: source, intent });
     } finally {
       activeIds.current.delete(source.id);
       if (mountedRef.current) onBusyChange?.(source.id, false, intent);
@@ -190,7 +190,7 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
         {result?.detail ? <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3 text-sm text-amber-50">{result.detail}</div> : null}
 
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          {step === "confirm" ? <><button type="button" onClick={onClose} className="rounded-full border border-white/15 px-4 py-2 text-sm">Cancel</button><button type="button" disabled={!summary.preview?.approved_final_account_id} onClick={() => post({ approvedFinalAccountId: summary.preview.approved_final_account_id })} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-black disabled:opacity-40">Post now</button></> : null}
+          {step === "confirm" ? <><button type="button" onClick={onClose} className="rounded-full border border-white/15 px-4 py-2 text-sm">Cancel</button><button type="button" disabled={!summary.preview?.approved_final_account_id || !summary.preview?.preview_token} onClick={() => post({ approvedFinalAccountId: summary.preview.approved_final_account_id, previewToken: summary.preview.preview_token, confirmedExecution: true })} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-black disabled:opacity-40">Post now</button></> : null}
           {step === "posting" ? <button type="button" disabled className="rounded-full border border-white/10 px-4 py-2 text-sm text-slate-400">Posting…</button> : null}
           {result?.type === "fuzzy_duplicate" ? <><button type="button" onClick={onClose} className="rounded-full border border-white/15 px-4 py-2 text-sm">Cancel</button><button type="button" disabled={!candidate.qbo_txn_id} onClick={linkCandidate} className="rounded-full border border-white/15 px-4 py-2 text-sm disabled:opacity-40">Already in QuickBooks — link transaction</button><button type="button" onClick={() => setResult((value) => ({ ...value, type: "fuzzy_confirm" }))} className="rounded-full bg-amber-300 px-4 py-2 text-sm font-semibold text-black">Different transaction — post anyway</button></> : null}
           {result?.type === "fuzzy_confirm" ? <><button type="button" onClick={() => setResult((value) => ({ ...value, type: "fuzzy_duplicate" }))} className="rounded-full border border-white/15 px-4 py-2 text-sm">Back</button><button type="button" onClick={() => post({ confirmPostAnyway: true, duplicateChallengeId: result.challengeId }, txn)} className="rounded-full bg-rose-300 px-4 py-2 text-sm font-semibold text-black">Confirm duplicate risk and post</button></> : null}

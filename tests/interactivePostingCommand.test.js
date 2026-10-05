@@ -144,6 +144,70 @@ test("one worker owns approval, exact posting, receipt, and terminal state", asy
   assert.equal(status.rows[0].child_operation_id, "qbo-request-1");
 });
 
+test("row-level Post Now accepts an approved income account without merchant expense revalidation", async () => {
+  const db = makeDb();
+  db.store.qbo_accounts_cache.push({
+    business_id: BUSINESS_ID,
+    qbo_account_id: "12",
+    name: "Sales of Product Income",
+    account_type: "Income",
+    active: true,
+  });
+  db.store.transaction_categorizations = [{
+    business_id: BUSINESS_ID,
+    transaction_id: TXN_ID,
+    status: "approved",
+    review_status: "handled",
+    posting_status: "scheduled",
+    final_qbo_account_id: "12",
+    updated_at: "2026-10-05T19:54:52.183675+00:00",
+  }];
+  db.store.bank_transactions = [{
+    id: TXN_ID,
+    business_id: BUSINESS_ID,
+    pending: false,
+    direction: "INFLOW",
+    amount: 500,
+  }];
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "12",
+    transactionIds: [TXN_ID],
+    expectedRowVersions: { [TXN_ID]: "2026-10-05T19:54:52.183675+00:00" },
+    rememberForFuture: false,
+    merchantSnapshot: { audit_source: "monthly_review", requested_action: "post_now" },
+    idempotencyKey: "mobile-deposit-post-now",
+  });
+  let merchantApprovalCalls = 0;
+  let postCalls = 0;
+  const result = await processInteractivePostingCommand({
+    db,
+    operationId: command.operation_id,
+    runApprovalOperation: async () => {
+      merchantApprovalCalls += 1;
+      throw new Error("expense-only approval must not run");
+    },
+    postTransactionNow: async ({ businessId, transactionId }) => {
+      postCalls += 1;
+      db.store.qbo_posted_transactions.push({
+        id: "deposit-receipt",
+        business_id: businessId,
+        transaction_id: transactionId,
+        status: "posted",
+        qbo_txn_id: "qbo-deposit-500",
+        qbo_txn_type: "Deposit",
+        posted_at: "2026-10-05T20:12:21.000Z",
+      });
+      return { ok: true, qbo_txn_id: "qbo-deposit-500", qbo_txn_type: "Deposit", child_operation_id: "stable-request-id" };
+    },
+  });
+  assert.equal(merchantApprovalCalls, 0);
+  assert.equal(postCalls, 1);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.posted_transaction_ids, [TXN_ID]);
+});
+
 test("duplicate worker notifications do not create duplicate postings", async () => {
   const db = makeDb();
   const command = await createInteractivePostingCommand({

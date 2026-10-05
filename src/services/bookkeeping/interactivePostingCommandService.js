@@ -197,6 +197,80 @@ async function fetchQboAccount(db, businessId, selectedQboAccountId) {
   return data || null;
 }
 
+function isDirectTransactionPostCommand(command = {}) {
+  return command.command_type === INTERACTIVE_POSTING_COMMAND_TYPE &&
+    command.remember_for_future === false &&
+    Boolean(command.merchant_snapshot?.requested_action);
+}
+
+async function validateDirectTransactionPost({ db, command, transactionIds = [] } = {}) {
+  const rows = [];
+  for (const transactionId of transactionIds) {
+    let categorization;
+    let bankTransaction;
+    if (db.store) {
+      categorization = (db.store.transaction_categorizations || []).find(
+        (row) => row.business_id === command.business_id && String(row.transaction_id) === String(transactionId)
+      ) || null;
+      bankTransaction = (db.store.bank_transactions || []).find(
+        (row) => row.business_id === command.business_id && String(row.id) === String(transactionId)
+      ) || null;
+    } else {
+      const [categorizationResult, bankResult] = await Promise.all([
+        db.from("transaction_categorizations")
+          .select("transaction_id,business_id,status,review_status,posting_status,final_qbo_account_id,qbo_txn_id,post_after,post_error,meta,updated_at")
+          .eq("business_id", command.business_id)
+          .eq("transaction_id", transactionId)
+          .maybeSingle(),
+        db.from("bank_transactions")
+          .select("id,business_id,pending")
+          .eq("business_id", command.business_id)
+          .eq("id", transactionId)
+          .maybeSingle(),
+      ]);
+      if (categorizationResult.error) throw categorizationResult.error;
+      if (bankResult.error) throw bankResult.error;
+      categorization = categorizationResult.data || null;
+      bankTransaction = bankResult.data || null;
+    }
+    if (!categorization || !bankTransaction) {
+      const error = new Error("transaction_not_found");
+      error.code = "transaction_not_found";
+      throw error;
+    }
+    if (bankTransaction.pending === true || bankTransaction.is_pending === true) {
+      const error = new Error("pending_transaction_not_postable");
+      error.code = "pending_transaction_not_postable";
+      throw error;
+    }
+    if (categorization.qbo_txn_id || String(categorization.status || "").toLowerCase() === "posted") {
+      const error = new Error("transaction_already_posted");
+      error.code = "transaction_already_posted";
+      throw error;
+    }
+    if (String(categorization.final_qbo_account_id || "") !== String(command.selected_qbo_account_id || "")) {
+      const error = new Error("posting_preview_account_changed");
+      error.code = "posting_preview_account_changed";
+      throw error;
+    }
+    const expectedVersion = command.expected_row_versions?.[transactionId];
+    if (expectedVersion && categorization.updated_at && String(expectedVersion) !== String(categorization.updated_at)) {
+      const error = new Error("row_changed");
+      error.code = "row_changed";
+      throw error;
+    }
+    const forceSoftDuplicate = command.merchant_snapshot?.force_soft_duplicate_override === true;
+    const action = deriveBookkeepingPostingAction(categorization);
+    if (!forceSoftDuplicate && (!action.posting_eligible || !["post_now", "retry_posting"].includes(action.permitted_action))) {
+      const error = new Error(action.disabled_reason || "posting_action_not_permitted");
+      error.code = action.safe_failure_classification || "posting_action_not_permitted";
+      throw error;
+    }
+    rows.push({ transaction_id: transactionId, status: "ready_to_post" });
+  }
+  return { ok: true, blocked_count: 0, blocked: [], scheduled: rows };
+}
+
 export async function createInteractivePostingCommand({
   db = null,
   businessId,
@@ -373,6 +447,40 @@ export async function requestInteractiveTransactionPosting({
     expectedRowVersions: { [transactionId]: row.updated_at },
     idempotencyKey: idempotencyKey || `manual-post:${transactionId}:${row.updated_at || "current"}`,
   });
+  // Commands created by the deployed expense-validator defect are safe to
+  // resume under the same idempotency identity only when they failed before a
+  // child/provider operation or receipt existed. This is deliberately limited
+  // to that confirmed pre-provider failure code.
+  const legacyPreProviderFailure = decision.reused === true &&
+    decision.command?.state === INTERACTIVE_COMMAND_STATES.FAILED &&
+    decision.command?.failure_code === "qbo_account_not_eligible" &&
+    Object.keys(decision.command?.child_operations || {}).length === 0 &&
+    (decision.command?.qbo_receipt_ids || []).length === 0;
+  if (legacyPreProviderFailure) {
+    await updateInteractiveCommand({
+      db,
+      operationId: decision.operation_id,
+      states: [INTERACTIVE_COMMAND_STATES.FAILED],
+      patch: {
+        state: INTERACTIVE_COMMAND_STATES.ACCEPTED,
+        stage: INTERACTIVE_COMMAND_STATES.ACCEPTED,
+        stage_started_at: nowIso(),
+        claimed_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        terminal_at: null,
+        next_attempt_at: null,
+        failure_code: null,
+        failure_message: null,
+      },
+    });
+    await appendInteractivePostingCommandEvent({
+      db,
+      operationId: decision.operation_id,
+      event: "legacy_pre_provider_validation_resumed",
+      extra: { prior_failure_code: "qbo_account_not_eligible" },
+    });
+  }
   return {
     ok: true,
     accepted: true,
@@ -658,6 +766,7 @@ export async function processInteractivePostingCommand({
   claimedCommand = null,
   runApprovalOperation = runMerchantBacklogApprovalOperation,
   persistRememberedRule = null,
+  validateTransactionPost = validateDirectTransactionPost,
 } = {}) {
   db ||= await getDefaultSupabase();
   if (!duplicatePreflight && runApprovalOperation === runMerchantBacklogApprovalOperation) {
@@ -682,25 +791,32 @@ export async function processInteractivePostingCommand({
       extra: { queue_wait_ms: Number.isFinite(acceptedAt) ? Math.max(0, Date.now() - acceptedAt) : null },
     });
     command = await setCommandStage({ db, command, state: INTERACTIVE_COMMAND_STATES.PROCESSING, stage: "validation", event: "validation_completed" });
-    const decision = await runApprovalOperation({
-      db,
-      businessId: command.business_id,
-      actorId: command.actor_id,
-      selectedQboAccountId: command.selected_qbo_account_id,
-      // Remembered rules are auxiliary and are persisted only after the
-      // authoritative QBO receipt has been recorded.
-      rememberForFuture: false,
-      groupSnapshotToken: command.merchant_snapshot?.group_snapshot_token || null,
-      transactionIds,
-      exclusionIds: Array.isArray(command.merchant_snapshot?.exclusion_ids) ? command.merchant_snapshot.exclusion_ids : [],
-      expectedRowVersions: command.expected_row_versions || {},
-      idempotencyKey: command.idempotency_key,
-      duplicatePreflight,
-      graceHours: 0,
-      operationId: command.operation_id,
-      interactive: true,
-      correlationId: command.merchant_snapshot?.correlation_id || null,
-    });
+    // A row-level Post Now command is already an approved bookkeeping decision.
+    // Re-running merchant backlog approval here incorrectly applies its
+    // expense-only account policy to valid income deposits. Revalidate the
+    // persisted transaction/account authority, then let the canonical poster
+    // perform the remaining receipt, lease, duplicate, and payload checks.
+    const decision = isDirectTransactionPostCommand(command)
+      ? await validateTransactionPost({ db, command, transactionIds })
+      : await runApprovalOperation({
+        db,
+        businessId: command.business_id,
+        actorId: command.actor_id,
+        selectedQboAccountId: command.selected_qbo_account_id,
+        // Remembered rules are auxiliary and are persisted only after the
+        // authoritative QBO receipt has been recorded.
+        rememberForFuture: false,
+        groupSnapshotToken: command.merchant_snapshot?.group_snapshot_token || null,
+        transactionIds,
+        exclusionIds: Array.isArray(command.merchant_snapshot?.exclusion_ids) ? command.merchant_snapshot.exclusion_ids : [],
+        expectedRowVersions: command.expected_row_versions || {},
+        idempotencyKey: command.idempotency_key,
+        duplicatePreflight,
+        graceHours: 0,
+        operationId: command.operation_id,
+        interactive: true,
+        correlationId: command.merchant_snapshot?.correlation_id || null,
+      });
     await appendInteractivePostingCommandEvent({ db, operationId, event: "decision_saved", extra: { blocked_count: decision.blocked_count || 0 } });
     await appendInteractivePostingCommandEvent({ db, operationId, event: "duplicate_preflight_completed" });
     const blocked = Array.isArray(decision.blocked) ? decision.blocked : [];

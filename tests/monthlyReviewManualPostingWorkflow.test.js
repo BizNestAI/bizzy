@@ -91,7 +91,7 @@ test("Monthly Review closes manual posting safely on cancel, month changes, and 
   assert.match(page, /const selectBusiness = useCallback[\s\S]*?setManualPostingRequest\(null\)/);
   assert.match(page, /const stillPresent = \(handled\.rows \|\| \[\]\)\.some/);
   assert.match(page, /if \(!stillPresent && !requestBusy\)/);
-  assert.match(workflow, /onClose\?\.\(\);\s*await onComplete\?\.\(outcome\)/);
+  assert.match(workflow, /onClose\?\.\(\);\s*await onComplete\?\.\(\{ \.\.\.outcome, intent \}\)/);
 });
 
 test("Monthly Review posting workflow contains malformed rows and active-request unmounts", () => {

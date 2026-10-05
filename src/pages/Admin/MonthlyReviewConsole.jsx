@@ -1733,28 +1733,34 @@ export default function MonthlyReviewConsole() {
 
   const completeManualPostingWorkflow = useCallback(async (outcome) => {
     const transactionId = outcome?.transaction?.id;
-    if (outcome?.type === "failed" && outcome.transaction?.id) {
-      const message = outcome.response?.message || outcome.error?.body?.message || outcome.error?.message || "QuickBooks did not post this transaction.";
-      setBookkeepingFeedActionErrors((current) => ({ ...current, [outcome.transaction.id]: message }));
-    }
-    if (outcome?.type === "queued" && outcome.response?.status_url && transactionId) {
-      setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: "Posting to QuickBooks…" }));
-      let operation = outcome.response;
-      for (let attempt = 0; attempt < 60 && operation?.outcome === "processing"; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        operation = await safeFetch(outcome.response.status_url, { cache: "no-store" });
+    const intent = outcome?.intent || "post";
+    try {
+      if (outcome?.type === "failed" && outcome.transaction?.id) {
+        const message = outcome.response?.message || outcome.error?.body?.message || outcome.error?.message || "QuickBooks did not post this transaction.";
+        setBookkeepingFeedActionErrors((current) => ({ ...current, [outcome.transaction.id]: message }));
       }
-      const message = operation?.outcome === "posted"
-        ? `Posted to QuickBooks${operation.qbo_entity_type ? ` as ${operation.qbo_entity_type}` : ""}${operation.qbo_reference ? ` ${operation.qbo_reference}` : ""}.`
-        : operation?.outcome === "reconciliation_required"
-          ? "QuickBooks reconciliation is required before another posting attempt."
-          : operation?.outcome === "failed"
-            ? operation?.message || operation?.operation?.failure_message || "QuickBooks did not post this transaction."
-            : "Posting is still in progress. Refresh Monthly Review to check its durable operation.";
-      setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: message }));
+      if (outcome?.type === "queued" && outcome.response?.status_url && transactionId) {
+        setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: "Posting to QuickBooks…" }));
+        let operation = outcome.response;
+        for (let attempt = 0; attempt < 60 && operation?.outcome === "processing"; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          operation = await safeFetch(outcome.response.status_url, { cache: "no-store" });
+        }
+        const message = operation?.outcome === "posted"
+          ? `Posted to QuickBooks${operation.qbo_entity_type ? ` as ${operation.qbo_entity_type}` : ""}${operation.qbo_reference ? ` ${operation.qbo_reference}` : ""}.`
+          : operation?.outcome === "reconciliation_required"
+            ? "QuickBooks reconciliation is required before another posting attempt."
+            : operation?.outcome === "failed"
+              ? operation?.message || operation?.operation?.failure_message || "QuickBooks did not post this transaction."
+              : "Posting is still in progress. Refresh Monthly Review to check its durable operation.";
+        setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: message }));
+      }
+      await refreshAfterFeedAction();
+    } finally {
+      setManualPostingRequest(null);
+      if (transactionId) setManualPostingBusy(transactionId, false, intent);
     }
-    await refreshAfterFeedAction();
-  }, [refreshAfterFeedAction]);
+  }, [refreshAfterFeedAction, setManualPostingBusy]);
 
   const monthlyReviewManualPostRequest = useCallback(async (row, options = {}) => {
     if (!detail?.run?.id || !row?.id) throw new Error("Monthly Review posting context is unavailable.");
@@ -1762,6 +1768,8 @@ export default function MonthlyReviewConsole() {
     return safeFetch(route, {
       method: "POST",
       body: {
+        confirmed_execution: options.confirmedExecution === true,
+        preview_token: options.previewToken || null,
         approved_final_account_id: options.approvedFinalAccountId || null,
         confirm_post_anyway: options.confirmPostAnyway === true,
         duplicate_challenge_id: options.duplicateChallengeId || null,
