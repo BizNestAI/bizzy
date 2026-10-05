@@ -22,6 +22,7 @@ import {
   createInteractivePostingCommand,
   getInteractivePostingCommandStatus,
   reconcileInteractivePostingCommandFromReceipts,
+  requestInteractiveTransactionPosting,
 } from "../../../services/bookkeeping/interactivePostingCommandService.js";
 import { assertTaxBusinessAccess } from "../../tax/taxRouteUtils.js";
 import { getQBOClient } from "../../../utils/qboClient.js";
@@ -762,11 +763,17 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
       req.body?.post_anyway === true ||
       req.body?.confirmPostAnyway === true;
     const duplicateChallengeId = req.body?.duplicate_challenge_id || req.body?.duplicateChallengeId || null;
-    const result = manualDuplicateOverride
-      ? await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride, operationId, childOperationId })
-      : await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, duplicateChallengeId, operationId, childOperationId });
+    const result = await requestInteractiveTransactionPosting({
+      db: supabase,
+      businessId,
+      transactionId,
+      actorId: userId,
+      auditSource: "books_review",
+      idempotencyKey: req.get("Idempotency-Key") || operationId || null,
+    });
+    const wake = signalInteractivePostingCommandWakeup({ operationId: result.operation_id, correlationId: operationId || null });
     console.info("[bookkeeping][manual-post] response serialized", { operationId, childOperationId, transactionId, totalServerMs: Date.now() - requestStartedAt, outcome: result?.outcome || result?.status || (result?.already_posted ? "already_posted" : "complete") });
-    return res.json(result);
+    return res.status(202).json({ ...result, worker_wakeup: wake.queued ? "direct_exact_operation" : "periodic_recovery" });
   } catch (err) {
     const referenceId = err?.qbo_request_id || err?.child_operation_id || null;
     const normalizedError = err?.postingError

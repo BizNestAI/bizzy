@@ -12,6 +12,7 @@ import {
   isQboCreditCardAccount,
 } from "../../services/bookkeeping/creditCardPaymentStatus.js";
 import { formatQboPostingSchedule } from "../../services/bookkeeping/qboPostingLifecycle.js";
+import { deriveBookkeepingPostingAction } from "../../services/bookkeeping/bookkeepingPostingActionEligibility.js";
 import { detectProcessorSettlementActivity } from "../../services/bookkeeping/processorSettlementProfiles.js";
 import { formatNumericCalendarDate } from "../../utils/dateUtils.js";
 import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
@@ -1508,7 +1509,21 @@ export default function BookkeepingFeed({
             const showCanonicalCoa = ["needs_review", "handled"].includes(String(activeFeed || "").toLowerCase()) && !isPending && !isPosted;
             const coaEditingProtected = effectiveResolution === "match_credit_card_payment" || Boolean(ccWorkflowStatus || ccTransferLabel);
             const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly && (!selectableIds || selectableIds.has(txn.id));
-            const adminPostingRetryEligible = !adminBookkeepingAccess || Boolean(txn.post_error || txn.postError);
+            const postingAction = txn.posting_action || deriveBookkeepingPostingAction(txn);
+            const postingActionEnabled = postingAction.posting_eligible === true || postingAction.permitted_action === "confirm_type";
+            const postingActionLabel = postingAction.permitted_action === "retry_posting"
+              ? "Retry posting"
+              : postingAction.permitted_action === "confirm_type"
+                ? "Confirm type"
+                : postingAction.permitted_action === "posting"
+                  ? "Posting…"
+                  : postingAction.permitted_action === "reconciling"
+                    ? "Reconciling…"
+                    : postingAction.permitted_action === "fix_issue"
+                      ? "Fix issue"
+                      : postingAction.permitted_action === "review"
+                        ? "Review"
+                        : "Post now";
 
             return (
               <React.Fragment key={txn.id}>
@@ -1781,13 +1796,13 @@ export default function BookkeepingFeed({
                     </button>
                     <button
                       className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-100/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-emerald-300/65 hover:bg-emerald-500/16 disabled:cursor-not-allowed disabled:opacity-45"
-                      disabled={readOnly || isPosting || incomingMatchAction.loading === true || !adminPostingRetryEligible}
+                      disabled={readOnly || isPosting || incomingMatchAction.loading === true || !postingActionEnabled}
                       onClick={() => {
-                        if (readOnly || isPosting || !adminPostingRetryEligible) return;
+                        if (readOnly || isPosting || !postingActionEnabled) return;
                         onManualPost?.(txn.id);
                       }}
-                      title={adminBookkeepingAccess && !adminPostingRetryEligible ? "Admin Bookkeeping Access can retry failed postings, but cannot start a new manual post." : undefined}
-                      aria-label={adminBookkeepingAccess ? "Retry failed QuickBooks posting" : "Post to QuickBooks"}
+                      title={postingAction.disabled_reason || undefined}
+                      aria-label={postingActionLabel}
                     >
                       <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
                       {isPosting || incomingMatchAction.loading === true ? (
@@ -1799,7 +1814,7 @@ export default function BookkeepingFeed({
                             <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "240ms" }}>.</span>
                           </span>
                         </span>
-                      ) : adminBookkeepingAccess ? "Retry" : "Post"}
+                      ) : postingActionLabel}
                     </button>
                   </div>
                 ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (

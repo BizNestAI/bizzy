@@ -8,6 +8,7 @@ import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason, isUncon
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import { deriveMonthlyReviewActionState } from "../../services/bookkeeping/monthlyReviewActionState.js";
+import { deriveBookkeepingPostingAction } from "../../services/bookkeeping/bookkeepingPostingActionEligibility.js";
 import {
   deriveCreditCardPaymentOrientation,
   deriveResolutionAwareCreditCardPaymentStatus,
@@ -34,6 +35,7 @@ export default function BookkeepingTransactionMirrorTable({
   onReclassify,
   onPost,
   onRetry,
+  onRecover,
   onConfirmCcPaymentMatch,
   onMarkCcPayment,
   onRejectCcPayment,
@@ -88,6 +90,7 @@ export default function BookkeepingTransactionMirrorTable({
             onReclassify={onReclassify}
             onPost={onPost}
             onRetry={onRetry}
+            onRecover={onRecover}
             onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
             onMarkCcPayment={onMarkCcPayment}
             onRejectCcPayment={onRejectCcPayment}
@@ -126,6 +129,7 @@ function BookkeepingTransactionMirrorRow({
   onReclassify,
   onPost,
   onRetry,
+  onRecover,
   onConfirmCcPaymentMatch,
   onMarkCcPayment,
   onRejectCcPayment,
@@ -171,6 +175,7 @@ function BookkeepingTransactionMirrorRow({
   const isHandledFeed = feedStatus === "handled";
   const isActionBusy = (action) => Boolean(busyActions?.[`${action}:${row.id}`]) || busyAction === `${action}:${row.id}`;
   const manualPostBusy = isActionBusy("post") || isActionBusy("retry");
+  const postingAction = row.posting_action || deriveBookkeepingPostingAction(row);
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const hasFinalAccount = Boolean(row.final_qbo_account_id || row.finalQboAccountId);
@@ -456,29 +461,64 @@ function BookkeepingTransactionMirrorRow({
           {displayResolution === "split_transaction" ? (
             <span className="text-[11px] text-amber-100/80">Split review</span>
           ) : null}
-          {isHandledFeed && !isFailed ? (
+          {isHandledFeed && ["post_now", "confirm_type"].includes(postingAction.permitted_action) ? (
             <button
               type="button"
               onClick={() => onPost?.(row)}
-              disabled={manualPostBusy}
+              disabled={manualPostBusy || postingAction.posting_eligible === false && postingAction.permitted_action === "post_now"}
               aria-label={`Post ${row.payee || row.vendor || row.description || "transaction"} to QuickBooks`}
               className="inline-flex items-center gap-1 rounded-lg border border-sky-300/20 bg-sky-300/[0.1] px-2 py-1 text-[11px] font-semibold text-sky-100 hover:bg-sky-300/[0.16] disabled:cursor-not-allowed disabled:opacity-45"
             >
               {manualPostBusy ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
-              {manualPostBusy ? "Posting…" : "Post"}
+              {manualPostBusy ? "Posting…" : postingAction.permitted_action === "confirm_type" ? "Confirm type" : "Post now"}
             </button>
           ) : null}
-          {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && isFailed && qboStatus.retryable === true ? (
+          {isHandledFeed && postingAction.permitted_action === "retry_posting" ? (
             <button
               type="button"
               onClick={() => onRetry?.(row)}
               disabled={isActionBusy("retry")}
               className="rounded-lg border border-amber-300/20 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-300/[0.16] disabled:opacity-45"
             >
-              {isActionBusy("retry") ? "Retrying..." : "Retry QBO"}
+              {isActionBusy("retry") ? "Retrying..." : "Retry posting"}
+            </button>
+          ) : null}
+          {isHandledFeed && postingAction.permitted_action === "refresh_match_check" ? (
+            <button
+              type="button"
+              onClick={() => onInspectIncomingDepositMatch?.(row.id, null, row)}
+              disabled={isActionBusy("match")}
+              className="rounded-lg border border-amber-300/20 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 disabled:opacity-45"
+            >Refresh match check</button>
+          ) : null}
+          {isHandledFeed && ["review", "fix_issue", "posting", "reconciling", "completed"].includes(postingAction.permitted_action) ? (
+            <button
+              type="button"
+              disabled
+              title={postingAction.disabled_reason || qboStatus.detail || "No posting action is available."}
+              className="rounded-lg border border-white/12 bg-white/[0.05] px-2 py-1 text-[11px] font-semibold text-white/55 disabled:cursor-not-allowed"
+            >
+              {{ review: "Review", fix_issue: "Fix issue", posting: "Posting…", reconciling: "Reconciling…", completed: isPosted ? "Posted" : "Matched" }[postingAction.permitted_action]}
+            </button>
+          ) : null}
+          {isHandledFeed && ["review", "fix_issue"].includes(postingAction.permitted_action) ? (
+            <button
+              type="button"
+              onClick={() => onRecover?.(row)}
+              disabled={isActionBusy("recover")}
+              title="Re-evaluate this transaction's local posting disposition without contacting QuickBooks."
+              className="rounded-lg border border-violet-300/20 bg-violet-300/[0.1] px-2 py-1 text-[11px] font-semibold text-violet-100 hover:bg-violet-300/[0.16] disabled:opacity-45"
+            >
+              {isActionBusy("recover") ? "Recovering…" : "Recover state"}
             </button>
           ) : null}
         </div>
+        {isHandledFeed && postingAction.disabled_reason ? (
+          <details className="mt-1 text-[10px] text-white/45">
+            <summary className="cursor-pointer">Why this action?</summary>
+            <div className="mt-1 rounded-md border border-white/10 bg-black/20 px-2 py-1.5">{postingAction.disabled_reason}</div>
+          </details>
+        ) : null}
         {rowError ? (
           <div className="mt-1 rounded-lg border border-amber-300/18 bg-amber-300/[0.08] px-2 py-1 text-[11px] text-amber-100">
             {rowError}

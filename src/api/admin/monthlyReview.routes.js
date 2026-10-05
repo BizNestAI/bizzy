@@ -10,6 +10,8 @@ import {
   qboManualAccountCreationErrorResponse,
 } from "../../services/bookkeeping/qboManualAccountCreationService.js";
 import { postSingleBookkeepingTransactionNow } from "../../jobs/booksPost.cron.js";
+import { signalInteractivePostingCommandWakeup } from "../../jobs/interactivePostingCommands.worker.js";
+import { requestInteractiveTransactionPosting } from "../../services/bookkeeping/interactivePostingCommandService.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
@@ -2042,10 +2044,16 @@ router.post("/runs/:runId/bookkeeping/recover-handled-posting-dispositions", asy
     const { runId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
     const run = await fetchRun(runId);
+    const transactionIds = Array.from(new Set((req.body?.transaction_ids || []).filter(Boolean).map(String)));
+    if (!transactionIds.length || transactionIds.length > 25) {
+      return res.status(400).json({ ok: false, error: "bounded_transaction_selection_required", message: "Select between 1 and 25 transactions to recover." });
+    }
+    for (const transactionId of transactionIds) await assertRunTransactionInSelectedMonth(run, transactionId);
     const result = await recoverHandledPostingDispositions({
       db: supabase,
       businessId: run.business_id,
-      limit: req.body?.limit,
+      transactionIds,
+      limit: transactionIds.length,
       graceHours: Number(process.env.BOOKS_POST_GRACE_HOURS || 24),
     });
     await logAuditEvent({
@@ -2094,24 +2102,15 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
       return res.status(409).json({ ok: false, error: "transaction_not_handled", message: "Only handled transactions can be manually posted to QuickBooks." });
     }
 
-    const confirmPostAnyway =
-      req.body?.confirm_post_anyway === true ||
-      req.body?.post_anyway === true ||
-      req.body?.confirmPostAnyway === true;
-    const result = await postSingleBookkeepingTransactionNow({
+    const result = await requestInteractiveTransactionPosting({
+      db: supabase,
       businessId: run.business_id,
       transactionId,
-      confirmPostAnyway,
-      duplicateChallengeId: req.body?.duplicate_challenge_id || req.body?.duplicateChallengeId || null,
+      actorId: req.user?.id || req.user?.sub || null,
+      auditSource: "monthly_review",
+      idempotencyKey: req.get("Idempotency-Key") || null,
     });
-    if (result?.ok === false) {
-      return res.status(result?.status || 409).json({
-        ok: false,
-        error: result?.error || "monthly_review_manual_post_failed",
-        message: result?.message || result?.error || "QuickBooks posting did not complete.",
-        result,
-      });
-    }
+    const wake = signalInteractivePostingCommandWakeup({ operationId: result.operation_id });
 
     await logAuditEvent({
       run,
@@ -2126,14 +2125,14 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
       },
       nextValue: {
         transaction_id: transactionId,
-        posting_result: result,
+        posting_request: result,
       },
-      notes: "Manually pushed selected-month handled transaction to QuickBooks from Monthly Review.",
+      notes: "Requested durable posting for a selected-month Handled transaction from Monthly Review.",
     }).catch(() => null);
 
     const summaries = await buildSummaries(run.business_id, run.review_month);
     await syncRunStatus(runId, summaries);
-    res.json({ ok: true, transaction_id: transactionId, posting_result: result });
+    res.status(202).json({ ok: true, transaction_id: transactionId, posting_result: result, worker_wakeup: wake.queued ? "direct_exact_operation" : "periodic_recovery" });
   } catch (e) {
     console.error("[monthly-review] manual post failed", e?.message || e);
     res.status(e?.status || 500).json({

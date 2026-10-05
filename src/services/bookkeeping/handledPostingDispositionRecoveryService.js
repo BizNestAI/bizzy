@@ -25,14 +25,15 @@ function independentBlockReason(row = {}, bank = {}) {
   return null;
 }
 
-async function loadCandidates(db, businessId, limit) {
-  const { data, error } = await db
+async function loadCandidates(db, businessId, limit, transactionIds = []) {
+  let query = db
     .from("transaction_categorizations")
     .select("transaction_id,business_id,status,reason,final_qbo_account_id,final_qbo_account_name,post_after,post_error,last_post_attempt_at,meta,qbo_txn_id,updated_at")
     .eq("business_id", businessId)
     .in("status", HANDLED_STATUSES)
-    .is("qbo_txn_id", null)
-    .limit(limit);
+    .is("qbo_txn_id", null);
+  if (transactionIds.length) query = query.in("transaction_id", transactionIds);
+  const { data, error } = await query.limit(limit);
   if (error) throw error;
   return (data || []).filter((row) => !row.post_after || row.post_error || row.meta?.safe_to_auto_post !== true);
 }
@@ -72,9 +73,11 @@ export async function recoverHandledPostingDispositions({
   limit = 100,
   graceHours = 24,
   nowMs = Date.now(),
+  transactionIds = [],
 } = {}) {
   if (!db || !businessId) throw new Error("business_id_required");
-  const boundedLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
+  const selectedIds = Array.from(new Set((transactionIds || []).filter(Boolean).map(String))).slice(0, 25);
+  const boundedLimit = selectedIds.length || Math.max(1, Math.min(Number(limit) || 25, 25));
   const result = {
     business_id: businessId,
     examined: 0,
@@ -86,7 +89,7 @@ export async function recoverHandledPostingDispositions({
     reasons: {},
   };
   const policy = await getAutoPostPolicy(db, businessId);
-  const rows = await loadCandidates(db, businessId, boundedLimit);
+  const rows = await loadCandidates(db, businessId, boundedLimit, selectedIds);
   const bankById = await loadBankRows(db, businessId, rows.map((row) => row.transaction_id));
   const reevaluation = await reEvaluateAutoPostBacklog({
     db,

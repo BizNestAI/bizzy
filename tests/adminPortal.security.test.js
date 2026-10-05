@@ -163,7 +163,7 @@ test("CORS allows admin origin without wildcarding random production origins", (
   assert.match(allowlistBody, /"https:\/\/admin\.bizzios\.com"/);
   assert.doesNotMatch(allowlistBody, /"https:\/\/evil\.example\.com"/);
   assert.doesNotMatch(allowlistBody, /"\*"/);
-  assert.match(server, /"Content-Type", "Authorization", "x-data-mode", "x-debug", "x-user-id", "x-business-id"/);
+  assert.match(server, /"Content-Type", "Authorization", "x-data-mode", "x-user-id", "x-business-id", "x-bizzi-admin-view"/);
 });
 
 test("application surface and admin route targets split production and localhost paths", () => {

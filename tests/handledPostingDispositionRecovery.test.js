@@ -15,7 +15,9 @@ test("automatic Handled writes persist posting safety with the final account and
 
 test("bounded recovery is business scoped, CAS guarded, and never invokes QuickBooks", () => {
   const source = read("src/services/bookkeeping/handledPostingDispositionRecoveryService.js");
-  assert.match(source, /Math\.min\(Number\(limit\) \|\| 100, 500\)/);
+  assert.match(source, /slice\(0, 25\)/);
+  assert.match(source, /Math\.min\(Number\(limit\) \|\| 25, 25\)/);
+  assert.match(source, /query = query\.in\("transaction_id", transactionIds\)/);
   assert.match(source, /\.eq\("business_id", businessId\)/);
   assert.match(source, /\.eq\("updated_at", updatedAt\)/);
   assert.match(source, /active_operation/);
@@ -61,5 +63,7 @@ test("Admin recovery endpoint delegates to the shared database-only service", ()
   const route = read("src/api/admin/monthlyReview.routes.js");
   assert.match(route, /recover-handled-posting-dispositions/);
   assert.match(route, /recoverHandledPostingDispositions/);
+  assert.match(route, /bounded_transaction_selection_required/);
+  assert.match(route, /assertRunTransactionInSelectedMonth\(run, transactionId\)/);
   assert.match(route, /No QuickBooks writes were attempted/);
 });

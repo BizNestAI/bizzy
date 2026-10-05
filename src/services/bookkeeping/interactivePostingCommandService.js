@@ -5,6 +5,7 @@ import {
   markMerchantBacklogApprovalOperationFailed,
   persistMerchantApprovalVendorRule,
 } from "./autoPostControl.js";
+import { deriveBookkeepingPostingAction } from "./bookkeepingPostingActionEligibility.js";
 
 export const INTERACTIVE_POSTING_COMMAND_TYPE = "interactive_transaction_post";
 export const INTERACTIVE_COMMAND_STATES = Object.freeze({
@@ -301,6 +302,67 @@ export async function createInteractivePostingCommand({
   await appendInteractivePostingCommandEvent({ db, operationId, event: "command_committed", at: requestedIso });
   await appendInteractivePostingCommandEvent({ db, operationId, event: "worker_notified", at: new Date() });
   return { ok: true, reused: false, command: data, operation_id: operationId };
+}
+
+export async function requestInteractiveTransactionPosting({
+  db = null,
+  businessId,
+  transactionId,
+  actorId = null,
+  auditSource = "books_review",
+  idempotencyKey = null,
+} = {}) {
+  db ||= await getDefaultSupabase();
+  if (!businessId || !transactionId) {
+    const error = new Error("missing_posting_scope");
+    error.code = "missing_posting_scope";
+    error.status = 400;
+    throw error;
+  }
+  const { data: row, error: rowError } = await db
+    .from("transaction_categorizations")
+    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id,decided_by,updated_at")
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .maybeSingle();
+  if (rowError) throw rowError;
+  if (!row) {
+    const error = new Error("transaction_not_found");
+    error.code = "transaction_not_found";
+    error.status = 404;
+    throw error;
+  }
+  const action = deriveBookkeepingPostingAction(row);
+  if (!["post_now", "retry_posting"].includes(action.permitted_action) || action.posting_eligible !== true) {
+    const error = new Error(action.disabled_reason || "posting_action_not_permitted");
+    error.code = action.safe_failure_classification || "posting_action_not_permitted";
+    error.status = 409;
+    error.postingAction = action;
+    throw error;
+  }
+  await assertInteractivePostingCommandSchema({ db });
+  const decision = await createInteractivePostingCommand({
+    db,
+    businessId,
+    actorId,
+    selectedQboAccountId: row.final_qbo_account_id,
+    selectedQboAccountName: row.final_qbo_account_name,
+    merchantSnapshot: { audit_source: auditSource, requested_action: action.permitted_action },
+    rememberForFuture: false,
+    transactionIds: [transactionId],
+    expectedRowVersions: { [transactionId]: row.updated_at },
+    idempotencyKey: idempotencyKey || `manual-post:${transactionId}:${row.updated_at || "current"}`,
+  });
+  return {
+    ok: true,
+    accepted: true,
+    status: "accepted",
+    operation_id: decision.operation_id,
+    reused: decision.reused === true,
+    transaction_id: transactionId,
+    prior_state: row.status,
+    posting_action: action,
+  };
 }
 
 export async function assertInteractivePostingCommandSchema({ db = null } = {}) {

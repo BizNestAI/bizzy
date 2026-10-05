@@ -82,6 +82,10 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
         ? await postRequest(source, options)
         : await postTransactionToQuickBooks(businessId, source.id, options);
       const response = rawResponse?.posting_result || rawResponse?.posting_summary || rawResponse;
+      if (response?.accepted === true || response?.status === "accepted") {
+        await finish({ type: "queued", response, transaction: source });
+        return;
+      }
       if (response?.outcome === "confirmation_required" && response?.reason === "possible_qbo_match") {
         if (mountedRef.current) {
           setResult({ type: "fuzzy_duplicate", title: "Possible QuickBooks match", transaction: source, posting: response.transaction || {}, candidates: response.candidates || (response.candidate ? [response.candidate] : []), challengeId: response.challenge_id || null });

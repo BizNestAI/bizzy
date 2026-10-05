@@ -16,10 +16,9 @@ test("Monthly Review exposes first-attempt and retry manual posting through the 
   assert.match(page, /openManualPostingWorkflow\("post", row\)/);
   assert.match(page, /openManualPostingWorkflow\("retry", row\)/);
   assert.match(page, /postRequest=\{monthlyReviewManualPostRequest\}/);
-  assert.match(table, /Retry QBO/);
-  assert.match(table, /manualPostBusy \? "Posting…" : "Post"/);
-  assert.match(table, /\{isHandledFeed \? \(\s*<button[\s\S]*?onClick=\{\(\) => onPost\?\.\(row\)\}/);
-  assert.doesNotMatch(table, /!isQueued \? \(/);
+  assert.match(table, /Retry posting/);
+  assert.match(table, /postingAction\.permitted_action/);
+  assert.match(table, /onClick=\{\(\) => onPost\?\.\(row\)\}/);
   assert.match(workflow, /activeIds\.current\.has\(source\.id\)/);
   assert.match(workflow, /Posting…/);
 });
@@ -36,39 +35,38 @@ test("Monthly Review manual posting preserves duplicate and credit-type decision
   assert.match(workflow, /merchant_refund/);
   assert.match(workflow, /match_credit_card_payment/);
   assert.match(workflow, /credit_card_statement_credit/);
-  assert.match(route, /duplicateChallengeId:\s*req\.body\?\.duplicate_challenge_id/);
+  assert.match(route, /requestInteractiveTransactionPosting/);
+  assert.match(route, /signalInteractivePostingCommandWakeup/);
 });
 
-test("every Monthly Review Handled row keeps the shared manual Post action", () => {
+test("every Monthly Review Handled row renders the shared eligibility action", () => {
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   assert.match(table, /getProtectedWorkflowReason\(row\)/);
-  const postAction = table.slice(table.indexOf("{isHandledFeed ? ("), table.indexOf("{isHandledFeed && resolution", table.indexOf("{isHandledFeed ? (")));
-  assert.match(postAction, /onPost\?\.\(row\)/);
-  assert.match(postAction, /disabled=\{manualPostBusy\}/);
-  assert.doesNotMatch(postAction, /genericActionsBlocked|isPending|isPosted|isFailed|resolution ===/);
+  assert.match(table, /row\.posting_action \|\| deriveBookkeepingPostingAction\(row\)/);
+  assert.match(table, /onPost\?\.\(row\)/);
+  assert.match(table, /postingAction\.disabled_reason/);
   assert.match(table, /\{genericActionsBlocked \? \(/);
-  assert.match(table, /Retry QBO/);
+  assert.match(table, /Retry posting/);
 });
 
-test("Handled Post remains visible for every lifecycle and protected-workflow fixture", () => {
+test("Handled action matrix keeps completion or resolution controls visible", () => {
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
-  const postAction = table.slice(table.indexOf("{isHandledFeed ? ("), table.indexOf("{isHandledFeed && resolution", table.indexOf("{isHandledFeed ? (")));
-  const fixtures = [
-    "waiting_to_post",
-    "posting_failed",
-    "auto_approved",
-    "match_check_unavailable",
-    "duplicate_candidate",
-    "credit_card_inflow",
-    "merchant_refund",
-    "statement_credit",
-    "credit_card_payment",
-  ];
-
-  for (const fixture of fixtures) {
-    assert.match(postAction, /\{isHandledFeed \? \(/, `${fixture} must retain Post in the Handled feed`);
+  for (const label of ["Post now", "Retry posting", "Confirm type", "Refresh match check", "Fix issue", "Review", "Posting…", "Reconciling…"]) {
+    assert.match(table, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${label} must be represented`);
   }
-  assert.match(postAction, /\{manualPostBusy \? "Posting…" : "Post"\}/);
+});
+
+test("Monthly Review exposes bounded local recovery without a QuickBooks call", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  const route = read("src/api/admin/monthlyReview.routes.js");
+
+  assert.match(table, /Recover state/);
+  assert.match(table, /onRecover\?\.\(row\)/);
+  assert.match(page, /recover-handled-posting-dispositions/);
+  assert.match(page, /transaction_ids: \[transactionId\]/);
+  assert.match(route, /transactionIds\.length > 25/);
+  assert.match(route, /no QuickBooks calls were made/i);
 });
 
 test("Monthly Review never mounts transaction modal content for a null selection", () => {

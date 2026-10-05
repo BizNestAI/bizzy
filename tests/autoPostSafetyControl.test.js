@@ -133,7 +133,7 @@ test("successful QBO write remains required before Posted state", () => {
   assert.match(source, /status:\s*"posted"[\s\S]*?qbo_txn_id:\s*qboTxnId/);
 });
 
-test("manual row-level posting uses the shared QBO posting path while auto-post may be off", () => {
+test("manual row-level posting uses the durable interactive posting command", () => {
   const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
   const cron = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
   const client = readFileSync(join(root, "src/services/bookkeeping/bookkeepingClient.js"), "utf8");
@@ -142,13 +142,14 @@ test("manual row-level posting uses the shared QBO posting path while auto-post 
 
   assert.match(route, /router\.post\("\/posting\/transactions\/:transactionId"/);
   assert.match(route, /assertTaxBusinessAccess\(\{ req, businessId, supabase \}\)/);
-  assert.match(route, /postSingleBookkeepingTransactionNow\(\{[\s\S]*?businessId,[\s\S]*?transactionId,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId,[\s\S]*?\}\)/);
+  assert.match(route, /requestInteractiveTransactionPosting\(\{[\s\S]*?businessId,[\s\S]*?transactionId/);
+  assert.match(route, /signalInteractivePostingCommandWakeup/);
   assert.match(cron, /export async function postSingleBookkeepingTransactionNow/);
   assert.match(cron, /await handleItem\(item, \{[\s\S]*?manual: true,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId,[\s\S]*?\}\)/);
   assert.match(cron, /if \(!manual\)[\s\S]*?getAutoPostToQuickBooks/);
   assert.match(client, /postTransactionToQuickBooks/);
   assert.match(page, /Post this transaction to QuickBooks\?/);
-  assert.match(feed, /Post to QuickBooks/);
+  assert.match(feed, /postingActionLabel/);
 });
 
 test("manual posting validates one handled transaction and does not trust caller ownership", () => {
@@ -187,7 +188,7 @@ test("failed manual QBO writes remain actionable in the handled feed", () => {
   assert.match(transactionsService, /classifyBookkeepingLifecycle/);
   assert.match(transactionsService, /\["approved", "auto_approved", "failed", "handled"\]\.includes/);
   assert.match(feed, /\["approved", "auto_approved", "handled", "failed"\]\.includes\(String\(txn\.status/);
-  assert.match(feed, /aria-label=\{adminBookkeepingAccess \? "Retry failed QuickBooks posting" : "Post to QuickBooks"\}/);
+  assert.match(feed, /aria-label=\{postingActionLabel\}/);
 });
 
 test("manual posting affects only the selected transaction row and prevents repeated clicks", () => {
@@ -201,7 +202,7 @@ test("manual posting affects only the selected transaction row and prevents repe
   const handlerStart = page.indexOf("const handleManualPostTransaction");
   const handlerEnd = page.indexOf("const handleManualPostResultPrimary", handlerStart);
   assert.doesNotMatch(page.slice(handlerStart, handlerEnd), /hasIncomingDepositMatchWorkflow/);
-  assert.match(feed, /disabled=\{readOnly \|\| isPosting \|\| incomingMatchAction\.loading === true \|\| !adminPostingRetryEligible\}/);
+  assert.match(feed, /disabled=\{readOnly \|\| isPosting \|\| incomingMatchAction\.loading === true \|\| !postingActionEnabled\}/);
 });
 
 test("manual posting uses in-app confirmation and mapping guidance modals", () => {
@@ -1827,9 +1828,11 @@ test("all QBO posting entry points flow through finalized bank-transaction guard
   assert.match(autoPost, /\.eq\("pending", false\)[\s\S]*?\.in\("id", ids\)/);
   assert.match(autoPost, /bankTxn\?\.pending === true \|\| item\?\.meta\?\.pending === true/);
   assert.match(autoPost, /pending_transaction_not_postable/);
-  assert.match(postingRoutes, /postSingleBookkeepingTransactionNow\(\{[\s\S]*?businessId,[\s\S]*?transactionId,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId,[\s\S]*?\}\)/);
+  assert.match(postingRoutes, /requestInteractiveTransactionPosting\(\{/);
+  assert.match(postingRoutes, /auditSource: "books_review"/);
+  assert.match(postingRoutes, /idempotencyKey: req\.get\("Idempotency-Key"\)/);
   assert.match(postingRoutes, /runBooksPostOnce\(\{ businessId, force \}\)/);
-  assert.match(monthlyReviewRoutes, /postSingleBookkeepingTransactionNow\(/);
+  assert.match(monthlyReviewRoutes, /requestInteractiveTransactionPosting\(\{/);
   assert.doesNotMatch(postingRoutes, /postToQbo|createQboPurchase|createQboDeposit|createQboTransfer/);
   assert.doesNotMatch(monthlyReviewRoutes, /postToQbo|createQboPurchase|createQboDeposit|createQboTransfer/);
 });

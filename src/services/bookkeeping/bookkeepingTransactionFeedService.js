@@ -18,6 +18,7 @@ import {
 } from "./quickBooksPaymentsProtectedWorkflow.js";
 import { normalizeTransactionResolution } from "./transactionResolutionService.js";
 import { requireCanonicalBookkeepingFeedStatus } from "./bookkeepingFeedStatusContract.js";
+import { deriveBookkeepingPostingAction } from "./bookkeepingPostingActionEligibility.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -889,7 +890,8 @@ export async function fetchBookkeepingTransactions({
   });
   const enrichedRows = discoveryRows.map((row) => {
     const qboPostingLifecycle = buildPostingLifecycleForFeed(row, policy, nowMs);
-    return qboPostingLifecycle ? { ...row, qbo_posting_lifecycle: qboPostingLifecycle } : row;
+    const nextRow = qboPostingLifecycle ? { ...row, qbo_posting_lifecycle: qboPostingLifecycle } : row;
+    return { ...nextRow, posting_action: deriveBookkeepingPostingAction(nextRow, { nowMs }) };
   });
   return { rows: enrichedRows, totalCount };
 }

@@ -14,7 +14,7 @@ function routeBody(source, marker, endMarker) {
   return source.slice(start, end);
 }
 
-test("Monthly Review feed Needs Review approval uses explicit shared reclassification approval path", () => {
+test("Monthly Review feed Needs Review approval uses the shared bookkeeping approval path", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
   const approveBody = routeBody(
     route,
@@ -25,14 +25,14 @@ test("Monthly Review feed Needs Review approval uses explicit shared reclassific
   assert.match(route, /router\.use\(requireAuth\)/);
   assert.match(route, /router\.use\(requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)\)/);
   assert.match(approveBody, /assertRunTransactionInSelectedMonth\(run,\s*transactionId\)/);
-  assert.match(approveBody, /reclassifyBookkeepingTransaction\(/);
-  assert.match(approveBody, /mode !== "needs_review_approval"/);
-  assert.match(approveBody, /targetQboAccountId:\s*accountId/);
+  assert.match(approveBody, /approveBookkeepingTransactions\(/);
+  assert.match(approveBody, /resolution:\s*"categorize_new"/);
+  assert.match(approveBody, /newAccountId:\s*accountId/);
   assert.doesNotMatch(approveBody, /\.from\("transaction_categorizations"\)\s*\.update/);
   assert.doesNotMatch(approveBody, /runBooksPostOnce|postSingleBookkeepingTransactionNow|updatePostedQboTransactionAccount/);
 });
 
-test("Monthly Review feed handled post uses existing manual posting authority and blocks already posted rows", () => {
+test("Monthly Review feed handled post uses the durable shared command and blocks already posted rows", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
   const postBody = routeBody(
     route,
@@ -43,10 +43,11 @@ test("Monthly Review feed handled post uses existing manual posting authority an
   assert.match(postBody, /assertRunTransactionInSelectedMonth\(run,\s*transactionId\)/);
   assert.match(postBody, /matchesTransactionStatusFilter\("handled",\s*current\)/);
   assert.match(postBody, /transaction_already_posted/);
-  assert.match(postBody, /postSingleBookkeepingTransactionNow\(\{/);
+  assert.match(postBody, /requestInteractiveTransactionPosting\(\{/);
   assert.match(postBody, /businessId:\s*run\.business_id/);
   assert.match(postBody, /transactionId/);
-  assert.doesNotMatch(postBody, /auto_post_to_quickbooks|runBooksPostOnce|createQbo|updateQbo/);
+  assert.match(postBody, /signalInteractivePostingCommandWakeup/);
+  assert.doesNotMatch(postBody, /auto_post_to_quickbooks|runBooksPostOnce|createQbo|updateQbo|postSingleBookkeepingTransactionNow\(\{/);
 });
 
 test("Monthly Review feed reclassification and retry are selected-month guarded", () => {
@@ -109,8 +110,8 @@ test("Monthly Review mirror UI requires explicit actions and does not mutate on 
   assert.doesNotMatch(dropdownSnippet, /onApprove|onReclassify|safeFetch|fetch\(/);
   assert.match(table, />\s*\{isActionBusy\("approve"\) \? "Approving\.\.\." : "Approve"\}\s*</);
   assert.match(table, />\s*\{isActionBusy\("reclassify"\) \? "Saving\.\.\." : "Reclassify"\}\s*</);
-  assert.match(table, /manualPostBusy \? "Posting…" : "Post"/);
-  assert.match(table, /Retry QBO/);
+  assert.match(table, /postingAction\.permitted_action/);
+  assert.match(table, /Retry posting/);
   assert.match(table, /getProtectedWorkflowReason/);
   assert.match(table, /onChange=\{\(accountId\) => \{\s*setSelectedAccountId\(accountId\)/);
   assert.match(table, /Bank Account/);

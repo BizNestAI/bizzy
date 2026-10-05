@@ -1572,6 +1572,11 @@ export default function MonthlyReviewConsole() {
         await safeFetch(`${routeBase}/post-qbo`, { method: "POST" });
       } else if (actionKey === "retry") {
         await safeFetch(`${routeBase}/retry-qbo-sync`, { method: "POST" });
+      } else if (actionKey === "recover") {
+        result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/bookkeeping/recover-handled-posting-dispositions`, {
+          method: "POST",
+          body: { transaction_ids: [transactionId] },
+        });
       }
       if (actionKey === "approve") {
         patchBookkeepingFeedsAfterApproval(row, accountId, result);
@@ -2476,6 +2481,7 @@ export default function MonthlyReviewConsole() {
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
                   onPost={(row) => openManualPostingWorkflow("post", row)}
                   onRetry={(row) => openManualPostingWorkflow("retry", row)}
+                  onRecover={(row) => runBookkeepingFeedAction("recover", row)}
                   onConfirmCcPaymentMatch={handleMirrorConfirmCreditCardPaymentMatch}
                   onMarkCcPayment={handleMirrorMarkCreditCardPayment}
                   onRejectCcPayment={handleMirrorRejectCreditCardPayment}
@@ -2628,6 +2634,7 @@ function BookkeepingFeedMirrorPanels({
   onReclassify,
   onPost,
   onRetry,
+  onRecover,
   onConfirmCcPaymentMatch,
   onMarkCcPayment,
   onRejectCcPayment,
@@ -2717,6 +2724,7 @@ function BookkeepingFeedMirrorPanels({
             onReclassify={onReclassify}
             onPost={onPost}
             onRetry={onRetry}
+            onRecover={onRecover}
             onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
             onMarkCcPayment={onMarkCcPayment}
             onRejectCcPayment={onRejectCcPayment}
@@ -3191,6 +3199,7 @@ function BookkeepingFeedMirrorSection({
   onReclassify,
   onPost,
   onRetry,
+  onRecover,
   onConfirmCcPaymentMatch,
   onMarkCcPayment,
   onRejectCcPayment,
@@ -3260,6 +3269,7 @@ function BookkeepingFeedMirrorSection({
               onReclassify={onReclassify}
               onPost={onPost}
               onRetry={onRetry}
+              onRecover={onRecover}
               onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
               onMarkCcPayment={onMarkCcPayment}
               onRejectCcPayment={onRejectCcPayment}
