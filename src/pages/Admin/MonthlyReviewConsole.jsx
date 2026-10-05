@@ -1571,6 +1571,7 @@ export default function MonthlyReviewConsole() {
             resolution: "categorize_new",
             duplicate_risk_acknowledged: options?.duplicateRiskAcknowledged === true,
             duplicate_override: options?.duplicateOverride === true,
+            post_to_qbo_anyway: options?.postToQboAnyway === true,
             learn_reusable_rule: learnReusableRule,
             only_this_transaction: learnReusableRule === false,
           },
@@ -1591,7 +1592,14 @@ export default function MonthlyReviewConsole() {
       } else if (actionKey === "retry") {
         await safeFetch(`${routeBase}/retry-qbo-sync`, { method: "POST" });
       }
-      if (actionKey === "approve" && options?.duplicateOverride === true) {
+      if (actionKey === "approve" && options?.postToQboAnyway === true) {
+        const finalResult = result?.final_result;
+        setBookkeepingFeedActionErrors((current) => ({
+          ...current,
+          [transactionId]: finalResult?.message || "Posting in progress. QuickBooks has not yet confirmed the transaction.",
+        }));
+        await refreshAfterFeedAction();
+      } else if (actionKey === "approve" && options?.duplicateOverride === true) {
         const recovery = await runMonthlyReviewTransactionRecovery({
           request: safeFetch,
           runId: detail.run.id,

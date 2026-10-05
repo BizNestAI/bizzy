@@ -436,11 +436,22 @@ function BookkeepingTransactionMirrorRow({
               </label>
               <button
                 type="button"
-                onClick={() => onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged: true, duplicateOverride: true })}
+                onClick={() => {
+                  const candidate = row.qbo_duplicate_candidates?.[0] || {};
+                  const confirmed = globalThis.confirm?.([
+                    "Post to QuickBooks anyway?",
+                    `Bank transaction: ${formatMoney(row.amount)} on ${row.date || "unknown date"}`,
+                    `Destination bank account: ${bankAccountLabel || "unknown"}`,
+                    `Selected GL account: ${selectedAccountName(selectedAccountId, accounts) || selectedAccountId}`,
+                    `Suspected QBO candidate: ${candidate.qbo_entity_type || "Transaction"} ${candidate.qbo_entity_id || "unknown"} · ${candidate.txn_date || "unknown date"} · ${candidate.amount_minor == null ? "unknown amount" : formatMoney(Number(candidate.amount_minor) / 100)}`,
+                    "This candidate will be recorded as a distinct transaction and the durable posting pipeline will run once.",
+                  ].join("\n\n"));
+                  if (confirmed) onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged: true, duplicateOverride: true, postToQboAnyway: true });
+                }}
                 disabled={!selectedAccountId || !duplicateRiskAcknowledged || isActionBusy("approve")}
                 className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
               >
-                {isActionBusy("approve") ? "Approving..." : "Categorize as new anyway"}
+                {isActionBusy("approve") ? "Requesting post..." : "Post to QuickBooks anyway"}
               </button>
             </>
           ) : null}

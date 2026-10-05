@@ -46,6 +46,8 @@ test("explicit override archives candidate evidence and creates a current-versio
   assert.equal(resolved.incoming_deposit_resolution.decision_version, 2);
   assert.equal(resolved.incoming_deposit_resolution.duplicate_risk_acknowledged, true);
   assert.equal(resolved.incoming_deposit_resolution.reviewed_blocker, "possible_qbo_duplicate");
+  assert.equal(resolved.incoming_deposit_resolution.candidate_disposition, "rejected_as_distinct_transaction");
+  assert.equal(resolved.rejected_qbo_duplicate_candidates[0].disposition, "rejected_as_distinct_transaction");
   assert.equal(resolved.incoming_deposit_resolution.reviewed_duplicate_candidate.qbo_txn_id, "qbo-9");
   assert.equal(resolved.abandoned_match_proposal.possible_qbo_duplicate, true);
 });
@@ -60,6 +62,6 @@ test("Monthly Review requires an explicit override and reruns bounded recovery",
   assert.match(route, /provider_write_ambiguity_requires_review/);
   assert.match(page, /duplicate_override: options\?\.duplicateOverride === true/);
   assert.match(page, /runMonthlyReviewTransactionRecovery\(\{[\s\S]*transactionId/);
-  assert.match(table, /Categorize as new anyway/);
+  assert.match(table, /Post to QuickBooks anyway/);
   assert.match(table, /changeResolution\("match_existing_qbo"\)/);
 });

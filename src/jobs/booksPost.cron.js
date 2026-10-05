@@ -697,6 +697,16 @@ function summarizeQboDuplicateCandidates(candidates = []) {
   }));
 }
 
+export function isRejectedSoftDuplicateCandidate(item = {}, candidate = {}, { manual = false } = {}) {
+  const decision = item?.meta?.incoming_deposit_resolution || {};
+  if (manual !== true || decision.source !== "monthly_review_force_post" || Number(decision.decision_version || 0) < 2 || decision.duplicate_risk_acknowledged !== true || decision.candidate_disposition !== "rejected_as_distinct_transaction") return false;
+  const reviewedId = String(decision.reviewed_duplicate_candidate_id || "");
+  const candidateId = String(candidate?.qbo_txn_id || candidate?.qbo_entity_id || candidate?.id || "");
+  const reviewedType = String(decision.reviewed_duplicate_candidate?.qbo_txn_type || decision.reviewed_duplicate_candidate?.qbo_entity_type || "").toLowerCase();
+  const candidateType = String(candidate?.qbo_txn_type || candidate?.qbo_entity_type || candidate?.type || "").toLowerCase();
+  return Boolean(reviewedId && candidateId && reviewedId === candidateId && (!reviewedType || !candidateType || reviewedType === candidateType));
+}
+
 function duplicateChallengeId({ item, requestId, candidates = [] }) {
   const identities = summarizeQboDuplicateCandidates(candidates)
     .map((candidate) => `${candidate.qbo_txn_type || ""}:${candidate.qbo_txn_id || ""}`)
@@ -2862,8 +2872,13 @@ export async function handleItem(item, options = {}) {
       transactionId: txnId,
       qboRequestId: requestId,
     }));
+    const candidatesForCheck = qboCandidates.filter((candidate) => !isRejectedSoftDuplicateCandidate(item, candidate, { manual }));
+    if (qboCandidates.length > 0 && candidatesForCheck.length === 0) {
+      structuredManualCheckCompleted = true;
+      timing.context.reviewed_soft_duplicate_candidate_ignored = true;
+    }
     const duplicateCheck = classifyPreExistingQboMatch({
-      qboCandidates,
+      qboCandidates: candidatesForCheck,
       bankTxn: bank,
       mapping: {
         ...mapping,

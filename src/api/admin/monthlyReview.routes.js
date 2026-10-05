@@ -2007,8 +2007,14 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       .maybeSingle();
     if (currentCategorizationError) throw currentCategorizationError;
     const duplicateOverride = req.body?.duplicate_override === true;
+    const postToQuickBooksAnyway = req.body?.post_to_qbo_anyway === true;
+    const existingForceDecision = currentCategorization?.meta?.incoming_deposit_resolution;
+    const existingForceCandidateId = existingForceDecision?.reviewed_duplicate_candidate_id || currentCategorization?.meta?.rejected_qbo_duplicate_candidates?.[0]?.qbo_txn_id || null;
+    const isExistingForceOverride = existingForceDecision?.source === "monthly_review_force_post" &&
+      existingForceDecision?.duplicate_risk_acknowledged === true &&
+      existingForceDecision?.candidate_disposition === "rejected_as_distinct_transaction";
     const isHandledDuplicateOverride = duplicateOverride &&
-      currentCategorization?.meta?.possible_qbo_duplicate === true &&
+      (currentCategorization?.meta?.possible_qbo_duplicate === true || isExistingForceOverride) &&
       ["approved", "auto_approved", "failed", "handled"].includes(String(currentCategorization?.status || "").toLowerCase());
     if (duplicateOverride && !isHandledDuplicateOverride) {
       return res.status(409).json({ ok: false, error: "duplicate_override_not_available", message: "This duplicate-risk override is no longer available." });
@@ -2019,11 +2025,14 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
     if (currentCategorization?.qbo_txn_id || currentCategorization?.posted_at || currentCategorization?.meta?.matched_existing_qbo === true || currentCategorization?.meta?.incoming_deposit_match_status === "confirmed") {
       return res.status(409).json({ ok: false, error: "confirmed_or_posted_transaction_protected", message: "A confirmed match or posted transaction cannot be categorized as new." });
     }
-    if (currentCategorization?.meta?.posting_in_progress === true || currentCategorization?.meta?.provider_write_started_at || currentCategorization?.meta?.qbo_write_started_at || currentCategorization?.meta?.qbo_receipt_confirmed_at) {
+    if (currentCategorization?.meta?.posting_in_progress === true || currentCategorization?.meta?.active_operation_id || currentCategorization?.meta?.post_intent_id || currentCategorization?.meta?.operation_lease_owner || currentCategorization?.meta?.provider_write_started_at || currentCategorization?.meta?.qbo_write_started_at || currentCategorization?.meta?.qbo_receipt_confirmed_at) {
       return res.status(409).json({ ok: false, error: "provider_write_ambiguity_requires_review", message: "This transaction has provider-write evidence and cannot be overridden here." });
     }
     if (isHandledDuplicateOverride) {
-      const candidateIds = (currentCategorization?.meta?.qbo_duplicate_candidates || []).map((candidate) => candidate?.qbo_txn_id).filter(Boolean);
+      const candidateIds = Array.from(new Set([
+        ...(currentCategorization?.meta?.qbo_duplicate_candidates || []).map((candidate) => candidate?.qbo_txn_id),
+        existingForceCandidateId,
+      ].filter(Boolean)));
       if (candidateIds.length) {
         const { data: consumedCandidates, error: consumedCandidatesError } = await supabase
           .from("qbo_posted_transactions")
@@ -2037,6 +2046,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
         }
       }
     }
+    const reviewedCandidateId = currentCategorization?.meta?.qbo_duplicate_candidates?.[0]?.qbo_txn_id || existingForceCandidateId || null;
 
     const approval = await approveBookkeepingTransactions({
       businessId: run.business_id,
@@ -2045,13 +2055,15 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
         resolution: "categorize_new",
         newAccountId: accountId,
         duplicate_risk_acknowledged: req.body?.duplicate_risk_acknowledged === true,
+        operator_reason: req.body?.operator_reason ? String(req.body.operator_reason).slice(0, 500) : null,
+        reviewed_duplicate_candidate_id: reviewedCandidateId,
         learn_reusable_rule: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false ? false : true,
         only_this_transaction: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false,
         reason: req.body?.reason || "Approved from Monthly Review Needs Review feed.",
       }],
       actorId: req.user?.id,
       actorType: "admin",
-      source: "monthly_review",
+      source: postToQuickBooksAnyway ? "monthly_review_force_post" : "monthly_review",
       requireNeedsReview: !isHandledDuplicateOverride,
       db: supabase,
     });
@@ -2080,7 +2092,23 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
 
     const summaries = await buildSummaries(run.business_id, run.review_month);
     await syncRunStatus(runId, summaries);
-    res.json({
+    let postingRequest = null;
+    if (postToQuickBooksAnyway) {
+      if (!isHandledDuplicateOverride || !reviewedCandidateId) {
+        return res.status(409).json({ ok: false, error: "reviewed_duplicate_candidate_required", message: "Review a current QuickBooks candidate before posting anyway." });
+      }
+      postingRequest = await requestInteractiveTransactionPosting({
+        db: supabase,
+        businessId: run.business_id,
+        transactionId,
+        actorId: req.user?.id || req.user?.sub || null,
+        auditSource: "monthly_review_force_post",
+        idempotencyKey: `force-soft-duplicate:${transactionId}:${reviewedCandidateId}:v2`,
+        allowReviewedSoftDuplicate: true,
+      });
+      signalInteractivePostingCommandWakeup({ operationId: postingRequest.operation_id });
+    }
+    res.status(postingRequest ? 202 : 200).json({
       ok: true,
       transaction_id: transactionId,
       mode: "needs_review_approval",
@@ -2092,6 +2120,8 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       operator_response_resolution: null,
       warnings: approval.warnings || [],
       vendor_rule_results: approval.vendor_rule_results || [],
+      posting_result: postingRequest,
+      final_result: postingRequest ? { state: "posting_in_progress", message: "Posting request accepted. QuickBooks has not yet confirmed the transaction.", operation_id: postingRequest.operation_id } : null,
     });
   } catch (e) {
     console.error("[monthly-review] feed approval failed", e?.message || e);

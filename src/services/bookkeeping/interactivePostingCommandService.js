@@ -311,6 +311,7 @@ export async function requestInteractiveTransactionPosting({
   actorId = null,
   auditSource = "books_review",
   idempotencyKey = null,
+  allowReviewedSoftDuplicate = false,
 } = {}) {
   db ||= await getDefaultSupabase();
   if (!businessId || !transactionId) {
@@ -333,7 +334,14 @@ export async function requestInteractiveTransactionPosting({
     throw error;
   }
   const action = deriveBookkeepingPostingAction(row);
-  if (!["post_now", "retry_posting"].includes(action.permitted_action) || action.posting_eligible !== true) {
+  const forceDecision = row.meta?.incoming_deposit_resolution;
+  const reviewedSoftDuplicate = allowReviewedSoftDuplicate === true &&
+    forceDecision?.source === "monthly_review_force_post" &&
+    forceDecision?.decision_version >= 2 &&
+    forceDecision?.duplicate_risk_acknowledged === true &&
+    forceDecision?.candidate_disposition === "rejected_as_distinct_transaction" &&
+    Boolean(forceDecision?.reviewed_duplicate_candidate_id);
+  if ((!reviewedSoftDuplicate && !["post_now", "retry_posting"].includes(action.permitted_action)) || (!reviewedSoftDuplicate && action.posting_eligible !== true)) {
     const error = new Error(action.disabled_reason || "posting_action_not_permitted");
     error.code = action.safe_failure_classification || "posting_action_not_permitted";
     error.status = 409;
@@ -347,7 +355,7 @@ export async function requestInteractiveTransactionPosting({
     actorId,
     selectedQboAccountId: row.final_qbo_account_id,
     selectedQboAccountName: row.final_qbo_account_name,
-    merchantSnapshot: { audit_source: auditSource, requested_action: action.permitted_action },
+    merchantSnapshot: { audit_source: auditSource, requested_action: reviewedSoftDuplicate ? "post_reviewed_soft_duplicate" : action.permitted_action, force_soft_duplicate_override: reviewedSoftDuplicate },
     rememberForFuture: false,
     transactionIds: [transactionId],
     expectedRowVersions: { [transactionId]: row.updated_at },
@@ -764,6 +772,7 @@ export async function processInteractivePostingCommand({
         businessId: command.business_id,
         transactionId: row.transaction_id,
         confirmPostAnyway: false,
+        createNewIncomeOverride: command.merchant_snapshot?.force_soft_duplicate_override === true,
       });
       const childOperationId = result?.child_operation_id || result?.qbo_request_id || null;
       if (!childOperationId) {

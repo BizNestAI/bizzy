@@ -67,6 +67,9 @@ function approvalIdempotencyKey({ businessId, approval, actorType }) {
     resolution: approval.meta?.user_selected_resolution || "categorize_new",
     final_qbo_account_id: approval.final_qbo_account_id || null,
     actor_type: actorType,
+    duplicate_risk_acknowledged: approval.duplicate_risk_acknowledged === true,
+    reviewed_duplicate_candidate_id: approval.reviewed_duplicate_candidate_id || null,
+    decision_version: approval.decision_version || null,
   })).digest("hex");
 }
 
@@ -92,7 +95,7 @@ const UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS = [
   "post_anyway_requires_confirmation",
 ];
 
-export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId, actorType, source, nowIso, selectedQboAccountId = null, duplicateRiskAcknowledged = false } = {}) {
+export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId, actorType, source, nowIso, selectedQboAccountId = null, duplicateRiskAcknowledged = false, operatorReason = null } = {}) {
   if (hasAuthoritativeQuickBooksMatch({ meta })) return meta;
   const proposal = Object.fromEntries(
     UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS
@@ -100,6 +103,9 @@ export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId
       .map((key) => [key, meta[key]])
   );
   const next = { ...meta };
+  if (!Object.keys(proposal).length && meta.incoming_deposit_resolution?.candidate_disposition === "rejected_as_distinct_transaction" && meta.incoming_deposit_resolution?.duplicate_risk_acknowledged === true) {
+    return meta;
+  }
   for (const key of UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS) delete next[key];
   delete next.post_block_reason;
   delete next.auto_post_block_reason;
@@ -114,6 +120,7 @@ export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId
     };
   }
   next.resolution_mode = INCOMING_DEPOSIT_CATEGORIZE_AS_NEW;
+  const reviewedCandidate = proposal.qbo_duplicate_candidates?.[0] || proposal.incoming_deposit_candidates?.[0] || null;
   next.incoming_deposit_resolution = {
     resolution_mode: INCOMING_DEPOSIT_CATEGORIZE_AS_NEW,
     resolution: INCOMING_DEPOSIT_CATEGORIZE_AS_NEW,
@@ -124,9 +131,21 @@ export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId
     decision_version: 2,
     selected_qbo_account_id: selectedQboAccountId ? String(selectedQboAccountId) : null,
     duplicate_risk_acknowledged: duplicateRiskAcknowledged === true,
-    reviewed_duplicate_candidate: proposal.qbo_duplicate_candidates?.[0] || proposal.incoming_deposit_candidates?.[0] || null,
+    reviewed_duplicate_candidate: reviewedCandidate,
+    reviewed_duplicate_candidate_id: reviewedCandidate?.qbo_txn_id || reviewedCandidate?.qbo_entity_id || null,
+    candidate_disposition: reviewedCandidate ? "rejected_as_distinct_transaction" : null,
     reviewed_blocker: proposal.possible_qbo_duplicate === true ? "possible_qbo_duplicate" : null,
+    operator_reason: operatorReason || null,
   };
+  next.rejected_qbo_duplicate_candidates = reviewedCandidate ? [{
+    qbo_txn_id: reviewedCandidate.qbo_txn_id || reviewedCandidate.qbo_entity_id || null,
+    qbo_txn_type: reviewedCandidate.qbo_txn_type || reviewedCandidate.qbo_entity_type || null,
+    disposition: "rejected_as_distinct_transaction",
+    rejected_at: nowIso,
+    rejected_by: actorId || null,
+    source: source || "books_review",
+    decision_version: 2,
+  }] : [];
   next.duplicate_risk_acknowledged = duplicateRiskAcknowledged === true;
   return next;
 }
@@ -232,6 +251,9 @@ export async function approveBookkeepingTransactions({
     approval: {
       transaction_id: txnIdFromItem(item),
       final_qbo_account_id: finalIdFromItem(item),
+      duplicate_risk_acknowledged: item?.duplicate_risk_acknowledged === true,
+      reviewed_duplicate_candidate_id: item?.reviewed_duplicate_candidate_id || existingMetaMap[txnIdFromItem(item)]?.qbo_duplicate_candidates?.[0]?.qbo_txn_id || null,
+      decision_version: item?.duplicate_risk_acknowledged === true ? 2 : null,
       meta: { user_selected_resolution: item?.resolution || existingMetaMap[txnIdFromItem(item)]?.user_selected_resolution || "categorize_new" },
     },
   }));
@@ -558,6 +580,19 @@ export async function approveBookkeepingTransactions({
             : postAfter,
         meta: postingMeta,
         is_check: checkHit.is_check === true,
+        // These command-only fields are intentionally omitted from the RPC
+        // payload below. They make the persisted approval-event identity match
+        // the preflight identity so a reviewed duplicate override cannot
+        // collide with an older, ordinary categorization approval.
+        duplicate_risk_acknowledged: item?.duplicate_risk_acknowledged === true,
+        reviewed_duplicate_candidate_id:
+          item?.reviewed_duplicate_candidate_id ||
+          postingMeta?.incoming_deposit_resolution?.reviewed_candidate_qbo_txn_id ||
+          null,
+        decision_version:
+          item?.duplicate_risk_acknowledged === true
+            ? Number(postingMeta?.incoming_deposit_resolution?.decision_version || 2)
+            : null,
       };
     })
     .filter(Boolean);
@@ -598,6 +633,7 @@ export async function approveBookkeepingTransactions({
         nowIso,
         selectedQboAccountId: approval.final_qbo_account_id,
         duplicateRiskAcknowledged,
+        operatorReason: approvalItem?.operator_reason || null,
       });
       continue;
     }
@@ -612,6 +648,7 @@ export async function approveBookkeepingTransactions({
         nowIso,
         selectedQboAccountId: approval.final_qbo_account_id,
         duplicateRiskAcknowledged,
+        operatorReason: approvalItem?.operator_reason || null,
       });
       approval.meta.incoming_deposit_match_check_at_decision = "unavailable_acknowledged";
       warnings.push({ transaction_id: approval.transaction_id, code: "match_check_unavailable_manual_override" });
@@ -627,6 +664,7 @@ export async function approveBookkeepingTransactions({
         nowIso,
         selectedQboAccountId: approval.final_qbo_account_id,
         duplicateRiskAcknowledged,
+        operatorReason: approvalItem?.operator_reason || null,
       });
       warnings.push({ transaction_id: approval.transaction_id, code: "possible_qbo_match_manual_override" });
       continue;
