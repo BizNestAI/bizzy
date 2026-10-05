@@ -1,5 +1,6 @@
 import { computePostAfterForAutoPost, getAutoPostPolicy, reEvaluateAutoPostBacklog } from "./autoPostControl.js";
 import { hasManualAccountAuthority, isProtectedPostingWorkflow } from "./postingDecisionAuthority.js";
+import { hasFinalCategorizeAsNewResolution, isPreProviderIncomingDepositMatchFailure } from "./incomingDepositResolution.js";
 
 const HANDLED_STATUSES = ["approved", "auto_approved", "failed", "handled"];
 
@@ -20,7 +21,7 @@ function independentBlockReason(row = {}, bank = {}) {
   if (meta.possible_qbo_duplicate === true || meta.duplicate_risk === true) return "possible_qbo_duplicate";
   if (isProtectedPostingWorkflow(meta)) return "protected_special_workflow";
   const direction = String(bank.direction || "").toUpperCase();
-  if (direction === "INFLOW" || (!direction && Number(bank.amount || 0) > 0)) return "inflow_resolution_required";
+  if ((direction === "INFLOW" || (!direction && Number(bank.amount || 0) > 0)) && !hasFinalCategorizeAsNewResolution(row)) return "inflow_resolution_required";
   if (!row.final_qbo_account_id) return "missing_final_qbo_account";
   return null;
 }
@@ -127,6 +128,11 @@ export async function recoverHandledPostingDispositions({
       };
       if (manual && ["weak_memo_evidence", "probable_requires_review", "low_classifier_confidence"].includes(String(row.post_error || ""))) {
         meta.superseded_automated_review_reason = row.post_error;
+      }
+      if (hasFinalCategorizeAsNewResolution(row) && isPreProviderIncomingDepositMatchFailure(row)) {
+        meta.superseded_pre_provider_failure = "incoming_deposit_needs_match";
+        delete meta.post_block_reason;
+        delete meta.auto_post_block_reason;
       }
       const changed = await persistPatch(db, businessId, row.transaction_id, row.updated_at, {
         status: manual ? "approved" : "auto_approved",

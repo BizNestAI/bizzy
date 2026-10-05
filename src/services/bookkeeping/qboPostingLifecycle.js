@@ -1,6 +1,7 @@
 import { hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
 import { deriveCreditCardPaymentStatus } from "./creditCardPaymentStatus.js";
 import { classifyPostingFailure, formatPostingFailureLabel } from "./postingFailureClassification.js";
+import { hasFinalCategorizeAsNewResolution, isPreProviderIncomingDepositMatchFailure } from "./incomingDepositResolution.js";
 
 function formatShortDateTime(value) {
   if (!value) return "";
@@ -91,6 +92,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   }
 
   const blockReason = meta.post_block_reason || meta.auto_post_block_reason || row.post_block_reason || null;
+  const supersededDepositMatchFailure = hasFinalCategorizeAsNewResolution(row) && isPreProviderIncomingDepositMatchFailure(row);
   const postingJob = row.posting_job || row.bookkeeping_posting_job || {};
   const jobBlock = structuredBlockReason(row);
 
@@ -108,13 +110,13 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
     return { key: "retry_scheduled", label: `Retry ${formatShortDateTime(retryAt)}`, tone: "warning", detail: "A controlled retry is scheduled." };
   }
 
-  if (postingJob.state === "blocked" && jobBlock) {
+  if (postingJob.state === "blocked" && jobBlock && !supersededDepositMatchFailure) {
     return { key: "configuration_blocked", label: jobBlock.label, tone: "danger", detail: jobBlock.detail, code: jobBlock.code };
   }
-  if (
+  if (!supersededDepositMatchFailure && (
     ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(blockReason) ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable"].includes(row.incoming_deposit_match_status || meta.incoming_deposit_match_status)
-  ) {
+  )) {
     const matchStatus = row.incoming_deposit_match_status || meta.incoming_deposit_match_status;
     const unavailable = blockReason === "match_check_unavailable" || matchStatus === "match_check_unavailable";
     const ambiguous = matchStatus === "ambiguous";
@@ -131,7 +133,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
     !meta.cc_payment_pair_id &&
     (row.post_error === "cc_payment_post_not_supported" || meta.post_block_reason === "cc_payment_post_not_supported");
 
-  if (!unsupportedUnpairedCcPayment && hasProvenPostingFailure(row)) {
+  if (!unsupportedUnpairedCcPayment && !supersededDepositMatchFailure && hasProvenPostingFailure(row)) {
     const failure = classifyPostingFailure(postingJob.last_error_code || row.post_error || meta.post_error);
     return {
       key: "failed",

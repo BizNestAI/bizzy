@@ -140,6 +140,13 @@ select
   tc.updated_at,
   case
     when bt.pending is true then 'pending_transaction_not_postable'
+    when tc.post_error = 'incoming_deposit_needs_match'
+      and coalesce(
+        tc.meta->>'resolution_mode',
+        tc.meta#>>'{incoming_deposit_resolution,resolution_mode}',
+        tc.meta#>>'{incoming_deposit_resolution,resolution}'
+      ) = 'categorize_as_new'
+      then 'final_new_deposit_resolution_has_active_match_blocker'
     when tc.final_qbo_account_id is null then 'missing_final_qbo_account'
     when tc.status = 'auto_approved' and lower(coalesce(tc.meta->>'safe_to_auto_post','false')) <> 'true'
       then 'automatic_posting_safety_not_established'
@@ -162,6 +169,14 @@ where tc.status in ('approved','auto_approved','handled','failed')
   and (bpj.state is null or bpj.state in ('blocked','failed','cancelled'))
   and (
     tc.final_qbo_account_id is null
+    or (
+      tc.post_error = 'incoming_deposit_needs_match'
+      and coalesce(
+        tc.meta->>'resolution_mode',
+        tc.meta#>>'{incoming_deposit_resolution,resolution_mode}',
+        tc.meta#>>'{incoming_deposit_resolution,resolution}'
+      ) = 'categorize_as_new'
+    )
     or (tc.status = 'auto_approved' and lower(coalesce(tc.meta->>'safe_to_auto_post','false')) <> 'true')
     or (tc.post_after is null and tc.post_error is null)
   );

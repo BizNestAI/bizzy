@@ -36,11 +36,16 @@ test("confirmed matches remain protected while an unconfirmed possible match is 
     actorType: "admin",
     source: "monthly_review",
     nowIso: "2026-10-03T20:00:00.000Z",
+    selectedQboAccountId: "42",
+    duplicateRiskAcknowledged: true,
   });
   assert.equal(resolved.incoming_deposit_match_id, undefined);
   assert.equal(resolved.incoming_deposit_match_status, undefined);
   assert.equal(resolved.post_block_reason, undefined);
-  assert.equal(resolved.incoming_deposit_resolution, "categorized_as_new");
+  assert.equal(resolved.resolution_mode, "categorize_as_new");
+  assert.equal(resolved.incoming_deposit_resolution.resolution_mode, "categorize_as_new");
+  assert.equal(resolved.incoming_deposit_resolution.selected_qbo_account_id, "42");
+  assert.equal(resolved.incoming_deposit_resolution.duplicate_risk_acknowledged, true);
   assert.equal(resolved.abandoned_match_proposal.incoming_deposit_match_id, "proposal-1");
   assert.equal(resolved.abandoned_match_proposal.source, "monthly_review");
 

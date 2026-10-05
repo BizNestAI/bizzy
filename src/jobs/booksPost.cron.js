@@ -45,6 +45,7 @@ import { decideManualPostingGate, hasAuthorizedMonthlyReviewApproval } from "../
 import { hashManualPostOverrideContext } from "../services/bookkeeping/manualPostOverrideToken.js";
 import { createPostingError, normalizePostingError } from "../services/bookkeeping/postingErrorNormalizer.js";
 import { classifyPostingFailure } from "../services/bookkeeping/postingFailureClassification.js";
+import { hasFinalCategorizeAsNewResolution } from "../services/bookkeeping/incomingDepositResolution.js";
 import {
   buildLoanPaymentPurchasePayload,
   fetchConfirmedLoanPaymentSplit,
@@ -2284,7 +2285,7 @@ export async function handleItem(item, options = {}) {
   const duplicateChallengeIdValue = options?.duplicateChallengeId || null;
   const operationId = options?.operationId || null;
   const childOperationId = options?.childOperationId || null;
-  const createNewIncomeOverride = options?.createNewIncomeOverride === true && item?.meta?.incoming_deposit_resolution?.resolution === "create_new_income";
+  const createNewIncomeOverride = options?.createNewIncomeOverride === true || hasFinalCategorizeAsNewResolution(item);
   const duplicatePostAnyway = Boolean(
     manual && confirmPostAnyway && duplicateChallengeIdValue &&
     item?.meta?.possible_qbo_duplicate === true &&
@@ -3721,6 +3722,10 @@ async function runOnce(options = {}) {
         item?.meta?.cc_payment_bank_qbo_account_id ||
         item?.meta?.cc_payment_cc_qbo_account_id ||
         item?.meta?.cc_payment_mapping_confidence;
+      if (isIncomingDeposit && hasFinalCategorizeAsNewResolution(item)) {
+        guardedEligible.push(item);
+        continue;
+      }
       if ((!isIncomingDeposit && !isProcessorFee) || isCcWorkflow) {
         guardedEligible.push(item);
         continue;

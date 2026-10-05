@@ -1,6 +1,7 @@
 import { deriveQboPostingLifecycle } from "./qboPostingLifecycle.js";
 import { hasManualAccountAuthority } from "./postingDecisionAuthority.js";
 import { classifyPostingFailure } from "./postingFailureClassification.js";
+import { hasFinalCategorizeAsNewResolution, isPreProviderIncomingDepositMatchFailure } from "./incomingDepositResolution.js";
 
 const COMPLETED_KEYS = new Set(["posted", "matched_existing_qbo", "credit_card_payment_matched"]);
 const CREDIT_TYPE_CODES = new Set([
@@ -28,6 +29,7 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   const code = lifecycle.code || row.post_error || meta.post_block_reason || meta.auto_post_block_reason || null;
   const failure = code ? classifyPostingFailure(code) : null;
   const weakOnly = ["weak_memo_evidence", "probable_requires_review", "low_classifier_confidence"].includes(String(code || ""));
+  const supersededDepositMatchFailure = hasFinalCategorizeAsNewResolution(row) && isPreProviderIncomingDepositMatchFailure(row);
 
   if (COMPLETED_KEYS.has(lifecycle.key) || row.qbo_txn_id) return result(lifecycle, "completed");
   if (row.pending === true || meta.pending === true || lifecycle.key === "pending") {
@@ -40,7 +42,7 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   if (lifecycle.key === "qbo_match_check_unavailable") {
     return result(lifecycle, "refresh_match_check", { enabled: true, failure: "match_check_unavailable" });
   }
-  if (["possible_existing_qbo_match", "incoming_deposit_needs_match"].includes(lifecycle.key)) {
+  if (["possible_existing_qbo_match", "incoming_deposit_needs_match"].includes(lifecycle.key) && !supersededDepositMatchFailure) {
     return result(lifecycle, "review", { reason: "Review the possible existing QuickBooks match before creating a new transaction.", failure: lifecycle.key });
   }
   if (

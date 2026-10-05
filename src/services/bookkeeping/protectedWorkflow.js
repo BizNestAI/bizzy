@@ -1,3 +1,5 @@
+import { hasFinalCategorizeAsNewResolution } from "./incomingDepositResolution.js";
+
 export function isProtectedCreditCardPaymentWorkflow(row = {}) {
   const meta = row.meta || {};
   const taxonomy = String(row.taxonomy_type || meta.taxonomy_type || "").toLowerCase();
@@ -78,7 +80,8 @@ export function getProtectedWorkflowReason(row = {}) {
   const taxonomy = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
   const reason = String(row.accounting_review_reason || row.meta?.accounting_review_reason || "").toLowerCase();
   const protectedWorkflow = String(row.protected_workflow || meta.protected_workflow || "").toLowerCase();
-  if (protectedWorkflow === "quickbooks_payments_deposit_match_required") {
+  const finalizedIncomingCategorization = hasFinalCategorizeAsNewResolution(row);
+  if (protectedWorkflow === "quickbooks_payments_deposit_match_required" && !finalizedIncomingCategorization) {
     return { label: "QuickBooks payment · Needs match", detail: "This deposit may already be recorded by QuickBooks Payments. Select the matching QuickBooks transaction." };
   }
   if (protectedWorkflow === "quickbooks_payments_fee_match_required") {
@@ -87,7 +90,7 @@ export function getProtectedWorkflowReason(row = {}) {
   if (row.pending) return { label: "Pending bank transaction", detail: "Wait for the bank to finalize this transaction before accounting changes." };
   const incomingStatus = String(row.incoming_deposit_match_status || meta.incoming_deposit_match_status || "").toLowerCase();
   const incomingBlock = String(row.post_block_reason || meta.post_block_reason || meta.auto_post_block_reason || "").toLowerCase();
-  if (["needs_confirmation", "ambiguous", "match_check_unavailable", "unchecked", "superseded"].includes(incomingStatus) || ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(incomingBlock)) {
+  if (!finalizedIncomingCategorization && (["needs_confirmation", "ambiguous", "match_check_unavailable", "unchecked", "superseded"].includes(incomingStatus) || ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(incomingBlock))) {
     const unavailable = incomingStatus === "match_check_unavailable" || incomingBlock === "match_check_unavailable";
     return {
       label: unavailable ? "Match check unavailable" : incomingStatus === "ambiguous" ? "Choose QBO match" : "Possible QBO match",

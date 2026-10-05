@@ -23,6 +23,7 @@ import {
 import {
   resolveManualApprovalBookkeepingMeta as resolveManualApprovalPostingMeta,
 } from "./postingDecisionAuthority.js";
+import { INCOMING_DEPOSIT_CATEGORIZE_AS_NEW } from "./incomingDepositResolution.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -79,9 +80,11 @@ const UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS = [
   "incoming_deposit_independent_candidate_count",
   "incoming_deposit_candidates",
   "incoming_deposit_match_check",
+  "match_confirmation_required",
+  "possible_qbo_match_requires_review",
 ];
 
-export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId, actorType, source, nowIso } = {}) {
+export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId, actorType, source, nowIso, selectedQboAccountId = null, duplicateRiskAcknowledged = false } = {}) {
   if (hasAuthoritativeQuickBooksMatch({ meta })) return meta;
   const proposal = Object.fromEntries(
     UNCONFIRMED_INCOMING_DEPOSIT_META_KEYS
@@ -102,8 +105,19 @@ export function supersedeUnconfirmedIncomingDepositProposal(meta = {}, { actorId
       source: source || "books_review",
     };
   }
-  next.incoming_deposit_resolution = "categorized_as_new";
-  next.duplicate_risk_acknowledged = true;
+  next.resolution_mode = INCOMING_DEPOSIT_CATEGORIZE_AS_NEW;
+  next.incoming_deposit_resolution = {
+    resolution_mode: INCOMING_DEPOSIT_CATEGORIZE_AS_NEW,
+    resolution: INCOMING_DEPOSIT_CATEGORIZE_AS_NEW,
+    approved_at: nowIso,
+    approved_by: actorId || null,
+    actor_type: actorType || "user",
+    source: source || "books_review",
+    decision_version: 1,
+    selected_qbo_account_id: selectedQboAccountId ? String(selectedQboAccountId) : null,
+    duplicate_risk_acknowledged: duplicateRiskAcknowledged === true,
+  };
+  next.duplicate_risk_acknowledged = duplicateRiskAcknowledged === true;
   return next;
 }
 
@@ -561,30 +575,48 @@ export async function approveBookkeepingTransactions({
       actor: actorId,
       actorRole: "manual_approval",
     });
-    if (guard.allowed) continue;
     const explicitlyCategorizedAsNew =
       String(approval.meta?.user_selected_resolution || "categorize_new") === "categorize_new" &&
       Boolean(approval.final_qbo_account_id);
     const approvalItem = items.find((item) => String(txnIdFromItem(item)) === String(approval.transaction_id));
     const duplicateRiskAcknowledged = approvalItem?.duplicate_risk_acknowledged === true;
-    const authoritativeMatch = guard.result?.status === "confirmed" || approval.meta?.matched_existing_qbo === true;
-    const matchCheckUnavailable = String(guard.reason || "").includes("match_check_unavailable");
-    if (explicitlyCategorizedAsNew && matchCheckUnavailable) {
-      approval.meta = {
-        ...(approval.meta || {}),
-        incoming_deposit_match_check: "unavailable_manual_override",
-        incoming_deposit_match_status: guard.result?.status || null,
-        incoming_deposit_reason_codes: guard.result?.reason_codes || [],
-      };
-      warnings.push({ transaction_id: approval.transaction_id, code: "match_check_unavailable_manual_override" });
-      continue;
-    }
-    if (explicitlyCategorizedAsNew && duplicateRiskAcknowledged && !authoritativeMatch) {
+    if (guard.allowed && explicitlyCategorizedAsNew) {
       approval.meta = supersedeUnconfirmedIncomingDepositProposal(approval.meta || {}, {
         actorId,
         actorType,
         source,
         nowIso,
+        selectedQboAccountId: approval.final_qbo_account_id,
+        duplicateRiskAcknowledged,
+      });
+      continue;
+    }
+    if (guard.allowed) continue;
+    const authoritativeMatch = guard.result?.status === "confirmed" || approval.meta?.matched_existing_qbo === true;
+    const matchCheckUnavailable = String(guard.reason || "").includes("match_check_unavailable");
+    if (explicitlyCategorizedAsNew && matchCheckUnavailable && duplicateRiskAcknowledged) {
+      approval.meta = supersedeUnconfirmedIncomingDepositProposal(approval.meta || {}, {
+        actorId,
+        actorType,
+        source,
+        nowIso,
+        selectedQboAccountId: approval.final_qbo_account_id,
+        duplicateRiskAcknowledged,
+      });
+      approval.meta.incoming_deposit_match_check_at_decision = "unavailable_acknowledged";
+      warnings.push({ transaction_id: approval.transaction_id, code: "match_check_unavailable_manual_override" });
+      continue;
+    }
+    const credibleCandidateFound = Number(guard.result?.independent_candidate_count || 0) > 0 ||
+      (Array.isArray(guard.result?.candidates) && guard.result.candidates.length > 0);
+    if (explicitlyCategorizedAsNew && !authoritativeMatch && (!credibleCandidateFound || duplicateRiskAcknowledged)) {
+      approval.meta = supersedeUnconfirmedIncomingDepositProposal(approval.meta || {}, {
+        actorId,
+        actorType,
+        source,
+        nowIso,
+        selectedQboAccountId: approval.final_qbo_account_id,
+        duplicateRiskAcknowledged,
       });
       warnings.push({ transaction_id: approval.transaction_id, code: "possible_qbo_match_manual_override" });
       continue;

@@ -39,6 +39,7 @@ test("unsafe automatic rows return to review while durable manual approvals are 
 test("forward migration exposes a service-only diagnostic and preserves grants", () => {
   const sql = read("supabase/migrations/20261101094000_reconcile_handled_posting_job_runtime_states.sql");
   assert.match(sql, /bookkeeping_handled_posting_disposition_violations/);
+  assert.match(sql, /final_new_deposit_resolution_has_active_match_blocker/);
   assert.match(sql, /security_invoker = true/);
   assert.match(sql, /revoke all on table public\.bookkeeping_handled_posting_disposition_violations from public, anon, authenticated/);
   assert.match(sql, /grant select on table public\.bookkeeping_handled_posting_disposition_violations to service_role/);
