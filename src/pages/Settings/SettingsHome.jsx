@@ -26,6 +26,11 @@ import {
   createPlaidLinkToken,
   createPlaidUpdateLinkToken,
   completePlaidRepair,
+  getPlaidRecoveryStatus,
+  preparePlaidRecoveryPreview,
+  confirmPlaidReplacementLineage,
+  admitPlaidRecoveryBatch,
+  releasePlaidRecoveryHold,
   exchangePlaidPublicToken,
   triggerPlaidSync,
   disconnectPlaid,
@@ -45,6 +50,7 @@ const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.
 const INTEGRATION_ACTION_BUTTON_CLASS =
   "inline-flex h-11 w-full items-center justify-center whitespace-nowrap rounded-xl px-4 text-sm font-semibold sm:w-[232px]";
 const PLAID_STATUS_CACHE_VERSION = 1;
+const REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27";
 
 const CREDITS_CAP = 300;
 const EMPTY_BUSINESS_FORM = {
@@ -766,6 +772,10 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const [linking, setLinking] = useState(false);
   const [repairingItem, setRepairingItem] = useState(null);
   const [repairResult, setRepairResult] = useState({});
+  const [recoveryByItem, setRecoveryByItem] = useState({});
+  const [recoveryBusy, setRecoveryBusy] = useState({});
+  const [recoveryMessage, setRecoveryMessage] = useState({});
+  const [lineageSelection, setLineageSelection] = useState({});
   const [disconnectingItem, setDisconnectingItem] = useState(null);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
@@ -960,6 +970,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
             try {
               const result = await completePlaidRepair(businessId, plaidItemId);
               setRepairResult((current) => ({ ...current, [plaidItemId]: result }));
+              const durable = await getPlaidRecoveryStatus(businessId, plaidItemId);
+              setRecoveryByItem((current) => ({ ...current, [plaidItemId]: durable }));
               await fetchStatus();
               resolve();
             } catch (error) { reject(error); }
@@ -979,6 +991,50 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
       setRepairingItem(null);
     }
   }, [businessId, fetchStatus, readOnly]);
+
+  const refreshRecoveryStatus = useCallback(async (plaidItemId) => {
+    if (!businessId || !plaidItemId) return null;
+    const result = await getPlaidRecoveryStatus(businessId, plaidItemId);
+    if (result?.ok === false) throw new Error(result?.message || result?.error || "Recovery status unavailable");
+    setRecoveryByItem((current) => ({ ...current, [plaidItemId]: result }));
+    return result;
+  }, [businessId]);
+
+  useEffect(() => {
+    if (!businessId || !institutions.length) return;
+    let cancelled = false;
+    Promise.all(institutions.map(async (inst) => {
+      try {
+        const result = await getPlaidRecoveryStatus(businessId, inst.plaid_item_id);
+        return [inst.plaid_item_id, result];
+      } catch {
+        return [inst.plaid_item_id, null];
+      }
+    })).then((pairs) => {
+      if (!cancelled) setRecoveryByItem(Object.fromEntries(pairs.filter(([, value]) => value?.ok !== false)));
+    });
+    return () => { cancelled = true; };
+  }, [businessId, institutions]);
+
+  const runRecoveryAction = useCallback(async (plaidItemId, action) => {
+    if (readOnly || recoveryBusy[plaidItemId]) return;
+    setRecoveryBusy((current) => ({ ...current, [plaidItemId]: true }));
+    setRecoveryMessage((current) => ({ ...current, [plaidItemId]: null }));
+    try {
+      const result = await action();
+      if (result?.ok === false) throw new Error(result?.message || result?.error || "Recovery action failed");
+      let status = await refreshRecoveryStatus(plaidItemId);
+      for (let attempt = 0; status?.batch?.status === "staging" && attempt < 12; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        status = await refreshRecoveryStatus(plaidItemId);
+      }
+      setRecoveryMessage((current) => ({ ...current, [plaidItemId]: { tone: "ok", text: "Recovery state saved." } }));
+    } catch (error) {
+      setRecoveryMessage((current) => ({ ...current, [plaidItemId]: { tone: "error", text: error?.message || "Recovery action failed." } }));
+    } finally {
+      setRecoveryBusy((current) => ({ ...current, [plaidItemId]: false }));
+    }
+  }, [readOnly, recoveryBusy, refreshRecoveryStatus]);
 
   const handleDisconnectAll = useCallback(async () => {
     if (!businessId || readOnly) return;
@@ -1326,6 +1382,119 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                   <span className="text-[11px] text-rose-200">Repair could not be completed. Existing history remains unchanged.</span>
                 ) : null}
               </div>
+              {(() => {
+                const recovery = recoveryByItem[inst.plaid_item_id];
+                const pendingCandidate = recovery?.candidates?.find((candidate) => candidate.status === "pending");
+                const batch = recovery?.batch || null;
+                const summary = batch?.summary || {};
+                const busy = Boolean(recoveryBusy[inst.plaid_item_id]);
+                const selectionKey = pendingCandidate ? `${inst.plaid_item_id}:${pendingCandidate.id}` : null;
+                const selectedPriorAccount = selectionKey ? lineageSelection[selectionKey] : null;
+                if (!recovery || (!(recovery.candidates || []).length && !batch)) return null;
+                return (
+                  <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/[0.06] p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-amber-100">Replacement card recovery</div>
+                        <div className="mt-1 text-[11px] text-white/55">
+                          Source coverage and staged cursor are reviewed separately. Nothing in this panel posts to QuickBooks.
+                        </div>
+                      </div>
+                      <StatusBadge tone={batch?.status === "released" ? "ok" : "warning"} label={(batch?.status || "lineage review").replaceAll("_", " ")} />
+                    </div>
+
+                    {pendingCandidate ? (
+                      <div className="mt-3 rounded-lg border border-white/10 bg-black/15 p-3">
+                        <div className="text-xs text-white/80">
+                          Confirm that {pendingCandidate.name}{pendingCandidate.mask ? ` ••${pendingCandidate.mask}` : ""} replaces an existing account.
+                        </div>
+                        <select
+                          className="mt-2 h-10 w-full rounded-lg border border-white/10 bg-[#111513] px-3 text-xs text-white sm:max-w-md"
+                          value={selectedPriorAccount || ""}
+                          onChange={(event) => setLineageSelection((current) => ({ ...current, [selectionKey]: event.target.value }))}
+                          disabled={readOnly || busy}
+                        >
+                          <option value="">Select prior account…</option>
+                          {(inst.accounts || []).filter((account) => account.plaid_account_id !== pendingCandidate.plaid_account_id).map((account) => (
+                            <option key={account.plaid_account_id} value={account.plaid_account_id}>
+                              {account.name || account.official_name || "Account"}{account.mask ? ` ••${account.mask}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="mt-2">
+                          <AccentButton
+                            type="button"
+                            disabled={readOnly || busy || !selectedPriorAccount}
+                            onClick={() => runRecoveryAction(inst.plaid_item_id, () => confirmPlaidReplacementLineage(businessId, inst.plaid_item_id, {
+                              candidate_id: pendingCandidate.id,
+                              prior_plaid_account_id: selectedPriorAccount,
+                            }))}
+                            className="h-9 px-3 text-xs"
+                          >
+                            {busy ? "Saving…" : "Confirm account lineage"}
+                          </AccentButton>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {!pendingCandidate && (!batch || ["failed", "abandoned"].includes(batch.status)) ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-3">
+                        <AccentButton
+                          type="button"
+                          disabled={readOnly || busy}
+                          onClick={() => runRecoveryAction(inst.plaid_item_id, () => preparePlaidRecoveryPreview(businessId, inst.plaid_item_id, REPLACEMENT_CARD_CUTOFF_DATE))}
+                          className="h-9 px-3 text-xs"
+                        >
+                          {busy ? "Preparing…" : batch ? "Retry recovery preview" : "Prepare recovery preview"}
+                        </AccentButton>
+                        <span className="text-[11px] text-white/55">Controlled cutoff: Aug 27, 2026</span>
+                      </div>
+                    ) : null}
+
+                    {batch ? (
+                      <div className="mt-3">
+                        <div className="grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+                          {[
+                            ["Added", summary.total_added], ["Modified", summary.total_modified], ["Removed", summary.total_removed],
+                            ["Already represented", (summary.exact_existing || 0) + (summary.represented || 0)],
+                            ["Pending replacements", summary.pending_replacements], ["Historical discrepancies", summary.historical_discrepancies],
+                            ["New after cutoff", summary.new_after_cutoff], ["Probable duplicates", summary.probable_duplicates],
+                            ["Ambiguous", summary.ambiguous], ["Unknown accounts", summary.unknown_account_ids?.length || 0],
+                          ].map(([label, value]) => (
+                            <div key={label} className="rounded-lg border border-white/8 bg-black/10 px-2 py-2">
+                              <div className="text-white/45">{label}</div><div className="mt-0.5 font-semibold text-white/85">{value || 0}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-2 text-[11px] text-white/55">
+                          Source cutoff {batch.cutoff_date}. Staged cursor is not committed until controlled admission.
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {batch.status === "preview_ready" ? (
+                            <AccentButton type="button" disabled={readOnly || busy || summary.ambiguous > 0 || summary.probable_duplicates > 0}
+                              onClick={() => runRecoveryAction(inst.plaid_item_id, () => admitPlaidRecoveryBatch(businessId, batch.batch_id))}
+                              className="h-9 px-3 text-xs">
+                              {busy ? "Importing…" : "Import reviewed transactions"}
+                            </AccentButton>
+                          ) : null}
+                          {batch.status === "imported_held" ? (
+                            <AccentButton type="button" disabled={readOnly || busy}
+                              onClick={() => runRecoveryAction(inst.plaid_item_id, () => releasePlaidRecoveryHold(businessId, batch.batch_id))}
+                              className="h-9 px-3 text-xs">
+                              {busy ? "Releasing…" : "Release posting hold"}
+                            </AccentButton>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                    {recoveryMessage[inst.plaid_item_id] ? (
+                      <div className={`mt-2 text-[11px] ${recoveryMessage[inst.plaid_item_id].tone === "error" ? "text-rose-200" : "text-emerald-200"}`}>
+                        {recoveryMessage[inst.plaid_item_id].text}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })()}
                   <div className="mt-2">
                 {(inst.accounts || []).map((acct) => {
                   const mappingInfo = mappingById.get(acct.plaid_account_id) || null;

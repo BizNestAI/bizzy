@@ -225,9 +225,36 @@ const PAGE_SIZE_OPTIONS = [
 
 const PANEL_BG = "#151717";
 const PANEL_BORDER = "rgba(255,255,255,0.06)";
+const BOOKS_ACCOUNT_CACHE_PREFIX = "bizzi:books-review:accounts:";
 const BOOKS_TXN_CACHE_PREFIX = "bizzi:books-review:transactions:";
 const BOOKS_TXN_CACHE_TTL_MS = 5 * 60 * 1000;
 const APPROVAL_LEDGER_CONFIRMATION_GRACE_MS = 5_000;
+
+function buildAccountCacheKey(businessId) {
+  if (!businessId) return null;
+  return `${BOOKS_ACCOUNT_CACHE_PREFIX}${encodeURIComponent(String(businessId))}`;
+}
+
+function readAccountCardCache(businessId) {
+  const cacheKey = buildAccountCacheKey(businessId);
+  if (!cacheKey || typeof window === "undefined" || !window.sessionStorage) return [];
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(cacheKey) || "null");
+    return Array.isArray(parsed?.accounts) ? parsed.accounts : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeAccountCardCache(businessId, accounts) {
+  const cacheKey = buildAccountCacheKey(businessId);
+  if (!cacheKey || !Array.isArray(accounts) || typeof window === "undefined" || !window.sessionStorage) return;
+  try {
+    window.sessionStorage.setItem(cacheKey, JSON.stringify({ accounts, cachedAt: Date.now() }));
+  } catch {
+    // Account-card cache failures must never block Books Review.
+  }
+}
 
 function buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage }) {
   if (!businessId || !accountFilter) return null;
@@ -688,7 +715,10 @@ function BookkeepingCleanup() {
   const billingAccess = getBillingAccess(resolveStatusValue(billingStatus));
   const canRunAI = adminView.active ? false : (usingDemo ? true : billingAccess.canRunAI);
   const canBookkeepingWrite = adminView.bookkeepingAccess === true || canRunAI;
-  const [accounts, setAccounts] = useState(usingDemo ? DEMO_ACCOUNT_LIST : []);
+  const [accounts, setAccounts] = useState(() =>
+    usingDemo ? DEMO_ACCOUNT_LIST : readAccountCardCache(businessId)
+  );
+  const accountCacheBusinessIdRef = useRef(businessId);
   const [chartAccounts, setChartAccounts] = useState(() => {
     if (!usingDemo) return [];
     const byType = { income: [], expense: [], equity: [], other: [] };
@@ -822,6 +852,15 @@ function BookkeepingCleanup() {
   const [bulkAccountId, setBulkAccountId] = useState("");
   const [showCategorized] = useState(false);
   const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    if (usingDemo || accountCacheBusinessIdRef.current === businessId) return;
+    accountCacheBusinessIdRef.current = businessId;
+    const cachedAccounts = readAccountCardCache(businessId);
+    setAccounts(cachedAccounts);
+    setAccountFilter(cachedAccounts.length ? getAcctKey(cachedAccounts[0]) : null);
+  }, [businessId, usingDemo]);
+
   const transactionViewKey = useMemo(
     () => [businessId || "", accountFilter || "", activeTab || "", dateRange || "", page, rowsPerPage].join("|"),
     [activeTab, accountFilter, businessId, dateRange, page, rowsPerPage]
@@ -2930,6 +2969,7 @@ function BookkeepingCleanup() {
       const res = await fetchAccounts(businessId);
       const loadedAccounts = res?.accounts || [];
       setAccounts(loadedAccounts);
+      writeAccountCardCache(businessId, loadedAccounts);
       setLastSyncAt(res?.meta?.last_sync_at || null);
       if (!accountFilter && loadedAccounts.length) {
         const key = getAcctKey(loadedAccounts[0]);

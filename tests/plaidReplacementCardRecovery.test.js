@@ -106,3 +106,37 @@ test("settings keeps replacement repair distinct from adding another institution
   assert.match(settings, /createPlaidUpdateLinkToken/);
   assert.match(settings, /completePlaidRepair/);
 });
+
+test("settings reconstructs and orchestrates the bounded replacement recovery workflow", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const routes = read("src/api/integrations/plaid.routes.js");
+
+  assert.match(settings, /getPlaidRecoveryStatus/);
+  assert.match(settings, /Prepare recovery preview/);
+  assert.match(settings, /Confirm account lineage/);
+  assert.match(settings, /Import reviewed transactions/);
+  assert.match(settings, /Release posting hold/);
+  assert.match(settings, /Staged cursor is not committed until controlled admission/);
+  assert.match(settings, /REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27"/);
+  assert.match(client, /recovery-status/);
+  assert.match(client, /confirm-lineage/);
+  assert.match(client, /recovery-batches\/\$\{encodeURIComponent\(batchId\)\}\/admit/);
+  assert.match(client, /release-posting-hold/);
+  assert.match(routes, /router\.get\("\/items\/:plaidItemId\/recovery-status"/);
+});
+
+test("recovery admission schema is held, cutoff-bounded, tenant-scoped, and cursor-safe", () => {
+  const migration = read("supabase/migrations/20261101095000_plaid_replacement_recovery_orchestration.sql");
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+
+  assert.match(migration, /where id = p_batch_id and business_id = p_business_id for update/);
+  assert.match(migration, /r\.disposition = 'new_after_cutoff'/);
+  assert.match(migration, /posting_hold_batch_id/);
+  assert.match(migration, /status = 'imported_held'/);
+  assert.match(migration, /set cursor = v_batch\.staged_next_cursor/);
+  assert.match(migration, /grant execute .* to service_role/);
+  assert.match(recovery, /activeBatches/);
+  assert.match(recovery, /reused: true/);
+  assert.doesNotMatch(recovery, /create.*QuickBooks|post.*QuickBooks/i);
+});

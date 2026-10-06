@@ -889,6 +889,34 @@ export async function completePlaidRepair(businessId, plaidItemId) {
   });
 }
 
+export async function getPlaidRecoveryStatus(businessId, plaidItemId) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-status`), { method: "GET", headers: withBizHeaders(businessId) });
+}
+
+export async function preparePlaidRecoveryPreview(businessId, plaidItemId, cutoffDate) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-preview`), {
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({ cutoff_date: cutoffDate }),
+  });
+}
+
+export async function confirmPlaidReplacementLineage(businessId, plaidItemId, payload) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/confirm-lineage`), {
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify(payload),
+  });
+}
+
+export async function admitPlaidRecoveryBatch(businessId, batchId) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/recovery-batches/${encodeURIComponent(batchId)}/admit`), {
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({}),
+  });
+}
+
+export async function releasePlaidRecoveryHold(businessId, batchId) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/recovery-batches/${encodeURIComponent(batchId)}/release-posting-hold`), {
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({}),
+  });
+}
+
 export async function exchangePlaidPublicToken(businessId, public_token, metadata = null, link_session = null) {
   return safeFetch(apiUrl("/api/integrations/plaid/exchange"), {
     method: "POST",
@@ -1029,6 +1057,11 @@ export default {
   createPlaidLinkToken,
   createPlaidUpdateLinkToken,
   completePlaidRepair,
+  getPlaidRecoveryStatus,
+  preparePlaidRecoveryPreview,
+  confirmPlaidReplacementLineage,
+  admitPlaidRecoveryBatch,
+  releasePlaidRecoveryHold,
   exchangePlaidPublicToken,
   disconnectPlaid,
   getQboCoaCreations,

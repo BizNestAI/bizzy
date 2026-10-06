@@ -1,3 +1,4 @@
+/* global process */
 import { Router } from "express";
 import { recoverExpiredPlaidSyncLease, runPlaidSyncForBusiness } from "../../services/plaid/plaidSyncService.js";
 import { supabase } from "../../services/supabaseAdmin.js";
@@ -17,7 +18,7 @@ import {
   getPlaidStatus,
   inspectUpdatedItemAccounts,
 } from "../../services/plaid/plaidIntegrationService.js";
-import { createReplacementRecoveryPreview, releaseReplacementRecoveryHold } from "../../services/plaid/plaidReplacementRecoveryService.js";
+import { admitReplacementRecoveryBatch, confirmReplacementAccountLineage, createReplacementRecoveryPreview, getReplacementRecoveryStatus, releaseReplacementRecoveryHold } from "../../services/plaid/plaidReplacementRecoveryService.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from "../_shared/entitlementAuth.js";
 import { consumePlaidLinkState, createPlaidLinkState } from "../../services/plaid/plaidLinkStateService.js";
@@ -127,6 +128,42 @@ router.post("/items/:plaidItemId/recovery-preview", requireAuth, plaidMutationRa
     return res.json({ ok: true, ...result });
   } catch (error) {
     return res.status(error?.status || 500).json({ ok: false, error: error?.code || "plaid_recovery_preview_failed", message: "The recovery preview could not be staged. No transactions were imported and the cursor was not advanced." });
+  }
+});
+
+router.get("/items/:plaidItemId/recovery-status", requireAuth, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    return res.json({ ok: true, ...(await getReplacementRecoveryStatus({ businessId, plaidItemId: req.params.plaidItemId })) });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || error?.message || "plaid_recovery_status_failed", message: "Recovery status could not be loaded. Try again." });
+  }
+});
+
+router.post("/items/:plaidItemId/confirm-lineage", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await confirmReplacementAccountLineage({
+      businessId, plaidItemId: req.params.plaidItemId,
+      candidateId: req.body?.candidate_id, priorPlaidAccountId: req.body?.prior_plaid_account_id,
+      actorUserId: req.auth?.userId || req.user?.id || null,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "lineage_confirmation_failed", message: error?.message || "Account lineage could not be confirmed." });
+  }
+});
+
+router.post("/recovery-batches/:batchId/admit", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await admitReplacementRecoveryBatch({ businessId, batchId: req.params.batchId, actorUserId: req.auth?.userId || req.user?.id || null });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "recovery_admission_failed", message: error?.message || "Recovery transactions could not be admitted." });
   }
 });
 

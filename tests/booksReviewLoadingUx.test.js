@@ -37,6 +37,18 @@ test("Books Review caches the current transaction page across quick re-entry", (
   assert.match(source, /Updating this feed in the background without hiding your current rows/);
 });
 
+test("Books Review keeps account cards visible while transaction rows load", () => {
+  assert.match(source, /const BOOKS_ACCOUNT_CACHE_PREFIX = "bizzi:books-review:accounts:"/);
+  assert.match(source, /function readAccountCardCache\(businessId\)/);
+  assert.match(source, /usingDemo \? DEMO_ACCOUNT_LIST : readAccountCardCache\(businessId\)/);
+  assert.match(source, /writeAccountCardCache\(businessId, loadedAccounts\)/);
+
+  const cardsIndex = source.indexOf("{/* Account cards with scroll controls */}");
+  const loadingIndex = source.indexOf("Loading transactions...");
+  assert.ok(cardsIndex >= 0, "account-card row should be rendered");
+  assert.ok(loadingIndex > cardsIndex, "transaction loading state should render below account cards");
+});
+
 test("Books Review does not render a blank table for empty rows with a positive total", () => {
   assert.match(source, /function isInconsistentEmptyTransactionPage/);
   assert.match(source, /rows\.length === 0 && Number\(total \|\| 0\) > 0/);

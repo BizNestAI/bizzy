@@ -119,9 +119,89 @@ async function scopedItem({ db, businessId, plaidItemId }) {
   return data;
 }
 
+function safeCandidate(row = {}) {
+  const snapshot = row.account_snapshot || {};
+  return {
+    id: row.id,
+    plaid_account_id: row.plaid_account_id,
+    status: row.status,
+    name: snapshot.name || snapshot.official_name || "Replacement account",
+    official_name: snapshot.official_name || null,
+    mask: snapshot.mask || null,
+    type: snapshot.type || null,
+    subtype: snapshot.subtype || null,
+  };
+}
+
+export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db = supabase }) {
+  await scopedItem({ db, businessId, plaidItemId });
+  const { data: candidates, error: candidateError } = await db.from("plaid_replacement_account_candidates")
+    .select("id,plaid_account_id,account_snapshot,status,created_at,decided_at")
+    .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
+    .order("created_at", { ascending: false });
+  if (candidateError) throw candidateError;
+  const { data: batches, error: batchError } = await db.from("plaid_recovery_batches")
+    .select("id,status,cutoff_date,posting_hold,summary,failure_code,failure_detail,created_at,updated_at")
+    .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
+    .order("created_at", { ascending: false }).limit(1);
+  if (batchError) throw batchError;
+  const batch = batches?.[0] || null;
+  return {
+    plaid_item_id: plaidItemId,
+    recovery_required: Boolean((candidates || []).some((row) => row.status === "pending") || (batch && !["released", "abandoned"].includes(batch.status))),
+    candidates: (candidates || []).map(safeCandidate),
+    batch: batch ? {
+      batch_id: batch.id,
+      status: batch.status,
+      cutoff_date: batch.cutoff_date,
+      posting_hold: batch.posting_hold,
+      summary: batch.summary || {},
+      failure_code: batch.failure_code || null,
+      failure_detail: batch.failure_detail || null,
+      created_at: batch.created_at,
+      updated_at: batch.updated_at,
+    } : null,
+  };
+}
+
+export async function confirmReplacementAccountLineage({ businessId, plaidItemId, candidateId, priorPlaidAccountId, actorUserId, db = supabase }) {
+  await scopedItem({ db, businessId, plaidItemId });
+  if (!candidateId || !priorPlaidAccountId) throw recoveryError("invalid_lineage_confirmation", "Select the prior account represented by this replacement card.", 400);
+  const { data, error } = await db.rpc("confirm_plaid_replacement_account_lineage", {
+    p_business_id: businessId,
+    p_plaid_env: plaidEnvName,
+    p_plaid_item_id: plaidItemId,
+    p_candidate_id: candidateId,
+    p_prior_plaid_account_id: priorPlaidAccountId,
+    p_actor_user_id: actorUserId || null,
+  });
+  if (error) throw recoveryError("lineage_confirmation_failed", error.message || "Account lineage could not be confirmed.");
+  return data || { status: "confirmed" };
+}
+
+export async function admitReplacementRecoveryBatch({ businessId, batchId, actorUserId, db = supabase }) {
+  const { data, error } = await db.rpc("admit_plaid_recovery_batch", {
+    p_business_id: businessId,
+    p_batch_id: batchId,
+    p_actor_user_id: actorUserId || null,
+  });
+  if (error) throw recoveryError("recovery_admission_failed", error.message || "Recovery transactions could not be admitted.");
+  return data || { batch_id: batchId, status: "imported_held", posting_hold: true };
+}
+
 export async function createReplacementRecoveryPreview({ businessId, plaidItemId, cutoffDate, actorUserId, db = supabase, plaid = getPlaidClient() }) {
   if (!plaid) throw recoveryError("plaid_not_configured", "Plaid is unavailable.", 503);
   const item = await scopedItem({ db, businessId, plaidItemId });
+  const { data: activeBatches, error: activeBatchError } = await db.from("plaid_recovery_batches")
+    .select("id,status,cutoff_date,posting_hold,summary")
+    .eq("business_id", businessId).eq("plaid_env", item.plaid_env).eq("plaid_item_id", plaidItemId)
+    .eq("cutoff_date", cutoffDate).in("status", ["staging", "preview_ready", "lineage_confirmation_required", "imported_held"])
+    .order("created_at", { ascending: false }).limit(1);
+  if (activeBatchError) throw activeBatchError;
+  if (activeBatches?.[0]) {
+    const active = activeBatches[0];
+    return { batch_id: active.id, plaid_item_id: plaidItemId, status: active.status, cutoff_date: active.cutoff_date, posting_hold: active.posting_hold, summary: active.summary || {}, reused: true };
+  }
   const accessToken = await resolveStoredPlaidAccessToken({ storedToken: item.plaid_access_token });
   const collected = await collectCompletePlaidSyncPreview({ plaid, accessToken, originalCursor: item.cursor || null });
   const accountIds = [...new Set([...collected.added, ...collected.modified].map((tx) => tx.account_id).filter(Boolean))];
@@ -138,7 +218,7 @@ export async function createReplacementRecoveryPreview({ businessId, plaidItemId
   const makeRows = (transactions, changeType) => transactions.map((transaction) => {
     const classification = classifyRecoveryTransaction({ transaction, changeType, existingRows: existing || [], cutoffDate, confirmedAccountIds: [...knownAccounts] });
     const normalized = normalizedIncoming(transaction);
-    return { business_id: businessId, change_type: changeType, disposition: classification.disposition, ...normalized, payload: { transaction, classification } };
+    return { business_id: businessId, change_type: changeType, disposition: classification.disposition, ...normalized, transaction_date: normalized.date, payload: { transaction, classification } };
   });
   const rows = [
     ...makeRows(collected.added, "added"),
@@ -179,4 +259,3 @@ export async function releaseReplacementRecoveryHold({ businessId, batchId, acto
   if (batchUpdateError) throw batchUpdateError;
   return { batch_id: batchId, status: "released", posting_hold: false };
 }
-
