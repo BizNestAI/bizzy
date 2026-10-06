@@ -20,8 +20,8 @@ import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggest
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
-const BASE_COL_WIDTHS = [36, 90, 220, 160, 245, 105, 150];
-const BASE_MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 150];
+const BASE_COL_WIDTHS = [36, 90, 220, 160, 245, 105, 180];
+const BASE_MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 180];
 const QBO_COL_WIDTH = 120;
 const QBO_MIN_COL_WIDTH = 105;
 
@@ -1774,7 +1774,7 @@ export default function BookkeepingFeed({
                   </span>
                 </div>
               ) : null}
-              <div className="flex justify-center pl-3 pr-3" onClick={(e) => e.stopPropagation()}>
+              <div className="flex min-w-0 justify-center px-2" onClick={(e) => e.stopPropagation()}>
                 {isApproving ? (
                   <span role="status" className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-emerald-200/90">
                     <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -1785,9 +1785,10 @@ export default function BookkeepingFeed({
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
                 ) : isHandledStatus && !quickBooksPaymentsProtected ? (
-                  <div className="flex items-center justify-center gap-1.5">
+                  <div className="flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap">
                     <button
-                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
+                      type="button"
+                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold leading-none text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
                       disabled={readOnly || isPosting}
                       onClick={() => {
                         if (readOnly || isPosting) return;
@@ -1800,7 +1801,8 @@ export default function BookkeepingFeed({
                       Undo
                     </button>
                     <button
-                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-100/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-emerald-300/65 hover:bg-emerald-500/16 disabled:cursor-not-allowed disabled:opacity-45"
+                      type="button"
+                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold leading-none text-emerald-100/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-emerald-300/65 hover:bg-emerald-500/16 disabled:cursor-not-allowed disabled:opacity-45"
                       disabled={readOnly || isPosting || incomingMatchAction.loading === true || !postingActionEnabled}
                       onClick={() => {
                         if (readOnly || isPosting || !postingActionEnabled) return;
@@ -2009,12 +2011,14 @@ export default function BookkeepingFeed({
                              {qboSchedule.technical?.operation_id ? <div>Operation: {qboSchedule.technical.operation_id}</div> : null}
                            </div>
                          </details>
-                         <a
-                           href="/dashboard/admin/monthly-review#posting-review"
-                           className="mt-2 inline-flex text-[10px] font-semibold text-emerald-300 hover:text-emerald-200"
-                         >
-                           Open Monthly Review Posting Review
-                         </a>
+                         {adminBookkeepingAccess ? (
+                           <a
+                             href="/dashboard/admin/monthly-review#posting-review"
+                             className="mt-2 inline-flex text-[10px] font-semibold text-emerald-300 hover:text-emerald-200"
+                           >
+                             Open Monthly Review Posting Review
+                           </a>
+                         ) : null}
                        </div>
                      ) : null}
                      {!isPosted && !isPending ? <div className="mt-3">

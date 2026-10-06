@@ -21,5 +21,5 @@ test("Books Review feed rows can expand to show the full bank memo", () => {
 test("Books Review row controls do not trigger row expansion", () => {
   assert.match(source, /onClick=\{\(e\) => e\.stopPropagation\(\)\}/);
   assert.match(source, /CoaDropdown/);
-  assert.match(source, /Post to QuickBooks/);
+  assert.match(source, /aria-label=\{postingActionLabel\}/);
 });

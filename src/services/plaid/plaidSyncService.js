@@ -20,6 +20,7 @@ import {
   normalizePlaidAuthorizedDate,
   normalizePlaidPostedDate,
 } from "../bookkeeping/accountingDatePolicy.js";
+import crypto from "crypto";
 
 function normalizeDate(d) {
   return normalizePlaidPostedDate(d);
@@ -98,23 +99,65 @@ async function upsertRowsInChunks(table, rows, onConflict, chunkSize = 200) {
 // In-memory lock fallback (per process). DB locks are primary.
 const memoryLocks = new Set();
 
-async function acquireDbLock(itemId) {
-  const { data, error } = await supabase
-    .from("plaid_items")
-    .update({ sync_in_progress: true, sync_started_at: nowIso() })
-    .eq("id", itemId)
-    .eq("sync_in_progress", false)
-    .select("id")
-    .single();
-  if (error) return false;
-  return !!data;
+export async function acquireDbLock(itemId, businessId, owner, db = supabase) {
+  const { data, error } = await db.rpc("claim_plaid_sync_lease", {
+    p_business_id: businessId,
+    p_item_id: itemId,
+    p_owner: owner,
+    p_ttl_seconds: Math.max(30, Math.min(Number(process.env.PLAID_SYNC_LEASE_TTL_SECONDS || 300), 1800)),
+  });
+  if (error) throw error;
+  return data === true;
 }
 
-async function releaseDbLock(itemId) {
-  await supabase
-    .from("plaid_items")
-    .update({ sync_in_progress: false, sync_started_at: null })
-    .eq("id", itemId);
+export async function releaseDbLock(itemId, businessId, owner, db = supabase) {
+  const { data, error } = await db.rpc("release_plaid_sync_lease", {
+    p_business_id: businessId,
+    p_item_id: itemId,
+    p_owner: owner,
+  });
+  if (error) throw error;
+  return data === true;
+}
+
+export async function recoverExpiredPlaidSyncLease({ businessId, plaidItemId, actorUserId, db = supabase }) {
+  const { data: item, error } = await db.from("plaid_items")
+    .select("id,plaid_item_id,sync_lease_owner,sync_lease_expires_at,sync_started_at")
+    .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId).maybeSingle();
+  if (error) throw error;
+  if (!item?.id) {
+    const notFound = new Error("plaid_item_not_found");
+    notFound.status = 404;
+    throw notFound;
+  }
+  const explicitExpiry = Date.parse(item.sync_lease_expires_at || "");
+  const legacyStartedAt = Date.parse(item.sync_started_at || "");
+  const ttlMs = Math.max(30, Math.min(Number(process.env.PLAID_SYNC_LEASE_TTL_SECONDS || 300), 1800)) * 1000;
+  const expiresAt = Number.isFinite(explicitExpiry) ? explicitExpiry : (Number.isFinite(legacyStartedAt) ? legacyStartedAt + ttlMs : NaN);
+  if (Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+    const active = new Error("plaid_sync_lease_active");
+    active.status = 409;
+    throw active;
+  }
+  const recoveryOwner = `plaid-lease-recovery:${actorUserId || "operator"}:${crypto.randomUUID()}`;
+  const claimed = await acquireDbLock(item.id, businessId, recoveryOwner, db);
+  if (!claimed) {
+    const conflict = new Error("plaid_sync_lease_active");
+    conflict.status = 409;
+    throw conflict;
+  }
+  const now = nowIso();
+  const { error: runError } = await db.from("bank_sync_runs").insert({
+    business_id: businessId, plaid_item_id: plaidItemId, status: "abandoned",
+    worker_id: recoveryOwner, lease_acquired_at: now, started_at: now, finished_at: now,
+    failure_code: "expired_sync_lease_recovered", error_message: "An expired synchronization lease was recovered without contacting Plaid.",
+  });
+  if (runError) {
+    await releaseDbLock(item.id, businessId, recoveryOwner, db);
+    throw runError;
+  }
+  const released = await releaseDbLock(item.id, businessId, recoveryOwner, db);
+  return { plaid_item_id: plaidItemId, outcome: "expired_lease_recovered", released, provider_called: false };
 }
 
 async function runSyncForItem(plaid, businessId, item, options = {}) {
@@ -123,9 +166,26 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
   if (memoryLocks.has(itemLockKey)) {
     return { skipped: true, reason: "memory_lock" };
   }
-  const gotDbLock = await acquireDbLock(item.id);
+  const workerId = `plaid-sync:${process.env.HOSTNAME || "local"}:${process.pid}:${crypto.randomUUID()}`;
+  const gotDbLock = await acquireDbLock(item.id, businessId, workerId);
   if (!gotDbLock) return { skipped: true, reason: "db_lock" };
   memoryLocks.add(itemLockKey);
+  const runId = crypto.randomUUID();
+  const leaseStartedAt = nowIso();
+  const { error: runStartError } = await supabase.from("bank_sync_runs").insert({
+    id: runId,
+    business_id: businessId,
+    plaid_item_id: item.plaid_item_id,
+    status: "running",
+    worker_id: workerId,
+    lease_acquired_at: leaseStartedAt,
+    started_at: leaseStartedAt,
+  });
+  if (runStartError) {
+    memoryLocks.delete(itemLockKey);
+    await releaseDbLock(item.id, businessId, workerId);
+    throw runStartError;
+  }
 
   try {
     const originalCursor = item.cursor || null;
@@ -823,16 +883,15 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
     const modifiedCount = Number.isFinite(modified.length) ? modified.length : 0;
     const removedCount = Number.isFinite(removed.length) ? removed.length : 0;
 
-    const { error: syncLogErr } = await supabase.from("bank_sync_runs").insert({
-      business_id: businessId,
-      plaid_item_id: item.plaid_item_id,
+    const { error: syncLogErr } = await supabase.from("bank_sync_runs").update({
       added_count: addedCount,
       modified_count: modifiedCount,
       removed_count: removedCount,
-      started_at: now,
       finished_at: now,
-      status: "ok",
-    });
+      status: "completed",
+      failure_code: null,
+      error_message: null,
+    }).eq("id", runId).eq("worker_id", workerId);
     if (syncLogErr) {
       const e = new Error("supabase_sync_log_failed");
       e.supabase = syncLogErr;
@@ -920,9 +979,25 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       removed: removed.length,
       bookkeeping_enqueued: bookkeepingEnqueued,
     };
+  } catch (error) {
+    try {
+      await supabase.from("bank_sync_runs").update({
+        status: "failed",
+        finished_at: nowIso(),
+        failure_code: String(error?.code || error?.message || "plaid_sync_failed").slice(0, 160),
+        error_message: "Plaid synchronization failed before completion.",
+      }).eq("id", runId).eq("worker_id", workerId);
+    } catch {
+      // Preserve the original sync failure when diagnostic persistence is unavailable.
+    }
+    throw error;
   } finally {
     memoryLocks.delete(itemLockKey);
-    await releaseDbLock(item.id);
+    try {
+      await releaseDbLock(item.id, businessId, workerId);
+    } catch {
+      // The owner-scoped lease will expire and can be recovered without provider access.
+    }
   }
 }
 
@@ -936,7 +1011,7 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
 
   const { data: items, error: itemsErr } = await supabase
     .from("plaid_items")
-    .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active")
+    .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active,sync_lease_owner,sync_lease_expires_at")
     .eq("business_id", businessId)
     .eq("plaid_env", plaidEnvName)
     .eq("is_active", true);

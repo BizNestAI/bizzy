@@ -1,4 +1,5 @@
 import { getAccountingDateFromBankTransaction } from "./accountingDatePolicy.js";
+import { isCreditCardPaymentWorkflow, normalizeQboAccountType } from "./creditCardPaymentStatus.js";
 import crypto from "crypto";
 
 function postingError(code, message, status = 409) {
@@ -59,11 +60,33 @@ export function compileCanonicalDepositPosting({
   };
 }
 
+export function resolveCanonicalPostingRail({ bankTransaction = {}, categorization = {}, mapping = {} } = {}) {
+  const mappingType = normalizeQboAccountType(mapping.qbo_account_type);
+  const direction = String(bankTransaction.direction || "").toUpperCase();
+  const amount = Number(bankTransaction.amount || 0);
+  const outflow = direction === "OUTFLOW" || (direction !== "INFLOW" && amount < 0);
+  const inflow = direction === "INFLOW" || (direction !== "OUTFLOW" && amount > 0);
+  const creditResolution = categorization?.meta?.credit_card_inflow_resolution?.resolution_type || null;
+  if (!Number.isFinite(amount) || amount === 0 || (!outflow && !inflow)) {
+    throw postingError("invalid_amount", "The bank transaction amount is invalid.");
+  }
+  if (isCreditCardPaymentWorkflow(categorization) || creditResolution === "match_credit_card_payment") {
+    throw postingError("credit_card_payment_requires_match", "Credit card payments must be confirmed through the protected matching workflow.");
+  }
+  if (mappingType === "bank") return outflow ? "Purchase" : "Deposit";
+  if (mappingType !== "creditcard") {
+    throw postingError("invalid_qbo_account_mapping_type", "The connected account is not mapped to a compatible QuickBooks bank or credit card account.");
+  }
+  if (outflow) return "CreditCardCharge";
+  if (["merchant_refund", "credit_card_statement_credit"].includes(creditResolution)) return "CreditCardCredit";
+  throw postingError("credit_card_inflow_requires_review", "Confirm whether this credit is a merchant refund, card payment, statement credit, or other activity before posting.");
+}
+
 export async function buildCanonicalPostingPreview({ db, businessId, transactionId } = {}) {
   if (!db || !businessId || !transactionId) throw postingError("missing_posting_scope", "Posting preview context is incomplete.", 400);
   const [{ data: item, error: itemError }, { data: bankTransaction, error: bankError }] = await Promise.all([
     db.from("transaction_categorizations")
-      .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,posted_at,updated_at")
+      .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,posted_at,updated_at,taxonomy_type,cc_payment_pair_id,meta")
       .eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle(),
     db.from("bank_transactions")
       .select("id,business_id,date,amount,direction,name,merchant_name,plaid_account_id,pending,is_archived")
@@ -88,21 +111,26 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
   if (!approvedAccount?.qbo_account_id) throw postingError("final_qbo_account_not_found", "The approved QuickBooks GL account is unavailable for this business.");
   if (approvedAccount.active === false) throw postingError("final_qbo_account_inactive", "The approved QuickBooks GL account is inactive.");
   if (String(approvedAccount.qbo_account_id) !== String(item.final_qbo_account_id)) throw postingError("final_qbo_account_inconsistent", "The approved QuickBooks account is inconsistent.");
-  const mappingType = String(mapping?.qbo_account_type || "").replace(/[\s_-]+/g, "").toLowerCase();
-  if (!mapping?.qbo_account_id || mappingType !== "bank") throw postingError("invalid_qbo_account_mapping_type", "The destination bank account is not mapped to a QuickBooks bank account.");
-  const direction = String(bankTransaction.direction || "").toUpperCase();
-  if (direction === "OUTFLOW" || (direction !== "INFLOW" && Number(bankTransaction.amount) < 0)) throw postingError("posting_preview_not_deposit", "This transaction is not an incoming bank deposit.");
-
-  const compiled = compileCanonicalDepositPosting({
-    bankTransaction,
-    destinationAccount: { id: mapping.qbo_account_id, name: mapping.qbo_account_name },
-    approvedLineAccount: { id: approvedAccount.qbo_account_id, name: approvedAccount.name, active: approvedAccount.active },
-  });
+  if (!mapping?.qbo_account_id) throw postingError("missing_qbo_account_mapping", "The connected account is not mapped to QuickBooks.");
+  const entityType = resolveCanonicalPostingRail({ bankTransaction, categorization: item, mapping });
+  const sourceAccount = { id: String(mapping.qbo_account_id), name: mapping.qbo_account_name || null };
+  const lineAccount = { id: String(approvedAccount.qbo_account_id), name: approvedAccount.name || null };
+  const compiled = entityType === "Deposit"
+    ? compileCanonicalDepositPosting({ bankTransaction, destinationAccount: sourceAccount, approvedLineAccount: { ...lineAccount, active: approvedAccount.active } })
+    : {
+        entity_type: entityType,
+        approved_final_account_id: lineAccount.id,
+        destination_account: sourceAccount,
+        line_account: lineAccount,
+        amount: Math.abs(Number(bankTransaction.amount)),
+        date: getAccountingDateFromBankTransaction(bankTransaction),
+      };
   const preview = {
     transaction_id: transactionId,
     row_version: item.updated_at || null,
     entity_type: compiled.entity_type,
-    destination_bank_account: compiled.destination_account,
+    source_qbo_account: compiled.destination_account,
+    destination_bank_account: compiled.entity_type === "Deposit" ? compiled.destination_account : null,
     line_gl_account: compiled.line_account,
     approved_final_account_id: compiled.approved_final_account_id,
     amount: compiled.amount,
@@ -112,7 +140,7 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
     transaction_id: preview.transaction_id,
     row_version: preview.row_version,
     entity_type: preview.entity_type,
-    destination_account_id: preview.destination_bank_account.id,
+    source_account_id: preview.source_qbo_account.id,
     final_account_id: preview.approved_final_account_id,
     amount: preview.amount,
     date: preview.date,

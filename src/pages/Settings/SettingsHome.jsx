@@ -24,6 +24,8 @@ import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import {
   getPlaidStatus,
   createPlaidLinkToken,
+  createPlaidUpdateLinkToken,
+  completePlaidRepair,
   exchangePlaidPublicToken,
   triggerPlaidSync,
   disconnectPlaid,
@@ -762,6 +764,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const initialCachedStatus = useMemo(() => readPlaidStatusCache(businessId), [businessId]);
   const [loading, setLoading] = useState(() => !initialCachedStatus);
   const [linking, setLinking] = useState(false);
+  const [repairingItem, setRepairingItem] = useState(null);
+  const [repairResult, setRepairResult] = useState({});
   const [disconnectingItem, setDisconnectingItem] = useState(null);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
@@ -941,6 +945,40 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
       setLinking(false);
     }
   }, [businessId, fetchStatus, readOnly, refreshMappings]);
+
+  const repairPlaidItem = useCallback(async (plaidItemId, institutionName) => {
+    if (!businessId || !plaidItemId || readOnly) return;
+    setRepairingItem(plaidItemId);
+    setRepairResult((current) => ({ ...current, [plaidItemId]: null }));
+    try {
+      const tokenResponse = await createPlaidUpdateLinkToken(businessId, plaidItemId);
+      const Plaid = await loadPlaidScript();
+      await new Promise((resolve, reject) => {
+        const handler = Plaid.create({
+          token: tokenResponse?.link_token,
+          onSuccess: async () => {
+            try {
+              const result = await completePlaidRepair(businessId, plaidItemId);
+              setRepairResult((current) => ({ ...current, [plaidItemId]: result }));
+              await fetchStatus();
+              resolve();
+            } catch (error) { reject(error); }
+            finally { handler?.destroy?.(); }
+          },
+          onExit: (error) => {
+            handler?.destroy?.();
+            if (error) reject(error); else resolve();
+          },
+        });
+        handler.open();
+      });
+    } catch (error) {
+      console.warn("[plaid][repair] failed", error?.message || error);
+      setRepairResult((current) => ({ ...current, [plaidItemId]: { ok: false, status: "failed", institution_name: institutionName } }));
+    } finally {
+      setRepairingItem(null);
+    }
+  }, [businessId, fetchStatus, readOnly]);
 
   const handleDisconnectAll = useCallback(async () => {
     if (!businessId || readOnly) return;
@@ -1271,6 +1309,22 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
               </div>
               <div className="mt-1 text-[11px] text-white/50">
                 Disconnect stops new transactions from syncing. Your historical transactions and categorizations stay saved.
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <GhostButton
+                  onClick={() => repairPlaidItem(inst.plaid_item_id, inst.institution_name)}
+                  disabled={readOnly || repairingItem === inst.plaid_item_id}
+                  className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-semibold"
+                >
+                  {repairingItem === inst.plaid_item_id ? "Opening repair…" : `Repair ${inst.institution_name || "connection"}`}
+                </GhostButton>
+                {repairResult?.[inst.plaid_item_id]?.status === "lineage_confirmation_required" ? (
+                  <span className="text-[11px] text-amber-200">New account identity found. Ingestion is paused pending authorized lineage confirmation.</span>
+                ) : repairResult?.[inst.plaid_item_id]?.status === "updated_existing_item" ? (
+                  <span className="text-[11px] text-emerald-200">Connection repaired. Existing Item and account identity retained.</span>
+                ) : repairResult?.[inst.plaid_item_id]?.status === "failed" ? (
+                  <span className="text-[11px] text-rose-200">Repair could not be completed. Existing history remains unchanged.</span>
+                ) : null}
               </div>
                   <div className="mt-2">
                 {(inst.accounts || []).map((acct) => {

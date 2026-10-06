@@ -1554,7 +1554,7 @@ async function fetchPending(businessId = null, options = {}) {
     let query = supabase
       .from("transaction_categorizations")
       .select(
-        "transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id,decided_by"
+        "transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id,decided_by,posting_hold_batch_id"
       )
       .in("status", ["approved", "auto_approved", "failed"])
       .is("qbo_txn_id", null)
@@ -2342,6 +2342,10 @@ export async function handleItem(item, options = {}) {
   }
   if (bank.accounting_review_required === true) {
     await markTransactionNonPostable(item, "plaid_accounting_review_required");
+    return;
+  }
+  if (item.posting_hold_batch_id) {
+    await markTransactionNonPostable(item, "plaid_recovery_posting_hold");
     return;
   }
   let accountingDate = null;

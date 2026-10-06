@@ -31,11 +31,17 @@ test("same transaction replay and cursor replay remain DB-upsert protected by Pl
 
 test("concurrent Plaid sync keeps item-level locking", () => {
   const sync = read("src/services/plaid/plaidSyncService.js");
+  const recoveryMigration = read("supabase/migrations/20261006_plaid_replacement_card_recovery.sql");
 
   assert.match(sync, /async function acquireDbLock/);
-  assert.match(sync, /\.eq\("sync_in_progress", false\)/);
+  assert.match(sync, /claim_plaid_sync_lease/);
+  assert.match(sync, /release_plaid_sync_lease/);
+  assert.match(sync, /workerId/);
   assert.match(sync, /memoryLocks/);
   assert.match(sync, /releaseDbLock/);
+  assert.match(recoveryMigration, /sync_lease_owner = p_owner/);
+  assert.match(recoveryMigration, /sync_lease_expires_at <= now\(\)/);
+  assert.match(recoveryMigration, /business_id = p_business_id and sync_lease_owner = p_owner/);
 });
 
 test("physical account identity is strong only with institution, mask, type, and subtype", () => {

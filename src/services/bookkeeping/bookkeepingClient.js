@@ -873,6 +873,22 @@ export async function createPlaidLinkToken(businessId) {
   });
 }
 
+export async function createPlaidUpdateLinkToken(businessId, plaidItemId) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/update-link-token`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({}),
+  });
+}
+
+export async function completePlaidRepair(businessId, plaidItemId) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/repair-complete`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({}),
+  });
+}
+
 export async function exchangePlaidPublicToken(businessId, public_token, metadata = null, link_session = null) {
   return safeFetch(apiUrl("/api/integrations/plaid/exchange"), {
     method: "POST",
@@ -1011,6 +1027,8 @@ export default {
   getReconciliationsRuns,
   getPlaidStatus,
   createPlaidLinkToken,
+  createPlaidUpdateLinkToken,
+  completePlaidRepair,
   exchangePlaidPublicToken,
   disconnectPlaid,
   getQboCoaCreations,

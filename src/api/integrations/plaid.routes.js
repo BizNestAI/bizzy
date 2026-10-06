@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { runPlaidSyncForBusiness } from "../../services/plaid/plaidSyncService.js";
+import { recoverExpiredPlaidSyncLease, runPlaidSyncForBusiness } from "../../services/plaid/plaidSyncService.js";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { getPlaidClient, plaidEnvName } from "../../services/plaid/plaidClient.js";
@@ -12,9 +12,12 @@ import {
 import { resolveStoredPlaidAccessToken } from "../../services/plaid/plaidTokenCrypto.js";
 import {
   createLinkToken,
+  createUpdateLinkToken,
   exchangePublicToken,
   getPlaidStatus,
+  inspectUpdatedItemAccounts,
 } from "../../services/plaid/plaidIntegrationService.js";
+import { createReplacementRecoveryPreview, releaseReplacementRecoveryHold } from "../../services/plaid/plaidReplacementRecoveryService.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from "../_shared/entitlementAuth.js";
 import { consumePlaidLinkState, createPlaidLinkState } from "../../services/plaid/plaidLinkStateService.js";
@@ -81,6 +84,71 @@ router.post("/link-token", requireAuth, plaidMutationRateLimit, primaryOwner, in
   } catch (err) {
     console.error("[plaid] link token failed", redactPlaidSecrets(err?.message || err));
     return res.status(500).json({ ok: false, error: "plaid_link_token_failed" });
+  }
+});
+
+router.post("/items/:plaidItemId/update-link-token", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await createUpdateLinkToken({
+      businessId,
+      userId: req.auth?.userId || req.user?.id || null,
+      plaidItemId: req.params.plaidItemId,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    const code = error?.message === "plaid_item_not_found" ? "plaid_item_not_found" : "plaid_update_link_token_failed";
+    return res.status(code === "plaid_item_not_found" ? 404 : 500).json({ ok: false, error: code, message: safePlaidClientMessage(error, code) });
+  }
+});
+
+router.post("/items/:plaidItemId/repair-complete", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await inspectUpdatedItemAccounts({ businessId, plaidItemId: req.params.plaidItemId });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(error?.message === "plaid_item_not_found" ? 404 : 500).json({ ok: false, error: error?.message || "plaid_repair_inspection_failed" });
+  }
+});
+
+router.post("/items/:plaidItemId/recovery-preview", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, providerSync, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  const cutoffDate = String(req.body?.cutoff_date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffDate)) return res.status(400).json({ ok: false, error: "invalid_recovery_cutoff_date" });
+  try {
+    const result = await createReplacementRecoveryPreview({
+      businessId, plaidItemId: req.params.plaidItemId, cutoffDate,
+      actorUserId: req.auth?.userId || req.user?.id || null,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "plaid_recovery_preview_failed", message: "The recovery preview could not be staged. No transactions were imported and the cursor was not advanced." });
+  }
+});
+
+router.post("/items/:plaidItemId/recover-expired-lease", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await recoverExpiredPlaidSyncLease({ businessId, plaidItemId: req.params.plaidItemId, actorUserId: req.auth?.userId || req.user?.id || null });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.message || "plaid_sync_lease_recovery_failed", message: error?.message === "plaid_sync_lease_active" ? "A live synchronization worker still owns this connection." : "The expired synchronization lease could not be recovered." });
+  }
+});
+
+router.post("/recovery-batches/:batchId/release-posting-hold", requireAuth, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await releaseReplacementRecoveryHold({ businessId, batchId: req.params.batchId, actorUserId: req.auth?.userId || req.user?.id || null });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "plaid_recovery_hold_release_failed", message: error?.message || "The posting hold could not be released." });
   }
 });
 
