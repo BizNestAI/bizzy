@@ -112,9 +112,14 @@ export function summarizeRecoveryRows(rows = []) {
 
 async function scopedItem({ db, businessId, plaidItemId }) {
   const { data, error } = await db.from("plaid_items")
-    .select("id,business_id,plaid_item_id,plaid_env,plaid_access_token,cursor,institution_name,is_active")
+    .select("id,business_id,plaid_item_id,plaid_env,plaid_access_token,cursor,institution_name,is_active,replacement_recovery_status,replacement_recovery_account_id,replacement_recovery_cutoff_date,replacement_repair_completed_at")
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId).maybeSingle();
-  if (error) throw error;
+  if (error) {
+    if (error.code === "42703" || /replacement_recovery_/i.test(error.message || "")) {
+      throw recoveryError("plaid_recovery_schema_unavailable", "The durable replacement-recovery migration is not available.", 503);
+    }
+    throw error;
+  }
   if (!data?.id || data.is_active === false) throw recoveryError("plaid_item_not_found", "The selected active Plaid connection was not found.", 404);
   return data;
 }
@@ -130,11 +135,14 @@ function safeCandidate(row = {}) {
     mask: snapshot.mask || null,
     type: snapshot.type || null,
     subtype: snapshot.subtype || null,
+    qbo_account_id: snapshot.qbo_account_id || null,
+    qbo_account_name: snapshot.qbo_account_name || null,
+    qbo_account_type: snapshot.qbo_account_type || null,
   };
 }
 
 export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db = supabase }) {
-  await scopedItem({ db, businessId, plaidItemId });
+  const item = await scopedItem({ db, businessId, plaidItemId });
   const { data: candidates, error: candidateError } = await db.from("plaid_replacement_account_candidates")
     .select("id,plaid_account_id,account_snapshot,status,created_at,decided_at")
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
@@ -148,7 +156,14 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
   const batch = batches?.[0] || null;
   return {
     plaid_item_id: plaidItemId,
-    recovery_required: Boolean((candidates || []).some((row) => row.status === "pending") || (batch && !["released", "abandoned"].includes(batch.status))),
+    orchestration: {
+      status: item.replacement_recovery_status || null,
+      selected_plaid_account_id: item.replacement_recovery_account_id || null,
+      cutoff_date: item.replacement_recovery_cutoff_date || "2026-08-27",
+      repair_completed_at: item.replacement_repair_completed_at || null,
+    },
+    recovery_required: Boolean(item.replacement_recovery_status && item.replacement_recovery_status !== "released")
+      || Boolean((candidates || []).some((row) => row.status === "pending") || (batch && !["released", "abandoned"].includes(batch.status))),
     candidates: (candidates || []).map(safeCandidate),
     batch: batch ? {
       batch_id: batch.id,
@@ -164,10 +179,30 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
   };
 }
 
+export async function bootstrapReplacementRecoveryState({ businessId, plaidItemId, actorUserId, db = supabase }) {
+  await scopedItem({ db, businessId, plaidItemId });
+  const { data, error } = await db.rpc("bootstrap_plaid_replacement_recovery", {
+    p_business_id: businessId, p_plaid_env: plaidEnvName, p_plaid_item_id: plaidItemId, p_actor_user_id: actorUserId || null,
+  });
+  if (error) throw recoveryError("plaid_recovery_bootstrap_failed", "Recovery state could not be reconstructed. Verify the recovery migration and retry.");
+  return data;
+}
+
+export async function selectReplacementRecoveryAccount({ businessId, plaidItemId, plaidAccountId, actorUserId, db = supabase }) {
+  await scopedItem({ db, businessId, plaidItemId });
+  if (!plaidAccountId) throw recoveryError("replacement_account_required", "Select the replacement card account.", 400);
+  const { data, error } = await db.rpc("select_plaid_replacement_recovery_account", {
+    p_business_id: businessId, p_plaid_env: plaidEnvName, p_plaid_item_id: plaidItemId,
+    p_plaid_account_id: plaidAccountId, p_actor_user_id: actorUserId || null,
+  });
+  if (error) throw recoveryError(error.message?.includes("mapping") ? "replacement_account_qbo_mapping_required" : "replacement_candidate_persistence_failed", "The replacement account selection could not be saved.");
+  return data;
+}
+
 export async function confirmReplacementAccountLineage({ businessId, plaidItemId, candidateId, priorPlaidAccountId, actorUserId, db = supabase }) {
   await scopedItem({ db, businessId, plaidItemId });
   if (!candidateId || !priorPlaidAccountId) throw recoveryError("invalid_lineage_confirmation", "Select the prior account represented by this replacement card.", 400);
-  const { data, error } = await db.rpc("confirm_plaid_replacement_account_lineage", {
+  const { data, error } = await db.rpc("confirm_plaid_replacement_lineage_and_advance", {
     p_business_id: businessId,
     p_plaid_env: plaidEnvName,
     p_plaid_item_id: plaidItemId,
@@ -175,7 +210,10 @@ export async function confirmReplacementAccountLineage({ businessId, plaidItemId
     p_prior_plaid_account_id: priorPlaidAccountId,
     p_actor_user_id: actorUserId || null,
   });
-  if (error) throw recoveryError("lineage_confirmation_failed", error.message || "Account lineage could not be confirmed.");
+  if (error) throw recoveryError(
+    /lineage_state_persistence_failed/.test(error.message || "") ? "lineage_state_persistence_failed" : "lineage_confirmation_failed",
+    error.message || "Account lineage could not be confirmed.",
+  );
   return data || { status: "confirmed" };
 }
 

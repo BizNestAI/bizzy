@@ -140,3 +140,60 @@ test("recovery admission schema is held, cutoff-bounded, tenant-scoped, and curs
   assert.match(recovery, /reused: true/);
   assert.doesNotMatch(recovery, /create.*QuickBooks|post.*QuickBooks/i);
 });
+
+test("retained-identity repair cannot report success without durable recovery persistence", () => {
+  const integration = read("src/services/plaid/plaidIntegrationService.js");
+  const routes = read("src/api/integrations/plaid.routes.js");
+
+  assert.match(integration, /replacement_recovery_status:\s*recoveryStatus/);
+  assert.match(integration, /replacement_recovery_cutoff_date:\s*"2026-08-27"/);
+  assert.match(integration, /plaid_recovery_state_persistence_failed/);
+  assert.doesNotMatch(integration, /status:\s*newAccounts\.length\s*\?\s*"lineage_confirmation_required"\s*:\s*"updated_existing_item"/);
+  assert.match(routes, /plaid_recovery_state_persistence_failed/);
+});
+
+test("durable recovery status hydrates and missing retained state has an idempotent bootstrap", () => {
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+  const routes = read("src/api/integrations/plaid.routes.js");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const migration = read("supabase/migrations/20261101101000_plaid_replacement_recovery_durable_state.sql");
+
+  assert.match(recovery, /orchestration:\s*\{/);
+  assert.match(recovery, /plaid_recovery_schema_unavailable/);
+  assert.match(routes, /recovery-bootstrap/);
+  assert.match(routes, /recovery-account/);
+  assert.match(client, /bootstrapPlaidRecoveryState/);
+  assert.match(client, /selectPlaidReplacementRecoveryAccount/);
+  assert.match(settings, /Resume replacement recovery/);
+  assert.match(settings, /Continue to lineage confirmation/);
+  assert.match(settings, /recoveryByItem\[inst\.plaid_item_id\]\?\.ok === false/);
+  assert.match(migration, /if v_item\.replacement_recovery_status is null then/);
+  assert.match(migration, /'reused',true/);
+  assert.match(migration, /date '2026-08-27'/);
+});
+
+test("lineage confirmation and durable preview readiness advance atomically", () => {
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+  const migration = read("supabase/migrations/20261101101000_plaid_replacement_recovery_durable_state.sql");
+
+  assert.match(recovery, /confirm_plaid_replacement_lineage_and_advance/);
+  assert.match(migration, /v_result := public\.confirm_plaid_replacement_account_lineage/);
+  assert.match(migration, /replacement_recovery_status = 'ready_for_preview'/);
+  assert.match(migration, /if affected <> 1 then raise exception 'lineage_state_persistence_failed'/);
+  assert.match(migration, /grant execute .*confirm_plaid_replacement_lineage_and_advance.* to service_role/);
+});
+
+test("replacement account selection requires authoritative mapping and never infers lineage from mask", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const migration = read("supabase/migrations/20261101101000_plaid_replacement_recovery_durable_state.sql");
+
+  assert.match(settings, /mask is informational and is not used to infer lineage/);
+  assert.match(settings, /Select prior account/);
+  assert.match(migration, /replacement_account_qbo_mapping_required/);
+  assert.match(migration, /plaid_account_id = p_plaid_account_id/);
+  assert.match(migration, /v_candidate\.plaid_account_id = p_prior_plaid_account_id/);
+  assert.match(migration, /settings_replacement_recovery_explicit_retained_identity/);
+  assert.match(migration, /confidence, status, needs_confirmation/);
+  assert.doesNotMatch(migration, /where[^;]*mask\s*=/i);
+});

@@ -26,6 +26,8 @@ import {
   createPlaidLinkToken,
   createPlaidUpdateLinkToken,
   completePlaidRepair,
+  bootstrapPlaidRecoveryState,
+  selectPlaidReplacementRecoveryAccount,
   getPlaidRecoveryStatus,
   preparePlaidRecoveryPreview,
   confirmPlaidReplacementLineage,
@@ -1007,11 +1009,11 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
       try {
         const result = await getPlaidRecoveryStatus(businessId, inst.plaid_item_id);
         return [inst.plaid_item_id, result];
-      } catch {
-        return [inst.plaid_item_id, null];
+      } catch (error) {
+        return [inst.plaid_item_id, { ok: false, error: error?.code || "plaid_recovery_status_failed", message: error?.message || "Recovery status could not be loaded." }];
       }
     })).then((pairs) => {
-      if (!cancelled) setRecoveryByItem(Object.fromEntries(pairs.filter(([, value]) => value?.ok !== false)));
+      if (!cancelled) setRecoveryByItem(Object.fromEntries(pairs));
     });
     return () => { cancelled = true; };
   }, [businessId, institutions]);
@@ -1376,21 +1378,32 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                 </GhostButton>
                 {repairResult?.[inst.plaid_item_id]?.status === "lineage_confirmation_required" ? (
                   <span className="text-[11px] text-amber-200">New account identity found. Ingestion is paused pending authorized lineage confirmation.</span>
-                ) : repairResult?.[inst.plaid_item_id]?.status === "updated_existing_item" ? (
-                  <span className="text-[11px] text-emerald-200">Connection repaired. Existing Item and account identity retained.</span>
+                ) : repairResult?.[inst.plaid_item_id]?.status === "awaiting_account_selection" ? (
+                  <span className="text-[11px] text-emerald-200">Connection repaired. Select the replacement account to continue the durable recovery review.</span>
                 ) : repairResult?.[inst.plaid_item_id]?.status === "failed" ? (
                   <span className="text-[11px] text-rose-200">Repair could not be completed. Existing history remains unchanged.</span>
+                ) : null}
+                {recoveryByItem[inst.plaid_item_id]?.ok === false ? (
+                  <span className="text-[11px] text-rose-200">{recoveryByItem[inst.plaid_item_id]?.message || "Durable recovery status is unavailable."}</span>
+                ) : null}
+                {!recoveryByItem[inst.plaid_item_id]?.orchestration?.status ? (
+                  <GhostButton type="button" disabled={readOnly || Boolean(recoveryBusy[inst.plaid_item_id])}
+                    onClick={() => runRecoveryAction(inst.plaid_item_id, () => bootstrapPlaidRecoveryState(businessId, inst.plaid_item_id))}
+                    className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-semibold">
+                    Resume replacement recovery
+                  </GhostButton>
                 ) : null}
               </div>
               {(() => {
                 const recovery = recoveryByItem[inst.plaid_item_id];
+                const orchestration = recovery?.orchestration || null;
                 const pendingCandidate = recovery?.candidates?.find((candidate) => candidate.status === "pending");
                 const batch = recovery?.batch || null;
                 const summary = batch?.summary || {};
                 const busy = Boolean(recoveryBusy[inst.plaid_item_id]);
                 const selectionKey = pendingCandidate ? `${inst.plaid_item_id}:${pendingCandidate.id}` : null;
                 const selectedPriorAccount = selectionKey ? lineageSelection[selectionKey] : null;
-                if (!recovery || (!(recovery.candidates || []).length && !batch)) return null;
+                if (!recovery || (!orchestration?.status && !(recovery.candidates || []).length && !batch)) return null;
                 return (
                   <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/[0.06] p-3">
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1402,6 +1415,29 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                       </div>
                       <StatusBadge tone={batch?.status === "released" ? "ok" : "warning"} label={(batch?.status || "lineage review").replaceAll("_", " ")} />
                     </div>
+
+                    {orchestration?.status === "awaiting_account_selection" ? (
+                      <div className="mt-3 rounded-lg border border-white/10 bg-black/15 p-3">
+                        <div className="text-xs text-white/80">Select the repaired replacement-card account. Its mask is informational and is not used to infer lineage.</div>
+                        <select className="mt-2 h-10 w-full rounded-lg border border-white/10 bg-[#111513] px-3 text-xs text-white sm:max-w-md"
+                          value={lineageSelection[`${inst.plaid_item_id}:replacement`] || ""}
+                          onChange={(event) => setLineageSelection((current) => ({ ...current, [`${inst.plaid_item_id}:replacement`]: event.target.value }))}
+                          disabled={readOnly || busy}>
+                          <option value="">Select replacement account…</option>
+                          {(inst.accounts || []).map((account) => {
+                            const mapping = mappingById.get(account.plaid_account_id);
+                            return <option key={account.plaid_account_id} value={account.plaid_account_id}>
+                              {account.name || account.official_name || "Account"}{account.mask ? ` ••${account.mask}` : ""}{mapping?.qbo_account_name ? ` → ${mapping.qbo_account_name}` : ""}
+                            </option>;
+                          })}
+                        </select>
+                        <div className="mt-2"><AccentButton type="button" className="h-9 px-3 text-xs"
+                          disabled={readOnly || busy || !lineageSelection[`${inst.plaid_item_id}:replacement`]}
+                          onClick={() => runRecoveryAction(inst.plaid_item_id, () => selectPlaidReplacementRecoveryAccount(businessId, inst.plaid_item_id, lineageSelection[`${inst.plaid_item_id}:replacement`]))}>
+                          {busy ? "Saving…" : "Continue to lineage confirmation"}
+                        </AccentButton></div>
+                      </div>
+                    ) : null}
 
                     {pendingCandidate ? (
                       <div className="mt-3 rounded-lg border border-white/10 bg-black/15 p-3">
@@ -1415,7 +1451,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                           disabled={readOnly || busy}
                         >
                           <option value="">Select prior account…</option>
-                          {(inst.accounts || []).filter((account) => account.plaid_account_id !== pendingCandidate.plaid_account_id).map((account) => (
+                          {(inst.accounts || []).map((account) => (
                             <option key={account.plaid_account_id} value={account.plaid_account_id}>
                               {account.name || account.official_name || "Account"}{account.mask ? ` ••${account.mask}` : ""}
                             </option>
@@ -1437,7 +1473,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                       </div>
                     ) : null}
 
-                    {!pendingCandidate && (!batch || ["failed", "abandoned"].includes(batch.status)) ? (
+                    {!pendingCandidate && orchestration?.status === "ready_for_preview" && (!batch || ["failed", "abandoned"].includes(batch.status)) ? (
                       <div className="mt-3 flex flex-wrap items-center gap-3">
                         <AccentButton
                           type="button"

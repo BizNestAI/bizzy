@@ -86,9 +86,24 @@ export async function inspectUpdatedItemAccounts({ businessId, plaidItemId, db =
     })), { onConflict: "business_id,plaid_env,plaid_item_id,plaid_account_id" });
     if (candidateError) throw candidateError;
   }
+  const recoveryStatus = newAccounts.length === 1 ? "lineage_confirmation_required" : "awaiting_account_selection";
+  const { data: durableItem, error: durableError } = await db.from("plaid_items").update({
+    replacement_recovery_status: recoveryStatus,
+    replacement_recovery_account_id: newAccounts.length === 1 ? newAccounts[0].plaid_account_id : null,
+    replacement_recovery_cutoff_date: "2026-08-27",
+    replacement_repair_completed_at: new Date().toISOString(),
+  }).eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
+    .select("plaid_item_id,replacement_recovery_status,replacement_recovery_account_id,replacement_recovery_cutoff_date").maybeSingle();
+  if (durableError || !durableItem?.plaid_item_id) {
+    const failure = new Error("plaid_recovery_state_persistence_failed");
+    failure.code = "plaid_recovery_state_persistence_failed";
+    failure.cause = durableError || null;
+    throw failure;
+  }
   return {
     plaid_item_id: plaidItemId,
-    status: newAccounts.length ? "lineage_confirmation_required" : "updated_existing_item",
+    status: durableItem.replacement_recovery_status,
+    recovery_state: durableItem,
     new_accounts: newAccounts,
     ingestion_started: false,
   };

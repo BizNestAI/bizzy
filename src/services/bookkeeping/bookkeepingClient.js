@@ -893,6 +893,19 @@ export async function getPlaidRecoveryStatus(businessId, plaidItemId) {
   return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-status`), { method: "GET", headers: withBizHeaders(businessId) });
 }
 
+export async function bootstrapPlaidRecoveryState(businessId, plaidItemId) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-bootstrap`), {
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({}),
+  });
+}
+
+export async function selectPlaidReplacementRecoveryAccount(businessId, plaidItemId, plaidAccountId) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-account`), {
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ plaid_account_id: plaidAccountId }),
+  });
+}
+
 export async function preparePlaidRecoveryPreview(businessId, plaidItemId, cutoffDate) {
   return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-preview`), {
     method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({ cutoff_date: cutoffDate }),
@@ -1057,6 +1070,8 @@ export default {
   createPlaidLinkToken,
   createPlaidUpdateLinkToken,
   completePlaidRepair,
+  bootstrapPlaidRecoveryState,
+  selectPlaidReplacementRecoveryAccount,
   getPlaidRecoveryStatus,
   preparePlaidRecoveryPreview,
   confirmPlaidReplacementLineage,

@@ -18,7 +18,7 @@ import {
   getPlaidStatus,
   inspectUpdatedItemAccounts,
 } from "../../services/plaid/plaidIntegrationService.js";
-import { admitReplacementRecoveryBatch, confirmReplacementAccountLineage, createReplacementRecoveryPreview, getReplacementRecoveryStatus, releaseReplacementRecoveryHold } from "../../services/plaid/plaidReplacementRecoveryService.js";
+import { admitReplacementRecoveryBatch, bootstrapReplacementRecoveryState, confirmReplacementAccountLineage, createReplacementRecoveryPreview, getReplacementRecoveryStatus, releaseReplacementRecoveryHold, selectReplacementRecoveryAccount } from "../../services/plaid/plaidReplacementRecoveryService.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from "../_shared/entitlementAuth.js";
 import { consumePlaidLinkState, createPlaidLinkState } from "../../services/plaid/plaidLinkStateService.js";
@@ -111,7 +111,35 @@ router.post("/items/:plaidItemId/repair-complete", requireAuth, plaidMutationRat
     const result = await inspectUpdatedItemAccounts({ businessId, plaidItemId: req.params.plaidItemId });
     return res.json({ ok: true, ...result });
   } catch (error) {
-    return res.status(error?.message === "plaid_item_not_found" ? 404 : 500).json({ ok: false, error: error?.message || "plaid_repair_inspection_failed" });
+    const code = error?.code || error?.message || "plaid_repair_inspection_failed";
+    return res.status(code === "plaid_item_not_found" ? 404 : 500).json({ ok: false, error: code,
+      message: code === "plaid_recovery_state_persistence_failed"
+        ? "The connection was repaired, but durable replacement recovery could not be saved. Verify the recovery migration before continuing."
+        : "The repaired connection could not be inspected safely." });
+  }
+});
+
+router.post("/items/:plaidItemId/recovery-bootstrap", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await bootstrapReplacementRecoveryState({ businessId, plaidItemId: req.params.plaidItemId,
+      actorUserId: req.auth?.userId || req.user?.id || null });
+    return res.json({ ok: true, plaid_item_id: req.params.plaidItemId, orchestration: result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "plaid_recovery_bootstrap_failed", message: error?.message || "Recovery state could not be reconstructed." });
+  }
+});
+
+router.post("/items/:plaidItemId/recovery-account", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await selectReplacementRecoveryAccount({ businessId, plaidItemId: req.params.plaidItemId,
+      plaidAccountId: req.body?.plaid_account_id, actorUserId: req.auth?.userId || req.user?.id || null });
+    return res.json({ ok: true, plaid_item_id: req.params.plaidItemId, orchestration: result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "replacement_account_selection_failed", message: error?.message || "The replacement account could not be selected." });
   }
 });
 
