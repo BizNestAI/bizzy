@@ -1,4 +1,5 @@
 /* global process */
+import crypto from "crypto";
 import { Router } from "express";
 import { recoverExpiredPlaidSyncLease, runPlaidSyncForBusiness } from "../../services/plaid/plaidSyncService.js";
 import { supabase } from "../../services/supabaseAdmin.js";
@@ -187,11 +188,16 @@ router.post("/items/:plaidItemId/confirm-lineage", requireAuth, plaidMutationRat
 router.get("/items/:plaidItemId/recovery-batches/:batchId/rows", requireAuth, primaryOwner, integrationAdmin, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  const requestId = String(req.get("x-request-id") || crypto.randomUUID());
+  res.set("x-request-id", requestId);
   try {
-    return res.json({ ok: true, ...(await listReplacementRecoveryRows({ businessId, plaidItemId: req.params.plaidItemId, batchId: req.params.batchId,
+    return res.json({ ok: true, request_id: requestId, ...(await listReplacementRecoveryRows({ businessId, plaidItemId: req.params.plaidItemId, batchId: req.params.batchId,
       page: req.query.page, pageSize: req.query.page_size, search: req.query.search, dateFrom: req.query.date_from, dateTo: req.query.date_to, sort: req.query.sort })) });
   } catch (error) {
-    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "recovery_rows_failed", message: error?.message || "Recovery transactions could not be loaded." });
+    console.warn("[plaid-recovery] row review failed", { request_id: requestId, business_id: businessId, plaid_item_id: req.params.plaidItemId,
+      batch_id: req.params.batchId, code: error?.code || "recovery_rows_failed", details: error?.details || null });
+    return res.status(error?.status || 500).json({ ok: false, request_id: requestId, error: error?.code || "recovery_rows_failed",
+      message: error?.message || "Recovery transactions could not be loaded.", details: error?.details || undefined });
   }
 });
 

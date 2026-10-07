@@ -1,5 +1,6 @@
 // src/components/Settings/SettingsHome.jsx
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useBusiness } from "../../context/BusinessContext";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
@@ -775,28 +776,54 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   const [selected, setSelected] = useState(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const dialogRef = useRef(null);
+  const returnFocusRef = useRef(typeof document !== "undefined" ? document.activeElement : null);
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.focus();
+    const onKeyDown = (event) => { if (event.key === "Escape" && !busy) onClose(); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+      returnFocusRef.current?.focus?.();
+    };
+  }, [busy, onClose]);
   useEffect(() => {
     let cancelled = false;
-    setError("");
+    setLoading(true);
+    setError(null);
+    setResult(null);
     getPlaidRecoveryBatchRows(businessId, plaidItemId, batch.batch_id, { page, page_size: 25, search, date_from: dateFrom, date_to: dateTo, sort })
       .then((response) => {
         if (cancelled) return;
-        if (response?.ok === false) throw new Error(response.message || "Recovery transactions could not be loaded.");
+        if (response?.ok === false) {
+          const cause = new Error(response.message || "Recovery transactions could not be loaded.");
+          cause.requestId = response.request_id;
+          throw cause;
+        }
+        if (response?.integrity?.ok !== true) throw new Error("Recovery preview integrity could not be confirmed.");
         setResult(response);
         setSelected((current) => current === null ? new Set(response.eligible_row_ids || []) : current);
-      }).catch((cause) => { if (!cancelled) setError(cause?.message || "Recovery transactions could not be loaded."); });
+      }).catch((cause) => { if (!cancelled) setError({ message: cause?.message || "Recovery transactions could not be loaded.", requestId: cause?.requestId || null }); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [businessId, plaidItemId, batch.batch_id, page, search, dateFrom, dateTo, sort]);
+  }, [businessId, plaidItemId, batch.batch_id, page, search, dateFrom, dateTo, sort, retryNonce]);
   const count = selected?.size || 0;
   const summary = result?.summary || batch.summary || {};
   const represented = (summary.exact_existing || 0) + (summary.represented || 0);
   const cutoffDate = result?.cutoff_date || batch.cutoff_date || REPLACEMENT_CARD_CUTOFF_DATE;
   const latestExistingDate = summary.latest_existing_transaction_date || summary.latest_existing_date || null;
   const money = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Math.abs(Number(value || 0)));
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3" role="dialog" aria-modal="true" aria-label="Review replacement-card transactions">
-      <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#101312] shadow-2xl">
+  const integrityOk = result?.integrity?.ok === true;
+  const modal = (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3">
+      <div ref={dialogRef} tabIndex={-1} className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#101312] shadow-2xl outline-none" role="dialog" aria-modal="true" aria-label="Review replacement-card transactions">
         <div className="border-b border-white/10 px-5 py-4"><div className="text-lg font-semibold text-white">Review new Chase transactions</div>
           <div className="mt-1 text-xs text-white/55">Controlled cutoff: {cutoffDate} · Operator confirmed{latestExistingDate ? ` · Latest existing transaction: ${latestExistingDate}` : ""}</div></div>
         <div className="overflow-y-auto p-5">
@@ -810,20 +837,22 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
               <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white [color-scheme:dark]" />
               <select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white"><option value="oldest">Oldest first</option><option value="newest">Newest first</option><option value="amount">Amount</option></select>
             </div>
-            {error ? <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-100">{error}</div> : null}
-            <div className="overflow-x-auto rounded-xl border border-white/10"><table className="min-w-[920px] w-full text-left text-xs"><thead className="bg-white/[.04] text-white/55"><tr>
+            {loading ? <div className="rounded-lg border border-white/10 bg-white/[.03] p-5 text-sm text-white/65">Loading staged transactions…</div> : null}
+            {error ? <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-100"><div>{error.message}</div>{error.requestId ? <div className="mt-1 text-xs text-rose-200/70">Request {error.requestId}</div> : null}<GhostButton type="button" className="mt-3" onClick={() => setRetryNonce((value) => value + 1)}>Retry</GhostButton></div> : null}
+            {!loading && !error ? <><div className="overflow-x-auto rounded-xl border border-white/10"><table className="min-w-[920px] w-full text-left text-xs"><thead className="bg-white/[.04] text-white/55"><tr>
               <th className="w-12 whitespace-nowrap p-3">Select</th><th className="min-w-32 whitespace-nowrap p-3">Transaction date</th><th className="min-w-32 whitespace-nowrap p-3">Authorized date</th><th className="min-w-72 whitespace-nowrap p-3">Merchant / description</th><th className="min-w-28 whitespace-nowrap p-3">Amount</th><th className="min-w-28 whitespace-nowrap p-3">Status</th><th className="min-w-40 whitespace-nowrap p-3">Classification</th>
             </tr></thead><tbody>{(result?.rows || []).map((row) => <tr key={row.id} className="border-t border-white/8 text-white/80"><td className="p-3"><input type="checkbox" checked={selected?.has(row.id) || false} onChange={() => setSelected((current) => { const next = new Set(current || []); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next; })} /></td>
               <td className="whitespace-nowrap p-3">{row.transaction_date}</td><td className="whitespace-nowrap p-3">{row.authorized_date && row.authorized_date !== row.transaction_date ? row.authorized_date : "—"}</td><td className="p-3">{row.merchant_or_description}</td><td className={`whitespace-nowrap p-3 font-semibold ${row.amount >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{row.amount >= 0 ? "+" : "−"}{money(row.amount)}</td><td className="whitespace-nowrap p-3">{row.pending ? "Pending" : "Posted"}</td><td className="whitespace-nowrap p-3 capitalize">{row.activity_type.replaceAll("_", " ")}</td></tr>)}</tbody></table></div>
-            <div className="mt-3 flex items-center justify-between text-xs text-white/55"><span>{result?.total ? `Showing ${(page - 1) * 25 + 1}–${Math.min(page * 25, result.total)} of ${result.total}` : "Showing 0 transactions"}</span><div className="flex gap-2"><GhostButton type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</GhostButton><GhostButton type="button" disabled={page * 25 >= (result?.total || 0)} onClick={() => setPage((p) => p + 1)}>Next</GhostButton></div></div>
+            <div className="mt-3 flex items-center justify-between text-xs text-white/55"><span>{result?.total ? `Showing ${(page - 1) * 25 + 1}–${Math.min(page * 25, result.total)} of ${result.total}` : "No new transactions in this verified recovery preview."}</span><div className="flex gap-2"><GhostButton type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</GhostButton><GhostButton type="button" disabled={page * 25 >= (result?.total || 0)} onClick={() => setPage((p) => p + 1)}>Next</GhostButton></div></div></> : null}
           </> : <div className="rounded-xl border border-amber-400/25 bg-amber-500/5 p-5 text-sm text-white/75"><div className="text-base font-semibold text-white">Confirm controlled admission</div><p className="mt-2">Import <b>{count}</b> selected transactions. Skip {represented} existing rows and hold {summary.pending_replacements || 0} pending replacements.</p><p className="mt-2">Cutoff: {cutoffDate} · Operator confirmed. Nothing will be sent to QuickBooks; Auto-post stays off and the posting hold remains active.</p></div>}
         </div>
         <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><GhostButton type="button" onClick={confirming ? () => setConfirming(false) : onClose}>{confirming ? "Back" : "Cancel"}</GhostButton>
-          {!confirming ? <AccentButton type="button" disabled={!count} onClick={() => setConfirming(true)}>Import {count} selected transactions</AccentButton>
-            : <AccentButton type="button" disabled={busy || !count} onClick={async () => { setBusy(true); setError(""); try { await onAdmit([...selected]); } catch (cause) { setError(cause?.message || "Admission failed."); setConfirming(false); } finally { setBusy(false); } }}>{busy ? "Importing…" : `Confirm import of ${count}`}</AccentButton>}</div>
+          {!confirming ? <AccentButton type="button" disabled={loading || Boolean(error) || !integrityOk || !count} onClick={() => setConfirming(true)}>Import {count} selected transactions</AccentButton>
+            : <AccentButton type="button" disabled={busy || !count} onClick={async () => { setBusy(true); setError(null); try { await onAdmit([...selected]); } catch (cause) { setError({ message: cause?.message || "Admission failed.", requestId: cause?.requestId || null }); setConfirming(false); } finally { setBusy(false); } }}>{busy ? "Importing…" : `Confirm import of ${count}`}</AccentButton>}</div>
       </div>
     </div>
   );
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : null;
 }
 
 function PlaidIntegrationCard({ businessId, readOnly = false }) {

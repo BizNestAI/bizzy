@@ -9,11 +9,27 @@ import {
 } from "./plaidCanonicalIdentity.js";
 import { normalizePlaidAuthorizedDate, normalizePlaidPostedDate } from "../bookkeeping/accountingDatePolicy.js";
 
-function recoveryError(code, message, status = 409) {
+function recoveryError(code, message, status = 409, details = null) {
   const error = new Error(message);
   error.code = code;
   error.status = status;
+  error.details = details;
   return error;
+}
+
+export function validateRecoveryReviewPopulation({ summary = {}, rows = [], replacementAccountId }) {
+  const expectedCount = Number(summary.new_after_cutoff ?? summary.genuinely_new ?? 0);
+  const reviewRows = (rows || []).filter((row) => row.disposition === "new_after_cutoff"
+    && row.plaid_account_id === replacementAccountId);
+  if (reviewRows.length !== expectedCount) {
+    throw recoveryError(
+      "recovery_preview_row_count_mismatch",
+      "This recovery preview is incomplete and cannot be imported. Prepare a fresh recovery preview and try again.",
+      409,
+      { expected_count: expectedCount, staged_count: reviewRows.length },
+    );
+  }
+  return { expected_count: expectedCount, staged_count: reviewRows.length, rows: reviewRows };
 }
 
 function normalizedIncoming(tx = {}) {
@@ -230,7 +246,10 @@ export async function listReplacementRecoveryRows({ businessId, plaidItemId, bat
     .eq("business_id", businessId).eq("batch_id", batchId).eq("plaid_account_id", item.replacement_recovery_account_id)
     .eq("disposition", "new_after_cutoff");
   if (error) throw error;
-  const sanitized = (data || []).map((row) => {
+  const integrity = validateRecoveryReviewPopulation({
+    summary: batch.summary || {}, rows: data || [], replacementAccountId: item.replacement_recovery_account_id,
+  });
+  const sanitized = integrity.rows.map((row) => {
     const transaction = row.payload?.transaction || {};
     const name = transaction.merchant_name || transaction.name || "Transaction";
     const amount = Number(row.signed_amount ?? row.amount ?? 0);
@@ -249,7 +268,8 @@ export async function listReplacementRecoveryRows({ businessId, plaidItemId, bat
   const safePage = Math.max(1, Number(page) || 1);
   const start = (safePage - 1) * safePageSize;
   return { batch_id: batch.id, plaid_item_id: plaidItemId, status: batch.status, cutoff_date: batch.cutoff_date, posting_hold: batch.posting_hold,
-    summary: batch.summary || {}, page: safePage, page_size: safePageSize, total: filtered.length, rows: filtered.slice(start, start + safePageSize),
+    summary: batch.summary || {}, integrity: { ok: true, expected_count: integrity.expected_count, staged_count: integrity.staged_count },
+    page: safePage, page_size: safePageSize, total: filtered.length, rows: filtered.slice(start, start + safePageSize),
     eligible_row_ids: sanitized.filter((row) => !row.admitted).map((row) => row.id) };
 }
 
@@ -279,8 +299,16 @@ export async function createReplacementRecoveryPreview({ businessId, plaidItemId
   if (activeBatchError) throw activeBatchError;
   if (activeBatches?.[0]) {
     const active = activeBatches[0];
+    if (active.status === "preview_ready") {
+      const { data: stagedRows, error: stagedRowsError } = await db.from("plaid_recovery_batch_rows")
+        .select("id,plaid_account_id,disposition").eq("business_id", businessId).eq("batch_id", active.id)
+        .eq("plaid_account_id", item.replacement_recovery_account_id).eq("disposition", "new_after_cutoff");
+      if (stagedRowsError) throw stagedRowsError;
+      validateRecoveryReviewPopulation({ summary: active.summary || {}, rows: stagedRows || [], replacementAccountId: item.replacement_recovery_account_id });
+    }
     return { batch_id: active.id, plaid_item_id: plaidItemId, status: active.status, cutoff_date: active.cutoff_date, posting_hold: active.posting_hold, summary: active.summary || {}, reused: true };
   }
+  if (!item.replacement_recovery_account_id) throw recoveryError("replacement_account_required", "Confirm the replacement account before preparing a preview.");
   const accessToken = await resolveStoredPlaidAccessToken({ storedToken: item.plaid_access_token });
   const collected = await collectCompletePlaidSyncPreview({ plaid, accessToken, originalCursor: item.cursor || null });
   const accountIds = [...new Set([...collected.added, ...collected.modified].map((tx) => tx.account_id).filter(Boolean))];
@@ -294,32 +322,40 @@ export async function createReplacementRecoveryPreview({ businessId, plaidItemId
     .eq("business_id", businessId);
   if (existingError) throw existingError;
 
-  const makeRows = (transactions, changeType) => transactions.map((transaction) => {
-    const classification = classifyRecoveryTransaction({ transaction, changeType, existingRows: existing || [], cutoffDate, confirmedAccountIds: [...knownAccounts] });
+  const recoveryAccountId = item.replacement_recovery_account_id;
+  const makeRows = (transactions, changeType) => transactions.filter((transaction) => transaction.account_id === recoveryAccountId).map((transaction) => {
+    const classification = classifyRecoveryTransaction({ transaction, changeType, existingRows: existing || [], cutoffDate, confirmedAccountIds: [recoveryAccountId] });
     const normalized = normalizedIncoming(transaction);
     return { business_id: businessId, change_type: changeType, disposition: classification.disposition, ...normalized, transaction_date: normalized.date, payload: { transaction, classification } };
   });
   const rows = [
     ...makeRows(collected.added, "added"),
     ...makeRows(collected.modified, "modified"),
-    ...(collected.removed || []).map((transaction) => ({
+    ...(collected.removed || []).filter((transaction) => (existing || []).some((row) => row.plaid_transaction_id === transaction.transaction_id && row.plaid_account_id === recoveryAccountId)).map((transaction) => ({
       business_id: businessId, change_type: "removed", disposition: (existing || []).some((row) => row.plaid_transaction_id === transaction.transaction_id) ? "removed_existing" : "ambiguous",
       plaid_transaction_id: transaction.transaction_id || null, payload: { transaction },
     })),
   ];
   const summary = { ...summarizeRecoveryRows(rows), pages: collected.pages.length, mutation_restarts: collected.mutation_restarts, unknown_account_ids: unknownAccounts };
   const batchId = crypto.randomUUID();
-  const status = unknownAccounts.length ? "lineage_confirmation_required" : "preview_ready";
+  const status = unknownAccounts.includes(recoveryAccountId) ? "lineage_confirmation_required" : "preview_ready";
   const { error: batchError } = await db.from("plaid_recovery_batches").insert({
     id: batchId, business_id: businessId, plaid_env: item.plaid_env, plaid_item_id: plaidItemId,
     original_cursor: item.cursor || null, staged_next_cursor: collected.staged_next_cursor, cutoff_date: cutoffDate,
-    status, posting_hold: true, summary, created_by: actorUserId || null,
+    status: "staging", posting_hold: true, summary, created_by: actorUserId || null,
   });
   if (batchError) throw batchError;
   if (rows.length) {
     const { error: rowError } = await db.from("plaid_recovery_batch_rows").insert(rows.map((row) => ({ ...row, batch_id: batchId })));
-    if (rowError) throw rowError;
+    if (rowError) {
+      await db.from("plaid_recovery_batches").update({ status: "failed", failure_code: "recovery_row_staging_failed", failure_detail: rowError.message || null })
+        .eq("business_id", businessId).eq("id", batchId);
+      throw recoveryError("recovery_row_staging_failed", "Recovery transactions could not be staged. Nothing was imported.", 503);
+    }
   }
+  validateRecoveryReviewPopulation({ summary, rows, replacementAccountId: recoveryAccountId });
+  const { error: readyError } = await db.from("plaid_recovery_batches").update({ status }).eq("business_id", businessId).eq("id", batchId).eq("status", "staging");
+  if (readyError) throw recoveryError("recovery_preview_finalize_failed", "The recovery preview could not be finalized. Nothing was imported.", 503);
   return { batch_id: batchId, plaid_item_id: plaidItemId, status, cutoff_date: cutoffDate, posting_hold: true, summary };
 }
 

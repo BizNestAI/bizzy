@@ -1511,7 +1511,11 @@ export default function BookkeepingFeed({
             const permittedRowResolutionOptions = Array.isArray(allowedResolutionIds)
               ? rowResolutionOptions.filter(([id]) => allowedResolutionIds.includes(id))
               : rowResolutionOptions;
-            const showCanonicalCoa = ["needs_review", "handled"].includes(String(activeFeed || "").toLowerCase()) && !isPending && !isPosted;
+            const showCanonicalCoa =
+              ["needs_review", "handled"].includes(String(activeFeed || "").toLowerCase()) &&
+              !isPending &&
+              !isPosted &&
+              effectiveResolution !== "match_credit_card_payment";
             const coaEditingProtected = effectiveResolution === "match_credit_card_payment" || Boolean(ccWorkflowStatus || ccTransferLabel);
             const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly && (!selectableIds || selectableIds.has(txn.id));
             const postingAction = txn.posting_action || deriveBookkeepingPostingAction(txn);

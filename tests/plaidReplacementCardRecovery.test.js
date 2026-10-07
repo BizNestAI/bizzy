@@ -76,6 +76,20 @@ test("recovery cutoff and duplicate policy fail closed", async () => {
   }).disposition, "new_after_cutoff");
 });
 
+test("recovery review fails closed when a preview summary has no durable staged rows", async () => {
+  const { validateRecoveryReviewPopulation } = await import("../src/services/plaid/plaidReplacementRecoveryService.js");
+  assert.throws(() => validateRecoveryReviewPopulation({
+    summary: { new_after_cutoff: 113 }, rows: [], replacementAccountId: "replacement",
+  }), (error) => error.code === "recovery_preview_row_count_mismatch"
+    && error.details.expected_count === 113 && error.details.staged_count === 0);
+  const valid = validateRecoveryReviewPopulation({
+    summary: { new_after_cutoff: 1 },
+    rows: [{ id: "row-1", plaid_account_id: "replacement", disposition: "new_after_cutoff" }],
+    replacementAccountId: "replacement",
+  });
+  assert.equal(valid.staged_count, 1);
+});
+
 test("replacement repair remains update-mode, staged, held, and explicitly released", () => {
   const integration = read("src/services/plaid/plaidIntegrationService.js");
   const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
@@ -137,6 +151,12 @@ test("replacement recovery review is transaction-level, scoped, selective, and h
   assert.match(settings, /Import \{count\} selected transactions/);
   assert.match(settings, /Auto-post is off\. Posting hold remains active/);
   assert.match(settings, /overflow-x-auto/);
+  assert.match(settings, /createPortal\(modal, document\.body\)/);
+  assert.match(settings, /Loading staged transactions/);
+  assert.match(settings, />Retry</);
+  assert.match(settings, /integrityOk/);
+  assert.match(settings, /document\.body\.style\.overflow = "hidden"/);
+  assert.match(settings, /event\.key === "Escape"/);
   assert.match(settings, /Oldest first/);
   assert.match(settings, /getPlaidRecoveryBatchRows/);
   assert.match(client, /items\/\$\{encodeURIComponent\(plaidItemId\)\}\/recovery-batches/);
@@ -146,6 +166,8 @@ test("replacement recovery review is transaction-level, scoped, selective, and h
   assert.match(recovery, /\.eq\("business_id", businessId\)/);
   assert.match(recovery, /\.eq\("plaid_account_id", item\.replacement_recovery_account_id\)/);
   assert.match(recovery, /\.eq\("disposition", "new_after_cutoff"\)/);
+  assert.match(recovery, /recovery_preview_row_count_mismatch/);
+  assert.match(recovery, /status: "staging"/);
   assert.match(migration, /id = any\(p_selected_row_ids\)/);
   assert.match(migration, /recovery_selection_no_longer_eligible/);
   assert.match(migration, /recovery_admission_count_mismatch/);
