@@ -924,6 +924,13 @@ export async function getPlaidRecoveryBatchRows(businessId, plaidItemId, batchId
   return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-batches/${encodeURIComponent(batchId)}/rows?${qs}`), { method: "GET", headers: withBizHeaders(businessId) });
 }
 
+export async function rebuildPlaidRecoveryPreview(businessId, plaidItemId, batchId, idempotencyKey) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-batches/${encodeURIComponent(batchId)}/rebuild`), {
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ idempotency_key: idempotencyKey }),
+  });
+}
+
 export async function admitPlaidRecoveryBatch(businessId, plaidItemId, batchId, selectedRowIds) {
   return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-batches/${encodeURIComponent(batchId)}/admit`), {
     method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({ selected_row_ids: selectedRowIds }),

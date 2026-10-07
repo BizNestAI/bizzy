@@ -33,6 +33,7 @@ import {
   preparePlaidRecoveryPreview,
   confirmPlaidReplacementLineage,
   getPlaidRecoveryBatchRows,
+  rebuildPlaidRecoveryPreview,
   admitPlaidRecoveryBatch,
   releasePlaidRecoveryHold,
   exchangePlaidPublicToken,
@@ -766,7 +767,7 @@ function StatusBadge({ label = "Unknown", tone = "slate" }) {
   );
 }
 
-function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClose, onAdmit }) {
+function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClose, onAdmit, onRebuild }) {
   const [result, setResult] = useState(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
@@ -779,6 +780,8 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [retryNonce, setRetryNonce] = useState(0);
+  const [confirmingRebuild, setConfirmingRebuild] = useState(false);
+  const rebuildKeyRef = useRef(null);
   const dialogRef = useRef(null);
   const returnFocusRef = useRef(typeof document !== "undefined" ? document.activeElement : null);
   useEffect(() => {
@@ -805,12 +808,14 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
         if (response?.ok === false) {
           const cause = new Error(response.message || "Recovery transactions could not be loaded.");
           cause.requestId = response.request_id;
+          cause.code = response.error;
+          cause.details = response.details;
           throw cause;
         }
         if (response?.integrity?.ok !== true) throw new Error("Recovery preview integrity could not be confirmed.");
         setResult(response);
         setSelected((current) => current === null ? new Set(response.eligible_row_ids || []) : current);
-      }).catch((cause) => { if (!cancelled) setError({ message: cause?.message || "Recovery transactions could not be loaded.", requestId: cause?.requestId || null }); })
+      }).catch((cause) => { if (!cancelled) setError({ message: cause?.message || "Recovery transactions could not be loaded.", requestId: cause?.requestId || null, code: cause?.code || null, details: cause?.details || null }); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [businessId, plaidItemId, batch.batch_id, page, search, dateFrom, dateTo, sort, retryNonce]);
@@ -821,6 +826,7 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   const latestExistingDate = summary.latest_existing_transaction_date || summary.latest_existing_date || null;
   const money = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Math.abs(Number(value || 0)));
   const integrityOk = result?.integrity?.ok === true;
+  const orphanedPreview = error?.code === "recovery_preview_row_count_mismatch";
   const modal = (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3">
       <div ref={dialogRef} tabIndex={-1} className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#101312] shadow-2xl outline-none" role="dialog" aria-modal="true" aria-label="Review replacement-card transactions">
@@ -838,12 +844,33 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
               <select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white"><option value="oldest">Oldest first</option><option value="newest">Newest first</option><option value="amount">Amount</option></select>
             </div>
             {loading ? <div className="rounded-lg border border-white/10 bg-white/[.03] p-5 text-sm text-white/65">Loading staged transactions…</div> : null}
-            {error ? <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-100"><div>{error.message}</div>{error.requestId ? <div className="mt-1 text-xs text-rose-200/70">Request {error.requestId}</div> : null}<GhostButton type="button" className="mt-3" onClick={() => setRetryNonce((value) => value + 1)}>Retry</GhostButton></div> : null}
+            {error ? <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-100">
+              <div>{orphanedPreview ? "The earlier preview did not save its transaction details. Your Chase connection is still repaired. Bizzi only needs to rebuild the preview." : error.message}</div>
+              {error.requestId ? <div className="mt-1 text-xs text-rose-200/70">Request {error.requestId}</div> : null}
+              {orphanedPreview && !confirmingRebuild ? <GhostButton type="button" className="mt-3" disabled={busy} onClick={() => setConfirmingRebuild(true)}>Rebuild recovery preview</GhostButton> : null}
+              {orphanedPreview && confirmingRebuild ? <div className="mt-4 rounded-lg border border-amber-300/25 bg-black/20 p-4 text-amber-50">
+                <div className="font-semibold">Confirm a new read-only Chase preview</div>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-100/80"><li>No Plaid Link or connection repair</li><li>No transaction import</li><li>No QuickBooks access</li><li>No live cursor advancement</li><li>No posting-hold release</li></ul>
+                <div className="mt-3 flex gap-2"><GhostButton type="button" disabled={busy} onClick={() => setConfirmingRebuild(false)}>Cancel</GhostButton><AccentButton type="button" disabled={busy} onClick={async () => {
+                  setBusy(true);
+                  try {
+                    if (!rebuildKeyRef.current) rebuildKeyRef.current = globalThis.crypto?.randomUUID?.() || `${batch.batch_id}:${Date.now()}`;
+                    await onRebuild(rebuildKeyRef.current);
+                    setConfirmingRebuild(false);
+                  } catch (cause) {
+                    rebuildKeyRef.current = null;
+                    setError({ message: cause?.message || "The recovery preview could not be rebuilt.", requestId: cause?.requestId || null, code: cause?.code || "recovery_rebuild_failed" });
+                  } finally { setBusy(false); }
+                }}>{busy ? "Rebuilding…" : "Confirm rebuild"}</AccentButton></div>
+              </div> : null}
+              {!orphanedPreview ? <GhostButton type="button" className="mt-3" onClick={() => setRetryNonce((value) => value + 1)}>Retry</GhostButton> : null}
+            </div> : null}
             {!loading && !error ? <><div className="overflow-x-auto rounded-xl border border-white/10"><table className="min-w-[920px] w-full text-left text-xs"><thead className="bg-white/[.04] text-white/55"><tr>
               <th className="w-12 whitespace-nowrap p-3">Select</th><th className="min-w-32 whitespace-nowrap p-3">Transaction date</th><th className="min-w-32 whitespace-nowrap p-3">Authorized date</th><th className="min-w-72 whitespace-nowrap p-3">Merchant / description</th><th className="min-w-28 whitespace-nowrap p-3">Amount</th><th className="min-w-28 whitespace-nowrap p-3">Status</th><th className="min-w-40 whitespace-nowrap p-3">Classification</th>
             </tr></thead><tbody>{(result?.rows || []).map((row) => <tr key={row.id} className="border-t border-white/8 text-white/80"><td className="p-3"><input type="checkbox" checked={selected?.has(row.id) || false} onChange={() => setSelected((current) => { const next = new Set(current || []); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next; })} /></td>
               <td className="whitespace-nowrap p-3">{row.transaction_date}</td><td className="whitespace-nowrap p-3">{row.authorized_date && row.authorized_date !== row.transaction_date ? row.authorized_date : "—"}</td><td className="p-3">{row.merchant_or_description}</td><td className={`whitespace-nowrap p-3 font-semibold ${row.amount >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{row.amount >= 0 ? "+" : "−"}{money(row.amount)}</td><td className="whitespace-nowrap p-3">{row.pending ? "Pending" : "Posted"}</td><td className="whitespace-nowrap p-3 capitalize">{row.activity_type.replaceAll("_", " ")}</td></tr>)}</tbody></table></div>
             <div className="mt-3 flex items-center justify-between text-xs text-white/55"><span>{result?.total ? `Showing ${(page - 1) * 25 + 1}–${Math.min(page * 25, result.total)} of ${result.total}` : "No new transactions in this verified recovery preview."}</span><div className="flex gap-2"><GhostButton type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</GhostButton><GhostButton type="button" disabled={page * 25 >= (result?.total || 0)} onClick={() => setPage((p) => p + 1)}>Next</GhostButton></div></div></> : null}
+            {!loading && !error && batch.previous_expected_count != null && Number(batch.previous_expected_count) !== Number(result?.total || 0) ? <div className="mt-3 rounded-lg border border-amber-400/20 bg-amber-500/5 p-3 text-xs text-amber-100">The rebuilt preview now contains {result?.total || 0} transactions; the earlier incomplete preview reported {batch.previous_expected_count}. This reflects the current authoritative Plaid source read.</div> : null}
           </> : <div className="rounded-xl border border-amber-400/25 bg-amber-500/5 p-5 text-sm text-white/75"><div className="text-base font-semibold text-white">Confirm controlled admission</div><p className="mt-2">Import <b>{count}</b> selected transactions. Skip {represented} existing rows and hold {summary.pending_replacements || 0} pending replacements.</p><p className="mt-2">Cutoff: {cutoffDate} · Operator confirmed. Nothing will be sent to QuickBooks; Auto-post stays off and the posting hold remains active.</p></div>}
         </div>
         <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><GhostButton type="button" onClick={confirming ? () => setConfirming(false) : onClose}>{confirming ? "Back" : "Cancel"}</GhostButton>
@@ -1829,6 +1856,26 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
             await refreshRecoveryStatus(recoveryReview.plaidItemId);
             setRecoveryMessage((current) => ({ ...current, [recoveryReview.plaidItemId]: { tone: "ok", text: `${selectedRowIds.length} reviewed transactions imported with posting hold active.` } }));
             setRecoveryReview(null);
+          }}
+          onRebuild={async (idempotencyKey) => {
+            const current = recoveryReview;
+            const result = await rebuildPlaidRecoveryPreview(businessId, current.plaidItemId, current.batch.batch_id, idempotencyKey);
+            if (result?.ok === false) {
+              const cause = new Error(result?.message || result?.error || "Recovery preview rebuild failed.");
+              cause.code = result?.error; cause.requestId = result?.request_id; throw cause;
+            }
+            let rebuilt = result;
+            if (result?.processing) {
+              for (let attempt = 0; attempt < 10; attempt += 1) {
+                await new Promise((resolve) => window.setTimeout(resolve, 750));
+                const durable = await refreshRecoveryStatus(current.plaidItemId);
+                rebuilt = durable?.batch || result;
+                if (rebuilt?.status === "preview_ready" || rebuilt?.status === "failed") break;
+              }
+            }
+            if (rebuilt?.status !== "preview_ready") throw Object.assign(new Error("The recovery preview rebuild is still processing. Try again shortly."), { code: "recovery_rebuild_in_progress", requestId: result?.request_id });
+            setRecoveryReview({ plaidItemId: current.plaidItemId, batch: { ...rebuilt, previous_expected_count: result?.previous_expected_count ?? rebuilt?.previous_expected_count } });
+            await refreshRecoveryStatus(current.plaidItemId);
           }}
         />
       ) : null}

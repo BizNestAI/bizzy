@@ -202,6 +202,51 @@ test("recovery admission schema is held, cutoff-bounded, tenant-scoped, and curs
   assert.doesNotMatch(recovery, /create.*QuickBooks|post.*QuickBooks/i);
 });
 
+test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempotent", () => {
+  const migration = read("supabase/migrations/20261101104000_plaid_recovery_preview_rebuild.sql");
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+  const routes = read("src/api/integrations/plaid.routes.js");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+
+  assert.match(migration, /b551bd2e-8921-4440-a151-cc70721beb31/);
+  assert.match(migration, /recovery_rebuild_unrelated_batch/);
+  assert.match(migration, /v_expected <> 113/);
+  assert.match(migration, /v_staged <> 0 or v_admitted <> 0 or v_imported <> 0/);
+  assert.match(migration, /v_item\.cursor is distinct from v_old\.original_cursor/);
+  assert.match(migration, /recovery_rebuild_newer_batch_exists/);
+  assert.match(migration, /set status='abandoned'/);
+  assert.match(migration, /recovery_rebuild_compare_and_swap_failed/);
+  assert.match(migration, /rebuild_source_batch_id/);
+  assert.match(migration, /rebuild_idempotency_key/);
+  assert.doesNotMatch(migration, /delete from public\.plaid_recovery_batches/);
+
+  assert.match(recovery, /begin_plaid_recovery_preview_rebuild/);
+  assert.match(recovery, /collectCompletePlaidSyncPreview/);
+  assert.match(recovery, /validateRecoveryReviewPopulation/);
+  assert.match(recovery, /status: "preview_ready"/);
+  assert.match(recovery, /finally \{\s*await releaseRecoveryLease/);
+  assert.doesNotMatch(recovery, /set cursor\s*=|update\(\{\s*cursor/);
+  assert.doesNotMatch(recovery, /QuickBooks|qbo.*create|create.*qbo/i);
+
+  assert.match(routes, /recovery-batches\/:batchId\/rebuild/);
+  assert.match(routes, /primaryOwner, integrationAdmin, providerSync/);
+  assert.match(routes, /idempotencyKey: String\(req\.body\?\.idempotency_key/);
+  assert.match(client, /recovery-batches\/\$\{encodeURIComponent\(batchId\)\}\/rebuild/);
+  assert.match(settings, /Rebuild recovery preview/);
+  assert.match(settings, /The earlier preview did not save its transaction details/);
+  assert.match(settings, /attempt < 10/);
+  assert.match(settings, /status === "preview_ready" \|\| rebuilt\?\.status === "failed"/);
+  assert.match(settings, /No Plaid Link or connection repair/);
+  assert.match(settings, /No transaction import/);
+  assert.match(settings, /No QuickBooks access/);
+  assert.match(settings, /No live cursor advancement/);
+  assert.match(settings, /No posting-hold release/);
+  assert.match(settings, /page_size: 25/);
+  assert.match(settings, /Showing \$\{\(page - 1\) \* 25 \+ 1\}–\$\{Math\.min\(page \* 25, result\.total\)\} of \$\{result\.total\}/);
+  assert.match(settings, /createPortal\(modal, document\.body\)/);
+});
+
 test("retained-identity repair cannot report success without durable recovery persistence", () => {
   const integration = read("src/services/plaid/plaidIntegrationService.js");
   const routes = read("src/api/integrations/plaid.routes.js");

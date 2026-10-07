@@ -359,6 +359,81 @@ export async function createReplacementRecoveryPreview({ businessId, plaidItemId
   return { batch_id: batchId, plaid_item_id: plaidItemId, status, cutoff_date: cutoffDate, posting_hold: true, summary };
 }
 
+async function claimRecoveryLease({ db, item, businessId, owner }) {
+  const { data, error } = await db.rpc("claim_plaid_sync_lease", {
+    p_item_id: item.id, p_business_id: businessId, p_owner: owner, p_lease_seconds: 300,
+  });
+  if (error) throw error;
+  if (data !== true) throw recoveryError("recovery_rebuild_in_progress", "A recovery preview rebuild is already running.", 202);
+}
+
+async function releaseRecoveryLease({ db, item, businessId, owner }) {
+  const { error } = await db.rpc("release_plaid_sync_lease", { p_item_id: item.id, p_business_id: businessId, p_owner: owner });
+  if (error) console.warn("[plaid-recovery] rebuild lease release failed", { business_id: businessId, plaid_item_id: item.plaid_item_id });
+}
+
+export async function rebuildReplacementRecoveryPreview({ businessId, plaidItemId, batchId, actorUserId, idempotencyKey, db = supabase, plaid = getPlaidClient() }) {
+  if (!plaid) throw recoveryError("plaid_not_configured", "Plaid is unavailable.", 503);
+  const item = await scopedItem({ db, businessId, plaidItemId });
+  if (!item.replacement_recovery_account_id) throw recoveryError("replacement_account_required", "Confirmed replacement-card lineage is required.");
+  const { data: handoff, error: handoffError } = await db.rpc("begin_plaid_recovery_preview_rebuild", {
+    p_business_id: businessId, p_plaid_env: item.plaid_env, p_plaid_item_id: plaidItemId, p_batch_id: batchId,
+    p_actor_user_id: actorUserId || null, p_idempotency_key: idempotencyKey,
+  });
+  if (handoffError) throw recoveryError(handoffError.message || "recovery_rebuild_validation_failed", "This recovery preview is not eligible for a controlled rebuild.");
+  const newBatchId = handoff?.batch_id;
+  if (!handoff?.created) {
+    if (handoff?.status === "preview_ready") {
+      const status = await getReplacementRecoveryStatus({ businessId, plaidItemId, db });
+      return { ...status.batch, batch_id: newBatchId, reused: true, previous_expected_count: handoff.previous_expected_count || null };
+    }
+    return { batch_id: newBatchId, status: handoff?.status || "staging", posting_hold: true, reused: true, processing: true };
+  }
+
+  const leaseOwner = `recovery-rebuild:${newBatchId}`;
+  try {
+    await claimRecoveryLease({ db, item, businessId, owner: leaseOwner });
+    const accessToken = await resolveStoredPlaidAccessToken({ storedToken: item.plaid_access_token });
+    const collected = await collectCompletePlaidSyncPreview({ plaid, accessToken, originalCursor: item.cursor || null });
+    const { data: existing, error: existingError } = await db.from("bank_transactions")
+      .select("id,plaid_transaction_id,pending_transaction_id,plaid_account_id,physical_account_id,date,authorized_date,amount,signed_amount,name,merchant_name,pending,is_archived")
+      .eq("business_id", businessId);
+    if (existingError) throw existingError;
+    const recoveryAccountId = item.replacement_recovery_account_id;
+    const cutoffDate = item.replacement_recovery_cutoff_date;
+    const makeRows = (transactions, changeType) => transactions.filter((transaction) => transaction.account_id === recoveryAccountId).map((transaction) => {
+      const classification = classifyRecoveryTransaction({ transaction, changeType, existingRows: existing || [], cutoffDate, confirmedAccountIds: [recoveryAccountId] });
+      const normalized = normalizedIncoming(transaction);
+      return { batch_id: newBatchId, business_id: businessId, change_type: changeType, disposition: classification.disposition,
+        ...normalized, transaction_date: normalized.date, payload: { transaction, classification } };
+    });
+    const rows = [...makeRows(collected.added, "added"), ...makeRows(collected.modified, "modified")];
+    const summary = { ...summarizeRecoveryRows(rows), pages: collected.pages.length, mutation_restarts: collected.mutation_restarts,
+      rebuild_previous_expected_count: Number(handoff.previous_expected_count || 0) };
+    if (rows.length) {
+      const { error } = await db.from("plaid_recovery_batch_rows").upsert(rows, { onConflict: "batch_id,change_type,plaid_transaction_id", ignoreDuplicates: true });
+      if (error) throw error;
+    }
+    const { data: durable, error: durableError } = await db.from("plaid_recovery_batch_rows")
+      .select("id,plaid_account_id,disposition").eq("business_id", businessId).eq("batch_id", newBatchId)
+      .eq("plaid_account_id", recoveryAccountId).eq("disposition", "new_after_cutoff");
+    if (durableError) throw durableError;
+    validateRecoveryReviewPopulation({ summary, rows: durable || [], replacementAccountId: recoveryAccountId });
+    const { data: ready, error: readyError } = await db.from("plaid_recovery_batches").update({ status: "preview_ready", posting_hold: true,
+      staged_next_cursor: collected.staged_next_cursor, summary, failure_code: null, failure_detail: null, updated_at: new Date().toISOString() })
+      .eq("id", newBatchId).eq("business_id", businessId).eq("status", "staging").select("id").maybeSingle();
+    if (readyError || !ready?.id) throw recoveryError("recovery_preview_finalize_failed", "The rebuilt preview could not be finalized.", 503);
+    return { batch_id: newBatchId, source_batch_id: batchId, plaid_item_id: plaidItemId, status: "preview_ready",
+      cutoff_date: cutoffDate, posting_hold: true, summary, previous_expected_count: Number(handoff.previous_expected_count || 0) };
+  } catch (error) {
+    await db.from("plaid_recovery_batches").update({ status: "failed", failure_code: error?.code || "recovery_rebuild_failed",
+      failure_detail: error?.message || null, updated_at: new Date().toISOString() }).eq("id", newBatchId).eq("business_id", businessId).eq("status", "staging");
+    throw error?.code ? error : recoveryError("recovery_rebuild_failed", "The recovery preview could not be rebuilt. Nothing was imported and the cursor was preserved.", 503);
+  } finally {
+    await releaseRecoveryLease({ db, item, businessId, owner: leaseOwner });
+  }
+}
+
 export async function releaseReplacementRecoveryHold({ businessId, batchId, actorUserId, db = supabase }) {
   const { data: batch, error } = await db.from("plaid_recovery_batches").select("id,status,posting_hold")
     .eq("id", batchId).eq("business_id", businessId).maybeSingle();

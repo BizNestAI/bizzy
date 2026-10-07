@@ -19,7 +19,7 @@ import {
   getPlaidStatus,
   inspectUpdatedItemAccounts,
 } from "../../services/plaid/plaidIntegrationService.js";
-import { admitReplacementRecoveryBatch, bootstrapReplacementRecoveryState, confirmReplacementAccountLineage, createReplacementRecoveryPreview, getReplacementRecoveryStatus, listReplacementRecoveryRows, releaseReplacementRecoveryHold, selectReplacementRecoveryAccount } from "../../services/plaid/plaidReplacementRecoveryService.js";
+import { admitReplacementRecoveryBatch, bootstrapReplacementRecoveryState, confirmReplacementAccountLineage, createReplacementRecoveryPreview, getReplacementRecoveryStatus, listReplacementRecoveryRows, rebuildReplacementRecoveryPreview, releaseReplacementRecoveryHold, selectReplacementRecoveryAccount } from "../../services/plaid/plaidReplacementRecoveryService.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from "../_shared/entitlementAuth.js";
 import { consumePlaidLinkState, createPlaidLinkState } from "../../services/plaid/plaidLinkStateService.js";
@@ -198,6 +198,29 @@ router.get("/items/:plaidItemId/recovery-batches/:batchId/rows", requireAuth, pr
       batch_id: req.params.batchId, code: error?.code || "recovery_rows_failed", details: error?.details || null });
     return res.status(error?.status || 500).json({ ok: false, request_id: requestId, error: error?.code || "recovery_rows_failed",
       message: error?.message || "Recovery transactions could not be loaded.", details: error?.details || undefined });
+  }
+});
+
+router.post("/items/:plaidItemId/recovery-batches/:batchId/rebuild", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, providerSync, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  const requestId = String(req.get("x-request-id") || crypto.randomUUID());
+  res.set("x-request-id", requestId);
+  try {
+    const result = await rebuildReplacementRecoveryPreview({
+      businessId,
+      plaidItemId: req.params.plaidItemId,
+      batchId: req.params.batchId,
+      actorUserId: req.auth?.userId || req.user?.id || null,
+      idempotencyKey: String(req.body?.idempotency_key || ""),
+    });
+    return res.status(result?.processing ? 202 : 200).json({ ok: true, request_id: requestId, ...result });
+  } catch (error) {
+    console.warn("[plaid-recovery] controlled rebuild failed", { request_id: requestId, business_id: businessId,
+      plaid_item_id: req.params.plaidItemId, batch_id: req.params.batchId, code: error?.code || "recovery_rebuild_failed" });
+    return res.status(error?.status || 500).json({ ok: false, request_id: requestId,
+      error: error?.code || "recovery_rebuild_failed",
+      message: error?.message || "The recovery preview could not be rebuilt. Nothing was imported and the cursor was preserved." });
   }
 });
 

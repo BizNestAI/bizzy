@@ -1002,25 +1002,35 @@ body.pdf-modal-open .bizzy-qprompts {
   justify-content: center;
   gap: 6px;
   transform: translateY(-2px);
-  color: rgba(34,197,94,0.75);
+  color: rgba(74,222,128,0.92);
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.11em;
   text-transform: uppercase;
-  text-shadow: 0 0 10px rgba(34,197,94,0.14);
+  text-shadow: 0 0 12px rgba(34,197,94,0.28);
+  animation: bizzyOnlineStatusPulse 1.45s ease-in-out infinite;
 }
 
 .bizzy-chathome-status-dot{
   position: relative;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
   background: var(--accent-green);
   box-shadow:
     0 0 0 3px rgba(34,197,94,0.12),
     0 0 16px rgba(34,197,94,0.42);
-  animation: bizzyOnlineDotPulse 1.8s ease-in-out infinite;
+  animation: bizzyOnlineDotPulse 1.45s ease-in-out infinite;
+}
+
+.bizzy-chathome-status-dot::after{
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid rgba(74,222,128,0.72);
+  border-radius: inherit;
+  animation: bizzyOnlineRingPulse 1.45s ease-out infinite;
 }
 
 .bizzy-chathome-greeting-row{
@@ -1041,10 +1051,26 @@ body.pdf-modal-open .bizzy-qprompts {
   }
   50% {
     opacity: 1;
-    transform: scale(1);
+    transform: scale(1.18);
     box-shadow:
-      0 0 0 4px rgba(34,197,94,0.10),
-      0 0 16px rgba(34,197,94,0.38);
+      0 0 0 5px rgba(34,197,94,0.16),
+      0 0 22px rgba(34,197,94,0.72);
+  }
+}
+
+@keyframes bizzyOnlineRingPulse{
+  0% { opacity: 0.8; transform: scale(0.9); }
+  70%, 100% { opacity: 0; transform: scale(2.5); }
+}
+
+@keyframes bizzyOnlineStatusPulse{
+  0%, 100% {
+    filter: brightness(0.9);
+    text-shadow: 0 0 9px rgba(34,197,94,0.22);
+  }
+  50% {
+    filter: brightness(1.28);
+    text-shadow: 0 0 18px rgba(34,197,94,0.62);
   }
 }
 
@@ -1126,6 +1152,11 @@ body.pdf-modal-open .bizzy-qprompts {
 /* Reduced motion guard */
 @media (prefers-reduced-motion: reduce){
   .bizzy-chathome-halo{ animation: none !important; }
+  .bizzy-chathome-status,
+  .bizzy-chathome-status-dot,
+  .bizzy-chathome-status-dot::after{
+    animation: none !important;
+  }
   [data-bizzy-chip],
   [data-bizzy-chip]::after{
     animation: none !important;
