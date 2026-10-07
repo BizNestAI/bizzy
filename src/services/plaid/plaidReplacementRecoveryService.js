@@ -217,10 +217,51 @@ export async function confirmReplacementAccountLineage({ businessId, plaidItemId
   return data || { status: "confirmed" };
 }
 
-export async function admitReplacementRecoveryBatch({ businessId, batchId, actorUserId, db = supabase }) {
+export async function listReplacementRecoveryRows({ businessId, plaidItemId, batchId, page = 1, pageSize = 25, search = "", dateFrom = null, dateTo = null, sort = "oldest", db = supabase }) {
+  const item = await scopedItem({ db, businessId, plaidItemId });
+  if (!item.replacement_recovery_account_id) throw recoveryError("replacement_account_required", "Confirm the replacement account before reviewing transactions.", 409);
+  const { data: batch, error: batchError } = await db.from("plaid_recovery_batches")
+    .select("id,status,cutoff_date,posting_hold,summary")
+    .eq("id", batchId).eq("business_id", businessId).eq("plaid_env", item.plaid_env).eq("plaid_item_id", plaidItemId).maybeSingle();
+  if (batchError) throw batchError;
+  if (!batch || !["preview_ready", "imported_held"].includes(batch.status)) throw recoveryError("recovery_batch_not_reviewable", "The active recovery preview could not be found.", 404);
+  const { data, error } = await db.from("plaid_recovery_batch_rows")
+    .select("id,plaid_transaction_id,plaid_account_id,transaction_date,authorized_date,amount,signed_amount,pending,disposition,payload,admitted_transaction_id")
+    .eq("business_id", businessId).eq("batch_id", batchId).eq("plaid_account_id", item.replacement_recovery_account_id)
+    .eq("disposition", "new_after_cutoff");
+  if (error) throw error;
+  const sanitized = (data || []).map((row) => {
+    const transaction = row.payload?.transaction || {};
+    const name = transaction.merchant_name || transaction.name || "Transaction";
+    const amount = Number(row.signed_amount ?? row.amount ?? 0);
+    const normalizedName = String(name).toLowerCase();
+    const activityType = amount < 0 ? "charge" : /payment/.test(normalizedName) ? "payment" : /statement\s+credit|credit/.test(normalizedName) ? "statement_credit" : "refund";
+    return { id: row.id, plaid_transaction_id: row.plaid_transaction_id, transaction_date: row.transaction_date, authorized_date: row.authorized_date,
+      merchant_or_description: name, amount, pending: row.pending === true, classification: row.disposition, activity_type: activityType,
+      admitted: Boolean(row.admitted_transaction_id) };
+  });
+  const needle = String(search || "").trim().toLowerCase();
+  const filtered = sanitized.filter((row) => (!needle || row.merchant_or_description.toLowerCase().includes(needle))
+    && (!dateFrom || row.transaction_date >= dateFrom) && (!dateTo || row.transaction_date <= dateTo));
+  filtered.sort((a, b) => sort === "newest" ? b.transaction_date.localeCompare(a.transaction_date)
+    : sort === "amount" ? Math.abs(b.amount) - Math.abs(a.amount) : a.transaction_date.localeCompare(b.transaction_date));
+  const safePageSize = Math.min(100, Math.max(1, Number(pageSize) || 25));
+  const safePage = Math.max(1, Number(page) || 1);
+  const start = (safePage - 1) * safePageSize;
+  return { batch_id: batch.id, plaid_item_id: plaidItemId, status: batch.status, cutoff_date: batch.cutoff_date, posting_hold: batch.posting_hold,
+    summary: batch.summary || {}, page: safePage, page_size: safePageSize, total: filtered.length, rows: filtered.slice(start, start + safePageSize),
+    eligible_row_ids: sanitized.filter((row) => !row.admitted).map((row) => row.id) };
+}
+
+export async function admitReplacementRecoveryBatch({ businessId, plaidItemId, batchId, selectedRowIds, actorUserId, db = supabase }) {
+  await scopedItem({ db, businessId, plaidItemId });
+  if (!Array.isArray(selectedRowIds) || selectedRowIds.length === 0) throw recoveryError("recovery_selection_required", "Select at least one staged transaction.", 400);
+  if (new Set(selectedRowIds).size !== selectedRowIds.length) throw recoveryError("duplicate_recovery_row_selection", "The transaction selection contains duplicates.", 400);
   const { data, error } = await db.rpc("admit_plaid_recovery_batch", {
     p_business_id: businessId,
     p_batch_id: batchId,
+    p_plaid_item_id: plaidItemId,
+    p_selected_row_ids: selectedRowIds,
     p_actor_user_id: actorUserId || null,
   });
   if (error) throw recoveryError("recovery_admission_failed", error.message || "Recovery transactions could not be admitted.");

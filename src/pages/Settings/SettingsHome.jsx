@@ -31,6 +31,7 @@ import {
   getPlaidRecoveryStatus,
   preparePlaidRecoveryPreview,
   confirmPlaidReplacementLineage,
+  getPlaidRecoveryBatchRows,
   admitPlaidRecoveryBatch,
   releasePlaidRecoveryHold,
   exchangePlaidPublicToken,
@@ -764,6 +765,67 @@ function StatusBadge({ label = "Unknown", tone = "slate" }) {
   );
 }
 
+function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClose, onAdmit }) {
+  const [result, setResult] = useState(null);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [sort, setSort] = useState("oldest");
+  const [selected, setSelected] = useState(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    setError("");
+    getPlaidRecoveryBatchRows(businessId, plaidItemId, batch.batch_id, { page, page_size: 25, search, date_from: dateFrom, date_to: dateTo, sort })
+      .then((response) => {
+        if (cancelled) return;
+        if (response?.ok === false) throw new Error(response.message || "Recovery transactions could not be loaded.");
+        setResult(response);
+        setSelected((current) => current === null ? new Set(response.eligible_row_ids || []) : current);
+      }).catch((cause) => { if (!cancelled) setError(cause?.message || "Recovery transactions could not be loaded."); });
+    return () => { cancelled = true; };
+  }, [businessId, plaidItemId, batch.batch_id, page, search, dateFrom, dateTo, sort]);
+  const count = selected?.size || 0;
+  const summary = result?.summary || batch.summary || {};
+  const represented = (summary.exact_existing || 0) + (summary.represented || 0);
+  const cutoffDate = result?.cutoff_date || batch.cutoff_date || REPLACEMENT_CARD_CUTOFF_DATE;
+  const latestExistingDate = summary.latest_existing_transaction_date || summary.latest_existing_date || null;
+  const money = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Math.abs(Number(value || 0)));
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3" role="dialog" aria-modal="true" aria-label="Review replacement-card transactions">
+      <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#101312] shadow-2xl">
+        <div className="border-b border-white/10 px-5 py-4"><div className="text-lg font-semibold text-white">Review new Chase transactions</div>
+          <div className="mt-1 text-xs text-white/55">Controlled cutoff: {cutoffDate} · Operator confirmed{latestExistingDate ? ` · Latest existing transaction: ${latestExistingDate}` : ""}</div></div>
+        <div className="overflow-y-auto p-5">
+          <div className="mb-4 grid gap-2 sm:grid-cols-3"><div className="rounded-lg border border-white/10 bg-white/[.03] p-3 text-xs text-white/65"><b className="text-white">{represented}</b> already represented and skipped</div>
+            <div className="rounded-lg border border-white/10 bg-white/[.03] p-3 text-xs text-white/65"><b className="text-white">{summary.pending_replacements || 0}</b> pending replacements remain held</div>
+            <div className="rounded-lg border border-amber-400/25 bg-amber-500/5 p-3 text-xs text-amber-100">Auto-post is off. Posting hold remains active.</div></div>
+          {!confirming ? <>
+            <div className="mb-3 flex flex-wrap gap-2">
+              <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search merchant or description" className="min-w-56 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white" />
+              <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white [color-scheme:dark]" />
+              <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white [color-scheme:dark]" />
+              <select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white"><option value="oldest">Oldest first</option><option value="newest">Newest first</option><option value="amount">Amount</option></select>
+            </div>
+            {error ? <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-100">{error}</div> : null}
+            <div className="overflow-x-auto rounded-xl border border-white/10"><table className="min-w-[920px] w-full text-left text-xs"><thead className="bg-white/[.04] text-white/55"><tr>
+              <th className="w-12 whitespace-nowrap p-3">Select</th><th className="min-w-32 whitespace-nowrap p-3">Transaction date</th><th className="min-w-32 whitespace-nowrap p-3">Authorized date</th><th className="min-w-72 whitespace-nowrap p-3">Merchant / description</th><th className="min-w-28 whitespace-nowrap p-3">Amount</th><th className="min-w-28 whitespace-nowrap p-3">Status</th><th className="min-w-40 whitespace-nowrap p-3">Classification</th>
+            </tr></thead><tbody>{(result?.rows || []).map((row) => <tr key={row.id} className="border-t border-white/8 text-white/80"><td className="p-3"><input type="checkbox" checked={selected?.has(row.id) || false} onChange={() => setSelected((current) => { const next = new Set(current || []); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next; })} /></td>
+              <td className="whitespace-nowrap p-3">{row.transaction_date}</td><td className="whitespace-nowrap p-3">{row.authorized_date && row.authorized_date !== row.transaction_date ? row.authorized_date : "—"}</td><td className="p-3">{row.merchant_or_description}</td><td className={`whitespace-nowrap p-3 font-semibold ${row.amount >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{row.amount >= 0 ? "+" : "−"}{money(row.amount)}</td><td className="whitespace-nowrap p-3">{row.pending ? "Pending" : "Posted"}</td><td className="whitespace-nowrap p-3 capitalize">{row.activity_type.replaceAll("_", " ")}</td></tr>)}</tbody></table></div>
+            <div className="mt-3 flex items-center justify-between text-xs text-white/55"><span>{result?.total ? `Showing ${(page - 1) * 25 + 1}–${Math.min(page * 25, result.total)} of ${result.total}` : "Showing 0 transactions"}</span><div className="flex gap-2"><GhostButton type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</GhostButton><GhostButton type="button" disabled={page * 25 >= (result?.total || 0)} onClick={() => setPage((p) => p + 1)}>Next</GhostButton></div></div>
+          </> : <div className="rounded-xl border border-amber-400/25 bg-amber-500/5 p-5 text-sm text-white/75"><div className="text-base font-semibold text-white">Confirm controlled admission</div><p className="mt-2">Import <b>{count}</b> selected transactions. Skip {represented} existing rows and hold {summary.pending_replacements || 0} pending replacements.</p><p className="mt-2">Cutoff: {cutoffDate} · Operator confirmed. Nothing will be sent to QuickBooks; Auto-post stays off and the posting hold remains active.</p></div>}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><GhostButton type="button" onClick={confirming ? () => setConfirming(false) : onClose}>{confirming ? "Back" : "Cancel"}</GhostButton>
+          {!confirming ? <AccentButton type="button" disabled={!count} onClick={() => setConfirming(true)}>Import {count} selected transactions</AccentButton>
+            : <AccentButton type="button" disabled={busy || !count} onClick={async () => { setBusy(true); setError(""); try { await onAdmit([...selected]); } catch (cause) { setError(cause?.message || "Admission failed."); setConfirming(false); } finally { setBusy(false); } }}>{busy ? "Importing…" : `Confirm import of ${count}`}</AccentButton>}</div>
+      </div>
+    </div>
+  );
+}
+
 function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const mappingOverrideStorageKey = useMemo(
     () => (businessId ? `bizzy:plaid-mapping-overrides:${businessId}` : null),
@@ -778,6 +840,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const [recoveryBusy, setRecoveryBusy] = useState({});
   const [recoveryMessage, setRecoveryMessage] = useState({});
   const [lineageSelection, setLineageSelection] = useState({});
+  const [recoveryReview, setRecoveryReview] = useState(null);
   const [disconnectingItem, setDisconnectingItem] = useState(null);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
@@ -1037,6 +1100,26 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
       setRecoveryBusy((current) => ({ ...current, [plaidItemId]: false }));
     }
   }, [readOnly, recoveryBusy, refreshRecoveryStatus]);
+
+  const prepareRecoveryPreview = useCallback(async (plaidItemId) => {
+    try {
+      const result = await preparePlaidRecoveryPreview(businessId, plaidItemId, REPLACEMENT_CARD_CUTOFF_DATE);
+      if (result?.ok !== false) return result;
+      const durable = await refreshRecoveryStatus(plaidItemId).catch(() => null);
+      if (["preview_ready", "lineage_confirmation_required"].includes(durable?.batch?.status)) {
+        return { ok: true, recovered_from_status: true };
+      }
+      return result;
+    } catch (error) {
+      // Preview creation is durable. If the response was lost after the server
+      // committed it, recover the saved batch instead of asking for another sync.
+      const durable = await refreshRecoveryStatus(plaidItemId).catch(() => null);
+      if (["preview_ready", "lineage_confirmation_required"].includes(durable?.batch?.status)) {
+        return { ok: true, recovered_from_status: true };
+      }
+      throw error;
+    }
+  }, [businessId, refreshRecoveryStatus]);
 
   const handleDisconnectAll = useCallback(async () => {
     if (!businessId || readOnly) return;
@@ -1386,7 +1469,9 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                 {recoveryByItem[inst.plaid_item_id]?.ok === false ? (
                   <span className="text-[11px] text-rose-200">{recoveryByItem[inst.plaid_item_id]?.message || "Durable recovery status is unavailable."}</span>
                 ) : null}
-                {!recoveryByItem[inst.plaid_item_id]?.orchestration?.status ? (
+                {!recoveryByItem[inst.plaid_item_id]?.orchestration?.status
+                  && (recoveryByItem[inst.plaid_item_id]?.recovery_required
+                    || ["awaiting_account_selection", "lineage_confirmation_required"].includes(repairResult?.[inst.plaid_item_id]?.status)) ? (
                   <GhostButton type="button" disabled={readOnly || Boolean(recoveryBusy[inst.plaid_item_id])}
                     onClick={() => runRecoveryAction(inst.plaid_item_id, () => bootstrapPlaidRecoveryState(businessId, inst.plaid_item_id))}
                     className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-semibold">
@@ -1419,18 +1504,22 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                     {orchestration?.status === "awaiting_account_selection" ? (
                       <div className="mt-3 rounded-lg border border-white/10 bg-black/15 p-3">
                         <div className="text-xs text-white/80">Select the repaired replacement-card account. Its mask is informational and is not used to infer lineage.</div>
-                        <select className="mt-2 h-10 w-full rounded-lg border border-white/10 bg-[#111513] px-3 text-xs text-white sm:max-w-md"
-                          value={lineageSelection[`${inst.plaid_item_id}:replacement`] || ""}
-                          onChange={(event) => setLineageSelection((current) => ({ ...current, [`${inst.plaid_item_id}:replacement`]: event.target.value }))}
-                          disabled={readOnly || busy}>
-                          <option value="">Select replacement account…</option>
-                          {(inst.accounts || []).map((account) => {
-                            const mapping = mappingById.get(account.plaid_account_id);
-                            return <option key={account.plaid_account_id} value={account.plaid_account_id}>
-                              {account.name || account.official_name || "Account"}{account.mask ? ` ••${account.mask}` : ""}{mapping?.qbo_account_name ? ` → ${mapping.qbo_account_name}` : ""}
-                            </option>;
-                          })}
-                        </select>
+                        <div className="mt-2">
+                          <DarkMappingDropdown
+                            className="w-full sm:max-w-md"
+                            value={lineageSelection[`${inst.plaid_item_id}:replacement`] || ""}
+                            onChange={(value) => setLineageSelection((current) => ({ ...current, [`${inst.plaid_item_id}:replacement`]: value }))}
+                            disabled={readOnly || busy}
+                            placeholder="Select replacement account…"
+                            options={(inst.accounts || []).map((account) => {
+                              const mapping = mappingById.get(account.plaid_account_id);
+                              return {
+                                value: account.plaid_account_id,
+                                label: `${account.name || account.official_name || "Account"}${account.mask ? ` ••${account.mask}` : ""}${mapping?.qbo_account_name ? ` → ${mapping.qbo_account_name}` : ""}`,
+                              };
+                            })}
+                          />
+                        </div>
                         <div className="mt-2"><AccentButton type="button" className="h-9 px-3 text-xs"
                           disabled={readOnly || busy || !lineageSelection[`${inst.plaid_item_id}:replacement`]}
                           onClick={() => runRecoveryAction(inst.plaid_item_id, () => selectPlaidReplacementRecoveryAccount(businessId, inst.plaid_item_id, lineageSelection[`${inst.plaid_item_id}:replacement`]))}>
@@ -1444,19 +1533,19 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                         <div className="text-xs text-white/80">
                           Confirm that {pendingCandidate.name}{pendingCandidate.mask ? ` ••${pendingCandidate.mask}` : ""} replaces an existing account.
                         </div>
-                        <select
-                          className="mt-2 h-10 w-full rounded-lg border border-white/10 bg-[#111513] px-3 text-xs text-white sm:max-w-md"
-                          value={selectedPriorAccount || ""}
-                          onChange={(event) => setLineageSelection((current) => ({ ...current, [selectionKey]: event.target.value }))}
-                          disabled={readOnly || busy}
-                        >
-                          <option value="">Select prior account…</option>
-                          {(inst.accounts || []).map((account) => (
-                            <option key={account.plaid_account_id} value={account.plaid_account_id}>
-                              {account.name || account.official_name || "Account"}{account.mask ? ` ••${account.mask}` : ""}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="mt-2">
+                          <DarkMappingDropdown
+                            className="w-full sm:max-w-md"
+                            value={selectedPriorAccount || ""}
+                            onChange={(value) => setLineageSelection((current) => ({ ...current, [selectionKey]: value }))}
+                            disabled={readOnly || busy}
+                            placeholder="Select prior account…"
+                            options={(inst.accounts || []).map((account) => ({
+                              value: account.plaid_account_id,
+                              label: `${account.name || account.official_name || "Account"}${account.mask ? ` ••${account.mask}` : ""}`,
+                            }))}
+                          />
+                        </div>
                         <div className="mt-2">
                           <AccentButton
                             type="button"
@@ -1478,7 +1567,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                         <AccentButton
                           type="button"
                           disabled={readOnly || busy}
-                          onClick={() => runRecoveryAction(inst.plaid_item_id, () => preparePlaidRecoveryPreview(businessId, inst.plaid_item_id, REPLACEMENT_CARD_CUTOFF_DATE))}
+                          onClick={() => runRecoveryAction(inst.plaid_item_id, () => prepareRecoveryPreview(inst.plaid_item_id))}
                           className="h-9 px-3 text-xs"
                         >
                           {busy ? "Preparing…" : batch ? "Retry recovery preview" : "Prepare recovery preview"}
@@ -1508,9 +1597,9 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                         <div className="mt-3 flex flex-wrap gap-2">
                           {batch.status === "preview_ready" ? (
                             <AccentButton type="button" disabled={readOnly || busy || summary.ambiguous > 0 || summary.probable_duplicates > 0}
-                              onClick={() => runRecoveryAction(inst.plaid_item_id, () => admitPlaidRecoveryBatch(businessId, batch.batch_id))}
+                              onClick={() => setRecoveryReview({ plaidItemId: inst.plaid_item_id, batch })}
                               className="h-9 px-3 text-xs">
-                              {busy ? "Importing…" : "Import reviewed transactions"}
+                              {`Review ${summary.new_after_cutoff || 0} new transactions`}
                             </AccentButton>
                           ) : null}
                           {batch.status === "imported_held" ? (
@@ -1699,6 +1788,21 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
           ))
         )}
       </div>
+      {recoveryReview ? (
+        <RecoveryTransactionReviewModal
+          businessId={businessId}
+          plaidItemId={recoveryReview.plaidItemId}
+          batch={recoveryReview.batch}
+          onClose={() => setRecoveryReview(null)}
+          onAdmit={async (selectedRowIds) => {
+            const result = await admitPlaidRecoveryBatch(businessId, recoveryReview.plaidItemId, recoveryReview.batch.batch_id, selectedRowIds);
+            if (result?.ok === false) throw new Error(result?.message || result?.error || "Recovery admission failed.");
+            await refreshRecoveryStatus(recoveryReview.plaidItemId);
+            setRecoveryMessage((current) => ({ ...current, [recoveryReview.plaidItemId]: { tone: "ok", text: `${selectedRowIds.length} reviewed transactions imported with posting hold active.` } }));
+            setRecoveryReview(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1722,6 +1826,7 @@ function DarkMappingDropdown({
   options = [],
   placeholder = "Select...",
   disabled = false,
+  className = "w-[22rem] max-w-full",
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
@@ -1743,7 +1848,7 @@ function DarkMappingDropdown({
   );
 
   return (
-    <div className="relative w-[22rem] max-w-full" ref={containerRef}>
+    <div className={`relative ${className}`} ref={containerRef}>
       <button
         type="button"
         disabled={disabled}

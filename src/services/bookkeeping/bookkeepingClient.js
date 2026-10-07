@@ -918,9 +918,15 @@ export async function confirmPlaidReplacementLineage(businessId, plaidItemId, pa
   });
 }
 
-export async function admitPlaidRecoveryBatch(businessId, batchId) {
-  return safeFetch(apiUrl(`/api/integrations/plaid/recovery-batches/${encodeURIComponent(batchId)}/admit`), {
-    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({}),
+export async function getPlaidRecoveryBatchRows(businessId, plaidItemId, batchId, params = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== null && value !== "") qs.set(key, value); });
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-batches/${encodeURIComponent(batchId)}/rows?${qs}`), { method: "GET", headers: withBizHeaders(businessId) });
+}
+
+export async function admitPlaidRecoveryBatch(businessId, plaidItemId, batchId, selectedRowIds) {
+  return safeFetch(apiUrl(`/api/integrations/plaid/items/${encodeURIComponent(plaidItemId)}/recovery-batches/${encodeURIComponent(batchId)}/admit`), {
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({ selected_row_ids: selectedRowIds }),
   });
 }
 
@@ -1075,6 +1081,7 @@ export default {
   getPlaidRecoveryStatus,
   preparePlaidRecoveryPreview,
   confirmPlaidReplacementLineage,
+  getPlaidRecoveryBatchRows,
   admitPlaidRecoveryBatch,
   releasePlaidRecoveryHold,
   exchangePlaidPublicToken,

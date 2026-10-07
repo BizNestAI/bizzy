@@ -115,7 +115,7 @@ test("settings reconstructs and orchestrates the bounded replacement recovery wo
   assert.match(settings, /getPlaidRecoveryStatus/);
   assert.match(settings, /Prepare recovery preview/);
   assert.match(settings, /Confirm account lineage/);
-  assert.match(settings, /Import reviewed transactions/);
+  assert.match(settings, /Review \$\{summary\.new_after_cutoff \|\| 0\} new transactions/);
   assert.match(settings, /Release posting hold/);
   assert.match(settings, /Staged cursor is not committed until controlled admission/);
   assert.match(settings, /REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27"/);
@@ -124,6 +124,45 @@ test("settings reconstructs and orchestrates the bounded replacement recovery wo
   assert.match(client, /recovery-batches\/\$\{encodeURIComponent\(batchId\)\}\/admit/);
   assert.match(client, /release-posting-hold/);
   assert.match(routes, /router\.get\("\/items\/:plaidItemId\/recovery-status"/);
+});
+
+test("replacement recovery review is transaction-level, scoped, selective, and held", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const routes = read("src/api/integrations/plaid.routes.js");
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+  const migration = read("supabase/migrations/20261101103000_plaid_recovery_selective_admission.sql");
+
+  assert.match(settings, /Review new Chase transactions/);
+  assert.match(settings, /Import \{count\} selected transactions/);
+  assert.match(settings, /Auto-post is off\. Posting hold remains active/);
+  assert.match(settings, /overflow-x-auto/);
+  assert.match(settings, /Oldest first/);
+  assert.match(settings, /getPlaidRecoveryBatchRows/);
+  assert.match(client, /items\/\$\{encodeURIComponent\(plaidItemId\)\}\/recovery-batches/);
+  assert.match(routes, /items\/:plaidItemId\/recovery-batches\/:batchId\/rows/);
+  assert.match(routes, /selectedRowIds: req\.body\?\.selected_row_ids/);
+  assert.match(recovery, /from\("plaid_recovery_batch_rows"\)/);
+  assert.match(recovery, /\.eq\("business_id", businessId\)/);
+  assert.match(recovery, /\.eq\("plaid_account_id", item\.replacement_recovery_account_id\)/);
+  assert.match(recovery, /\.eq\("disposition", "new_after_cutoff"\)/);
+  assert.match(migration, /id = any\(p_selected_row_ids\)/);
+  assert.match(migration, /recovery_selection_no_longer_eligible/);
+  assert.match(migration, /recovery_admission_count_mismatch/);
+  assert.match(migration, /posting_hold=true/);
+  assert.match(migration, /cursor=v_batch\.staged_next_cursor/);
+  assert.doesNotMatch(settings, /Import reviewed transactions/);
+});
+
+test("ambiguous preview responses recover the one durable batch without starting a second preview", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+
+  assert.match(settings, /recovered_from_status/);
+  assert.match(settings, /refreshRecoveryStatus\(plaidItemId\)\.catch/);
+  assert.match(settings, /\["preview_ready", "lineage_confirmation_required"\]/);
+  assert.match(recovery, /activeBatches\?\.\[0\]/);
+  assert.match(recovery, /reused: true/);
 });
 
 test("recovery admission schema is held, cutoff-bounded, tenant-scoped, and cursor-safe", () => {

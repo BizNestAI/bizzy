@@ -18,7 +18,7 @@ import {
   getPlaidStatus,
   inspectUpdatedItemAccounts,
 } from "../../services/plaid/plaidIntegrationService.js";
-import { admitReplacementRecoveryBatch, bootstrapReplacementRecoveryState, confirmReplacementAccountLineage, createReplacementRecoveryPreview, getReplacementRecoveryStatus, releaseReplacementRecoveryHold, selectReplacementRecoveryAccount } from "../../services/plaid/plaidReplacementRecoveryService.js";
+import { admitReplacementRecoveryBatch, bootstrapReplacementRecoveryState, confirmReplacementAccountLineage, createReplacementRecoveryPreview, getReplacementRecoveryStatus, listReplacementRecoveryRows, releaseReplacementRecoveryHold, selectReplacementRecoveryAccount } from "../../services/plaid/plaidReplacementRecoveryService.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from "../_shared/entitlementAuth.js";
 import { consumePlaidLinkState, createPlaidLinkState } from "../../services/plaid/plaidLinkStateService.js";
@@ -184,11 +184,23 @@ router.post("/items/:plaidItemId/confirm-lineage", requireAuth, plaidMutationRat
   }
 });
 
-router.post("/recovery-batches/:batchId/admit", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+router.get("/items/:plaidItemId/recovery-batches/:batchId/rows", requireAuth, primaryOwner, integrationAdmin, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
-    const result = await admitReplacementRecoveryBatch({ businessId, batchId: req.params.batchId, actorUserId: req.auth?.userId || req.user?.id || null });
+    return res.json({ ok: true, ...(await listReplacementRecoveryRows({ businessId, plaidItemId: req.params.plaidItemId, batchId: req.params.batchId,
+      page: req.query.page, pageSize: req.query.page_size, search: req.query.search, dateFrom: req.query.date_from, dateTo: req.query.date_to, sort: req.query.sort })) });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "recovery_rows_failed", message: error?.message || "Recovery transactions could not be loaded." });
+  }
+});
+
+router.post("/items/:plaidItemId/recovery-batches/:batchId/admit", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await admitReplacementRecoveryBatch({ businessId, plaidItemId: req.params.plaidItemId, batchId: req.params.batchId,
+      selectedRowIds: req.body?.selected_row_ids, actorUserId: req.auth?.userId || req.user?.id || null });
     return res.json({ ok: true, ...result });
   } catch (error) {
     return res.status(error?.status || 500).json({ ok: false, error: error?.code || "recovery_admission_failed", message: error?.message || "Recovery transactions could not be admitted." });
