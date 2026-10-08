@@ -347,7 +347,25 @@ export async function admitReplacementRecoveryBatch({ businessId, plaidItemId, b
     p_selected_row_ids: selectedRowIds,
     p_actor_user_id: actorUserId || null,
   });
-  if (error) throw recoveryError("recovery_admission_failed", error.message || "Recovery transactions could not be admitted.");
+  if (error) {
+    const knownCodes = new Set([
+      "recovery_selection_required", "duplicate_recovery_row_selection", "recovery_batch_not_found",
+      "recovery_batch_not_ready", "recovery_workflow_not_active", "recovery_batch_requires_review",
+      "invalid_recovery_row_selection", "recovery_selection_no_longer_eligible", "recovery_admission_count_mismatch",
+    ]);
+    const code = knownCodes.has(error.message) ? error.message : "recovery_admission_failed";
+    const messages = {
+      recovery_batch_not_found: "This recovery preview is no longer available.",
+      recovery_batch_not_ready: "This recovery preview is not active for admission.",
+      recovery_workflow_not_active: "The recovery preview is valid, but its admission state is stale. Refresh and try again.",
+      recovery_batch_requires_review: "Resolve the remaining ambiguous or duplicate transactions before importing.",
+      invalid_recovery_row_selection: "One or more selected transactions do not belong to this active recovery preview.",
+      recovery_selection_no_longer_eligible: "One or more selected transactions were already imported or are no longer eligible.",
+      recovery_admission_count_mismatch: "The selected transactions changed during admission. Nothing was imported.",
+    };
+    throw recoveryError(code, messages[code] || "Recovery transactions could not be admitted.", 409,
+      { upstream_code: error.code || null, upstream_message: error.message || null });
+  }
   return data || { batch_id: batchId, status: "imported_held", posting_hold: true };
 }
 

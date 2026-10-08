@@ -829,8 +829,8 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   const latestExistingDate = summary.latest_existing_transaction_date || summary.latest_existing_date || null;
   const money = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Math.abs(Number(value || 0)));
   const integrityOk = result?.integrity?.ok === true;
-  const orphanedPreview = error?.code === "recovery_preview_row_count_mismatch"
-    || batch?.integrity?.ok === false || Boolean(batch?.rebuild_source_batch_id);
+  const activeRecoveryBatchId = result?.batch_id || batch.batch_id;
+  const orphanedPreview = error?.code === "recovery_preview_row_count_mismatch" || batch?.integrity?.ok === false;
   const modal = (
     <div className="pointer-events-auto fixed inset-0 z-[2147482000] flex h-[100dvh] items-center justify-center overflow-hidden overscroll-none bg-black/80 p-2 sm:p-4">
       <div ref={dialogRef} tabIndex={-1} className="flex min-h-0 max-h-[calc(100dvh-16px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#101312] shadow-2xl outline-none sm:max-h-[calc(100dvh-32px)]" role="dialog" aria-modal="true" aria-label="Review replacement-card transactions">
@@ -877,7 +877,7 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
             {!loading && !error ? <><div className="overflow-x-auto rounded-xl border border-white/10"><table className="min-w-[920px] w-full text-left text-xs"><thead className="bg-white/[.04] text-white/55"><tr>
               <th className="w-12 whitespace-nowrap p-3">Select</th><th className="min-w-32 whitespace-nowrap p-3">Transaction date</th><th className="min-w-32 whitespace-nowrap p-3">Authorized date</th><th className="min-w-72 whitespace-nowrap p-3">Merchant / description</th><th className="min-w-28 whitespace-nowrap p-3">Amount</th><th className="min-w-28 whitespace-nowrap p-3">Status</th><th className="min-w-40 whitespace-nowrap p-3">Classification</th>
             </tr></thead><tbody>{(result?.rows || []).map((row) => <tr key={row.id} className="border-t border-white/8 text-white/80"><td className="p-3"><input type="checkbox" checked={selected?.has(row.id) || false} onChange={() => setSelected((current) => { const next = new Set(current || []); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next; })} /></td>
-              <td className="whitespace-nowrap p-3">{row.transaction_date}</td><td className="whitespace-nowrap p-3">{row.authorized_date && row.authorized_date !== row.transaction_date ? row.authorized_date : "—"}</td><td className="p-3">{row.merchant_or_description}</td><td className={`whitespace-nowrap p-3 font-semibold ${row.amount >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{row.amount >= 0 ? "+" : "−"}{money(row.amount)}</td><td className="whitespace-nowrap p-3">Plaid status: {row.pending ? "Pending" : "Posted"}</td><td className="whitespace-nowrap p-3 capitalize">{row.activity_type.replaceAll("_", " ")}</td></tr>)}</tbody></table></div>
+              <td className="whitespace-nowrap p-3">{row.transaction_date}</td><td className="whitespace-nowrap p-3">{row.authorized_date && row.authorized_date !== row.transaction_date ? row.authorized_date : "—"}</td><td className="p-3">{row.merchant_or_description}</td><td className={`whitespace-nowrap p-3 font-semibold ${row.amount >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{row.amount >= 0 ? "+" : "−"}{money(row.amount)}</td><td className="whitespace-nowrap p-3">Plaid snapshot status: {row.pending ? "Pending" : "Posted"}</td><td className="whitespace-nowrap p-3 capitalize">{row.activity_type.replaceAll("_", " ")}</td></tr>)}</tbody></table></div>
             <div className="mt-3 flex items-center justify-between text-xs text-white/55"><span>{result?.total ? `Showing ${(page - 1) * 25 + 1}–${Math.min(page * 25, result.total)} of ${result.total}` : "No new transactions in this verified recovery preview."}</span><div className="flex gap-2"><GhostButton type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</GhostButton><GhostButton type="button" disabled={page * 25 >= (result?.total || 0)} onClick={() => setPage((p) => p + 1)}>Next</GhostButton></div></div></> : null}
             {!loading && !error && batch.previous_expected_count != null && Number(batch.previous_expected_count) !== Number(result?.total || 0) ? <div className="mt-3 rounded-lg border border-amber-400/20 bg-amber-500/5 p-3 text-xs text-amber-100">The rebuilt preview now contains {result?.total || 0} transactions; the earlier incomplete preview reported {batch.previous_expected_count}. This reflects the current authoritative Plaid source read.</div> : null}
             </div>
@@ -885,7 +885,7 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
         </div>
         <div className="relative z-10 flex shrink-0 items-center justify-end gap-2 border-t border-white/10 bg-[#101312] px-3 py-3 sm:px-5 sm:py-4"><GhostButton type="button" disabled={busy} onClick={onClose}>Close — keep preview</GhostButton>
           {!confirming ? <AccentButton type="button" disabled={loading || Boolean(error) || !integrityOk || !count || busy} onClick={() => setConfirming(true)}>Import {count} transactions</AccentButton>
-            : <AccentButton type="button" disabled={busy || !count} onClick={async () => { setBusy(true); setError(null); try { await onAdmit([...selected]); } catch (cause) { setError({ message: cause?.message || "Admission failed.", requestId: cause?.requestId || null }); setConfirming(false); } finally { setBusy(false); } }}>{busy ? `Importing ${count} transactions…` : `Import ${count} transactions`}</AccentButton>}</div>
+            : <AccentButton type="button" disabled={busy || !count} onClick={async () => { setBusy(true); setError(null); try { await onAdmit([...selected], activeRecoveryBatchId); } catch (cause) { setError({ message: cause?.message || "Admission failed.", requestId: cause?.requestId || null, code: cause?.code || "recovery_admission_failed", details: cause?.details || null }); setConfirming(false); } finally { setBusy(false); } }}>{busy ? `Importing ${count} transactions…` : `Import ${count} transactions`}</AccentButton>}</div>
       </div>
     </div>
   );
@@ -1874,11 +1874,15 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
           plaidItemId={recoveryReview.plaidItemId}
           batch={recoveryReview.batch}
           onClose={() => setRecoveryReview(null)}
-          onAdmit={async (selectedRowIds) => {
-            const result = await admitPlaidRecoveryBatch(businessId, recoveryReview.plaidItemId, recoveryReview.batch.batch_id, selectedRowIds);
-            if (result?.ok === false) throw new Error(result?.message || result?.error || "Recovery admission failed.");
-            await refreshRecoveryStatus(recoveryReview.plaidItemId);
-            setRecoveryMessage((current) => ({ ...current, [recoveryReview.plaidItemId]: { tone: "ok", text: `${selectedRowIds.length} reviewed transactions imported with posting hold active.` } }));
+          onAdmit={async (selectedRowIds, activeRecoveryBatchId) => {
+            const current = recoveryReview;
+            const result = await admitPlaidRecoveryBatch(businessId, current.plaidItemId, activeRecoveryBatchId, selectedRowIds);
+            if (result?.ok === false) {
+              const cause = new Error(result?.message || result?.error || "Recovery admission failed.");
+              cause.code = result?.error; cause.requestId = result?.request_id; cause.details = result?.details; throw cause;
+            }
+            await refreshRecoveryStatus(current.plaidItemId);
+            setRecoveryMessage((messages) => ({ ...messages, [current.plaidItemId]: { tone: "ok", text: `${selectedRowIds.length} reviewed transactions imported with posting hold active.` } }));
             setRecoveryReview(null);
           }}
           onRebuild={async (idempotencyKey) => {

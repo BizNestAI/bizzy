@@ -233,12 +233,24 @@ router.post("/items/:plaidItemId/recovery-batches/:batchId/rebuild", requireAuth
 router.post("/items/:plaidItemId/recovery-batches/:batchId/admit", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  const requestId = String(req.get("x-request-id") || crypto.randomUUID());
+  res.set("x-request-id", requestId);
   try {
+    console.info("[plaid-recovery] controlled admission requested", { request_id: requestId, business_id: businessId,
+      plaid_item_id: req.params.plaidItemId, batch_id: req.params.batchId,
+      selected_count: Array.isArray(req.body?.selected_row_ids) ? req.body.selected_row_ids.length : 0 });
     const result = await admitReplacementRecoveryBatch({ businessId, plaidItemId: req.params.plaidItemId, batchId: req.params.batchId,
       selectedRowIds: req.body?.selected_row_ids, actorUserId: req.auth?.userId || req.user?.id || null });
-    return res.json({ ok: true, ...result });
+    console.info("[plaid-recovery] controlled admission completed", { request_id: requestId, business_id: businessId,
+      plaid_item_id: req.params.plaidItemId, batch_id: result?.batch_id, admitted: result?.admitted,
+      quarantined: result?.quarantined, posting_hold: result?.posting_hold, reused: result?.reused === true });
+    return res.json({ ok: true, request_id: requestId, ...result });
   } catch (error) {
-    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "recovery_admission_failed", message: error?.message || "Recovery transactions could not be admitted." });
+    console.warn("[plaid-recovery] controlled admission failed", { request_id: requestId, business_id: businessId,
+      plaid_item_id: req.params.plaidItemId, batch_id: req.params.batchId, code: error?.code || "recovery_admission_failed",
+      details: error?.details || null });
+    return res.status(error?.status || 500).json({ ok: false, request_id: requestId,
+      error: error?.code || "recovery_admission_failed", message: error?.message || "Recovery transactions could not be admitted." });
   }
 });
 

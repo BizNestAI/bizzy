@@ -283,7 +283,36 @@ test("review selections survive pagination and import remains guarded", () => {
   assert.match(modal, /disabled=\{loading \|\| Boolean\(error\) \|\| !integrityOk \|\| !count \|\| busy\}/);
   assert.match(modal, /disabled=\{busy \|\| !count\}/);
   assert.match(modal, /Importing \$\{count\} transactions/);
-  assert.match(modal, /Plaid status: \{row\.pending \? "Pending" : "Posted"\}/);
+  assert.match(modal, /Plaid snapshot status: \{row\.pending \? "Pending" : "Posted"\}/);
+});
+
+test("valid rebuilt batch is canonical for selective admission and non-integrity 409s never request rebuild", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+  const routes = read("src/api/integrations/plaid.routes.js");
+  const modal = settings.slice(settings.indexOf("function RecoveryTransactionReviewModal"), settings.indexOf("function PlaidIntegrationCard"));
+  assert.match(modal, /activeRecoveryBatchId = result\?\.batch_id \|\| batch\.batch_id/);
+  assert.match(modal, /onAdmit\(\[\.\.\.selected\], activeRecoveryBatchId\)/);
+  assert.match(settings, /admitPlaidRecoveryBatch\(businessId, current\.plaidItemId, activeRecoveryBatchId, selectedRowIds\)/);
+  assert.match(modal, /orphanedPreview = error\?\.code === "recovery_preview_row_count_mismatch" \|\| batch\?\.integrity\?\.ok === false/);
+  assert.doesNotMatch(modal, /orphanedPreview[^;]*rebuild_source_batch_id/);
+  assert.match(recovery, /invalid_recovery_row_selection/);
+  assert.match(recovery, /recovery_workflow_not_active: "The recovery preview is valid, but its admission state is stale/);
+  assert.match(routes, /controlled admission failed/);
+  assert.match(routes, /request_id: requestId/);
+});
+
+test("forward admission contract accepts a valid rebuilt preview, preserves subset omissions, and stays atomic", () => {
+  const migration = read("supabase/migrations/20261101105000_plaid_recovery_admission_active_batch.sql");
+  assert.match(migration, /replacement_recovery_status not in \('ready_for_preview','preview_ready'\)/);
+  assert.match(migration, /id=any\(p_selected_row_ids\).*batch_id=p_batch_id/s);
+  assert.match(migration, /v_blocked<>v_selected/);
+  assert.match(migration, /v_admitted<>v_selected/);
+  assert.match(migration, /'quarantined'.*new_after_cutoff.*v_selected/s);
+  assert.match(migration, /status='imported_held',posting_hold=true/);
+  assert.match(migration, /replacement_recovery_status='imported_held'/);
+  assert.match(migration, /if v_batch\.status='imported_held'.*'reused',true/s);
+  assert.doesNotMatch(migration, /quickbooks|qbo/i);
 });
 
 test("ambiguous preview responses recover the one durable batch without starting a second preview", () => {
