@@ -221,7 +221,7 @@ test("replacement recovery review is transaction-level, scoped, selective, and h
   const migration = read("supabase/migrations/20261101103000_plaid_recovery_selective_admission.sql");
 
   assert.match(settings, /Review new Chase transactions/);
-  assert.match(settings, /Import \{count\} selected transactions/);
+  assert.match(settings, /Import \{count\} transactions/);
   assert.match(settings, /Auto-post is off\. Posting hold remains active/);
   assert.match(settings, /overflow-x-auto/);
   assert.match(settings, /createPortal\(modal, document\.body\)/);
@@ -247,6 +247,43 @@ test("replacement recovery review is transaction-level, scoped, selective, and h
   assert.match(migration, /posting_hold=true/);
   assert.match(migration, /cursor=v_batch\.staged_next_cursor/);
   assert.doesNotMatch(settings, /Import reviewed transactions/);
+});
+
+test("recovery review modal is viewport-bounded with a fixed header/footer and one transaction scroll region", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const modal = settings.slice(settings.indexOf("function RecoveryTransactionReviewModal"), settings.indexOf("function PlaidIntegrationCard"));
+  assert.match(modal, /fixed inset-0 z-\[2147482000\]/);
+  assert.match(modal, /h-\[100dvh\]/);
+  assert.match(modal, /max-h-\[calc\(100dvh-16px\)\]/);
+  assert.match(modal, /sm:max-h-\[calc\(100dvh-32px\)\]/);
+  assert.match(modal, /flex min-h-0.*flex-col overflow-hidden/);
+  assert.match(modal, /shrink-0 border-b/);
+  assert.match(modal, /data-recovery-transaction-scroll-region/);
+  assert.match(modal, /min-h-0 flex-1 overflow-y-auto overscroll-contain/);
+  assert.match(modal, /relative z-10 flex shrink-0.*border-t/);
+  assert.match(modal, /Close — keep preview/);
+  assert.match(modal, /Import \{count\} transactions/);
+});
+
+test("closing recovery review is local-only and reopening reads the same durable batch", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const modal = settings.slice(settings.indexOf("function RecoveryTransactionReviewModal"), settings.indexOf("function PlaidIntegrationCard"));
+  assert.match(modal, /event\.key === "Escape" && !busyRef\.current\) onClose\(\)/);
+  assert.match(modal, /onClick=\{onClose\}>Close — keep preview/);
+  assert.match(settings, /onClose=\{\(\) => setRecoveryReview\(null\)\}/);
+  assert.match(modal, /getPlaidRecoveryBatchRows\(businessId, plaidItemId, batch\.batch_id/);
+  assert.doesNotMatch(modal, /createPlaid|transactionsSync|preparePlaidRecoveryPreview/);
+});
+
+test("review selections survive pagination and import remains guarded", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const modal = settings.slice(settings.indexOf("function RecoveryTransactionReviewModal"), settings.indexOf("function PlaidIntegrationCard"));
+  assert.match(modal, /setSelected\(\(current\) => current === null \? new Set\(response\.eligible_row_ids \|\| \[\]\) : current\)/);
+  assert.match(modal, /setPage\(\(p\) => p \+ 1\)/);
+  assert.match(modal, /disabled=\{loading \|\| Boolean\(error\) \|\| !integrityOk \|\| !count \|\| busy\}/);
+  assert.match(modal, /disabled=\{busy \|\| !count\}/);
+  assert.match(modal, /Importing \$\{count\} transactions/);
+  assert.match(modal, /Plaid status: \{row\.pending \? "Pending" : "Posted"\}/);
 });
 
 test("ambiguous preview responses recover the one durable batch without starting a second preview", () => {

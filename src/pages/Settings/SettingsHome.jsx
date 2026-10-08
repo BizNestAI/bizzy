@@ -783,20 +783,23 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   const [confirmingRebuild, setConfirmingRebuild] = useState(false);
   const rebuildKeyRef = useRef(null);
   const dialogRef = useRef(null);
+  const busyRef = useRef(false);
   const returnFocusRef = useRef(typeof document !== "undefined" ? document.activeElement : null);
+  useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
     const previousOverflow = document.body.style.overflow;
+    const returnFocusTarget = returnFocusRef.current;
     document.body.style.overflow = "hidden";
     dialogRef.current?.focus();
-    const onKeyDown = (event) => { if (event.key === "Escape" && !busy) onClose(); };
+    const onKeyDown = (event) => { if (event.key === "Escape" && !busyRef.current) onClose(); };
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", onKeyDown);
-      returnFocusRef.current?.focus?.();
+      returnFocusTarget?.focus?.();
     };
-  }, [busy, onClose]);
+  }, [onClose]);
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -829,21 +832,22 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   const orphanedPreview = error?.code === "recovery_preview_row_count_mismatch"
     || batch?.integrity?.ok === false || Boolean(batch?.rebuild_source_batch_id);
   const modal = (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3">
-      <div ref={dialogRef} tabIndex={-1} className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#101312] shadow-2xl outline-none" role="dialog" aria-modal="true" aria-label="Review replacement-card transactions">
-        <div className="border-b border-white/10 px-5 py-4"><div className="text-lg font-semibold text-white">Review new Chase transactions</div>
+    <div className="pointer-events-auto fixed inset-0 z-[2147482000] flex h-[100dvh] items-center justify-center overflow-hidden overscroll-none bg-black/80 p-2 sm:p-4">
+      <div ref={dialogRef} tabIndex={-1} className="flex min-h-0 max-h-[calc(100dvh-16px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#101312] shadow-2xl outline-none sm:max-h-[calc(100dvh-32px)]" role="dialog" aria-modal="true" aria-label="Review replacement-card transactions">
+        <div className="shrink-0 border-b border-white/10 px-4 py-3 sm:px-5 sm:py-4"><div className="text-lg font-semibold text-white">Review new Chase transactions</div>
           <div className="mt-1 text-xs text-white/55">Controlled cutoff: {cutoffDate} · Operator confirmed{latestExistingDate ? ` · Latest existing transaction: ${latestExistingDate}` : ""}</div></div>
-        <div className="overflow-y-auto p-5">
-          <div className="mb-4 grid gap-2 sm:grid-cols-3"><div className="rounded-lg border border-white/10 bg-white/[.03] p-3 text-xs text-white/65"><b className="text-white">{represented}</b> already represented and skipped</div>
+        <div className="flex min-h-0 flex-1 flex-col p-3 sm:p-5">
+          <div className="mb-3 grid shrink-0 gap-2 sm:grid-cols-3"><div className="rounded-lg border border-white/10 bg-white/[.03] p-3 text-xs text-white/65"><b className="text-white">{represented}</b> already represented and skipped</div>
             <div className="rounded-lg border border-white/10 bg-white/[.03] p-3 text-xs text-white/65"><b className="text-white">{summary.pending_replacements || 0}</b> pending replacements remain held</div>
             <div className="rounded-lg border border-amber-400/25 bg-amber-500/5 p-3 text-xs text-amber-100">Auto-post is off. Posting hold remains active.</div></div>
           {!confirming ? <>
-            <div className="mb-3 flex flex-wrap gap-2">
+            <div className="mb-3 flex shrink-0 flex-wrap gap-2">
               <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search merchant or description" className="min-w-56 flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white" />
               <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white [color-scheme:dark]" />
               <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white [color-scheme:dark]" />
               <select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }} className="rounded-lg border border-white/10 bg-[#111] px-3 py-2 text-sm text-white"><option value="oldest">Oldest first</option><option value="newest">Newest first</option><option value="amount">Amount</option></select>
             </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1" data-recovery-transaction-scroll-region>
             {loading ? <div className="rounded-lg border border-white/10 bg-white/[.03] p-5 text-sm text-white/65">Loading staged transactions…</div> : null}
             {error ? <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-100">
               <div>{orphanedPreview ? "The earlier preview did not save its transaction details. Your Chase connection is still repaired. Bizzi only needs to rebuild the preview." : error.message}</div>
@@ -873,14 +877,15 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
             {!loading && !error ? <><div className="overflow-x-auto rounded-xl border border-white/10"><table className="min-w-[920px] w-full text-left text-xs"><thead className="bg-white/[.04] text-white/55"><tr>
               <th className="w-12 whitespace-nowrap p-3">Select</th><th className="min-w-32 whitespace-nowrap p-3">Transaction date</th><th className="min-w-32 whitespace-nowrap p-3">Authorized date</th><th className="min-w-72 whitespace-nowrap p-3">Merchant / description</th><th className="min-w-28 whitespace-nowrap p-3">Amount</th><th className="min-w-28 whitespace-nowrap p-3">Status</th><th className="min-w-40 whitespace-nowrap p-3">Classification</th>
             </tr></thead><tbody>{(result?.rows || []).map((row) => <tr key={row.id} className="border-t border-white/8 text-white/80"><td className="p-3"><input type="checkbox" checked={selected?.has(row.id) || false} onChange={() => setSelected((current) => { const next = new Set(current || []); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next; })} /></td>
-              <td className="whitespace-nowrap p-3">{row.transaction_date}</td><td className="whitespace-nowrap p-3">{row.authorized_date && row.authorized_date !== row.transaction_date ? row.authorized_date : "—"}</td><td className="p-3">{row.merchant_or_description}</td><td className={`whitespace-nowrap p-3 font-semibold ${row.amount >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{row.amount >= 0 ? "+" : "−"}{money(row.amount)}</td><td className="whitespace-nowrap p-3">{row.pending ? "Pending" : "Posted"}</td><td className="whitespace-nowrap p-3 capitalize">{row.activity_type.replaceAll("_", " ")}</td></tr>)}</tbody></table></div>
+              <td className="whitespace-nowrap p-3">{row.transaction_date}</td><td className="whitespace-nowrap p-3">{row.authorized_date && row.authorized_date !== row.transaction_date ? row.authorized_date : "—"}</td><td className="p-3">{row.merchant_or_description}</td><td className={`whitespace-nowrap p-3 font-semibold ${row.amount >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{row.amount >= 0 ? "+" : "−"}{money(row.amount)}</td><td className="whitespace-nowrap p-3">Plaid status: {row.pending ? "Pending" : "Posted"}</td><td className="whitespace-nowrap p-3 capitalize">{row.activity_type.replaceAll("_", " ")}</td></tr>)}</tbody></table></div>
             <div className="mt-3 flex items-center justify-between text-xs text-white/55"><span>{result?.total ? `Showing ${(page - 1) * 25 + 1}–${Math.min(page * 25, result.total)} of ${result.total}` : "No new transactions in this verified recovery preview."}</span><div className="flex gap-2"><GhostButton type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</GhostButton><GhostButton type="button" disabled={page * 25 >= (result?.total || 0)} onClick={() => setPage((p) => p + 1)}>Next</GhostButton></div></div></> : null}
             {!loading && !error && batch.previous_expected_count != null && Number(batch.previous_expected_count) !== Number(result?.total || 0) ? <div className="mt-3 rounded-lg border border-amber-400/20 bg-amber-500/5 p-3 text-xs text-amber-100">The rebuilt preview now contains {result?.total || 0} transactions; the earlier incomplete preview reported {batch.previous_expected_count}. This reflects the current authoritative Plaid source read.</div> : null}
-          </> : <div className="rounded-xl border border-amber-400/25 bg-amber-500/5 p-5 text-sm text-white/75"><div className="text-base font-semibold text-white">Confirm controlled admission</div><p className="mt-2">Import <b>{count}</b> selected transactions. Skip {represented} existing rows and hold {summary.pending_replacements || 0} pending replacements.</p><p className="mt-2">Cutoff: {cutoffDate} · Operator confirmed. Nothing will be sent to QuickBooks; Auto-post stays off and the posting hold remains active.</p></div>}
+            </div>
+          </> : <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain"><div className="rounded-xl border border-amber-400/25 bg-amber-500/5 p-5 text-sm text-white/75"><div className="text-base font-semibold text-white">Confirm controlled admission</div><p className="mt-2">Import <b>{count}</b> selected transactions. Skip {represented} existing rows and hold {summary.pending_replacements || 0} pending replacements.</p><p className="mt-2">Cutoff: {cutoffDate} · Operator confirmed. Nothing will be sent to QuickBooks; Auto-post stays off and the posting hold remains active.</p><GhostButton type="button" className="mt-4" disabled={busy} onClick={() => setConfirming(false)}>Back to transactions</GhostButton></div></div>}
         </div>
-        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-4"><GhostButton type="button" onClick={confirming ? () => setConfirming(false) : onClose}>{confirming ? "Back" : "Cancel"}</GhostButton>
-          {!confirming ? <AccentButton type="button" disabled={loading || Boolean(error) || !integrityOk || !count} onClick={() => setConfirming(true)}>Import {count} selected transactions</AccentButton>
-            : <AccentButton type="button" disabled={busy || !count} onClick={async () => { setBusy(true); setError(null); try { await onAdmit([...selected]); } catch (cause) { setError({ message: cause?.message || "Admission failed.", requestId: cause?.requestId || null }); setConfirming(false); } finally { setBusy(false); } }}>{busy ? "Importing…" : `Confirm import of ${count}`}</AccentButton>}</div>
+        <div className="relative z-10 flex shrink-0 items-center justify-end gap-2 border-t border-white/10 bg-[#101312] px-3 py-3 sm:px-5 sm:py-4"><GhostButton type="button" disabled={busy} onClick={onClose}>Close — keep preview</GhostButton>
+          {!confirming ? <AccentButton type="button" disabled={loading || Boolean(error) || !integrityOk || !count || busy} onClick={() => setConfirming(true)}>Import {count} transactions</AccentButton>
+            : <AccentButton type="button" disabled={busy || !count} onClick={async () => { setBusy(true); setError(null); try { await onAdmit([...selected]); } catch (cause) { setError({ message: cause?.message || "Admission failed.", requestId: cause?.requestId || null }); setConfirming(false); } finally { setBusy(false); } }}>{busy ? `Importing ${count} transactions…` : `Import ${count} transactions`}</AccentButton>}</div>
       </div>
     </div>
   );
