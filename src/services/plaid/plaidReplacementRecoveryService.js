@@ -126,6 +126,22 @@ export function summarizeRecoveryRows(rows = []) {
   return summary;
 }
 
+export function validateRecoveryPopulation({ summary = {}, rows = [], replacementAccountId }) {
+  if ((rows || []).some((row) => row.plaid_account_id !== replacementAccountId)) {
+    throw recoveryError("recovery_preview_account_scope_mismatch", "The rebuilt preview contains transactions outside the confirmed replacement account.", 409);
+  }
+  const addedRows = (rows || []).filter((row) => row.change_type === "added");
+  const classifiedAdded = addedRows.filter((row) => [
+    "exact_existing", "pending_replacement", "represented", "historical_discrepancy",
+    "new_after_cutoff", "probable_duplicate", "ambiguous",
+  ].includes(row.disposition));
+  if (Number(summary.total_added || 0) !== addedRows.length || classifiedAdded.length !== addedRows.length) {
+    throw recoveryError("recovery_preview_classification_mismatch", "The rebuilt preview classifications do not reconcile to the complete added population.", 409,
+      { expected_added: Number(summary.total_added || 0), staged_added: addedRows.length, classified_added: classifiedAdded.length });
+  }
+  return { added_count: addedRows.length, classified_added_count: classifiedAdded.length };
+}
+
 async function scopedItem({ db, businessId, plaidItemId }) {
   const { data, error } = await db.from("plaid_items")
     .select("id,business_id,plaid_item_id,plaid_env,plaid_access_token,cursor,institution_name,is_active,replacement_recovery_status,replacement_recovery_account_id,replacement_recovery_cutoff_date,replacement_repair_completed_at")
@@ -165,11 +181,23 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
     .order("created_at", { ascending: false });
   if (candidateError) throw candidateError;
   const { data: batches, error: batchError } = await db.from("plaid_recovery_batches")
-    .select("id,status,cutoff_date,posting_hold,summary,failure_code,failure_detail,created_at,updated_at")
+    .select("id,status,cutoff_date,posting_hold,summary,failure_code,failure_detail,rebuild_source_batch_id,created_at,updated_at")
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
-    .order("created_at", { ascending: false }).limit(1);
+    .order("created_at", { ascending: false }).limit(20);
   if (batchError) throw batchError;
-  const batch = batches?.[0] || null;
+  // Never hydrate an abandoned audit record. Prefer the newest usable preview;
+  // otherwise expose the newest in-flight/failed attempt so recovery can resume.
+  let batch = (batches || []).find((row) => ["preview_ready", "imported_held", "released"].includes(row.status))
+    || (batches || []).find((row) => row.status !== "abandoned") || null;
+  let integrity = null;
+  if (batch?.status === "preview_ready") {
+    const expectedCount = Number(batch.summary?.new_after_cutoff ?? batch.summary?.genuinely_new ?? 0);
+    const { count, error: countError } = await db.from("plaid_recovery_batch_rows").select("id", { count: "exact", head: true })
+      .eq("business_id", businessId).eq("batch_id", batch.id)
+      .eq("plaid_account_id", item.replacement_recovery_account_id).eq("disposition", "new_after_cutoff");
+    if (countError) throw countError;
+    integrity = { ok: Number(count || 0) === expectedCount, expected_count: expectedCount, staged_count: Number(count || 0) };
+  }
   return {
     plaid_item_id: plaidItemId,
     orchestration: {
@@ -189,6 +217,8 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
       summary: batch.summary || {},
       failure_code: batch.failure_code || null,
       failure_detail: batch.failure_detail || null,
+      rebuild_source_batch_id: batch.rebuild_source_batch_id || null,
+      integrity,
       created_at: batch.created_at,
       updated_at: batch.updated_at,
     } : null,
@@ -274,9 +304,13 @@ export async function listReplacementRecoveryRows({ businessId, plaidItemId, bat
 }
 
 export async function admitReplacementRecoveryBatch({ businessId, plaidItemId, batchId, selectedRowIds, actorUserId, db = supabase }) {
-  await scopedItem({ db, businessId, plaidItemId });
+  const item = await scopedItem({ db, businessId, plaidItemId });
   if (!Array.isArray(selectedRowIds) || selectedRowIds.length === 0) throw recoveryError("recovery_selection_required", "Select at least one staged transaction.", 400);
   if (new Set(selectedRowIds).size !== selectedRowIds.length) throw recoveryError("duplicate_recovery_row_selection", "The transaction selection contains duplicates.", 400);
+  const { data: batch, error: batchError } = await db.from("plaid_recovery_batches").select("id,status")
+    .eq("id", batchId).eq("business_id", businessId).eq("plaid_env", item.plaid_env).eq("plaid_item_id", plaidItemId).maybeSingle();
+  if (batchError) throw batchError;
+  if (!batch || batch.status !== "preview_ready") throw recoveryError("recovery_batch_not_admissible", "Only the active valid recovery preview can be admitted.", 409);
   const { data, error } = await db.rpc("admit_plaid_recovery_batch", {
     p_business_id: businessId,
     p_batch_id: batchId,
@@ -361,7 +395,7 @@ export async function createReplacementRecoveryPreview({ businessId, plaidItemId
 
 async function claimRecoveryLease({ db, item, businessId, owner }) {
   const { data, error } = await db.rpc("claim_plaid_sync_lease", {
-    p_item_id: item.id, p_business_id: businessId, p_owner: owner, p_lease_seconds: 300,
+    p_item_id: item.id, p_business_id: businessId, p_owner: owner, p_ttl_seconds: 300,
   });
   if (error) throw error;
   if (data !== true) throw recoveryError("recovery_rebuild_in_progress", "A recovery preview rebuild is already running.", 202);
@@ -415,9 +449,11 @@ export async function rebuildReplacementRecoveryPreview({ businessId, plaidItemI
       if (error) throw error;
     }
     const { data: durable, error: durableError } = await db.from("plaid_recovery_batch_rows")
-      .select("id,plaid_account_id,disposition").eq("business_id", businessId).eq("batch_id", newBatchId)
-      .eq("plaid_account_id", recoveryAccountId).eq("disposition", "new_after_cutoff");
+      .select("id,plaid_transaction_id,plaid_account_id,change_type,disposition").eq("business_id", businessId).eq("batch_id", newBatchId)
+      .eq("plaid_account_id", recoveryAccountId);
     if (durableError) throw durableError;
+    // The durable copy, not the in-memory Plaid response, is the readiness authority.
+    validateRecoveryPopulation({ summary, rows: durable || [], replacementAccountId: recoveryAccountId });
     validateRecoveryReviewPopulation({ summary, rows: durable || [], replacementAccountId: recoveryAccountId });
     const { data: ready, error: readyError } = await db.from("plaid_recovery_batches").update({ status: "preview_ready", posting_hold: true,
       staged_next_cursor: collected.staged_next_cursor, summary, failure_code: null, failure_detail: null, updated_at: new Date().toISOString() })

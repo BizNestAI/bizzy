@@ -826,7 +826,8 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   const latestExistingDate = summary.latest_existing_transaction_date || summary.latest_existing_date || null;
   const money = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Math.abs(Number(value || 0)));
   const integrityOk = result?.integrity?.ok === true;
-  const orphanedPreview = error?.code === "recovery_preview_row_count_mismatch";
+  const orphanedPreview = error?.code === "recovery_preview_row_count_mismatch"
+    || batch?.integrity?.ok === false || Boolean(batch?.rebuild_source_batch_id);
   const modal = (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3">
       <div ref={dialogRef} tabIndex={-1} className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#101312] shadow-2xl outline-none" role="dialog" aria-modal="true" aria-label="Review replacement-card transactions">
@@ -862,6 +863,10 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
                     setError({ message: cause?.message || "The recovery preview could not be rebuilt.", requestId: cause?.requestId || null, code: cause?.code || "recovery_rebuild_failed" });
                   } finally { setBusy(false); }
                 }}>{busy ? "Rebuilding…" : "Confirm rebuild"}</AccentButton></div>
+                {busy ? <div className="mt-3 flex items-center gap-2 text-xs text-amber-100/80" role="status">
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-amber-100/25 border-t-amber-100" />
+                  Reading current Chase transactions and staging a new durable preview…
+                </div> : null}
               </div> : null}
               {!orphanedPreview ? <GhostButton type="button" className="mt-3" onClick={() => setRetryNonce((value) => value + 1)}>Retry</GhostButton> : null}
             </div> : null}
@@ -1541,6 +1546,9 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                 const pendingCandidate = recovery?.candidates?.find((candidate) => candidate.status === "pending");
                 const batch = recovery?.batch || null;
                 const summary = batch?.summary || {};
+                const batchIncomplete = (batch?.status === "preview_ready" && batch?.integrity?.ok === false)
+                  || (batch?.status === "failed" && Boolean(batch?.rebuild_source_batch_id));
+                const lineageIncomplete = Boolean(pendingCandidate) || orchestration?.status === "awaiting_account_selection";
                 const busy = Boolean(recoveryBusy[inst.plaid_item_id]);
                 const selectionKey = pendingCandidate ? `${inst.plaid_item_id}:${pendingCandidate.id}` : null;
                 const selectedPriorAccount = selectionKey ? lineageSelection[selectionKey] : null;
@@ -1554,7 +1562,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                           Source coverage and staged cursor are reviewed separately. Nothing in this panel posts to QuickBooks.
                         </div>
                       </div>
-                      <StatusBadge tone={batch?.status === "released" ? "ok" : "warning"} label={(batch?.status || "lineage review").replaceAll("_", " ")} />
+                      <StatusBadge tone={batch?.status === "released" ? "ok" : "warning"}
+                        label={batchIncomplete ? "Preview incomplete · Rebuild required" : (batch?.status || "lineage review").replaceAll("_", " ")} />
                     </div>
 
                     {orchestration?.status === "awaiting_account_selection" ? (
@@ -1632,7 +1641,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                       </div>
                     ) : null}
 
-                    {batch ? (
+                    {batch && !lineageIncomplete && !batchIncomplete ? (
                       <div className="mt-3">
                         <div className="grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
                           {[
@@ -1666,6 +1675,16 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                             </AccentButton>
                           ) : null}
                         </div>
+                      </div>
+                    ) : null}
+                    {batchIncomplete && !lineageIncomplete ? (
+                      <div className="mt-3 rounded-lg border border-rose-400/30 bg-rose-500/10 p-3">
+                        <div className="text-xs font-semibold text-rose-100">Preview incomplete · Rebuild required</div>
+                        <div className="mt-1 text-[11px] text-rose-100/70">The stale summary is hidden because its eligible transaction rows were not durably staged.</div>
+                        <GhostButton type="button" className="mt-3 h-9 px-3 text-xs" disabled={readOnly || busy}
+                          onClick={() => setRecoveryReview({ plaidItemId: inst.plaid_item_id, batch })}>
+                          Rebuild recovery preview
+                        </GhostButton>
                       </div>
                     ) : null}
                     {recoveryMessage[inst.plaid_item_id] ? (
@@ -1859,7 +1878,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
           }}
           onRebuild={async (idempotencyKey) => {
             const current = recoveryReview;
-            const result = await rebuildPlaidRecoveryPreview(businessId, current.plaidItemId, current.batch.batch_id, idempotencyKey);
+            const sourceBatchId = current.batch.rebuild_source_batch_id || current.batch.batch_id;
+            const result = await rebuildPlaidRecoveryPreview(businessId, current.plaidItemId, sourceBatchId, idempotencyKey);
             if (result?.ok === false) {
               const cause = new Error(result?.message || result?.error || "Recovery preview rebuild failed.");
               cause.code = result?.error; cause.requestId = result?.request_id; throw cause;

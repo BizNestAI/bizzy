@@ -207,6 +207,8 @@ router.post("/items/:plaidItemId/recovery-batches/:batchId/rebuild", requireAuth
   const requestId = String(req.get("x-request-id") || crypto.randomUUID());
   res.set("x-request-id", requestId);
   try {
+    console.info("[plaid-recovery] controlled rebuild requested", { request_id: requestId, business_id: businessId,
+      plaid_item_id: req.params.plaidItemId, batch_id: req.params.batchId });
     const result = await rebuildReplacementRecoveryPreview({
       businessId,
       plaidItemId: req.params.plaidItemId,
@@ -214,6 +216,9 @@ router.post("/items/:plaidItemId/recovery-batches/:batchId/rebuild", requireAuth
       actorUserId: req.auth?.userId || req.user?.id || null,
       idempotencyKey: String(req.body?.idempotency_key || ""),
     });
+    console.info("[plaid-recovery] controlled rebuild completed", { request_id: requestId, business_id: businessId,
+      plaid_item_id: req.params.plaidItemId, source_batch_id: req.params.batchId, batch_id: result?.batch_id,
+      status: result?.status, eligible_count: result?.summary?.new_after_cutoff });
     return res.status(result?.processing ? 202 : 200).json({ ok: true, request_id: requestId, ...result });
   } catch (error) {
     console.warn("[plaid-recovery] controlled rebuild failed", { request_id: requestId, business_id: businessId,

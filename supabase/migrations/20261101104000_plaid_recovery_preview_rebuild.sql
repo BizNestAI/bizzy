@@ -26,6 +26,9 @@ declare
   v_admitted integer;
   v_imported integer;
   v_attempts integer;
+  v_candidate public.plaid_replacement_account_candidates%rowtype;
+  v_lineage public.plaid_account_lineage_decisions%rowtype;
+  v_mapping public.plaid_qbo_account_mappings%rowtype;
   v_new_id uuid := gen_random_uuid();
 begin
   if nullif(trim(p_idempotency_key), '') is null then raise exception 'recovery_rebuild_idempotency_required'; end if;
@@ -35,6 +38,28 @@ begin
   select * into v_item from public.plaid_items
    where business_id=p_business_id and plaid_env=p_plaid_env and plaid_item_id=p_plaid_item_id and is_active=true for update;
   if not found then raise exception 'plaid_item_not_found'; end if;
+  if p_business_id <> 'cffc2183-e77c-4148-a206-d5192e090925'::uuid
+     or p_plaid_item_id <> '4KNZYd1xn4fZeBMob4RYTwZvwO9ezVSAEwrXe' then
+    raise exception 'recovery_rebuild_scope_mismatch';
+  end if;
+  if v_item.replacement_recovery_status <> 'ready_for_preview'
+     or v_item.replacement_recovery_account_id is null
+     or v_item.replacement_recovery_cutoff_date <> date '2026-08-27' then
+    raise exception 'recovery_rebuild_lineage_not_ready';
+  end if;
+  select * into v_candidate from public.plaid_replacement_account_candidates
+   where business_id=p_business_id and plaid_env=p_plaid_env and plaid_item_id=p_plaid_item_id
+     and plaid_account_id=v_item.replacement_recovery_account_id and status='confirmed';
+  if not found then raise exception 'recovery_rebuild_lineage_not_confirmed'; end if;
+  select * into v_lineage from public.plaid_account_lineage_decisions
+   where business_id=p_business_id and plaid_env=p_plaid_env
+     and replacement_plaid_account_id=v_item.replacement_recovery_account_id and status='confirmed';
+  if not found then raise exception 'recovery_rebuild_lineage_not_confirmed'; end if;
+  select * into v_mapping from public.plaid_qbo_account_mappings
+   where business_id=p_business_id and plaid_account_id=v_item.replacement_recovery_account_id;
+  if not found or v_mapping.qbo_account_id <> v_lineage.qbo_account_id then
+    raise exception 'recovery_rebuild_mapping_changed';
+  end if;
 
   select * into v_existing from public.plaid_recovery_batches
    where business_id=p_business_id and rebuild_idempotency_key=p_idempotency_key limit 1;
@@ -57,7 +82,7 @@ begin
 
   if v_old.status <> 'abandoned' then
     update public.plaid_recovery_batches set status='abandoned', abandoned_at=now(), abandoned_by=p_actor_user_id,
-      failure_code='recovery_preview_row_count_mismatch', failure_detail='Preview summary had eligible rows but no durable transaction details.', updated_at=now()
+      failure_code='eligible_rows_not_staged', failure_detail='Preview summary had 113 eligible rows but no durable transaction details.', updated_at=now()
     where id=v_old.id and status in ('preview_ready','failed');
     if not found then raise exception 'recovery_rebuild_compare_and_swap_failed'; end if;
   end if;

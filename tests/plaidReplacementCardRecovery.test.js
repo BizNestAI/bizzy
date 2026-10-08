@@ -77,7 +77,7 @@ test("recovery cutoff and duplicate policy fail closed", async () => {
 });
 
 test("recovery review fails closed when a preview summary has no durable staged rows", async () => {
-  const { validateRecoveryReviewPopulation } = await import("../src/services/plaid/plaidReplacementRecoveryService.js");
+  const { validateRecoveryPopulation, validateRecoveryReviewPopulation } = await import("../src/services/plaid/plaidReplacementRecoveryService.js");
   assert.throws(() => validateRecoveryReviewPopulation({
     summary: { new_after_cutoff: 113 }, rows: [], replacementAccountId: "replacement",
   }), (error) => error.code === "recovery_preview_row_count_mismatch"
@@ -88,6 +88,25 @@ test("recovery review fails closed when a preview summary has no durable staged 
     replacementAccountId: "replacement",
   });
   assert.equal(valid.staged_count, 1);
+
+  assert.throws(() => validateRecoveryPopulation({
+    summary: { total_added: 1 },
+    rows: [{ plaid_account_id: "other", change_type: "added", disposition: "new_after_cutoff" }],
+    replacementAccountId: "replacement",
+  }), (error) => error.code === "recovery_preview_account_scope_mismatch");
+  assert.throws(() => validateRecoveryPopulation({
+    summary: { total_added: 2 },
+    rows: [{ plaid_account_id: "replacement", change_type: "added", disposition: "new_after_cutoff" }],
+    replacementAccountId: "replacement",
+  }), (error) => error.code === "recovery_preview_classification_mismatch");
+  assert.deepEqual(validateRecoveryPopulation({
+    summary: { total_added: 2 },
+    rows: [
+      { plaid_account_id: "replacement", change_type: "added", disposition: "exact_existing" },
+      { plaid_account_id: "replacement", change_type: "added", disposition: "new_after_cutoff" },
+    ],
+    replacementAccountId: "replacement",
+  }), { added_count: 2, classified_added_count: 2 });
 });
 
 test("replacement repair remains update-mode, staged, held, and explicitly released", () => {
@@ -214,6 +233,10 @@ test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempot
   assert.match(migration, /v_expected <> 113/);
   assert.match(migration, /v_staged <> 0 or v_admitted <> 0 or v_imported <> 0/);
   assert.match(migration, /v_item\.cursor is distinct from v_old\.original_cursor/);
+  assert.match(migration, /cffc2183-e77c-4148-a206-d5192e090925/);
+  assert.match(migration, /4KNZYd1xn4fZeBMob4RYTwZvwO9ezVSAEwrXe/);
+  assert.match(migration, /status='confirmed'/);
+  assert.match(migration, /eligible_rows_not_staged/);
   assert.match(migration, /recovery_rebuild_newer_batch_exists/);
   assert.match(migration, /set status='abandoned'/);
   assert.match(migration, /recovery_rebuild_compare_and_swap_failed/);
@@ -224,6 +247,9 @@ test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempot
   assert.match(recovery, /begin_plaid_recovery_preview_rebuild/);
   assert.match(recovery, /collectCompletePlaidSyncPreview/);
   assert.match(recovery, /validateRecoveryReviewPopulation/);
+  assert.match(recovery, /validateRecoveryPopulation/);
+  assert.match(recovery, /p_ttl_seconds: 300/);
+  assert.match(recovery, /rebuild_source_batch_id/);
   assert.match(recovery, /status: "preview_ready"/);
   assert.match(recovery, /finally \{\s*await releaseRecoveryLease/);
   assert.doesNotMatch(recovery, /set cursor\s*=|update\(\{\s*cursor/);
@@ -234,6 +260,9 @@ test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempot
   assert.match(routes, /idempotencyKey: String\(req\.body\?\.idempotency_key/);
   assert.match(client, /recovery-batches\/\$\{encodeURIComponent\(batchId\)\}\/rebuild/);
   assert.match(settings, /Rebuild recovery preview/);
+  assert.match(settings, /Preview incomplete · Rebuild required/);
+  assert.match(settings, /sourceBatchId = current\.batch\.rebuild_source_batch_id \|\| current\.batch\.batch_id/);
+  assert.match(settings, /animate-spin/);
   assert.match(settings, /The earlier preview did not save its transaction details/);
   assert.match(settings, /attempt < 10/);
   assert.match(settings, /status === "preview_ready" \|\| rebuilt\?\.status === "failed"/);
