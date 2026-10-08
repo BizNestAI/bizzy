@@ -1,5 +1,5 @@
 import { supabase } from "../services/supabaseAdmin.js";
-import { runPlaidSyncForBusiness } from "../services/plaid/plaidSyncService.js";
+import { isPlaidItemEligibleForScheduledSync, runPlaidSyncForBusiness } from "../services/plaid/plaidSyncService.js";
 import { runReconciliationOnceForBusiness } from "./reconciliation.cron.js";
 import { filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 
@@ -54,8 +54,9 @@ export function startPlaidDailySyncCron() {
 async function tick() {
   const { data: items, error } = await supabase
     .from("plaid_items")
-    .select("id,business_id,plaid_item_id,status,last_sync_at,metadata")
-    .eq("status", "connected");
+    .select("id,business_id,plaid_item_id,status,last_sync_at,metadata,is_active")
+    .eq("is_active", true)
+    .in("status", ["connected", "active"]);
   if (error) {
     console.error("[plaid-sync-cron] failed to fetch items", error?.message || error);
     return;
@@ -66,6 +67,7 @@ async function tick() {
 
   let processed = 0;
   for (const item of items) {
+    if (!isPlaidItemEligibleForScheduledSync(item)) continue;
     if (!entitledBusinessIds.has(item.business_id)) continue;
     if (processed >= MAX_ITEMS_PER_TICK) break;
     const tz = item.metadata?.timezone || item.metadata?.profile?.timezone || null;

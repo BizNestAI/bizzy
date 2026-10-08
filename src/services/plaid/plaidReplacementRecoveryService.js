@@ -77,6 +77,30 @@ export function normalizeRecoverySchemaContractError(error) {
   );
 }
 
+export function deriveRecoverySyncHealth({ item = {}, latestRun = null, latestSuccessfulRun = null, importedThrough = null } = {}) {
+  const lastSuccessfulSyncAt = latestSuccessfulRun?.finished_at || item.last_success_at || item.last_sync_at || null;
+  const latestFailed = latestRun?.status === "failed"
+    && (!lastSuccessfulSyncAt || Date.parse(latestRun.finished_at || latestRun.started_at || 0) > Date.parse(lastSuccessfulSyncAt));
+  const active = item.is_active !== false && ["connected", "active"].includes(item.status) && !latestFailed;
+  return {
+    status: active ? "active" : "attention_required",
+    reason: active ? null : latestFailed ? "The most recent transaction sync did not complete. Automatic retry remains enabled."
+      : item.is_active === false ? "The Plaid connection is inactive."
+        : "The Plaid connection requires attention before automatic synchronization can continue.",
+    last_successful_sync_at: lastSuccessfulSyncAt,
+    transactions_imported_through: importedThrough,
+    latest_run: latestRun ? {
+      status: latestRun.status,
+      started_at: latestRun.started_at,
+      finished_at: latestRun.finished_at,
+      added_count: Number(latestRun.added_count || 0),
+      modified_count: Number(latestRun.modified_count || 0),
+      removed_count: Number(latestRun.removed_count || 0),
+      failure_code: latestRun.failure_code ? "transaction_sync_failed" : null,
+    } : null,
+  };
+}
+
 export async function collectCompletePlaidSyncPreview({ plaid, accessToken, originalCursor = null, maxRestarts = 3 }) {
   let restartCount = 0;
   for (;;) {
@@ -173,7 +197,7 @@ export function validateRecoveryPopulation({ summary = {}, rows = [], replacemen
 
 async function scopedItem({ db, businessId, plaidItemId }) {
   const { data, error } = await db.from("plaid_items")
-    .select("id,business_id,plaid_item_id,plaid_env,plaid_access_token,cursor,institution_name,is_active,replacement_recovery_status,replacement_recovery_account_id,replacement_recovery_cutoff_date,replacement_repair_completed_at")
+    .select("id,business_id,plaid_item_id,plaid_env,plaid_access_token,cursor,institution_name,status,is_active,last_sync_at,last_success_at,sync_in_progress,sync_lease_owner,sync_lease_acquired_at,sync_lease_expires_at,replacement_recovery_status,replacement_recovery_account_id,replacement_recovery_cutoff_date,replacement_repair_completed_at")
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId).maybeSingle();
   if (error) {
     if (error.code === "42703" || /replacement_recovery_/i.test(error.message || "")) {
@@ -210,7 +234,7 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
     .order("created_at", { ascending: false });
   if (candidateError) throw candidateError;
   const { data: batches, error: batchError } = await db.from("plaid_recovery_batches")
-    .select("id,status,cutoff_date,posting_hold,summary,failure_code,failure_detail,rebuild_source_batch_id,created_at,updated_at")
+    .select("id,status,cutoff_date,posting_hold,summary,failure_code,failure_detail,rebuild_source_batch_id,created_by,created_at,updated_at,staged_next_cursor")
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
     .order("created_at", { ascending: false }).limit(20);
   if (batchError) throw batchError;
@@ -227,6 +251,25 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
     if (countError) throw countError;
     integrity = { ok: Number(count || 0) === expectedCount, expected_count: expectedCount, staged_count: Number(count || 0) };
   }
+  const [{ data: syncRuns, error: syncRunError }, { data: importedRows, error: importedRowsError }] = await Promise.all([
+    db.from("bank_sync_runs")
+      .select("status,started_at,finished_at,added_count,modified_count,removed_count,failure_code")
+      .eq("business_id", businessId).eq("plaid_item_id", plaidItemId)
+      .order("started_at", { ascending: false }).limit(20),
+    item.replacement_recovery_account_id
+      ? db.from("bank_transactions").select("date")
+        .eq("business_id", businessId).eq("plaid_account_id", item.replacement_recovery_account_id)
+        .eq("is_archived", false).order("date", { ascending: false }).limit(1)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (syncRunError) throw syncRunError;
+  if (importedRowsError) throw importedRowsError;
+  const latestRun = syncRuns?.[0] || null;
+  const latestSuccessfulRun = (syncRuns || []).find((run) => ["completed", "success"].includes(run.status)) || null;
+  const admittedAt = batch?.summary?.admitted_at || (batch?.status === "imported_held" ? batch.updated_at : null);
+  const admittedCount = Number(batch?.summary?.admitted ?? batch?.summary?.selected ?? 0);
+  const eligibleCount = Number(batch?.summary?.new_after_cutoff ?? batch?.summary?.genuinely_new ?? 0);
+  const cursorCommitted = Boolean(batch?.staged_next_cursor && item.cursor && batch.staged_next_cursor === item.cursor);
   return {
     plaid_item_id: plaidItemId,
     orchestration: {
@@ -234,6 +277,17 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
       selected_plaid_account_id: item.replacement_recovery_account_id || null,
       cutoff_date: item.replacement_recovery_cutoff_date || "2026-08-27",
       repair_completed_at: item.replacement_repair_completed_at || null,
+    },
+    sync_health: deriveRecoverySyncHealth({
+      item,
+      latestRun,
+      latestSuccessfulRun,
+      importedThrough: importedRows?.[0]?.date || null,
+    }),
+    synchronization: {
+      eligible: item.is_active !== false && ["connected", "active"].includes(item.status),
+      in_progress: item.sync_in_progress === true,
+      lease_active: Boolean(item.sync_lease_owner),
     },
     recovery_required: Boolean(item.replacement_recovery_status && item.replacement_recovery_status !== "released")
       || Boolean((candidates || []).some((row) => row.status === "pending") || (batch && !["released", "abandoned"].includes(batch.status))),
@@ -244,6 +298,19 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
       cutoff_date: batch.cutoff_date,
       posting_hold: batch.posting_hold,
       summary: batch.summary || {},
+      admission: {
+        imported_count: admittedCount,
+        omitted_count: Math.max(0, eligibleCount - admittedCount),
+        pending_held_count: Number(batch.summary?.pending_replacements || 0),
+        admitted_at: admittedAt,
+        operator_id: batch.summary?.admitted_by || batch.created_by || null,
+        request_id: batch.summary?.admission_request_id || null,
+      },
+      cursor_commit: {
+        staged_cursor_present: Boolean(batch.staged_next_cursor),
+        committed: cursorCommitted,
+        committed_at: cursorCommitted ? admittedAt : null,
+      },
       failure_code: batch.failure_code || null,
       failure_detail: batch.failure_detail || null,
       rebuild_source_batch_id: batch.rebuild_source_batch_id || null,

@@ -406,6 +406,20 @@ export async function getPlaidStatus({ businessId }) {
     .eq("is_active", true);
   if (acctErr) throw acctErr;
 
+  const { data: successfulRuns, error: successfulRunsErr } = await supabase
+    .from("bank_sync_runs")
+    .select("plaid_item_id,finished_at,started_at,status")
+    .eq("business_id", businessId)
+    .in("status", ["completed", "success"])
+    .order("finished_at", { ascending: false, nullsLast: true });
+  if (successfulRunsErr) throw successfulRunsErr;
+  const lastSuccessfulByItem = new Map();
+  for (const run of successfulRuns || []) {
+    if (!lastSuccessfulByItem.has(run.plaid_item_id)) {
+      lastSuccessfulByItem.set(run.plaid_item_id, run.finished_at || run.started_at || null);
+    }
+  }
+
   const { data: mappings } = await supabase
     .from("plaid_qbo_account_mappings")
     .select("plaid_account_id")
@@ -447,7 +461,7 @@ export async function getPlaidStatus({ businessId }) {
       institution_name: it.institution_name,
       institution_id: it.institution_id,
       status,
-      last_sync_at: it.last_sync_at,
+      last_sync_at: lastSuccessfulByItem.get(it.plaid_item_id) || it.last_sync_at || null,
       accounts: acctList.map((a) => ({
         ...a,
         mapped_to_qbo: mappedSet.has(a.plaid_account_id),

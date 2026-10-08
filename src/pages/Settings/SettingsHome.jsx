@@ -892,6 +892,28 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   return typeof document !== "undefined" ? createPortal(modal, document.body) : null;
 }
 
+function formatLocalTimestamp(value) {
+  if (!value) return "Not recorded";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "Not recorded" : parsed.toLocaleString();
+}
+
+function SyncHealthSummary({ health }) {
+  if (!health) return null;
+  const active = health.status === "active";
+  return (
+    <div className="mt-3 rounded-lg border border-white/8 bg-black/10 p-2 text-[11px]" data-transaction-sync-health>
+      <div className={active ? "font-semibold text-emerald-200" : "font-semibold text-amber-200"}>
+        {active ? "Transaction sync: Active" : "Attention required"}
+      </div>
+      {!active && health.reason ? <div className="mt-1 text-white/60">{health.reason}</div> : null}
+      <div className="mt-1 text-white/55">Last successful sync: {formatLocalTimestamp(health.last_successful_sync_at)}</div>
+      <div className="mt-1 text-white/55">Transactions imported through: {health.transactions_imported_through || "Not available"}</div>
+      <div className="mt-1 text-amber-200/80">Posting hold is separate from transaction synchronization.</div>
+    </div>
+  );
+}
+
 function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const mappingOverrideStorageKey = useMemo(
     () => (businessId ? `bizzy:plaid-mapping-overrides:${businessId}` : null),
@@ -907,6 +929,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const [recoveryMessage, setRecoveryMessage] = useState({});
   const [lineageSelection, setLineageSelection] = useState({});
   const [recoveryReview, setRecoveryReview] = useState(null);
+  const [expandedRecoveryHistory, setExpandedRecoveryHistory] = useState({});
   const [disconnectingItem, setDisconnectingItem] = useState(null);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
@@ -1558,6 +1581,32 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                 const selectionKey = pendingCandidate ? `${inst.plaid_item_id}:${pendingCandidate.id}` : null;
                 const selectedPriorAccount = selectionKey ? lineageSelection[selectionKey] : null;
                 if (!recovery || (!orchestration?.status && !(recovery.candidates || []).length && !batch)) return null;
+                const completedRecovery = ["imported_held", "released"].includes(batch?.status);
+                const historyExpanded = expandedRecoveryHistory[inst.plaid_item_id] === true;
+                const admittedAt = batch?.admission?.admitted_at || batch?.updated_at || null;
+                const importedCount = Number(batch?.admission?.imported_count ?? summary.admitted ?? summary.selected ?? 0);
+                if (completedRecovery && !historyExpanded) {
+                  return (
+                    <div className="mt-3 rounded-xl border border-emerald-400/25 bg-emerald-500/[0.06] p-3" data-recovery-history-summary>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs font-semibold text-emerald-100">Replacement-card recovery completed</div>
+                          <div className="mt-1 text-[11px] text-white/65">
+                            {importedCount} transactions imported{admittedAt ? ` · ${formatLocalTimestamp(admittedAt)}` : ""}
+                          </div>
+                          <div className={`mt-1 text-[11px] ${batch.posting_hold ? "text-amber-200" : "text-emerald-200"}`}>
+                            {batch.posting_hold ? "Posting hold remains active" : "Posting hold released"}
+                          </div>
+                        </div>
+                        <GhostButton type="button" className="h-9 px-3 text-xs"
+                          onClick={() => setExpandedRecoveryHistory((current) => ({ ...current, [inst.plaid_item_id]: true }))}>
+                          View details
+                        </GhostButton>
+                      </div>
+                      <SyncHealthSummary health={recovery.sync_health} />
+                    </div>
+                  );
+                }
                 return (
                   <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/[0.06] p-3">
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1570,6 +1619,15 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                       <StatusBadge tone={batch?.status === "released" ? "ok" : "warning"}
                         label={batchIncomplete ? "Preview incomplete · Rebuild required" : (batch?.status || "lineage review").replaceAll("_", " ")} />
                     </div>
+                    {completedRecovery ? (
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-white/60">
+                        <span>{importedCount} transactions imported{admittedAt ? ` · ${formatLocalTimestamp(admittedAt)}` : ""}</span>
+                        <GhostButton type="button" className="h-8 px-3 text-xs"
+                          onClick={() => setExpandedRecoveryHistory((current) => ({ ...current, [inst.plaid_item_id]: false }))}>
+                          Hide details
+                        </GhostButton>
+                      </div>
+                    ) : null}
 
                     {orchestration?.status === "awaiting_account_selection" ? (
                       <div className="mt-3 rounded-lg border border-white/10 bg-black/15 p-3">
@@ -1662,8 +1720,25 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                           ))}
                         </div>
                         <div className="mt-2 text-[11px] text-white/55">
-                          Source cutoff {batch.cutoff_date}. Staged cursor is not committed until controlled admission.
+                          Source cutoff {batch.cutoff_date}. {completedRecovery
+                            ? batch.cursor_commit?.committed
+                              ? `Recovery cursor committed ${formatLocalTimestamp(batch.cursor_commit.committed_at)}.`
+                              : "Attention required: recovery cursor was not committed."
+                            : "Staged cursor is not committed until controlled admission."}
                         </div>
+                        {completedRecovery ? (
+                          <div className="mt-2 grid gap-1 rounded-lg border border-white/8 bg-black/10 p-2 text-[11px] text-white/60 sm:grid-cols-2" data-recovery-history-details>
+                            <span>Imported: {batch.admission?.imported_count || 0}</span>
+                            <span>Omitted: {batch.admission?.omitted_count || 0}</span>
+                            <span>Pending held: {batch.admission?.pending_held_count || 0}</span>
+                            <span>Operator: {batch.admission?.operator_id || "Not recorded"}</span>
+                            <span>Batch ID: {batch.batch_id}</span>
+                            <span>Request ID: {batch.admission?.request_id || "Not recorded"}</span>
+                            <span>Created: {formatLocalTimestamp(batch.created_at)}</span>
+                            <span>Admitted: {formatLocalTimestamp(admittedAt)}</span>
+                          </div>
+                        ) : null}
+                        {completedRecovery ? <SyncHealthSummary health={recovery.sync_health} /> : null}
                         <div className="mt-3 flex flex-wrap gap-2">
                           {batch.status === "preview_ready" ? (
                             <AccentButton type="button" disabled={readOnly || busy || summary.ambiguous > 0 || summary.probable_duplicates > 0}

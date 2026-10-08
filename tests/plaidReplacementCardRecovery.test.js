@@ -341,6 +341,64 @@ test("recovery admission schema is held, cutoff-bounded, tenant-scoped, and curs
   assert.doesNotMatch(recovery, /create.*QuickBooks|post.*QuickBooks/i);
 });
 
+test("completed recovery history is durable, collapsed by default, and exposes only sanitized cursor state", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+  assert.match(settings, /Replacement-card recovery completed/);
+  assert.match(settings, /View details/);
+  assert.match(settings, /expandedRecoveryHistory\[inst\.plaid_item_id\] === true/);
+  assert.match(settings, /Recovery cursor committed/);
+  assert.match(settings, /Batch ID:/);
+  assert.match(settings, /Request ID:/);
+  assert.match(recovery, /staged_cursor_present: Boolean\(batch\.staged_next_cursor\)/);
+  assert.match(recovery, /committed: cursorCommitted/);
+  const cursorContract = recovery.slice(recovery.indexOf("cursor_commit:"), recovery.indexOf("failure_code:", recovery.indexOf("cursor_commit:")));
+  assert.doesNotMatch(cursorContract, /staged_next_cursor\s*:/);
+});
+
+test("sync health distinguishes a newer failed run from an active incremental connection", async () => {
+  const { deriveRecoverySyncHealth } = await import("../src/services/plaid/plaidReplacementRecoveryService.js");
+  const active = deriveRecoverySyncHealth({
+    item: { is_active: true, status: "connected", last_success_at: "2026-10-08T10:00:00Z" },
+    latestRun: { status: "completed", started_at: "2026-10-08T10:00:00Z", finished_at: "2026-10-08T10:01:00Z" },
+    latestSuccessfulRun: { finished_at: "2026-10-08T10:01:00Z" },
+    importedThrough: "2026-10-07",
+  });
+  assert.equal(active.status, "active");
+  assert.equal(active.transactions_imported_through, "2026-10-07");
+
+  const failed = deriveRecoverySyncHealth({
+    item: { is_active: true, status: "connected", last_success_at: "2026-10-08T10:00:00Z" },
+    latestRun: { status: "failed", started_at: "2026-10-08T11:00:00Z", finished_at: "2026-10-08T11:01:00Z", failure_code: "private" },
+  });
+  assert.equal(failed.status, "attention_required");
+  assert.equal(failed.latest_run.failure_code, "transaction_sync_failed");
+});
+
+test("automatic sync accepts connected and active items, persists cursor evidence, and ignores posting holds", async () => {
+  const { isPlaidItemEligibleForScheduledSync } = await import("../src/services/plaid/plaidSyncService.js");
+  assert.equal(isPlaidItemEligibleForScheduledSync({ is_active: true, status: "connected" }), true);
+  assert.equal(isPlaidItemEligibleForScheduledSync({ is_active: true, status: "active" }), true);
+  assert.equal(isPlaidItemEligibleForScheduledSync({ is_active: false, status: "connected" }), false);
+  const sync = read("src/services/plaid/plaidSyncService.js");
+  const cron = read("src/cron/plaidSync.cron.js");
+  assert.match(sync, /const originalCursor = item\.cursor \|\| null/);
+  assert.match(sync, /cursor_input_sha256: cursorDigest\(originalCursor\)/);
+  assert.match(sync, /next_cursor_sha256: cursorDigest\(cursor\)/);
+  assert.match(sync, /last_success_at: now/);
+  assert.match(cron, /\.in\("status", \["connected", "active"\]\)/);
+  assert.doesNotMatch(sync, /posting_hold/);
+});
+
+test("successful sync metadata is sourced from completed runs and recovery history expansion performs no provider call", () => {
+  const integration = read("src/services/plaid/plaidIntegrationService.js");
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  assert.match(integration, /lastSuccessfulByItem/);
+  assert.match(integration, /\.in\("status", \["completed", "success"\]\)/);
+  assert.match(settings, /onClick=\{\(\) => setExpandedRecoveryHistory\(\(current\) => \(\{ \.\.\.current, \[inst\.plaid_item_id\]: true \}\)\)\}/);
+  assert.match(settings, /Posting hold is separate from transaction synchronization/);
+});
+
 test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempotent", () => {
   const migration = read("supabase/migrations/20261101104000_plaid_recovery_preview_rebuild.sql");
   const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");

@@ -30,6 +30,14 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+export function isPlaidItemEligibleForScheduledSync(item = {}) {
+  return item.is_active !== false && ["connected", "active"].includes(item.status);
+}
+
+function cursorDigest(value) {
+  return value ? crypto.createHash("sha256").update(String(value)).digest("hex") : null;
+}
+
 function normalizeMemo(value) {
   return String(value || "")
     .toLowerCase()
@@ -866,7 +874,8 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       .update({
         cursor,
         last_sync_at: now,
-        status: "active",
+        last_success_at: now,
+        status: "connected",
         is_active: true,
         disconnected_at: null,
         updated_at: now,
@@ -877,6 +886,12 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       const e = new Error("supabase_update_failed");
       e.supabase = updateErr;
       throw e;
+    }
+    const syncedAccountIds = Array.from(new Set([...added, ...modified].map((tx) => tx?.account_id).filter(Boolean)));
+    if (syncedAccountIds.length) {
+      const { error: accountSyncErr } = await supabase.from("plaid_accounts").update({ last_sync_at: now, updated_at: now })
+        .eq("business_id", businessId).in("plaid_account_id", syncedAccountIds);
+      if (accountSyncErr) throw accountSyncErr;
     }
 
     const addedCount = Number.isFinite(added.length) ? added.length : 0;
@@ -891,6 +906,13 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       status: "completed",
       failure_code: null,
       error_message: null,
+      meta: {
+        cursor_input_present: Boolean(originalCursor),
+        cursor_input_sha256: cursorDigest(originalCursor),
+        next_cursor_present: Boolean(cursor),
+        next_cursor_sha256: cursorDigest(cursor),
+        mutation_restarts: mutationRestarts,
+      },
     }).eq("id", runId).eq("worker_id", workerId);
     if (syncLogErr) {
       const e = new Error("supabase_sync_log_failed");
@@ -1023,6 +1045,10 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
   let bookkeepingEnqueued = 0;
   for (const item of items) {
     try {
+      if (!isPlaidItemEligibleForScheduledSync(item)) {
+        skipped += 1;
+        continue;
+      }
       if (!(await businessHasPaidEntitlement(businessId, { db: supabase }))) {
         skipped += 1;
         continue;
