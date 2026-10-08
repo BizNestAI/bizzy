@@ -1,3 +1,4 @@
+/* global process */
 import { supabase } from "../services/supabaseAdmin.js";
 import { isPlaidItemEligibleForScheduledSync, runPlaidSyncForBusiness } from "../services/plaid/plaidSyncService.js";
 import { runReconciliationOnceForBusiness } from "./reconciliation.cron.js";

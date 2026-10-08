@@ -203,7 +203,7 @@ test("settings reconstructs and orchestrates the bounded replacement recovery wo
   assert.match(settings, /Prepare recovery preview/);
   assert.match(settings, /Confirm account lineage/);
   assert.match(settings, /Review \$\{summary\.new_after_cutoff \|\| 0\} new transactions/);
-  assert.match(settings, /Release posting hold/);
+  assert.match(settings, /Allow recovered transactions to post/);
   assert.match(settings, /Staged cursor is not committed until controlled admission/);
   assert.match(settings, /REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27"/);
   assert.match(client, /recovery-status/);
@@ -394,9 +394,44 @@ test("successful sync metadata is sourced from completed runs and recovery histo
   const integration = read("src/services/plaid/plaidIntegrationService.js");
   const settings = read("src/pages/Settings/SettingsHome.jsx");
   assert.match(integration, /lastSuccessfulByItem/);
-  assert.match(integration, /\.in\("status", \["completed", "success"\]\)/);
+  assert.match(integration, /\["completed", "success"\]\.includes\(run\.status\)/);
   assert.match(settings, /onClick=\{\(\) => setExpandedRecoveryHistory\(\(current\) => \(\{ \.\.\.current, \[inst\.plaid_item_id\]: true \}\)\)\}/);
   assert.match(settings, /Posting hold is separate from transaction synchronization/);
+});
+
+test("settings status payload includes recovery history immediately and cold loading reserves its layout", () => {
+  const integration = read("src/services/plaid/plaidIntegrationService.js");
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  assert.match(integration, /const recovery = recoveryByItem\.get/);
+  assert.match(settings, /recoveryMapFromInstitutions/);
+  assert.match(settings, /RecoverySummarySkeleton/);
+  assert.match(settings, /h-\[148px\]/);
+  assert.doesNotMatch(settings, /Promise\.all\(institutions\.map\(async \(inst\)/);
+  assert.match(settings, /PLAID_STATUS_CACHE_VERSION = 2/);
+});
+
+test("posting hold release is explicitly confirmed and remains independent of auto-post", () => {
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const routes = read("src/api/integrations/plaid.routes.js");
+  assert.match(settings, /This removes the recovery safety hold\. It does not enable Auto-post or immediately send anything to QuickBooks\./);
+  assert.match(settings, /Auto-post is currently/);
+  assert.match(settings, /transaction categorizations are not changed/);
+  assert.match(client, /confirm_release: confirmation\.confirm_release === true/);
+  assert.match(routes, /posting_hold_release_confirmation_required/);
+  assert.match(routes, /primaryOwner, integrationAdmin/);
+  assert.doesNotMatch(settings.slice(settings.indexOf("function PostingHoldReleaseDialog"), settings.indexOf("function PlaidIntegrationCard")), /setAutoPost|QuickBooks.*fetch|qbo/i);
+});
+
+test("sync failures retain the committed cursor and persist sanitized retry diagnostics", async () => {
+  const { classifyPlaidSyncFailure } = await import("../src/services/plaid/plaidSyncService.js");
+  assert.equal(classifyPlaidSyncFailure(Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } })), "provider_connection_timeout");
+  assert.equal(classifyPlaidSyncFailure(new TypeError("fetch failed")), "provider_network_failure");
+  const sync = read("src/services/plaid/plaidSyncService.js");
+  const failureBlock = sync.slice(sync.indexOf("const failureCode = classifyPlaidSyncFailure(error)"), sync.indexOf("} finally {", sync.indexOf("const failureCode = classifyPlaidSyncFailure(error)")));
+  assert.match(failureBlock, /automatic_retry_scheduled: true/);
+  assert.match(failureBlock, /cursor_input_sha256: cursorDigest\(item\.cursor\)/);
+  assert.doesNotMatch(failureBlock, /cursor\s*[,}]/);
 });
 
 test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempotent", () => {

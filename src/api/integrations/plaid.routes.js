@@ -268,6 +268,9 @@ router.post("/items/:plaidItemId/recover-expired-lease", requireAuth, plaidMutat
 router.post("/recovery-batches/:batchId/release-posting-hold", requireAuth, primaryOwner, integrationAdmin, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  if (req.body?.confirm_release !== true) {
+    return res.status(409).json({ ok: false, error: "posting_hold_release_confirmation_required", message: "Explicit confirmation is required before recovered transactions may post." });
+  }
   try {
     const result = await releaseReplacementRecoveryHold({ businessId, batchId: req.params.batchId, actorUserId: req.auth?.userId || req.user?.id || null });
     return res.json({ ok: true, ...result });

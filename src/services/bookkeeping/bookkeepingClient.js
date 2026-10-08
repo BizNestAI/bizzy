@@ -846,11 +846,28 @@ export async function snoozeClarifications(businessId, payload = {}) {
   return res;
 }
 
-export async function getPlaidStatus(businessId) {
+const plaidStatusPrefetches = new Map();
+
+function requestPlaidStatus(businessId) {
   return safeFetch(apiUrl("/api/integrations/plaid/status"), {
     method: "GET",
     headers: withBizHeaders(businessId),
   });
+}
+
+export function prefetchPlaidStatus(businessId) {
+  if (!businessId) return Promise.resolve(null);
+  if (!plaidStatusPrefetches.has(businessId)) {
+    const request = requestPlaidStatus(businessId).finally(() => {
+      globalThis.setTimeout?.(() => plaidStatusPrefetches.delete(businessId), 15000);
+    });
+    plaidStatusPrefetches.set(businessId, request);
+  }
+  return plaidStatusPrefetches.get(businessId);
+}
+
+export async function getPlaidStatus(businessId) {
+  return plaidStatusPrefetches.get(businessId) || requestPlaidStatus(businessId);
 }
 
 export async function disconnectPlaid(businessId, payload = {}) {
@@ -937,9 +954,10 @@ export async function admitPlaidRecoveryBatch(businessId, plaidItemId, batchId, 
   });
 }
 
-export async function releasePlaidRecoveryHold(businessId, batchId) {
+export async function releasePlaidRecoveryHold(businessId, batchId, confirmation = {}) {
   return safeFetch(apiUrl(`/api/integrations/plaid/recovery-batches/${encodeURIComponent(batchId)}/release-posting-hold`), {
-    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }), body: JSON.stringify({}),
+    method: "POST", headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ confirm_release: confirmation.confirm_release === true }),
   });
 }
 

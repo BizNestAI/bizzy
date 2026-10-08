@@ -1,8 +1,10 @@
+/* global process */
 import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 import { encryptPlaidAccessToken, resolveStoredPlaidAccessToken } from "./plaidTokenCrypto.js";
 import { buildPhysicalAccountIdentity } from "./plaidCanonicalIdentity.js";
 import { plaidClientUserId } from "./plaidLinkStateService.js";
+import { deriveRecoverySyncHealth, getReplacementRecoveryStatus } from "./plaidReplacementRecoveryService.js";
 
 const devLog = (tag, payload) => {
   if (process.env.NODE_ENV !== "production") {
@@ -295,7 +297,12 @@ export async function fetchAndUpsertAccounts({ businessId, plaidItemId, accessTo
       devLog("missing_columns_retry", {
         reason: "plaid_accounts missing connected_at/last_sync_at; retrying without",
       });
-      const stripped = rows.map(({ connected_at: _connected_at, last_sync_at: _last_sync_at, ...rest }) => rest);
+      const stripped = rows.map((row) => {
+        const rest = { ...row };
+        delete rest.connected_at;
+        delete rest.last_sync_at;
+        return rest;
+      });
       const { error: retryErr } = await supabase
         .from("plaid_accounts")
         .upsert(stripped, { onConflict: "business_id,plaid_account_id" });
@@ -382,48 +389,41 @@ export async function exchangePublicToken({ businessId, userId, publicToken, met
 }
 
 export async function getPlaidStatus({ businessId }) {
-  const { data: items, error: itemErr } = await supabase
-    .from("plaid_items")
-    .select("plaid_item_id,institution_name,institution_id,status,last_sync_at,updated_at,is_active")
-    .eq("business_id", businessId)
-    .eq("plaid_env", plaidEnvName)
-    .eq("is_active", true);
+  const [itemResult, disconnectedResult, accountResult, successfulRunResult, mappingResult, businessResult] = await Promise.all([
+    supabase.from("plaid_items")
+      .select("plaid_item_id,institution_name,institution_id,status,last_sync_at,last_success_at,error_code,updated_at,is_active,sync_in_progress,replacement_recovery_status")
+      .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("is_active", true),
+    supabase.from("plaid_items").select("plaid_item_id", { count: "exact", head: true })
+      .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("is_active", false),
+    supabase.from("plaid_accounts")
+      .select("plaid_account_id,plaid_item_id,name,official_name,mask,type,subtype,is_active,current_balance,available_balance,connected_at,last_sync_at")
+      .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("is_active", true),
+    supabase.from("bank_sync_runs").select("plaid_item_id,finished_at,started_at,status,added_count,modified_count,removed_count,failure_code")
+      .eq("business_id", businessId)
+      .order("finished_at", { ascending: false, nullsLast: true }),
+    supabase.from("plaid_qbo_account_mappings").select("plaid_account_id").eq("business_id", businessId),
+    supabase.from("business_profiles").select("auto_post_to_quickbooks").eq("id", businessId).maybeSingle(),
+  ]);
+  const { data: items, error: itemErr } = itemResult;
   if (itemErr) throw itemErr;
-
-  const { count: disconnectedCount, error: disconnectedErr } = await supabase
-    .from("plaid_items")
-    .select("plaid_item_id", { count: "exact", head: true })
-    .eq("business_id", businessId)
-    .eq("plaid_env", plaidEnvName)
-    .eq("is_active", false);
+  const { count: disconnectedCount, error: disconnectedErr } = disconnectedResult;
   if (disconnectedErr) throw disconnectedErr;
-
-  const { data: accounts, error: acctErr } = await supabase
-    .from("plaid_accounts")
-    .select("plaid_account_id,plaid_item_id,name,official_name,mask,type,subtype,is_active,current_balance,available_balance,connected_at,last_sync_at")
-    .eq("business_id", businessId)
-    .eq("plaid_env", plaidEnvName)
-    .eq("is_active", true);
+  const { data: accounts, error: acctErr } = accountResult;
   if (acctErr) throw acctErr;
-
-  const { data: successfulRuns, error: successfulRunsErr } = await supabase
-    .from("bank_sync_runs")
-    .select("plaid_item_id,finished_at,started_at,status")
-    .eq("business_id", businessId)
-    .in("status", ["completed", "success"])
-    .order("finished_at", { ascending: false, nullsLast: true });
+  const { data: successfulRuns, error: successfulRunsErr } = successfulRunResult;
   if (successfulRunsErr) throw successfulRunsErr;
   const lastSuccessfulByItem = new Map();
+  const latestRunByItem = new Map();
   for (const run of successfulRuns || []) {
-    if (!lastSuccessfulByItem.has(run.plaid_item_id)) {
+    if (!latestRunByItem.has(run.plaid_item_id)) latestRunByItem.set(run.plaid_item_id, run);
+    if (["completed", "success"].includes(run.status) && !lastSuccessfulByItem.has(run.plaid_item_id)) {
       lastSuccessfulByItem.set(run.plaid_item_id, run.finished_at || run.started_at || null);
     }
   }
 
-  const { data: mappings } = await supabase
-    .from("plaid_qbo_account_mappings")
-    .select("plaid_account_id")
-    .eq("business_id", businessId);
+  const { data: mappings, error: mappingsError } = mappingResult;
+  if (mappingsError) throw mappingsError;
+  if (businessResult.error) throw businessResult.error;
   const mappedSet = new Set((mappings || []).map((m) => m.plaid_account_id));
 
   const itemAccountCounts = new Map();
@@ -453,18 +453,40 @@ export async function getPlaidStatus({ businessId }) {
     return !siblingWithAccounts;
   });
 
+  const recoveryPairs = await Promise.all(visibleItems
+    .filter((item) => Boolean(item.replacement_recovery_status))
+    .map(async (item) => {
+      try {
+        return [item.plaid_item_id, await getReplacementRecoveryStatus({ businessId, plaidItemId: item.plaid_item_id })];
+      } catch (error) {
+        return [item.plaid_item_id, { ok: false, error: error?.code || "plaid_recovery_status_failed", message: "Recovery history is temporarily unavailable." }];
+      }
+    }));
+  const recoveryByItem = new Map(recoveryPairs);
+
   const institutions = visibleItems.map((it) => {
     const acctList = (accounts || []).filter((a) => a.plaid_item_id === it.plaid_item_id);
     const status = it.status === "error" ? "error" : "connected";
+    const recovery = recoveryByItem.get(it.plaid_item_id) || null;
+    const syncHealth = recovery?.sync_health || deriveRecoverySyncHealth({
+      item: it,
+      latestRun: latestRunByItem.get(it.plaid_item_id) || null,
+      latestSuccessfulRun: lastSuccessfulByItem.has(it.plaid_item_id)
+        ? { finished_at: lastSuccessfulByItem.get(it.plaid_item_id) }
+        : null,
+    });
     return {
       plaid_item_id: it.plaid_item_id,
       institution_name: it.institution_name,
       institution_id: it.institution_id,
       status,
       last_sync_at: lastSuccessfulByItem.get(it.plaid_item_id) || it.last_sync_at || null,
+      recovery,
+      sync_health: syncHealth,
       accounts: acctList.map((a) => ({
         ...a,
         mapped_to_qbo: mappedSet.has(a.plaid_account_id),
+        sync_health: syncHealth,
       })),
     };
   });
@@ -498,6 +520,7 @@ export async function getPlaidStatus({ businessId }) {
     institutions,
     has_disconnected,
     disconnected_items_count: disconnectedCount || 0,
+    auto_post_enabled: businessResult.data?.auto_post_to_quickbooks === true,
   };
 }
 

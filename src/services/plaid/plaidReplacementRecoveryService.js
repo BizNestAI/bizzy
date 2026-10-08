@@ -81,12 +81,15 @@ export function deriveRecoverySyncHealth({ item = {}, latestRun = null, latestSu
   const lastSuccessfulSyncAt = latestSuccessfulRun?.finished_at || item.last_success_at || item.last_sync_at || null;
   const latestFailed = latestRun?.status === "failed"
     && (!lastSuccessfulSyncAt || Date.parse(latestRun.finished_at || latestRun.started_at || 0) > Date.parse(lastSuccessfulSyncAt));
-  const active = item.is_active !== false && ["connected", "active"].includes(item.status) && !latestFailed;
+  const disconnected = item.is_active === false || item.status === "disconnected";
+  const updating = !disconnected && (item.sync_in_progress === true || latestRun?.status === "running");
+  const active = !disconnected && !updating && ["connected", "active"].includes(item.status) && !latestFailed;
   return {
-    status: active ? "active" : "attention_required",
-    reason: active ? null : latestFailed ? "The most recent transaction sync did not complete. Automatic retry remains enabled."
-      : item.is_active === false ? "The Plaid connection is inactive."
+    status: disconnected ? "disconnected" : updating ? "updating" : active ? "active" : "attention_required",
+    reason: active || updating ? null : latestFailed ? "The most recent transaction sync did not complete. Automatic retry remains enabled."
+      : disconnected ? "The Plaid connection is disconnected."
         : "The Plaid connection requires attention before automatic synchronization can continue.",
+    automatic_retry_scheduled: latestFailed && !disconnected && ["connected", "active"].includes(item.status),
     last_successful_sync_at: lastSuccessfulSyncAt,
     transactions_imported_through: importedThrough,
     latest_run: latestRun ? {
@@ -99,6 +102,18 @@ export function deriveRecoverySyncHealth({ item = {}, latestRun = null, latestSu
       failure_code: latestRun.failure_code ? "transaction_sync_failed" : null,
     } : null,
   };
+}
+
+async function resolveSafeOperatorDisplay(db, userId) {
+  if (!userId || !db?.auth?.admin?.getUserById) return null;
+  try {
+    const { data, error } = await db.auth.admin.getUserById(userId);
+    if (error) return null;
+    const user = data?.user;
+    return user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function collectCompletePlaidSyncPreview({ plaid, accessToken, originalCursor = null, maxRestarts = 3 }) {
@@ -234,7 +249,7 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
     .order("created_at", { ascending: false });
   if (candidateError) throw candidateError;
   const { data: batches, error: batchError } = await db.from("plaid_recovery_batches")
-    .select("id,status,cutoff_date,posting_hold,summary,failure_code,failure_detail,rebuild_source_batch_id,created_by,created_at,updated_at,staged_next_cursor")
+    .select("id,status,cutoff_date,posting_hold,summary,failure_code,failure_detail,rebuild_source_batch_id,created_by,released_by,released_at,created_at,updated_at,staged_next_cursor")
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
     .order("created_at", { ascending: false }).limit(20);
   if (batchError) throw batchError;
@@ -253,7 +268,7 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
   }
   const [{ data: syncRuns, error: syncRunError }, { data: importedRows, error: importedRowsError }] = await Promise.all([
     db.from("bank_sync_runs")
-      .select("status,started_at,finished_at,added_count,modified_count,removed_count,failure_code")
+      .select("status,started_at,finished_at,added_count,modified_count,removed_count,failure_code,meta")
       .eq("business_id", businessId).eq("plaid_item_id", plaidItemId)
       .order("started_at", { ascending: false }).limit(20),
     item.replacement_recovery_account_id
@@ -267,6 +282,11 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
   const latestRun = syncRuns?.[0] || null;
   const latestSuccessfulRun = (syncRuns || []).find((run) => ["completed", "success"].includes(run.status)) || null;
   const admittedAt = batch?.summary?.admitted_at || (batch?.status === "imported_held" ? batch.updated_at : null);
+  const operatorId = batch?.summary?.admitted_by || batch?.created_by || null;
+  const [operatorDisplay, releaseOperatorDisplay] = await Promise.all([
+    resolveSafeOperatorDisplay(db, operatorId),
+    resolveSafeOperatorDisplay(db, batch?.released_by || null),
+  ]);
   const admittedCount = Number(batch?.summary?.admitted ?? batch?.summary?.selected ?? 0);
   const eligibleCount = Number(batch?.summary?.new_after_cutoff ?? batch?.summary?.genuinely_new ?? 0);
   const cursorCommitted = Boolean(batch?.staged_next_cursor && item.cursor && batch.staged_next_cursor === item.cursor);
@@ -303,8 +323,14 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
         omitted_count: Math.max(0, eligibleCount - admittedCount),
         pending_held_count: Number(batch.summary?.pending_replacements || 0),
         admitted_at: admittedAt,
-        operator_id: batch.summary?.admitted_by || batch.created_by || null,
+        operator: operatorDisplay,
+        operator_id: operatorId,
         request_id: batch.summary?.admission_request_id || null,
+      },
+      release: {
+        released_at: batch.released_at || null,
+        operator: releaseOperatorDisplay,
+        operator_id: batch.released_by || null,
       },
       cursor_commit: {
         staged_cursor_present: Boolean(batch.staged_next_cursor),

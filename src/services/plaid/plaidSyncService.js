@@ -38,6 +38,18 @@ function cursorDigest(value) {
   return value ? crypto.createHash("sha256").update(String(value)).digest("hex") : null;
 }
 
+export function classifyPlaidSyncFailure(error) {
+  const causeCode = String(error?.cause?.code || error?.code || "").toUpperCase();
+  if (error?.name === "TypeError" && /fetch failed/i.test(error?.message || "")) {
+    if (["ENOTFOUND", "EAI_AGAIN"].includes(causeCode)) return "provider_dns_failure";
+    if (["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(causeCode)) return "provider_connection_timeout";
+    if (["ECONNRESET", "UND_ERR_SOCKET"].includes(causeCode)) return "provider_connection_reset";
+    return "provider_network_failure";
+  }
+  if (/PLAID|TRANSACTIONS_/i.test(causeCode)) return "provider_api_failure";
+  return "transaction_sync_failed";
+}
+
 function normalizeMemo(value) {
   return String(value || "")
     .toLowerCase()
@@ -876,6 +888,8 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         last_sync_at: now,
         last_success_at: now,
         status: "connected",
+        error_code: null,
+        error_message: null,
         is_active: true,
         disconnected_at: null,
         updated_at: now,
@@ -1002,13 +1016,25 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       bookkeeping_enqueued: bookkeepingEnqueued,
     };
   } catch (error) {
+    const failureCode = classifyPlaidSyncFailure(error);
     try {
       await supabase.from("bank_sync_runs").update({
         status: "failed",
         finished_at: nowIso(),
-        failure_code: String(error?.code || error?.message || "plaid_sync_failed").slice(0, 160),
+        failure_code: failureCode,
         error_message: "Plaid synchronization failed before completion.",
+        meta: {
+          failure_stage: "incremental_sync",
+          automatic_retry_scheduled: true,
+          cursor_input_present: Boolean(item.cursor),
+          cursor_input_sha256: cursorDigest(item.cursor),
+        },
       }).eq("id", runId).eq("worker_id", workerId);
+      await supabase.from("plaid_items").update({
+        error_code: failureCode,
+        error_message: "Transaction synchronization did not complete. Automatic retry remains enabled.",
+        updated_at: nowIso(),
+      }).eq("business_id", businessId).eq("plaid_item_id", item.plaid_item_id);
     } catch {
       // Preserve the original sync failure when diagnostic persistence is unavailable.
     }

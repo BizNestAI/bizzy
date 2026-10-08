@@ -54,7 +54,7 @@ const ROW_BG = "rgba(255,255,255,0.032)";
 const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 const INTEGRATION_ACTION_BUTTON_CLASS =
   "inline-flex h-11 w-full items-center justify-center whitespace-nowrap rounded-xl px-4 text-sm font-semibold sm:w-[232px]";
-const PLAID_STATUS_CACHE_VERSION = 1;
+const PLAID_STATUS_CACHE_VERSION = 2;
 const REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27";
 
 const CREDITS_CAP = 300;
@@ -112,6 +112,11 @@ function clearPlaidStatusCache(businessId) {
   } catch {
     /* ignore */
   }
+}
+
+function recoveryMapFromInstitutions(institutions = []) {
+  return Object.fromEntries(institutions.filter((institution) => institution?.recovery)
+    .map((institution) => [institution.plaid_item_id, institution.recovery]));
 }
 
 export default function SettingsHome() {
@@ -261,7 +266,9 @@ export default function SettingsHome() {
     return () => {
       alive = false;
     };
-  }, [adminView.active, adminView.businessName, businessId, currentBusiness?.id, setCurrentBusiness]);
+  }, [adminView.active, adminView.businessName, businessId, currentBusiness?.bookkeeping_start_date,
+    currentBusiness?.business_name, currentBusiness?.id, currentBusiness?.industry, currentBusiness?.state,
+    currentBusiness?.team_size, setCurrentBusiness]);
 
   useEffect(() => {
     const checkout = searchParams.get("checkout");
@@ -901,17 +908,46 @@ function formatLocalTimestamp(value) {
 function SyncHealthSummary({ health }) {
   if (!health) return null;
   const active = health.status === "active";
+  const updating = health.status === "updating";
+  const disconnected = health.status === "disconnected";
+  const label = active ? "Transaction sync: Active" : updating ? "Transaction sync: Updating" : disconnected ? "Disconnected" : "Attention required";
   return (
     <div className="mt-3 rounded-lg border border-white/8 bg-black/10 p-2 text-[11px]" data-transaction-sync-health>
       <div className={active ? "font-semibold text-emerald-200" : "font-semibold text-amber-200"}>
-        {active ? "Transaction sync: Active" : "Attention required"}
+        {label}
       </div>
       {!active && health.reason ? <div className="mt-1 text-white/60">{health.reason}</div> : null}
+      {health.automatic_retry_scheduled ? <div className="mt-1 text-white/55">Automatic retry is scheduled.</div> : null}
       <div className="mt-1 text-white/55">Last successful sync: {formatLocalTimestamp(health.last_successful_sync_at)}</div>
       <div className="mt-1 text-white/55">Transactions imported through: {health.transactions_imported_through || "Not available"}</div>
       <div className="mt-1 text-amber-200/80">Posting hold is separate from transaction synchronization.</div>
     </div>
   );
+}
+
+function RecoverySummarySkeleton() {
+  return <div className="mt-3 h-[148px] animate-pulse rounded-xl border border-white/8 bg-white/[0.025]" aria-label="Loading recovery history" />;
+}
+
+function PostingHoldReleaseDialog({ recovery, autoPostEnabled, busy, onCancel, onConfirm }) {
+  if (!recovery) return null;
+  const modal = (
+    <div className="fixed inset-0 z-[2147482000] flex items-center justify-center bg-black/80 p-4" role="presentation">
+      <div role="dialog" aria-modal="true" aria-labelledby="posting-hold-title" className="w-full max-w-lg rounded-xl border border-amber-400/30 bg-[#111713] p-5 shadow-2xl">
+        <h3 id="posting-hold-title" className="text-base font-semibold text-white">Allow recovered transactions to post?</h3>
+        <div className="mt-3 space-y-2 text-sm text-white/70">
+          <p>This removes the recovery safety hold from <b>{recovery.importedCount}</b> recovered transactions.</p>
+          <p>Auto-post is currently <b>{autoPostEnabled ? "on" : "off"}</b>. This action does not change that setting.</p>
+          <p>No immediate QuickBooks or other provider call occurs, and transaction categorizations are not changed.</p>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <GhostButton type="button" disabled={busy} onClick={onCancel}>Cancel</GhostButton>
+          <AccentButton type="button" disabled={busy} onClick={onConfirm}>{busy ? "Removing hold…" : "Allow recovered transactions to post"}</AccentButton>
+        </div>
+      </div>
+    </div>
+  );
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : null;
 }
 
 function PlaidIntegrationCard({ businessId, readOnly = false }) {
@@ -924,12 +960,13 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const [linking, setLinking] = useState(false);
   const [repairingItem, setRepairingItem] = useState(null);
   const [repairResult, setRepairResult] = useState({});
-  const [recoveryByItem, setRecoveryByItem] = useState({});
+  const [recoveryByItem, setRecoveryByItem] = useState(() => recoveryMapFromInstitutions(initialCachedStatus?.institutions || []));
   const [recoveryBusy, setRecoveryBusy] = useState({});
   const [recoveryMessage, setRecoveryMessage] = useState({});
   const [lineageSelection, setLineageSelection] = useState({});
   const [recoveryReview, setRecoveryReview] = useState(null);
   const [expandedRecoveryHistory, setExpandedRecoveryHistory] = useState({});
+  const [holdReleaseConfirmation, setHoldReleaseConfirmation] = useState(null);
   const [disconnectingItem, setDisconnectingItem] = useState(null);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
@@ -938,6 +975,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const [counts, setCounts] = useState(() => initialCachedStatus?.counts || { institutions: 0, accounts: 0 });
   const [statusError, setStatusError] = useState("");
   const [hasDisconnected, setHasDisconnected] = useState(() => Boolean(initialCachedStatus?.hasDisconnected));
+  const [autoPostEnabled, setAutoPostEnabled] = useState(() => initialCachedStatus?.autoPostEnabled === true);
   const [mappingRows, setMappingRows] = useState([]);
   const [mappingLoading, setMappingLoading] = useState(false);
   const [mappingError, setMappingError] = useState("");
@@ -953,13 +991,17 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
     const cached = readPlaidStatusCache(businessId);
     if (cached) {
       setInstitutions(cached.institutions || []);
+      setRecoveryByItem(recoveryMapFromInstitutions(cached.institutions || []));
       setCounts(cached.counts || { institutions: 0, accounts: 0 });
       setHasDisconnected(Boolean(cached.hasDisconnected));
+      setAutoPostEnabled(cached.autoPostEnabled === true);
       setLoading(false);
     } else {
       setInstitutions([]);
+      setRecoveryByItem({});
       setCounts({ institutions: 0, accounts: 0 });
       setHasDisconnected(false);
+      setAutoPostEnabled(false);
       setLoading(Boolean(businessId));
     }
     setStatusError("");
@@ -988,13 +1030,17 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
           accounts: acctCount,
         };
         const nextHasDisconnected = Boolean(res?.has_disconnected);
+        const nextAutoPostEnabled = res?.auto_post_enabled === true;
         setInstitutions(nextInstitutions);
+        setRecoveryByItem(recoveryMapFromInstitutions(nextInstitutions));
         setCounts(nextCounts);
         setHasDisconnected(nextHasDisconnected);
+        setAutoPostEnabled(nextAutoPostEnabled);
         if (!readOnly) writePlaidStatusCache(businessId, {
           institutions: nextInstitutions,
           counts: nextCounts,
           hasDisconnected: nextHasDisconnected,
+          autoPostEnabled: nextAutoPostEnabled,
         });
       }
     } catch (err) {
@@ -1010,7 +1056,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
 
   useEffect(() => {
     fetchStatus({ showLoading: !readPlaidStatusCache(businessId) });
-  }, [fetchStatus]);
+  }, [businessId, fetchStatus]);
 
   const refreshMappings = useCallback(async () => {
     if (!businessId || readOnly) return;
@@ -1108,7 +1154,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
     } finally {
       setLinking(false);
     }
-  }, [businessId, fetchStatus, readOnly, refreshMappings]);
+  }, [businessId, fetchStatus, refreshMappings]);
 
   const repairPlaidItem = useCallback(async (plaidItemId, institutionName) => {
     if (!businessId || !plaidItemId || readOnly) return;
@@ -1154,22 +1200,6 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
     return result;
   }, [businessId]);
 
-  useEffect(() => {
-    if (!businessId || !institutions.length) return;
-    let cancelled = false;
-    Promise.all(institutions.map(async (inst) => {
-      try {
-        const result = await getPlaidRecoveryStatus(businessId, inst.plaid_item_id);
-        return [inst.plaid_item_id, result];
-      } catch (error) {
-        return [inst.plaid_item_id, { ok: false, error: error?.code || "plaid_recovery_status_failed", message: error?.message || "Recovery status could not be loaded." }];
-      }
-    })).then((pairs) => {
-      if (!cancelled) setRecoveryByItem(Object.fromEntries(pairs));
-    });
-    return () => { cancelled = true; };
-  }, [businessId, institutions]);
-
   const runRecoveryAction = useCallback(async (plaidItemId, action) => {
     if (readOnly || recoveryBusy[plaidItemId]) return;
     setRecoveryBusy((current) => ({ ...current, [plaidItemId]: true }));
@@ -1182,13 +1212,15 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
         await new Promise((resolve) => window.setTimeout(resolve, 500));
         status = await refreshRecoveryStatus(plaidItemId);
       }
+      clearPlaidStatusCache(businessId);
+      await fetchStatus();
       setRecoveryMessage((current) => ({ ...current, [plaidItemId]: { tone: "ok", text: "Recovery state saved." } }));
     } catch (error) {
       setRecoveryMessage((current) => ({ ...current, [plaidItemId]: { tone: "error", text: error?.message || "Recovery action failed." } }));
     } finally {
       setRecoveryBusy((current) => ({ ...current, [plaidItemId]: false }));
     }
-  }, [readOnly, recoveryBusy, refreshRecoveryStatus]);
+  }, [businessId, fetchStatus, readOnly, recoveryBusy, refreshRecoveryStatus]);
 
   const prepareRecoveryPreview = useCallback(async (plaidItemId) => {
     try {
@@ -1498,7 +1530,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
 
       <div className="mt-3 space-y-2">
         {loading ? (
-          <p className="text-xs text-white/60">Loading institutions…</p>
+          <div><p className="text-xs text-white/60">Loading institutions…</p><RecoverySummarySkeleton /></div>
         ) : isDisconnected ? (
           <div className="rounded-lg border border-emerald-400/20 bg-emerald-500/5 px-3 py-3 text-xs text-emerald-100">
             Disconnected — your historical data is still saved.
@@ -1568,6 +1600,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                   </GhostButton>
                 ) : null}
               </div>
+              {!recoveryByItem[inst.plaid_item_id]?.batch ? <SyncHealthSummary health={inst.sync_health} /> : null}
               {(() => {
                 const recovery = recoveryByItem[inst.plaid_item_id];
                 const orchestration = recovery?.orchestration || null;
@@ -1727,15 +1760,25 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                             : "Staged cursor is not committed until controlled admission."}
                         </div>
                         {completedRecovery ? (
-                          <div className="mt-2 grid gap-1 rounded-lg border border-white/8 bg-black/10 p-2 text-[11px] text-white/60 sm:grid-cols-2" data-recovery-history-details>
-                            <span>Imported: {batch.admission?.imported_count || 0}</span>
-                            <span>Omitted: {batch.admission?.omitted_count || 0}</span>
-                            <span>Pending held: {batch.admission?.pending_held_count || 0}</span>
-                            <span>Operator: {batch.admission?.operator_id || "Not recorded"}</span>
-                            <span>Batch ID: {batch.batch_id}</span>
-                            <span>Request ID: {batch.admission?.request_id || "Not recorded"}</span>
-                            <span>Created: {formatLocalTimestamp(batch.created_at)}</span>
-                            <span>Admitted: {formatLocalTimestamp(admittedAt)}</span>
+                          <div className="mt-2 rounded-lg border border-white/8 bg-black/10 p-2 text-[11px] text-white/60" data-recovery-history-details>
+                            <div className="grid gap-1 sm:grid-cols-2">
+                              <span>Imported: {batch.admission?.imported_count || 0}</span>
+                              <span>Omitted: {batch.admission?.omitted_count || 0}</span>
+                              <span>Pending held: {batch.admission?.pending_held_count || 0}</span>
+                              <span>Operator: {batch.admission?.operator || "Not recorded"}</span>
+                              <span>Created: {formatLocalTimestamp(batch.created_at)}</span>
+                              <span>Admitted: {formatLocalTimestamp(admittedAt)}</span>
+                              {batch.release?.released_at ? <span>Hold released: {formatLocalTimestamp(batch.release.released_at)} by {batch.release.operator || "authorized operator"}</span> : null}
+                            </div>
+                            <details className="mt-2 border-t border-white/8 pt-2">
+                              <summary className="cursor-pointer text-white/60">Technical details</summary>
+                              <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                                <span>Batch ID: {batch.batch_id}</span>
+                                <span>Request ID: {batch.admission?.request_id || "Not recorded"}</span>
+                                <span>Admission actor ID: {batch.admission?.operator_id || "Not recorded"}</span>
+                                {batch.release?.operator_id ? <span>Release actor ID: {batch.release.operator_id}</span> : null}
+                              </div>
+                            </details>
                           </div>
                         ) : null}
                         {completedRecovery ? <SyncHealthSummary health={recovery.sync_health} /> : null}
@@ -1748,11 +1791,14 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                             </AccentButton>
                           ) : null}
                           {batch.status === "imported_held" ? (
-                            <AccentButton type="button" disabled={readOnly || busy}
-                              onClick={() => runRecoveryAction(inst.plaid_item_id, () => releasePlaidRecoveryHold(businessId, batch.batch_id))}
-                              className="h-9 px-3 text-xs">
-                              {busy ? "Releasing…" : "Release posting hold"}
-                            </AccentButton>
+                            <div>
+                              <AccentButton type="button" disabled={readOnly || busy}
+                                onClick={() => setHoldReleaseConfirmation({ plaidItemId: inst.plaid_item_id, batchId: batch.batch_id, importedCount })}
+                                className="h-9 px-3 text-xs">
+                                Allow recovered transactions to post
+                              </AccentButton>
+                              <div className="mt-2 max-w-xl text-[11px] text-white/55">This removes the recovery safety hold. It does not enable Auto-post or immediately send anything to QuickBooks.</div>
+                            </div>
                           ) : null}
                         </div>
                       </div>
@@ -1957,6 +2003,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
               cause.code = result?.error; cause.requestId = result?.request_id; cause.details = result?.details; throw cause;
             }
             await refreshRecoveryStatus(current.plaidItemId);
+            clearPlaidStatusCache(businessId);
+            await fetchStatus();
             setRecoveryMessage((messages) => ({ ...messages, [current.plaidItemId]: { tone: "ok", text: `${selectedRowIds.length} reviewed transactions imported with posting hold active.` } }));
             setRecoveryReview(null);
           }}
@@ -1980,9 +2028,23 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
             if (rebuilt?.status !== "preview_ready") throw Object.assign(new Error("The recovery preview rebuild is still processing. Try again shortly."), { code: "recovery_rebuild_in_progress", requestId: result?.request_id });
             setRecoveryReview({ plaidItemId: current.plaidItemId, batch: { ...rebuilt, previous_expected_count: result?.previous_expected_count ?? rebuilt?.previous_expected_count } });
             await refreshRecoveryStatus(current.plaidItemId);
+            clearPlaidStatusCache(businessId);
+            await fetchStatus();
           }}
         />
       ) : null}
+      <PostingHoldReleaseDialog
+        recovery={holdReleaseConfirmation}
+        autoPostEnabled={autoPostEnabled}
+        busy={holdReleaseConfirmation ? Boolean(recoveryBusy[holdReleaseConfirmation.plaidItemId]) : false}
+        onCancel={() => setHoldReleaseConfirmation(null)}
+        onConfirm={async () => {
+          const confirmation = holdReleaseConfirmation;
+          if (!confirmation) return;
+          await runRecoveryAction(confirmation.plaidItemId, () => releasePlaidRecoveryHold(businessId, confirmation.batchId, { confirm_release: true }));
+          setHoldReleaseConfirmation(null);
+        }}
+      />
     </div>
   );
 }

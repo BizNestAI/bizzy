@@ -1,6 +1,6 @@
 // File: /src/components/layout/NavRail.jsx
 import React, { useEffect, useMemo, useRef, useLayoutEffect, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import Sidebar from '../components/UserAdmin/Sidebar';
 import ChatDrawer from '../components/Bizzy/ChatDrawer';
 import { useBizzyChatContext } from '../context/BizzyChatContext';
@@ -10,14 +10,8 @@ import { ACCENT_HEX, ACCENT_SOFT } from '../config/accent';
 import NavRailBusinessBadge from './NavRailBusinessBadge';
 import { getDemoMode } from '../services/demo/demoClient.js';
 import { useAdminView } from '../context/AdminViewContext.jsx';
+import { prefetchPlaidStatus } from '../services/bookkeeping/bookkeepingClient.js';
 
-function moduleFromPath(path) {
-  const seg = path.split('/')[2] || 'bizzy';
-  const key = (seg === 'financials' ? 'accounting' : seg).toLowerCase();
-  if (key === 'bizzi') return 'bizzy';
-  if (key === 'bizzi-docs') return 'docs';
-  return key;
-}
 function hexToRgba(hex, alpha = 1) {
   let c = (hex || '').replace('#', '');
   if (c.length === 3) c = c.split('').map(s => s + s).join('');
@@ -28,39 +22,16 @@ function hexToRgba(hex, alpha = 1) {
 
 const COLLAPSED_NAV_W = 115;
 
-/** Bizzi/chrome routes */
-const isChromeRoute = (path) =>
-  path.startsWith('/dashboard/bizzi')   ||   // Pulse
-  path.startsWith('/dashboard/bizzi-docs') ||
-  path.startsWith('/dashboard/companion') ||
-  path.startsWith('/dashboard/settings') ||
-  path.startsWith('/dashboard/leads-jobs') ||
-  path.startsWith('/dashboard/calendar') ||
-  path.startsWith('/dashboard/activity') ||
-  path.startsWith('/chat');
-
 export default function NavRail({
   businessId,
   className = '',
   open = false,
   onClose,
-  accentOverride,
 }) {
   const { openThread, threadsRefreshKey } = useBizzyChatContext();
   const { currentBusiness } = useBusiness();
   const adminView = useAdminView();
-  const location = useLocation();
   const navigate = useNavigate();
-
-  const isChatHome = location.pathname.startsWith('/dashboard/bizzi/chat') || location.pathname.startsWith('/chat');
-  const moduleKey = useMemo(() => moduleFromPath(location.pathname), [location.pathname]);
-  const useChrome = isChromeRoute(location.pathname);
-
-  // neutral when explicitly requested or on chat home
-  const isNeutral = useMemo(
-    () => accentOverride === 'neutral' || isChatHome,
-    [accentOverride, isChatHome]
-  );
 
   // pick the “base” accent for this route (unified Books green everywhere)
   const baseAccent = useMemo(() => ACCENT_HEX, []);
@@ -219,6 +190,8 @@ export default function NavRail({
           <button
             type="button"
             onClick={() => navigate('/dashboard/settings')}
+            onMouseEnter={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
+            onFocus={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
             title={`Data source mode: ${isLiveMode ? 'Live' : 'Mock'}`}
             aria-label={`Data source mode: ${isLiveMode ? 'Live' : 'Mock'}`}
             className="inline-flex h-6 items-center gap-1.5 rounded-full px-2 text-[10px] font-semibold uppercase tracking-[0.12em] transition hover:bg-white/[0.045]"
