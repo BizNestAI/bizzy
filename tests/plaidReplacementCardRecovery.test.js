@@ -109,6 +109,60 @@ test("recovery review fails closed when a preview summary has no durable staged 
   }), { added_count: 2, classified_added_count: 2 });
 });
 
+test("rebuild row serialization matches the PostgREST table contract exactly", async () => {
+  const { toRecoveryBatchRow } = await import("../src/services/plaid/plaidReplacementRecoveryService.js");
+  const row = toRecoveryBatchRow({
+    transaction: { transaction_id: "tx-1", account_id: "replacement", date: "2026-09-01", authorized_date: "2026-08-31", amount: 12.34, name: "Example" },
+    changeType: "added", classification: { disposition: "new_after_cutoff" }, businessId: "business", batchId: "batch",
+  });
+  assert.deepEqual(Object.keys(row).sort(), [
+    "amount", "authorized_date", "batch_id", "business_id", "change_type", "disposition", "payload", "pending",
+    "pending_transaction_id", "plaid_account_id", "plaid_transaction_id", "signed_amount", "transaction_date",
+  ]);
+  assert.equal(row.transaction_date, "2026-09-01");
+  assert.equal("date" in row, false);
+  assert.equal("name" in row, false);
+  assert.equal("merchant_name" in row, false);
+});
+
+test("synthetic zero-row and durably staged previews satisfy readiness only after parity", async () => {
+  const { summarizeRecoveryRows, validateRecoveryPopulation, validateRecoveryReviewPopulation } = await import("../src/services/plaid/plaidReplacementRecoveryService.js");
+  const emptySummary = summarizeRecoveryRows([]);
+  assert.deepEqual(validateRecoveryPopulation({ summary: emptySummary, rows: [], replacementAccountId: "replacement" }),
+    { added_count: 0, classified_added_count: 0 });
+  assert.equal(validateRecoveryReviewPopulation({ summary: emptySummary, rows: [], replacementAccountId: "replacement" }).staged_count, 0);
+
+  const durable = [{ plaid_transaction_id: "tx-1", plaid_account_id: "replacement", change_type: "added", disposition: "new_after_cutoff" }];
+  const summary = summarizeRecoveryRows(durable);
+  assert.throws(() => validateRecoveryReviewPopulation({ summary, rows: [], replacementAccountId: "replacement" }),
+    (error) => error.code === "recovery_preview_row_count_mismatch");
+  assert.equal(validateRecoveryReviewPopulation({ summary, rows: durable, replacementAccountId: "replacement" }).staged_count, 1);
+});
+
+test("PGRST204 is converted to a retryable sanitized schema-contract error", async () => {
+  const { normalizeRecoverySchemaContractError } = await import("../src/services/plaid/plaidReplacementRecoveryService.js");
+  const error = normalizeRecoverySchemaContractError({ code: "PGRST204", message: "Could not find the date column", details: null, hint: null });
+  assert.equal(error.code, "plaid_recovery_schema_contract_unavailable");
+  assert.equal(error.status, 503);
+  assert.equal(error.details.upstream_code, "PGRST204");
+  assert.doesNotMatch(error.message, /date column/i);
+});
+
+test("rebuild failure marks only the attempt failed and always releases its durable lease", () => {
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+  assert.match(recovery, /\.eq\("id", newBatchId\).*\.eq\("status", "staging"\)/s);
+  assert.match(recovery, /finally \{\s*await releaseRecoveryLease\(\{ db, item, businessId, owner: leaseOwner \}\);\s*\}/);
+  assert.doesNotMatch(recovery, /update\(\{\s*cursor:/);
+});
+
+test("rebuild handoff reuses an idempotency key and prevents a second active attempt", () => {
+  const migration = read("supabase/migrations/20261101104000_plaid_recovery_preview_rebuild.sql");
+  assert.match(migration, /plaid_recovery_rebuild_idempotency_idx/);
+  assert.match(migration, /where business_id=p_business_id and rebuild_idempotency_key=p_idempotency_key/);
+  assert.match(migration, /'created',false/);
+  assert.match(migration, /plaid_recovery_one_active_rebuild_idx/);
+});
+
 test("replacement repair remains update-mode, staged, held, and explicitly released", () => {
   const integration = read("src/services/plaid/plaidIntegrationService.js");
   const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
@@ -252,6 +306,7 @@ test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempot
   assert.match(recovery, /rebuild_source_batch_id/);
   assert.match(recovery, /status: "preview_ready"/);
   assert.match(recovery, /finally \{\s*await releaseRecoveryLease/);
+  assert.match(recovery, /normalizeRecoverySchemaContractError/);
   assert.doesNotMatch(recovery, /set cursor\s*=|update\(\{\s*cursor/);
   assert.doesNotMatch(recovery, /QuickBooks|qbo.*create|create.*qbo/i);
 

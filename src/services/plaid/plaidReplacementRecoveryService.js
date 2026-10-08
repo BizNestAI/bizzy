@@ -48,6 +48,35 @@ function normalizedIncoming(tx = {}) {
   };
 }
 
+export function toRecoveryBatchRow({ transaction, changeType, classification, businessId, batchId = null }) {
+  const normalized = normalizedIncoming(transaction);
+  return {
+    ...(batchId ? { batch_id: batchId } : {}),
+    business_id: businessId,
+    change_type: changeType,
+    disposition: classification.disposition,
+    plaid_transaction_id: normalized.plaid_transaction_id,
+    pending_transaction_id: normalized.pending_transaction_id,
+    plaid_account_id: normalized.plaid_account_id,
+    transaction_date: normalized.date,
+    authorized_date: normalized.authorized_date,
+    amount: normalized.amount,
+    signed_amount: normalized.signed_amount,
+    pending: normalized.pending,
+    payload: { transaction, classification },
+  };
+}
+
+export function normalizeRecoverySchemaContractError(error) {
+  if (error?.code !== "PGRST204") return error;
+  return recoveryError(
+    "plaid_recovery_schema_contract_unavailable",
+    "The recovery preview schema is temporarily unavailable. Nothing was imported; retry after the application update is deployed.",
+    503,
+    { upstream_code: error.code, upstream_message: error.message || null, upstream_details: error.details || null, upstream_hint: error.hint || null },
+  );
+}
+
 export async function collectCompletePlaidSyncPreview({ plaid, accessToken, originalCursor = null, maxRestarts = 3 }) {
   let restartCount = 0;
   for (;;) {
@@ -359,8 +388,7 @@ export async function createReplacementRecoveryPreview({ businessId, plaidItemId
   const recoveryAccountId = item.replacement_recovery_account_id;
   const makeRows = (transactions, changeType) => transactions.filter((transaction) => transaction.account_id === recoveryAccountId).map((transaction) => {
     const classification = classifyRecoveryTransaction({ transaction, changeType, existingRows: existing || [], cutoffDate, confirmedAccountIds: [recoveryAccountId] });
-    const normalized = normalizedIncoming(transaction);
-    return { business_id: businessId, change_type: changeType, disposition: classification.disposition, ...normalized, transaction_date: normalized.date, payload: { transaction, classification } };
+    return toRecoveryBatchRow({ transaction, changeType, classification, businessId });
   });
   const rows = [
     ...makeRows(collected.added, "added"),
@@ -437,9 +465,7 @@ export async function rebuildReplacementRecoveryPreview({ businessId, plaidItemI
     const cutoffDate = item.replacement_recovery_cutoff_date;
     const makeRows = (transactions, changeType) => transactions.filter((transaction) => transaction.account_id === recoveryAccountId).map((transaction) => {
       const classification = classifyRecoveryTransaction({ transaction, changeType, existingRows: existing || [], cutoffDate, confirmedAccountIds: [recoveryAccountId] });
-      const normalized = normalizedIncoming(transaction);
-      return { batch_id: newBatchId, business_id: businessId, change_type: changeType, disposition: classification.disposition,
-        ...normalized, transaction_date: normalized.date, payload: { transaction, classification } };
+      return toRecoveryBatchRow({ transaction, changeType, classification, businessId, batchId: newBatchId });
     });
     const rows = [...makeRows(collected.added, "added"), ...makeRows(collected.modified, "modified")];
     const summary = { ...summarizeRecoveryRows(rows), pages: collected.pages.length, mutation_restarts: collected.mutation_restarts,
@@ -464,7 +490,8 @@ export async function rebuildReplacementRecoveryPreview({ businessId, plaidItemI
   } catch (error) {
     await db.from("plaid_recovery_batches").update({ status: "failed", failure_code: error?.code || "recovery_rebuild_failed",
       failure_detail: error?.message || null, updated_at: new Date().toISOString() }).eq("id", newBatchId).eq("business_id", businessId).eq("status", "staging");
-    throw error?.code ? error : recoveryError("recovery_rebuild_failed", "The recovery preview could not be rebuilt. Nothing was imported and the cursor was preserved.", 503);
+    const safeError = normalizeRecoverySchemaContractError(error);
+    throw safeError?.code ? safeError : recoveryError("recovery_rebuild_failed", "The recovery preview could not be rebuilt. Nothing was imported and the cursor was preserved.", 503);
   } finally {
     await releaseRecoveryLease({ db, item, businessId, owner: leaseOwner });
   }

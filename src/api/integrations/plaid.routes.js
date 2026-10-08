@@ -222,7 +222,8 @@ router.post("/items/:plaidItemId/recovery-batches/:batchId/rebuild", requireAuth
     return res.status(result?.processing ? 202 : 200).json({ ok: true, request_id: requestId, ...result });
   } catch (error) {
     console.warn("[plaid-recovery] controlled rebuild failed", { request_id: requestId, business_id: businessId,
-      plaid_item_id: req.params.plaidItemId, batch_id: req.params.batchId, code: error?.code || "recovery_rebuild_failed" });
+      plaid_item_id: req.params.plaidItemId, batch_id: req.params.batchId, code: error?.code || "recovery_rebuild_failed",
+      details: error?.details || null, upstream_message: error?.message || null, hint: error?.hint || null });
     return res.status(error?.status || 500).json({ ok: false, request_id: requestId,
       error: error?.code || "recovery_rebuild_failed",
       message: error?.message || "The recovery preview could not be rebuilt. Nothing was imported and the cursor was preserved." });
