@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { derivePostingEligibilityRecheckAvailability } from "./postingEligibilityRecheckAvailability.js";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardCheck, ExternalLink, Loader2, Lock, RefreshCcw, RotateCcw, Search, ShieldCheck } from "lucide-react";
 import { safeFetch } from "../../utils/safeFetch.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
@@ -2603,6 +2604,8 @@ export default function MonthlyReviewConsole() {
                   onReconsider={runBookkeepingReconsideration}
                   onRecheckPostingEligibility={openPostingEligibilityRecheck}
                   postingEligibilityRecheck={postingEligibilityRecheck}
+                  recheckAuthorized={!blocked}
+                  recheckContextReady={Boolean(detail?.run?.id && selectedBusinessId && /^\d{4}-\d{2}$/.test(month))}
                   onTogglePostingReview={togglePostingReview}
                   onRefreshPostingReview={loadPostingReview}
                   onPostingReviewOptionChange={(groupId, patch) => {
@@ -2859,6 +2862,8 @@ function BookkeepingFeedMirrorPanels({
   onReconsider,
   onRecheckPostingEligibility,
   postingEligibilityRecheck,
+  recheckAuthorized,
+  recheckContextReady,
   onTogglePostingReview,
   onRefreshPostingReview,
   onPostingReviewOptionChange,
@@ -2895,6 +2900,15 @@ function BookkeepingFeedMirrorPanels({
   onCreatedAccountSelect,
   accountTypes,
 }) {
+  const handledCountLoaded = feeds?.handled?.totalCount !== null && feeds?.handled?.totalCount !== undefined;
+  const recheckAvailability = derivePostingEligibilityRecheckAvailability({
+    handledTotalCount: feeds?.handled?.totalCount,
+    countLoaded: handledCountLoaded,
+    loading: loadingCounts || postingEligibilityRecheck?.loading,
+    executing: postingEligibilityRecheck?.executing,
+    authorized: recheckAuthorized,
+    contextReady: recheckContextReady,
+  });
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
@@ -2916,8 +2930,8 @@ function BookkeepingFeedMirrorPanels({
           <button
             type="button"
             onClick={onRecheckPostingEligibility}
-            disabled={postingEligibilityRecheck?.loading || postingEligibilityRecheck?.executing || Number(feeds?.handled?.count || 0) === 0}
-            title={Number(feeds?.handled?.count || 0) === 0 ? "No selected-month Handled transactions are available to recheck." : "Preview a server-side posting eligibility recheck."}
+            disabled={recheckAvailability.disabled}
+            title={recheckAvailability.title}
             className="inline-flex items-center gap-2 rounded-xl border border-sky-300/20 bg-sky-950/30 px-3 py-2 text-sm font-semibold text-sky-50 hover:border-sky-200/35 hover:bg-sky-900/35 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {postingEligibilityRecheck?.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}

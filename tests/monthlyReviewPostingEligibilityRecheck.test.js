@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { derivePostingEligibilityRecheckAvailability } from "../src/pages/Admin/postingEligibilityRecheckAvailability.js";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -12,7 +13,8 @@ test("MRP exposes a bounded two-step posting eligibility workflow", () => {
   assert.match(page, /Idempotency-Key/);
   assert.match(page, /preview_version/);
   assert.match(page, /No QuickBooks or Plaid call occurs/);
-  assert.match(page, /Number\(feeds\?\.handled\?\.count \|\| 0\) === 0/);
+  assert.match(page, /feeds\?\.handled\?\.totalCount/);
+  assert.doesNotMatch(page, /feeds\?\.handled\?\.count/);
   assert.match(page, /role="dialog" aria-modal="true"/);
 });
 
@@ -23,8 +25,39 @@ test("preview and execution derive business and month from the authorized run", 
   assert.match(route, /posting-eligibility-preview/);
   assert.match(route, /posting-eligibility-executions/);
   assert.match(route, /businessId: run\.business_id/);
-  assert.match(route, /month: String\(run\.review_month\)\.slice\(0, 7\)/);
+  assert.match(route, /fetchPostingEligibilityHandledScope\(run\)/);
+  assert.match(route, /month: handled\.reviewMonth/);
   assert.doesNotMatch(route.slice(route.indexOf("posting-eligibility-preview"), route.indexOf("posting-eligibility-executions")), /req\.body\?\.business_id/);
+});
+
+test("authoritative Handled count controls button availability without client eligibility guesses", () => {
+  assert.deepEqual(derivePostingEligibilityRecheckAvailability({
+    handledTotalCount: 80, countLoaded: true, authorized: true, contextReady: true,
+  }), { disabled: false, title: "Preview a server-side posting eligibility recheck." });
+  assert.equal(derivePostingEligibilityRecheckAvailability({
+    handledTotalCount: 0, countLoaded: true, authorized: true, contextReady: true,
+  }).title, "No Handled transactions exist for the selected month.");
+  assert.equal(derivePostingEligibilityRecheckAvailability({
+    handledTotalCount: 80, countLoaded: false, authorized: true, contextReady: true,
+  }).title, "Loading Handled transactions…");
+  assert.equal(derivePostingEligibilityRecheckAvailability({
+    handledTotalCount: 80, countLoaded: true, authorized: false, contextReady: true,
+  }).title, "You do not have permission to perform this action.");
+  assert.equal(derivePostingEligibilityRecheckAvailability({
+    handledTotalCount: 80, countLoaded: true, authorized: true, contextReady: true, executing: true,
+  }).title, "A posting-eligibility recheck is already running.");
+});
+
+test("server preview starts from the same bounded selected-month Handled RPC population", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const helper = route.slice(route.indexOf("async function fetchPostingEligibilityHandledScope"), route.indexOf("router.use(requireAuth)"));
+  assert.match(helper, /get_bookkeeping_transactions_bounded/);
+  assert.match(helper, /p_status_filter: "handled"/);
+  assert.match(helper, /p_range_start: rangeStart/);
+  assert.match(helper, /p_range_end: rangeEnd/);
+  assert.match(helper, /p_limit: MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX/);
+  assert.match(route, /transactionIds: handled\.transactionIds/);
+  assert.match(route, /authoritative_handled_count: handled\.totalCount/);
 });
 
 test("shared reconciliation is bounded, read-only in preview, and CAS guarded in execution", () => {

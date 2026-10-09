@@ -137,6 +137,27 @@ const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX = 100;
 const MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_DEFAULT = 100;
 const MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_MAX = 250;
 
+async function fetchPostingEligibilityHandledScope(run) {
+  const reviewMonth = String(run.review_month).slice(0, 7);
+  const [rangeStart, rangeEnd] = monthBounds(reviewMonth);
+  const { data, error } = await supabase.rpc("get_bookkeeping_transactions_bounded", {
+    p_business_id: run.business_id,
+    p_status_filter: "handled",
+    p_account_id: null,
+    p_range_start: rangeStart,
+    p_range_end: rangeEnd,
+    p_limit: MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX,
+    p_offset: 0,
+  });
+  if (error) throw error;
+  const rows = data || [];
+  return {
+    reviewMonth,
+    transactionIds: rows.map((row) => row.id).filter(Boolean),
+    totalCount: rows.length ? Number(rows[0].total_count || 0) : 0,
+  };
+}
+
 router.use(requireAuth);
 router.use(requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES));
 
@@ -2204,11 +2225,13 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-preview", async (req, 
     const { runId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
     const run = await fetchRun(runId);
+    const handled = await fetchPostingEligibilityHandledScope(run);
     const preview = await previewPostingEligibilityRecheck({
       db: supabase,
       businessId: run.business_id,
-      month: String(run.review_month).slice(0, 7),
+      month: handled.reviewMonth,
       accountScope: null,
+      transactionIds: handled.transactionIds,
       limit: MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX,
     });
     const rows = (preview.rows || []).map((row) => {
@@ -2218,7 +2241,13 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-preview", async (req, 
       return safe;
     });
     setMonthlyReviewNoStore(res);
-    return res.json({ ...preview, rows, business: { id: run.business_id, name: run.business_name || null } });
+    return res.json({
+      ...preview,
+      rows,
+      authoritative_handled_count: handled.totalCount,
+      truncated: handled.totalCount > handled.transactionIds.length,
+      business: { id: run.business_id, name: run.business_name || null },
+    });
   } catch (error) {
     return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_eligibility_preview_failed", message: "Could not safely preview posting eligibility." });
   }
@@ -2230,12 +2259,14 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-executions", async (re
     const { runId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
     const run = await fetchRun(runId);
+    const handled = await fetchPostingEligibilityHandledScope(run);
     const idempotencyKey = req.get("Idempotency-Key") || req.body?.idempotency_key || null;
     const result = await executePostingEligibilityRecheck({
       db: supabase,
       businessId: run.business_id,
-      month: String(run.review_month).slice(0, 7),
+      month: handled.reviewMonth,
       accountScope: null,
+      transactionIds: handled.transactionIds,
       previewVersion: req.body?.preview_version,
       idempotencyKey,
       actorId: req.user?.id || req.user?.sub || null,
