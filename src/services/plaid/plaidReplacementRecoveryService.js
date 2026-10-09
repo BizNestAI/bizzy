@@ -8,6 +8,10 @@ import {
   isPlaidMutationDuringPaginationError,
 } from "./plaidCanonicalIdentity.js";
 import { normalizePlaidAuthorizedDate, normalizePlaidPostedDate } from "../bookkeeping/accountingDatePolicy.js";
+import {
+  executePostingEligibilityRecheck,
+  previewPostingEligibilityRecheck,
+} from "../bookkeeping/postingEligibilityRecheckService.js";
 
 function recoveryError(code, message, status = 409, details = null) {
   const error = new Error(message);
@@ -614,6 +618,10 @@ export async function releaseReplacementRecoveryHold({ businessId, batchId, acto
   if (error) throw error;
   if (!batch?.id) throw recoveryError("recovery_batch_not_found", "Recovery batch not found.", 404);
   if (batch.status !== "imported_held") throw recoveryError("recovery_batch_not_reviewed", "Import and review the recovery batch before releasing its posting hold.");
+  const heldRows = await db.from("transaction_categorizations").select("transaction_id")
+    .eq("business_id", businessId).eq("posting_hold_batch_id", batchId).limit(100);
+  if (heldRows.error) throw heldRows.error;
+  const transactionIds = (heldRows.data || []).map((row) => row.transaction_id).filter(Boolean);
   const now = new Date().toISOString();
   const { error: updateError } = await db.from("transaction_categorizations").update({ posting_hold_batch_id: null, updated_at: now })
     .eq("business_id", businessId).eq("posting_hold_batch_id", batchId);
@@ -621,5 +629,24 @@ export async function releaseReplacementRecoveryHold({ businessId, batchId, acto
   const { error: batchUpdateError } = await db.from("plaid_recovery_batches").update({ status: "released", posting_hold: false, released_by: actorUserId || null, released_at: now, updated_at: now })
     .eq("business_id", businessId).eq("id", batchId).eq("posting_hold", true);
   if (batchUpdateError) throw batchUpdateError;
-  return { batch_id: batchId, status: "released", posting_hold: false };
+  let eligibility_recheck = null;
+  if (transactionIds.length) {
+    try {
+      const month = new Date().toISOString().slice(0, 7);
+      const preview = await previewPostingEligibilityRecheck({ db, businessId, month, transactionIds });
+      eligibility_recheck = await executePostingEligibilityRecheck({
+        db, businessId, month, transactionIds,
+        previewVersion: preview.preview_version,
+        idempotencyKey: crypto.randomUUID(),
+        actorId: actorUserId || null,
+      });
+    } catch (recheckError) {
+      eligibility_recheck = {
+        ok: false,
+        error: recheckError?.code || "posting_eligibility_recheck_failed",
+        message: "The posting hold was released, but posting eligibility needs attention. No provider call was made.",
+      };
+    }
+  }
+  return { batch_id: batchId, status: "released", posting_hold: false, eligibility_recheck };
 }

@@ -1,0 +1,92 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+
+test("MRP exposes a bounded two-step posting eligibility workflow", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  assert.match(page, /Recheck Posting Eligibility/);
+  assert.match(page, /posting-eligibility-preview/);
+  assert.match(page, /posting-eligibility-executions/);
+  assert.match(page, /Idempotency-Key/);
+  assert.match(page, /preview_version/);
+  assert.match(page, /No QuickBooks or Plaid call occurs/);
+  assert.match(page, /Number\(feeds\?\.handled\?\.count \|\| 0\) === 0/);
+  assert.match(page, /role="dialog" aria-modal="true"/);
+});
+
+test("preview and execution derive business and month from the authorized run", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  assert.match(route, /router\.use\(requireAuth\)/);
+  assert.match(route, /requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)/);
+  assert.match(route, /posting-eligibility-preview/);
+  assert.match(route, /posting-eligibility-executions/);
+  assert.match(route, /businessId: run\.business_id/);
+  assert.match(route, /month: String\(run\.review_month\)\.slice\(0, 7\)/);
+  assert.doesNotMatch(route.slice(route.indexOf("posting-eligibility-preview"), route.indexOf("posting-eligibility-executions")), /req\.body\?\.business_id/);
+});
+
+test("shared reconciliation is bounded, read-only in preview, and CAS guarded in execution", () => {
+  const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
+  assert.match(service, /const MAX_ROWS = 100/);
+  assert.match(service, /previewPostingEligibilityRecheck/);
+  assert.match(service, /executePostingEligibilityRecheck/);
+  const preview = service.slice(service.indexOf("export async function previewPostingEligibilityRecheck"), service.indexOf("async function persistExecution"));
+  assert.doesNotMatch(preview, /\.update\(|\.insert\(|\.upsert\(/);
+  assert.match(service, /\.eq\("updated_at", row\.categorization_updated_at\)/);
+  assert.match(service, /posting_eligibility_preview_stale/);
+  assert.match(service, /business_id,idempotency_key/);
+  assert.doesNotMatch(service, /getQBOClient|plaidClient|createPurchase|createDeposit|createCreditCardCredit/);
+});
+
+test("canonical safety evaluation protects provider evidence and special workflows", () => {
+  const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
+  for (const contract of [
+    "pending_transaction_not_postable",
+    "active_provider_operation",
+    "active_worker_lease",
+    "qbo_receipt_requires_reconciliation",
+    "provider_reconciliation_required",
+    "recovery_posting_hold_active",
+    "matched_or_paired_transaction",
+    "possible_qbo_duplicate",
+    "incoming_deposit_resolution_required",
+    "invalid_or_inactive_qbo_account",
+    "source_environment_mismatch",
+  ]) assert.match(service, new RegExp(contract));
+  assert.match(service, /hasAuthorizedMonthlyReviewApproval/);
+  assert.match(service, /current_automatic_safety_gates/);
+  assert.match(service, /durable_manual_approval/);
+});
+
+test("scheduling uses a new grace timestamp and auto-post off remains Ready", () => {
+  const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
+  const lifecycle = read("src/services/bookkeeping/qboPostingLifecycle.js");
+  const feed = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
+  assert.match(service, /computePostAfterForAutoPost\(preview\.auto_post_enabled, graceHours, nowMs\)/);
+  assert.match(service, /post_after: preview\.auto_post_enabled \? postAfter : null/);
+  assert.match(lifecycle, /Ready · Auto-post off/);
+  assert.match(lifecycle, /Scheduled for/);
+  assert.match(feed, /Retry scheduled for/);
+  assert.match(feed, /Checking QuickBooks/);
+});
+
+test("release of a recovery posting hold invokes the same bounded eligibility service", () => {
+  const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
+  assert.match(recovery, /previewPostingEligibilityRecheck/);
+  assert.match(recovery, /executePostingEligibilityRecheck/);
+  assert.match(recovery, /transactionIds/);
+  assert.match(recovery, /posting hold was released, but posting eligibility needs attention/i);
+});
+
+test("forward migration persists service-only idempotency and sanitized audit history", () => {
+  const migration = read("supabase/migrations/20261101106000_monthly_review_posting_eligibility_rechecks.sql");
+  assert.match(migration, /bookkeeping_posting_eligibility_rechecks/);
+  assert.match(migration, /unique \(business_id, idempotency_key\)/);
+  assert.match(migration, /outcome_counts jsonb/);
+  assert.match(migration, /reason_counts jsonb/);
+  assert.match(migration, /enable row level security/);
+  assert.match(migration, /revoke all.*anon, authenticated/i);
+  assert.match(migration, /grant all.*service_role/i);
+});

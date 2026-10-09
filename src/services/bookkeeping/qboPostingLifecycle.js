@@ -99,7 +99,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   if (["processing", "reconciling"].includes(postingJob.state)) {
     return {
       key: postingJob.state === "reconciling" ? "reconciling" : "posting",
-      label: postingJob.state === "reconciling" ? "Checking QuickBooks..." : "Posting...",
+      label: postingJob.state === "reconciling" ? "Checking QuickBooks" : "Posting",
       tone: "warning",
       detail: "Bizzi is confirming this transaction with QuickBooks.",
     };
@@ -107,7 +107,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
 
   if (postingJob.state === "retry_scheduled" && (postingJob.next_attempt_at || row?.meta?.next_post_attempt_at)) {
     const retryAt = postingJob.next_attempt_at || row.meta.next_post_attempt_at;
-    return { key: "retry_scheduled", label: `Retry ${formatShortDateTime(retryAt)}`, tone: "warning", detail: "A controlled retry is scheduled." };
+    return { key: "retry_scheduled", label: `Retry scheduled for ${formatShortDateTime(retryAt)}`, tone: "warning", detail: "A controlled retry is scheduled." };
   }
 
   if (postingJob.state === "blocked" && jobBlock && !supersededDepositMatchFailure) {
@@ -154,7 +154,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   if (isPostingInProgress(row) && isHandledStatus(status)) {
     return {
       key: "posting",
-      label: "Posting...",
+      label: "Posting",
       tone: "warning",
       detail: "Bizzi is sending this transaction to QuickBooks.",
     };
@@ -171,7 +171,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   if (blockReason === "missing_final_qbo_account" || (!row.final_qbo_account_id && status === "auto_approved")) {
     return {
       key: "blocked_missing_final_account",
-      label: "Blocked: missing final account",
+      label: "Blocked · missing final account",
       tone: "danger",
       detail: "Choose a final QuickBooks account before posting.",
     };
@@ -179,7 +179,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   if (blockReason === "unsupported_transaction_type" || blockReason === "cc_payment_mapping_not_safe") {
     return {
       key: "blocked_unsupported_transaction_type",
-      label: "Blocked: unsupported transaction type",
+      label: "Blocked · unsupported transaction type",
       tone: "danger",
       detail: "This transaction type needs review before QuickBooks posting.",
     };
@@ -195,7 +195,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   if (meta.safe_to_auto_post === false && meta.auto_approve_reason !== "manual_user" && (status === "approved" || status === "auto_approved")) {
     return {
       key: "blocked_unsafe_auto_post",
-      label: "Blocked: not safe for auto-post",
+      label: "Blocked · not safe for auto-post",
       tone: "warning",
       detail: "Bizzi needs a safer posting match before auto-posting this row.",
     };
@@ -213,13 +213,16 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
     }
     return {
       key: "queued",
-      label: "Queued",
+      label: `Scheduled for ${formatShortDateTime(row.post_after)}`,
       tone: "warning",
       detail: `Posts after ${formatShortDateTime(row.post_after)}`,
     };
   }
 
   if (isHandledStatus(status)) {
+    if (meta.safe_to_auto_post === true && !row.post_after) {
+      return { key: "ready_auto_post_off", label: "Ready · Auto-post off", tone: "neutral", detail: "Posting eligibility is confirmed; no posting time is assigned while Auto-post is off." };
+    }
     return {
       key: "handled_not_posted",
       label: "Handled · Not posted",
@@ -260,7 +263,7 @@ export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) 
   if (lifecycle.key === "posting") {
     return {
       key: "posting",
-      label: "Posting...",
+      label: "Posting",
       tone: "warning",
       detail: lifecycle.detail || "Bizzi is sending this transaction to QuickBooks.",
     };

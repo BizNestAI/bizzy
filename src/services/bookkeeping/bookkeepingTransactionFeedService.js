@@ -450,17 +450,20 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   const meta = row.meta || {};
   const job = row.posting_job || {};
   if (["processing", "reconciling"].includes(job.state)) {
-    return { key: job.state === "reconciling" ? "reconciling" : "posting", label: job.state === "reconciling" ? "Checking QuickBooks..." : "Posting...", tone: "info", detail: "Bizzi is confirming this transaction with QuickBooks." };
+    return { key: job.state === "reconciling" ? "reconciling" : "posting", label: job.state === "reconciling" ? "Checking QuickBooks" : "Posting", tone: "info", detail: "Bizzi is confirming this transaction with QuickBooks." };
   }
   if (job.state === "retry_scheduled" && job.next_attempt_at) {
-    return { key: "retry_scheduled", label: `Retry ${new Date(job.next_attempt_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`, tone: "warning", detail: "A controlled retry is scheduled.", technical: { job_id: job.id, attempt_count: job.attempt_count, last_error_code: job.last_error_code } };
+    return { key: "retry_scheduled", label: `Retry scheduled for ${new Date(job.next_attempt_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`, tone: "warning", detail: "A controlled retry is scheduled.", technical: { job_id: job.id, attempt_count: job.attempt_count, last_error_code: job.last_error_code } };
   }
   if (job.state === "blocked") {
+    if (meta.safe_to_auto_post === true && policy.enabled !== true && job.blocking_code === "missing_posting_schedule") {
+      return { key: "ready_auto_post_off", label: "Ready · Auto-post off", tone: "neutral", detail: "Posting eligibility is confirmed. Enable Auto-post to assign a future review-window timestamp." };
+    }
     const sourceProblem = ["missing_source_qbo_account", "missing_qbo_account_mapping", "inactive_source_qbo_account"].includes(job.blocking_code);
     const connectionProblem = job.blocking_code === "qbo_authorization_expired";
     return {
       key: "configuration_blocked",
-      label: connectionProblem ? "Reconnect QuickBooks" : sourceProblem ? "Source account needs attention" : "Not scheduled",
+      label: connectionProblem ? "Blocked · Reconnect QuickBooks" : sourceProblem ? "Blocked · Source account needs attention" : `Blocked · ${String(job.blocking_code || "Needs attention").replaceAll("_", " ")}`,
       tone: "danger",
       detail: connectionProblem ? "Renew the QuickBooks connection before posting." : sourceProblem ? "Connect this bank or card account to an active QuickBooks account." : "This transaction needs attention before it can be scheduled.",
       technical: { job_id: job.id, blocking_code: job.blocking_code },
@@ -511,10 +514,13 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   if (!row.final_qbo_account_id && !meta?.cc_payment_cc_qbo_account_id && !hasConfirmedSplit) {
     return {
       key: "blocked_missing_final_account",
-      label: "Blocked: missing final account",
+      label: "Blocked · missing final account",
       tone: "danger",
       detail: "Choose a final QuickBooks account before posting.",
     };
+  }
+  if (meta.safe_to_auto_post === true && !row.post_after && policy.enabled !== true) {
+    return { key: "ready_auto_post_off", label: "Ready · Auto-post off", tone: "neutral", detail: "Posting eligibility is confirmed. Enable Auto-post to assign a future review-window timestamp." };
   }
   const unsupportedTaxonomy = ["transfer_internal", "owner_draw", "owner_contribution", "refund"].includes(
     String(meta.taxonomy_type || "")
@@ -522,7 +528,7 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   if (unsupportedTaxonomy) {
     return {
       key: "blocked_unsupported_transaction_type",
-      label: "Blocked: unsupported transaction type",
+      label: "Blocked · unsupported transaction type",
       tone: "danger",
       detail: "This transaction type needs review before QuickBooks posting.",
     };
@@ -542,7 +548,7 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   ) {
     return {
       key: "blocked_unsupported_transaction_type",
-      label: "Blocked: unsupported transaction type",
+      label: "Blocked · unsupported transaction type",
       tone: "danger",
       detail: "Credit-card payment rows need a verified source and destination account before posting.",
     };
@@ -550,7 +556,7 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   if (meta.safe_to_auto_post !== true && meta.auto_approve_reason !== "manual_user") {
     return {
       key: "blocked_unsafe_auto_post",
-      label: "Blocked: not safe for auto-post",
+      label: "Blocked · not safe for auto-post",
       tone: "warning",
       detail: "Bizzi needs a safer posting match before auto-posting this row.",
     };

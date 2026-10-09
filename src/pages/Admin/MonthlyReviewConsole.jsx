@@ -291,6 +291,7 @@ export default function MonthlyReviewConsole() {
   const [loadingBookkeepingCounts, setLoadingBookkeepingCounts] = useState(false);
   const [bookkeepingCountsError, setBookkeepingCountsError] = useState("");
   const [bookkeepingReconsideration, setBookkeepingReconsideration] = useState({ loading: false, message: "", error: "" });
+  const [postingEligibilityRecheck, setPostingEligibilityRecheck] = useState({ open: false, loading: false, executing: false, preview: null, result: null, error: "" });
   const [postingReview, setPostingReview] = useState({
     expanded: false,
     summary: null,
@@ -1164,6 +1165,7 @@ export default function MonthlyReviewConsole() {
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
     setManualPostingRequest(null);
+    setPostingEligibilityRecheck({ open: false, loading: false, executing: false, preview: null, result: null, error: "" });
     updateReviewUrl({ businessId, month });
   }, [applyQboPnlSnapshot, month, selectedBusinessId]);
 
@@ -1185,6 +1187,7 @@ export default function MonthlyReviewConsole() {
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
     setManualPostingRequest(null);
+    setPostingEligibilityRecheck({ open: false, loading: false, executing: false, preview: null, result: null, error: "" });
     updateReviewUrl({ businessId: selectedBusinessId, month: nextMonth });
   }, [applyQboPnlSnapshot, month, selectedBusinessId]);
 
@@ -1307,6 +1310,36 @@ export default function MonthlyReviewConsole() {
       loadBookkeepingFeed("needs_review", { reset: true }),
     ]);
   }, [loadBookkeepingFeed, loadBookkeepingFeedCounts]);
+
+  const openPostingEligibilityRecheck = useCallback(async () => {
+    if (!detail?.run?.id) return;
+    setPostingEligibilityRecheck({ open: true, loading: true, executing: false, preview: null, result: null, error: "" });
+    try {
+      const preview = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/bookkeeping/posting-eligibility-preview`, { method: "POST", body: {} });
+      setPostingEligibilityRecheck({ open: true, loading: false, executing: false, preview, result: null, error: "" });
+    } catch (error) {
+      setPostingEligibilityRecheck({ open: true, loading: false, executing: false, preview: null, result: null, error: error?.body?.message || error?.message || "Could not preview posting eligibility." });
+    }
+  }, [detail?.run?.id]);
+
+  const executePostingEligibilityRecheckAction = useCallback(async () => {
+    const preview = postingEligibilityRecheck.preview;
+    if (!detail?.run?.id || !preview?.preview_version || postingEligibilityRecheck.executing) return;
+    const idempotencyKey = globalThis.crypto?.randomUUID?.();
+    if (!idempotencyKey) return setPostingEligibilityRecheck((current) => ({ ...current, error: "A secure request identifier could not be created." }));
+    setPostingEligibilityRecheck((current) => ({ ...current, executing: true, error: "" }));
+    try {
+      const result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/bookkeeping/posting-eligibility-executions`, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: { preview_version: preview.preview_version, idempotency_key: idempotencyKey },
+      });
+      setPostingEligibilityRecheck((current) => ({ ...current, executing: false, result, error: "" }));
+      await refreshAfterFeedAction();
+    } catch (error) {
+      setPostingEligibilityRecheck((current) => ({ ...current, executing: false, preview: error?.body?.preview || preview, error: error?.body?.message || error?.message || "Could not recheck posting eligibility." }));
+    }
+  }, [detail?.run?.id, postingEligibilityRecheck.executing, postingEligibilityRecheck.preview, refreshAfterFeedAction]);
 
   const patchBookkeepingFeedsAfterApproval = useCallback((row, accountId, result = {}) => {
     const transactionId = row?.id;
@@ -2568,6 +2601,8 @@ export default function MonthlyReviewConsole() {
                   onLoadMore={(status) => loadBookkeepingFeed(status)}
                   onRefresh={refreshBookkeepingFeeds}
                   onReconsider={runBookkeepingReconsideration}
+                  onRecheckPostingEligibility={openPostingEligibilityRecheck}
+                  postingEligibilityRecheck={postingEligibilityRecheck}
                   onTogglePostingReview={togglePostingReview}
                   onRefreshPostingReview={loadPostingReview}
                   onPostingReviewOptionChange={(groupId, patch) => {
@@ -2685,6 +2720,13 @@ export default function MonthlyReviewConsole() {
                   onCancel={() => setConfirmFinalizeOpen(false)}
                   onConfirm={finalizeReview}
                 />
+                <PostingEligibilityRecheckModal
+                  state={postingEligibilityRecheck}
+                  businessName={selectedBusiness?.business_name || selectedBusiness?.name || "Selected business"}
+                  month={month}
+                  onClose={() => !postingEligibilityRecheck.executing && setPostingEligibilityRecheck((current) => ({ ...current, open: false }))}
+                  onConfirm={executePostingEligibilityRecheckAction}
+                />
                 <MonthlyReviewActionsBoundary
                   correlationId={renderCorrelationIdRef.current}
                   resetKey={`${selectedBusinessId}:${month}:manual-post`}
@@ -2713,6 +2755,92 @@ export default function MonthlyReviewConsole() {
   );
 }
 
+function PostingEligibilityRecheckModal({ state, businessName, month, onClose, onConfirm }) {
+  useEffect(() => {
+    if (!state?.open) return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event) => {
+      if (event.key === "Escape" && !state.executing) onClose?.();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previous;
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose, state?.executing, state?.open]);
+  if (!state?.open) return null;
+  const preview = state.preview;
+  const result = state.result;
+  const counts = result?.counts || preview?.counts || {};
+  const rows = result?.rows || preview?.rows || [];
+  const labels = {
+    eligible_to_schedule: "Eligible to schedule",
+    newly_scheduled: "Newly scheduled",
+    ready_auto_post_off: "Ready · Auto-post off",
+    already_scheduled: "Already scheduled",
+    processing: "Actively processing",
+    retry_scheduled: "Retry scheduled",
+    reconciling: "Receipt confirmed / reconciling",
+    blocked: "Blocked",
+    returned_to_review: "Returned to Needs Review",
+    skipped: "Skipped",
+    failed: "Failed",
+    conflicted: "Changed concurrently",
+  };
+  return (
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 p-3 sm:p-4" role="presentation">
+      <div role="dialog" aria-modal="true" aria-labelledby="posting-eligibility-title" className="flex max-h-[calc(100dvh-24px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-sky-300/25 bg-[#0c1012] shadow-2xl sm:max-h-[calc(100dvh-32px)]">
+        <header className="shrink-0 border-b border-white/10 px-5 py-4">
+          <h2 id="posting-eligibility-title" className="text-lg font-semibold text-white">Recheck Posting Eligibility</h2>
+          <p className="mt-1 text-sm text-white/55">{businessName} · {formatMonth(month)}</p>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+          {state.loading ? <div className="flex items-center gap-2 text-sm text-white/70"><Loader2 className="h-4 w-4 animate-spin" /> Building a read-only preview…</div> : null}
+          {state.error ? <div className="rounded-xl border border-rose-300/25 bg-rose-950/30 p-3 text-sm text-rose-100">{state.error}</div> : null}
+          {preview ? (
+            <>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <SummaryMetric label="Examined" value={result?.examined ?? preview.examined ?? 0} />
+                <SummaryMetric label="Auto-post" value={preview.auto_post_enabled ? "On" : "Off"} />
+                {Object.entries(counts).map(([key, value]) => <SummaryMetric key={key} label={labels[key] || key.replaceAll("_", " ")} value={value || 0} />)}
+              </div>
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-xs leading-5 text-white/65">
+                No QuickBooks or Plaid call occurs. Nothing posts immediately, selected GL accounts are unchanged, and final or posted transactions remain untouched. {preview.auto_post_enabled ? "Eligible rows receive a new future grace-period timestamp." : "Eligible rows become Ready and remain unscheduled while Auto-post is off."}
+              </div>
+              <div className="mt-4 space-y-2">
+                {Object.entries(result?.reason_counts || preview.reason_counts || {}).map(([reason, total]) => (
+                  <details key={reason} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                    <summary className="cursor-pointer text-sm text-white/80">{total} · {reason.replaceAll("_", " ")}</summary>
+                    <div className="mt-2 overflow-x-auto">
+                      <table className="min-w-[720px] w-full text-left text-xs text-white/60">
+                        <tbody>{rows.filter((row) => row.reason === reason).map((row) => (
+                          <tr key={row.transaction_id} className="border-t border-white/5">
+                            <td className="py-2 pr-3">{row.date}</td><td className="py-2 pr-3 text-white/80">{row.description}</td><td className="py-2 pr-3">{row.amount}</td><td className="py-2 pr-3">{row.account_name}</td><td className="py-2">{row.selected_gl_account || "No GL account"}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  </details>
+                ))}
+              </div>
+              {result ? <div className="mt-4 rounded-xl border border-emerald-300/20 bg-emerald-950/25 p-3 text-sm text-emerald-100">Persisted result · {result.executed_at} · Request {result.request_id}</div> : null}
+            </>
+          ) : null}
+        </div>
+        <footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-white/10 px-5 py-4">
+          <button type="button" onClick={onClose} disabled={state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">Close</button>
+          {!result ? <button type="button" onClick={onConfirm} disabled={!preview || state.loading || state.executing || Number(preview?.examined || 0) === 0} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/30 bg-sky-950/40 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{state.executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Confirm recheck</button> : null}
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function SummaryMetric({ label, value }) {
+  return <div className="rounded-xl border border-white/10 bg-white/[0.035] p-3"><div className="text-[11px] uppercase tracking-wide text-white/45">{label}</div><div className="mt-1 text-lg font-semibold text-white">{value}</div></div>;
+}
+
 function BookkeepingFeedMirrorPanels({
   feeds,
   loadingCounts,
@@ -2729,6 +2857,8 @@ function BookkeepingFeedMirrorPanels({
   onLoadMore,
   onRefresh,
   onReconsider,
+  onRecheckPostingEligibility,
+  postingEligibilityRecheck,
   onTogglePostingReview,
   onRefreshPostingReview,
   onPostingReviewOptionChange,
@@ -2782,6 +2912,16 @@ function BookkeepingFeedMirrorPanels({
           >
             {reconsideration?.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
             Re-evaluate Needs Review
+          </button>
+          <button
+            type="button"
+            onClick={onRecheckPostingEligibility}
+            disabled={postingEligibilityRecheck?.loading || postingEligibilityRecheck?.executing || Number(feeds?.handled?.count || 0) === 0}
+            title={Number(feeds?.handled?.count || 0) === 0 ? "No selected-month Handled transactions are available to recheck." : "Preview a server-side posting eligibility recheck."}
+            className="inline-flex items-center gap-2 rounded-xl border border-sky-300/20 bg-sky-950/30 px-3 py-2 text-sm font-semibold text-sky-50 hover:border-sky-200/35 hover:bg-sky-900/35 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {postingEligibilityRecheck?.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+            Recheck Posting Eligibility
           </button>
           <button
             type="button"

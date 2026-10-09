@@ -125,7 +125,7 @@ test("QBO posting schedule renders backlog and blocker lifecycle states without 
     meta: { safe_to_auto_post: false },
   }, { nowMs });
   assert.equal(unsafe.key, "blocked_unsafe_auto_post");
-  assert.equal(unsafe.label, "Blocked: not safe for auto-post");
+  assert.equal(unsafe.label, "Blocked · not safe for auto-post");
 
   const missing = formatQboPostingSchedule({
     status: "auto_approved",

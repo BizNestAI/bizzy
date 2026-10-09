@@ -80,6 +80,10 @@ import { canonicalIncomingDepositLookupOutcome } from "../../services/bookkeepin
 import { persistCreditCardInflowResolution, persistTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import { recoverHandledPostingDispositions } from "../../services/bookkeeping/handledPostingDispositionRecoveryService.js";
 import {
+  executePostingEligibilityRecheck,
+  previewPostingEligibilityRecheck,
+} from "../../services/bookkeeping/postingEligibilityRecheckService.js";
+import {
   BookkeepingReclassificationError,
   reclassifyBookkeepingTransaction,
   updatePostedQboTransactionAccount,
@@ -2192,6 +2196,74 @@ router.post("/runs/:runId/bookkeeping/recover-handled-posting-dispositions", asy
       error: error?.code || "handled_posting_disposition_recovery_failed",
       message: "Could not safely recover contradictory Handled transactions. No QuickBooks writes were attempted.",
     });
+  }
+});
+
+router.post("/runs/:runId/bookkeeping/posting-eligibility-preview", async (req, res) => {
+  try {
+    const { runId } = req.params;
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    const run = await fetchRun(runId);
+    const preview = await previewPostingEligibilityRecheck({
+      db: supabase,
+      businessId: run.business_id,
+      month: String(run.review_month).slice(0, 7),
+      accountScope: null,
+      limit: MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX,
+    });
+    const rows = (preview.rows || []).map((row) => {
+      const safe = { ...row };
+      delete safe.current_meta;
+      delete safe.categorization_updated_at;
+      return safe;
+    });
+    setMonthlyReviewNoStore(res);
+    return res.json({ ...preview, rows, business: { id: run.business_id, name: run.business_name || null } });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_eligibility_preview_failed", message: "Could not safely preview posting eligibility." });
+  }
+});
+
+router.post("/runs/:runId/bookkeeping/posting-eligibility-executions", async (req, res) => {
+  const requestId = crypto.randomUUID();
+  try {
+    const { runId } = req.params;
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    const run = await fetchRun(runId);
+    const idempotencyKey = req.get("Idempotency-Key") || req.body?.idempotency_key || null;
+    const result = await executePostingEligibilityRecheck({
+      db: supabase,
+      businessId: run.business_id,
+      month: String(run.review_month).slice(0, 7),
+      accountScope: null,
+      previewVersion: req.body?.preview_version,
+      idempotencyKey,
+      actorId: req.user?.id || req.user?.sub || null,
+      requestId,
+      graceHours: Number(process.env.BOOKS_POST_GRACE_HOURS || 24),
+    });
+    await logAuditEvent({
+      run,
+      actor: req.user,
+      eventType: "posting_eligibility_rechecked",
+      sectionKey: "books_review_mirror",
+      previousValue: { preview_version: req.body?.preview_version || null },
+      nextValue: { execution_id: result.execution_id, counts: result.counts, reason_counts: result.reason_counts },
+      notes: "Rechecked bounded posting eligibility. No QuickBooks or Plaid calls were made.",
+    }).catch(() => null);
+    res.set("x-bizzi-request-id", requestId);
+    return res.json(result);
+  } catch (error) {
+    if (error?.code === "posting_eligibility_preview_stale") {
+      const rows = (error.preview?.rows || []).map((row) => {
+        const safe = { ...row };
+        delete safe.current_meta;
+        delete safe.categorization_updated_at;
+        return safe;
+      });
+      return res.status(409).json({ ok: false, error: error.code, message: "Posting eligibility changed. Review the refreshed preview before confirming.", preview: { ...error.preview, rows }, request_id: requestId });
+    }
+    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_eligibility_execution_failed", message: "Could not safely recheck posting eligibility. No provider calls were made.", request_id: requestId });
   }
 });
 
