@@ -47,6 +47,7 @@ import {
   updateAutoPostStatus,
 } from "../../services/bookkeeping/bookkeepingClient.js";
 import { buildPaymentAccountDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
+import { hasStrongCreditCardPaymentMemo, isCreditCardPaymentWorkflow } from "../../services/bookkeeping/creditCardPaymentStatus.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
 import { ClarificationModal } from "../../components/Bizzy/OperatorRequestsPanel.jsx";
@@ -1914,9 +1915,10 @@ function BookkeepingCleanup() {
     const meta = txn.meta || {};
     const explicitResolution = String(meta.user_selected_resolution || txn.resolution || "").toLowerCase();
     const hasDurablePair = Boolean(txn.cc_payment_pair_id || meta.cc_payment_pair_id);
-    if (explicitResolution && explicitResolution !== "match_credit_card_payment" && !hasDurablePair) return false;
+    if (explicitResolution && explicitResolution !== "match_credit_card_payment" && !hasDurablePair && !hasStrongCreditCardPaymentMemo(txn)) return false;
     return (
       explicitResolution === "match_credit_card_payment" ||
+      isCreditCardPaymentWorkflow(txn) ||
       String(txn.taxonomy_type || meta.taxonomy_type || "").toLowerCase() === "cc_payment" ||
       hasDurablePair ||
       String(txn.cc_payment_pair_status || meta.cc_payment_pair_status || "").length > 0 ||
@@ -2064,26 +2066,8 @@ function BookkeepingCleanup() {
     const ccAction = ccPaymentActionState[key] || {};
     const targetTransactionId = targetTransactionIdArg || ccAction.targetTransactionId || ccAction.candidate?.transaction_id || null;
     const initiatingTxn = transactions.find((txn) => String(txn.id) === key) || null;
-    const previousTransactions = transactions;
-    const previousTabCounts = tabCounts;
     const correlationId = globalThis.crypto?.randomUUID?.() || `cc-match-${Date.now()}`;
     const idempotencyKey = `cc-match:${businessId}:${key}:${targetTransactionId || "selected"}:${ccAction.candidate?.row_version || "current"}`;
-    const provisionalPair = {
-      id: `pending:${correlationId}`,
-      status: "confirmed",
-      checking_transaction_id: initiatingTxn?.direction === "outflow" ? id : targetTransactionId,
-      credit_card_transaction_id: initiatingTxn?.direction === "outflow" ? targetTransactionId : id,
-      checking_plaid_account_id: initiatingTxn?.direction === "outflow" ? initiatingTxn?.accountId : ccAction.candidate?.plaid_account_id,
-      credit_card_plaid_account_id: initiatingTxn?.direction === "outflow" ? ccAction.candidate?.plaid_account_id : initiatingTxn?.accountId,
-      amount: Math.abs(Number(initiatingTxn?.signed_amount ?? initiatingTxn?.amount ?? 0)),
-    };
-    const rollbackCachedFeeds = updateCachedCreditCardPaymentFeeds({
-      businessId,
-      transactionIds: [id, targetTransactionId],
-      plaidAccountIds: [provisionalPair.checking_plaid_account_id, provisionalPair.credit_card_plaid_account_id],
-      fallbackRows: [initiatingTxn, ccAction.candidate],
-      buildMatchedRow: (row) => buildMatchedCreditCardPaymentTxn(row, provisionalPair),
-    });
     ccConfirmInFlightRef.current.add(key);
     setCcPaymentActionState((prev) => ({
       ...prev,
@@ -2094,28 +2078,8 @@ function BookkeepingCleanup() {
         error: "",
       },
     }));
-    // Perceived completion is immediate; authoritative state is reconciled from
-    // the single atomic response below. Rollback restores this exact snapshot.
-    if (initiatingTxn) {
-      const optimisticTxn = {
-        ...initiatingTxn,
-        status: "matched",
-        match_type: "credit_card_payment_pair",
-        cc_payment_pair_status: "confirmed",
-        meta: {
-          ...(initiatingTxn.meta || {}),
-          taxonomy_type: "cc_payment",
-          cc_payment_pair_status: "confirmed",
-          match_type: "credit_card_payment_pair",
-          safe_to_auto_post: false,
-        },
-      };
-      applyOptimisticCountTransition(initiatingTxn, optimisticTxn);
-      setTransactions((prev) => activeTab === "matched"
-        ? prev.map((txn) => String(txn.id) === key ? optimisticTxn : txn)
-        : prev.filter((txn) => String(txn.id) !== key));
-    }
-    const optimisticVisibleUpdateMs = performance.now() - clickStartedAt;
+    // Keep the row visible until the server confirms that the pair was
+    // atomically persisted. The action state supplies the inline loading UI.
     try {
       const requestDispatchMs = performance.now() - clickStartedAt;
       const result = await confirmCreditCardPaymentMatch(businessId, id, targetQboAccountId, targetTransactionId, {
@@ -2161,7 +2125,6 @@ function BookkeepingCleanup() {
           timings_ms: {
             ...(result?.timings_ms || {}),
             click_to_request_dispatch_ms: requestDispatchMs,
-            optimistic_visible_update_ms: optimisticVisibleUpdateMs,
             client_response_to_visible_feed_ms: visibleFeedUpdateMs,
           },
         },
@@ -2187,9 +2150,6 @@ function BookkeepingCleanup() {
         });
       });
     } catch (e) {
-      rollbackCachedFeeds();
-      setTransactions(previousTransactions);
-      setTabCounts(previousTabCounts);
       const message = e?.body?.message || e?.message || "No matching opposite-side payment was found yet.";
       setCcPaymentActionState((prev) => ({
         ...prev,

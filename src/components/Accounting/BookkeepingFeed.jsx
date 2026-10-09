@@ -8,6 +8,7 @@ import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialL
 import {
   deriveCreditCardPaymentOrientation,
   deriveResolutionAwareCreditCardPaymentStatus,
+  isCreditCardPaymentWorkflow,
   isQboBankAccount,
   isQboCreditCardAccount,
 } from "../../services/bookkeeping/creditCardPaymentStatus.js";
@@ -1431,7 +1432,7 @@ export default function BookkeepingFeed({
             const customerRespondedAt = txn.customer_responded_at || operatorRequest?.answered_at || null;
             const ccRejected = txn.cc_payment_rejected === true || txn.meta?.cc_payment_rejected === true || txn.meta?.taxonomy_override === "not_cc_payment";
             const hasCcPair = Boolean(txn.cc_payment_pair_id || txn.meta?.cc_payment_pair_id);
-            const isCcPaymentSuspected = !ccRejected && !hasCcPair && (txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment");
+            const isCcPaymentSuspected = !ccRejected && !hasCcPair && isCreditCardPaymentWorkflow(txn);
             const isCcPayment = !ccRejected && hasCcPair;
             const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(txn, effectiveResolution);
             const isCcPaymentWorkflow = Boolean(ccWorkflowStatus);
@@ -1659,7 +1660,7 @@ export default function BookkeepingFeed({
                       {incomingMatch.primary?.qbo_entity_type || "QuickBooks"} {incomingMatch.primary?.txn_date || ""}
                     </span>
                   </span>
-                ) : ccWorkflowStatus && effectiveResolution === "match_credit_card_payment" ? (
+                ) : ccWorkflowStatus && (effectiveResolution === "match_credit_card_payment" || isCcPaymentSuspected) ? (
                   <CreditCardPaymentMatchControl
                     value={selectedCcTargetValue}
                     accounts={ccPaymentDestinationAccounts}

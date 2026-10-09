@@ -7,6 +7,7 @@ import { classifyTaxonomy } from "../src/services/bookkeeping/taxonomyClassifier
 import {
   deriveCreditCardPaymentOrientation,
   deriveResolutionAwareCreditCardPaymentStatus,
+  isCreditCardPaymentWorkflow,
   isQboBankAccount,
   isQboCreditCardAccount,
 } from "../src/services/bookkeeping/creditCardPaymentStatus.js";
@@ -79,6 +80,25 @@ test("taxonomy-only credit-card payment outflow still offers mapped credit-card 
     counterpartAccountType: "CreditCard",
     label: "Paid to",
     placeholder: "Match payment to...",
+  });
+});
+
+test("a strong Chase payment memo remains in Needs Match despite stale ordinary taxonomy", () => {
+  const row = {
+    name: "EPAY CHASE CREDIT CRD 1234 INTERNET PAYMENT",
+    taxonomy_type: "loan_payment",
+    suggested_qbo_account_name: "Uncategorized Expense",
+    direction: "OUTFLOW",
+    signed_amount: -3303.52,
+    meta: { taxonomy_type: "loan_payment", cc_payment_mapping_notes: "no_safe_pair" },
+  };
+  assert.equal(isCreditCardPaymentWorkflow(row), true);
+  assert.deepEqual(deriveResolutionAwareCreditCardPaymentStatus(row), {
+    key: "cc_payment_needs_match",
+    label: "Credit Card Payment · Needs Match",
+    matched: false,
+    postable: false,
+    tone: "warning",
   });
 });
 

@@ -171,16 +171,64 @@ function stablePairIdempotencyKey({ businessId, checkingTransactionId, creditCar
     .digest("hex");
 }
 
-async function fetchPlaidAccounts(db, businessId, accountIds = []) {
+async function fetchPlaidAccounts(db, businessId, accountIds = [], plaidEnv = null) {
   const ids = Array.from(new Set((accountIds || []).filter(Boolean).map(String)));
   if (!businessId || !ids.length) return new Map();
-  const { data, error } = await db
+  let query = db
     .from("plaid_accounts")
-    .select("plaid_account_id,name,official_name,mask,type,subtype")
+    .select("plaid_item_id,plaid_env,plaid_account_id,physical_account_id,relink_status,name,official_name,mask,type,subtype")
     .eq("business_id", businessId)
     .in("plaid_account_id", ids);
+  if (plaidEnv) query = query.eq("plaid_env", plaidEnv);
+  const { data, error } = await query;
   if (error) throw error;
   return new Map((data || []).map((row) => [String(row.plaid_account_id), row]));
+}
+
+async function fetchTrustedInstitutionIdentity({ db, businessId, plaidEnv, account, mapping }) {
+  if (!businessId || !plaidEnv || !account?.physical_account_id || !account?.plaid_account_id || !account?.plaid_item_id) return null;
+  if (String(account.plaid_env || "") !== String(plaidEnv)) return null;
+
+  const { data: physical, error: physicalError } = await db
+    .from("plaid_physical_accounts")
+    .select("id,plaid_env,institution_name,current_plaid_item_id,current_plaid_account_id,status,needs_confirmation,metadata")
+    .eq("business_id", businessId)
+    .eq("plaid_env", plaidEnv)
+    .eq("id", account.physical_account_id)
+    .maybeSingle();
+  if (physicalError) throw physicalError;
+  if (
+    !physical?.institution_name ||
+    physical.status !== "active" ||
+    physical.needs_confirmation === true ||
+    String(physical.current_plaid_item_id || "") !== String(account.plaid_item_id) ||
+    String(physical.current_plaid_account_id || "") !== String(account.plaid_account_id)
+  ) return null;
+
+  const { data: lineageRows, error: lineageError } = await db
+    .from("plaid_account_lineage_decisions")
+    .select("physical_account_id,replacement_plaid_account_id,qbo_account_id,status,reversed_at")
+    .eq("business_id", businessId)
+    .eq("plaid_env", plaidEnv)
+    .eq("replacement_plaid_account_id", account.plaid_account_id);
+  if (lineageError) throw lineageError;
+
+  const replacementIdentity = /replacement_recovery/i.test(String(physical.metadata?.source || ""));
+  if (replacementIdentity || (lineageRows || []).length > 0) {
+    const confirmed = (lineageRows || []).filter((row) =>
+      row.status === "confirmed" &&
+      !row.reversed_at &&
+      String(row.physical_account_id || "") === String(physical.id) &&
+      String(row.replacement_plaid_account_id || "") === String(account.plaid_account_id) &&
+      String(row.qbo_account_id || "") === String(mapping?.qbo_account_id || "")
+    );
+    if (confirmed.length !== 1 || confirmed.length !== (lineageRows || []).length) return null;
+  }
+
+  return {
+    institution_name: physical.institution_name,
+    physical_account_id: physical.id,
+  };
 }
 
 async function fetchMappings(db, businessId, accountIds = []) {
@@ -357,13 +405,14 @@ function derivePairSourceOrientation({ row = {}, sourceAcct = {}, sourceMapping 
   };
 }
 
-function issuerMatchesCheckingToCard(checkingRow = {}, cardRow = {}, cardAcct = {}) {
+function issuerMatchesCheckingToCard(checkingRow = {}, cardRow = {}, cardAcct = {}, trustedIdentity = null) {
   const checkingIssuer = detectCardIssuer(getTaxonomyMemo(checkingRow));
   if (!checkingIssuer) return true;
   const haystack = normalizeCcPaymentText([
     getTaxonomyMemo(cardRow),
     cardAcct.name,
     cardAcct.official_name,
+    trustedIdentity?.institution_name,
   ].filter(Boolean).join(" "));
   if (detectCardIssuer(haystack) === checkingIssuer) return true;
   if (checkingIssuer === "mastercard") return /\b(?:mastercard|master card)\b/.test(haystack);
@@ -721,6 +770,17 @@ export async function createSafeCreditCardPaymentPairForRow({
 
   const baseDate = dateOnly(row.date);
   if (!baseDate) return { status: "no_match", reason: "invalid_date" };
+  const sourceAccountMap = await fetchPlaidAccounts(db, businessId, [row.plaid_account_id], row.plaid_env || null);
+  const sourceAccount = sourceAccountMap.get(String(row.plaid_account_id));
+  const sourcePlaidEnv = String(row.plaid_env || sourceAccount?.plaid_env || "");
+  if (
+    !sourcePlaidEnv ||
+    !sourceAccount ||
+    String(sourceAccount.plaid_env || "") !== sourcePlaidEnv ||
+    String(sourceAccount.plaid_item_id || "") !== String(row.plaid_item_id || "")
+  ) {
+    return { status: "no_match", reason: "cc_payment_source_environment_unknown" };
+  }
   const start = new Date(`${baseDate}T00:00:00Z`);
   start.setUTCDate(start.getUTCDate() - DATE_WINDOW_DAYS);
   const end = new Date(`${baseDate}T00:00:00Z`);
@@ -728,8 +788,9 @@ export async function createSafeCreditCardPaymentPairForRow({
 
   let candidateQuery = db
     .from("bank_transactions")
-    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
+    .select("id,business_id,plaid_item_id,plaid_env,plaid_account_id,physical_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
     .eq("business_id", businessId)
+    .eq("plaid_env", sourcePlaidEnv)
     .eq("is_archived", false)
     .neq("plaid_account_id", row.plaid_account_id)
     .gte("date", start.toISOString().slice(0, 10))
@@ -788,7 +849,7 @@ export async function createSafeCreditCardPaymentPairForRow({
   if (hasFinalAccountingState(row.id)) return { status: "no_match", reason: "source_already_final" };
 
   const mappingStartedAt = Date.now();
-  const accountMap = await fetchPlaidAccounts(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)]);
+  const accountMap = await fetchPlaidAccounts(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)], sourcePlaidEnv);
   const mappingMap = await fetchMappings(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)]);
   markTiming("account_mapping_lookup_ms", mappingStartedAt);
   const sourceAcct = accountMap.get(String(row.plaid_account_id));
@@ -813,6 +874,12 @@ export async function createSafeCreditCardPaymentPairForRow({
     if (candidate.id === row.id || candidate.pending === true || candidate.is_archived === true || hasFinalAccountingState(candidate.id)) continue;
     if (activePairByTxnId.has(String(candidate.id))) continue;
     const candidateAcct = accountMap.get(String(candidate.plaid_account_id));
+    if (
+      !candidateAcct ||
+      String(candidate.plaid_env || "") !== sourcePlaidEnv ||
+      String(candidateAcct.plaid_env || "") !== sourcePlaidEnv ||
+      String(candidateAcct.plaid_item_id || "") !== String(candidate.plaid_item_id || "")
+    ) continue;
     const candidateRail = plaidAccountRail(candidateAcct);
     const candidateMapping = mappingMap.get(String(candidate.plaid_account_id));
     const candidateMappingRail = qboMappingRail(candidateMapping);
@@ -833,7 +900,18 @@ export async function createSafeCreditCardPaymentPairForRow({
     if (!checkingMapping?.qbo_account_id || !cardMapping?.qbo_account_id) continue;
     const targetMapping = sourceIsChecking ? cardMapping : checkingMapping;
     if (targetQboAccountId && String(targetMapping.qbo_account_id) !== String(targetQboAccountId)) continue;
-    if (!issuerMatchesCheckingToCard(checkingRow, cardRow, cardAcct)) continue;
+    let issuerMatches = issuerMatchesCheckingToCard(checkingRow, cardRow, cardAcct);
+    if (!issuerMatches) {
+      const trustedCardIdentity = await fetchTrustedInstitutionIdentity({
+        db,
+        businessId,
+        plaidEnv: sourcePlaidEnv,
+        account: cardAcct,
+        mapping: cardMapping,
+      });
+      issuerMatches = issuerMatchesCheckingToCard(checkingRow, cardRow, cardAcct, trustedCardIdentity);
+    }
+    if (!issuerMatches) continue;
     if (!hasCreditCardPaymentSignal(checkingRow) && !hasCreditCardPaymentSignal(cardRow)) continue;
     const diff = dateDiffDays(checkingRow.date, cardRow.date);
     if (diff == null || diff > DATE_WINDOW_DAYS) continue;
@@ -954,7 +1032,7 @@ export async function discoverCreditCardPaymentMatchForTransaction({
   const sourceStartedAt = Date.now();
   const { data: row, error } = await db
     .from("bank_transactions")
-    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
+    .select("id,business_id,plaid_item_id,plaid_env,plaid_account_id,physical_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
     .eq("business_id", businessId)
     .eq("id", transactionId)
     .eq("is_archived", false)
@@ -1038,7 +1116,50 @@ export async function confirmCreditCardPaymentMatchForTransaction({
     err.status = 400;
     throw err;
   }
+  const { data: row, error } = await db
+    .from("bank_transactions")
+    .select("id,business_id,plaid_item_id,plaid_env,plaid_account_id,physical_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
+    .eq("business_id", businessId)
+    .eq("id", transactionId)
+    .eq("is_archived", false)
+    .maybeSingle();
+  if (error) throw error;
+  if (!row) {
+    const err = new Error("cc_payment_source_not_found");
+    err.status = 404;
+    throw err;
+  }
+  if (row.pending === true) {
+    return { ok: false, matched: false, code: "pending_transaction_not_matchable", message: "This payment is still pending." };
+  }
   if (targetTransactionId && typeof db.rpc === "function") {
+    const revalidated = await createSafeCreditCardPaymentPairForRow({
+      db,
+      businessId,
+      row,
+      targetQboAccountId,
+      targetTransactionId,
+      validateQboAccountType,
+      discoverOnly: true,
+    });
+    const existingPairMatchesTarget =
+      revalidated.status === "paired" &&
+      [revalidated.pair?.checking_transaction_id, revalidated.pair?.credit_card_transaction_id]
+        .map(String)
+        .includes(String(targetTransactionId));
+    if (revalidated.status !== "candidate_found" && !existingPairMatchesTarget) {
+      const code = revalidated.reason || "cc_payment_no_matching_counterpart";
+      return {
+        ok: false,
+        matched: false,
+        code,
+        message: code === "cc_payment_pair_ambiguous"
+          ? "More than one possible opposite-side payment was found."
+          : "No matching opposite-side payment was found yet.",
+        candidates: revalidated.candidates || [],
+        timings_ms: revalidated.timings_ms || null,
+      };
+    }
     const rpcStartedAt = Date.now();
     const stableIdempotencyKey = idempotencyKey || stablePairIdempotencyKey({
       businessId,
@@ -1074,22 +1195,6 @@ export async function confirmCreditCardPaymentMatchForTransaction({
         database_rpc_round_trip_and_commit_ms: Date.now() - rpcStartedAt,
       },
     };
-  }
-  const { data: row, error } = await db
-    .from("bank_transactions")
-    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
-    .eq("business_id", businessId)
-    .eq("id", transactionId)
-    .eq("is_archived", false)
-    .maybeSingle();
-  if (error) throw error;
-  if (!row) {
-    const err = new Error("cc_payment_source_not_found");
-    err.status = 404;
-    throw err;
-  }
-  if (row.pending === true) {
-    return { ok: false, matched: false, code: "pending_transaction_not_matchable", message: "This payment is still pending." };
   }
   const result = await createSafeCreditCardPaymentPairForRow({
     db,

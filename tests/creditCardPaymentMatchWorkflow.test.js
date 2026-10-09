@@ -12,6 +12,12 @@ async function confirmCreditCardPaymentMatchForTransaction(args) {
   return service.confirmCreditCardPaymentMatchForTransaction(args);
 }
 
+async function discoverCreditCardPaymentMatchForTransaction(args) {
+  servicePromise ||= import("../src/services/bookkeeping/creditCardPaymentPairService.js");
+  const service = await servicePromise;
+  return service.discoverCreditCardPaymentMatchForTransaction(args);
+}
+
 async function confirmCreditCardPaymentPairForTransaction(args) {
   servicePromise ||= import("../src/services/bookkeeping/creditCardPaymentPairService.js");
   const service = await servicePromise;
@@ -117,6 +123,8 @@ function makeDb(overrides = {}) {
       {
         id: "checking-aug5",
         business_id: businessId,
+        plaid_item_id: "item-bank",
+        plaid_env: "production",
         plaid_account_id: "plaid-checking",
         plaid_transaction_id: "plaid-checking-aug5",
         pending_transaction_id: null,
@@ -135,6 +143,8 @@ function makeDb(overrides = {}) {
       {
         id: "card-aug4",
         business_id: businessId,
+        plaid_item_id: "item-amex",
+        plaid_env: "production",
         plaid_account_id: "plaid-amex",
         plaid_transaction_id: "plaid-card-aug4",
         pending_transaction_id: null,
@@ -152,9 +162,11 @@ function makeDb(overrides = {}) {
       },
     ],
     plaid_accounts: [
-      { business_id: businessId, plaid_account_id: "plaid-checking", name: "Checking 8626", type: "depository", subtype: "checking" },
-      { business_id: businessId, plaid_account_id: "plaid-amex", name: "Blue Cash Everyday", type: "credit", subtype: "credit card" },
+      { business_id: businessId, plaid_item_id: "item-bank", plaid_env: "production", plaid_account_id: "plaid-checking", name: "Checking 8626", type: "depository", subtype: "checking" },
+      { business_id: businessId, plaid_item_id: "item-amex", plaid_env: "production", plaid_account_id: "plaid-amex", name: "Blue Cash Everyday", type: "credit", subtype: "credit card" },
     ],
+    plaid_physical_accounts: [],
+    plaid_account_lineage_decisions: [],
     plaid_qbo_account_mappings: [
       { id: "map-checking", business_id: businessId, plaid_account_id: "plaid-checking", qbo_account_id: "qbo-bank", qbo_account_name: "Checking", qbo_account_type: "Bank" },
       { id: "map-amex", business_id: businessId, plaid_account_id: "plaid-amex", qbo_account_id: "qbo-blue", qbo_account_name: "Blue Cash Everyday", qbo_account_type: "CreditCard" },
@@ -235,43 +247,40 @@ test("confirms the same pair when started from the credit-card side", async () =
   assert.equal(result.pair.credit_card_transaction_id, "card-aug4");
 });
 
-test("selected confirmation uses one atomic RPC without rerunning broad discovery", async () => {
+test("selected confirmation revalidates the complete pair before one atomic RPC", async () => {
   const calls = [];
-  const db = {
-    from() {
-      throw new Error("selected fast path must not issue table queries");
-    },
-    async rpc(name, args) {
-      calls.push({ name, args });
-      return {
-        data: {
-          ok: true,
-          matched: true,
-          pair: { id: "pair-fast", status: "confirmed" },
-          lifecycle_rows: [{ transaction_id: "checking-fast", status: "matched" }, { transaction_id: "card-fast", status: "matched" }],
-          timings_ms: { database_transaction_precommit_ms: 12 },
-        },
-        error: null,
-      };
-    },
+  const { db, businessId } = makeDb();
+  db.rpc = async (name, args) => {
+    calls.push({ name, args });
+    return {
+      data: {
+        ok: true,
+        matched: true,
+        pair: { id: "pair-fast", status: "confirmed" },
+        lifecycle_rows: [{ transaction_id: "checking-aug5", status: "matched" }, { transaction_id: "card-aug4", status: "matched" }],
+        timings_ms: { database_transaction_precommit_ms: 12 },
+      },
+      error: null,
+    };
   };
 
   const result = await confirmCreditCardPaymentMatchForTransaction({
     db,
-    businessId: "biz-1",
-    transactionId: "checking-fast",
-    targetTransactionId: "card-fast",
+    businessId,
+    transactionId: "checking-aug5",
+    targetTransactionId: "card-aug4",
     targetQboAccountId: "qbo-blue",
-    expectedCandidateVersion: "2026-09-22T12:00:00.000Z",
+    expectedCandidateVersion: "2026-08-04T12:00:00.000Z",
     idempotencyKey: "fast-idempotency",
     correlationId: "fast-correlation",
+    validateQboAccountType: validator,
   });
 
-  assert.equal(result.matched, true);
+  assert.equal(result.matched, true, JSON.stringify(result));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].name, "confirm_selected_credit_card_payment_pair_atomic");
-  assert.equal(calls[0].args.p_opposite_transaction_id, "card-fast");
-  assert.equal(calls[0].args.p_expected_opposite_updated_at, "2026-09-22T12:00:00.000Z");
+  assert.equal(calls[0].args.p_opposite_transaction_id, "card-aug4");
+  assert.equal(calls[0].args.p_expected_opposite_updated_at, "2026-08-04T12:00:00.000Z");
   assert.equal(calls[0].args.p_idempotency_key, "fast-idempotency");
   assert.equal(calls[0].args.p_correlation_id, "fast-correlation");
   assert.ok(result.timings_ms.database_rpc_round_trip_and_commit_ms >= 0);
@@ -411,9 +420,8 @@ test("confirms the Sep 7 checking AMEX payment to the Sep 5 card-side payment", 
     bank_transactions: [
       ...base.data.bank_transactions,
       {
+        ...base.data.bank_transactions[0],
         id: "checking-sep7-amex-40",
-        business_id: base.businessId,
-        plaid_account_id: "plaid-checking",
         plaid_transaction_id: "plaid-checking-sep7-amex-40",
         pending_transaction_id: null,
         amount: 40,
@@ -429,9 +437,8 @@ test("confirms the Sep 7 checking AMEX payment to the Sep 5 card-side payment", 
         accounting_review_required: true,
       },
       {
+        ...base.data.bank_transactions[1],
         id: "amex-sep5-mobile-payment-40",
-        business_id: base.businessId,
-        plaid_account_id: "plaid-amex",
         plaid_transaction_id: "plaid-amex-sep5-mobile-payment-40",
         pending_transaction_id: null,
         amount: 40,
@@ -891,4 +898,122 @@ test("undo restores both sides and rematch reuses the voided request without dup
   assert.equal(rematch.reason, "voided_pair_reused");
   assert.equal(data.credit_card_payment_pairs.length, 1);
   assert.equal(data.credit_card_payment_pairs[0].status, "confirmed");
+});
+
+function makeTrustedChaseDb({ settlementDays = 1, cardEnv = "production", lineageStatus = "confirmed", recoveryHeld = false } = {}) {
+  const base = makeDb();
+  const cardDate = new Date("2026-09-20T00:00:00Z");
+  const checkingDate = new Date(cardDate);
+  checkingDate.setUTCDate(checkingDate.getUTCDate() + settlementDays);
+  const checking = {
+    ...base.data.bank_transactions[0],
+    id: "checking-chase-payment",
+    plaid_transaction_id: "plaid-checking-chase-payment",
+    amount: 40,
+    signed_amount: -40,
+    date: checkingDate.toISOString().slice(0, 10),
+    name: "EPAY CHASE CREDIT CRD 1234 INTERNET PAYMENT",
+  };
+  const card = {
+    ...base.data.bank_transactions[1],
+    id: "card-chase-payment",
+    plaid_item_id: "item-chase",
+    plaid_env: cardEnv,
+    plaid_account_id: "plaid-chase",
+    plaid_transaction_id: "plaid-card-chase-payment",
+    physical_account_id: null,
+    amount: 40,
+    signed_amount: 40,
+    date: "2026-09-20",
+    authorized_date: "2026-09-19",
+    name: "Payment Thank You-Mobile",
+  };
+  return makeDb({
+    bank_transactions: [checking, card],
+    plaid_accounts: [
+      base.data.plaid_accounts[0],
+      {
+        business_id: base.businessId,
+        plaid_item_id: "item-chase",
+        plaid_env: "production",
+        plaid_account_id: "plaid-chase",
+        physical_account_id: "physical-chase",
+        relink_status: "linked_existing",
+        name: "CREDIT CARD",
+        official_name: "Ultimate Rewards",
+        type: "credit",
+        subtype: "credit card",
+      },
+    ],
+    plaid_physical_accounts: [{
+      id: "physical-chase",
+      business_id: base.businessId,
+      plaid_env: "production",
+      institution_name: "Chase",
+      current_plaid_item_id: "item-chase",
+      current_plaid_account_id: "plaid-chase",
+      status: "active",
+      needs_confirmation: false,
+      metadata: { source: "settings_replacement_recovery_explicit_retained_identity" },
+    }],
+    plaid_account_lineage_decisions: [{
+      business_id: base.businessId,
+      plaid_env: "production",
+      physical_account_id: "physical-chase",
+      prior_plaid_account_id: "plaid-chase",
+      replacement_plaid_account_id: "plaid-chase",
+      qbo_account_id: "qbo-blue",
+      status: lineageStatus,
+      reversed_at: lineageStatus === "confirmed" ? null : "2026-09-22T00:00:00Z",
+    }],
+    plaid_qbo_account_mappings: [
+      base.data.plaid_qbo_account_mappings[0],
+      {
+        ...base.data.plaid_qbo_account_mappings[1],
+        plaid_account_id: "plaid-chase",
+        qbo_account_name: "CREDIT CARD (0000)",
+      },
+    ],
+    transaction_categorizations: [
+      { business_id: base.businessId, transaction_id: checking.id, status: "needs_review", meta: { taxonomy_type: "cc_payment" } },
+      {
+        business_id: base.businessId,
+        transaction_id: card.id,
+        status: "needs_review",
+        posting_hold_batch_id: recoveryHeld ? "recovery-batch" : null,
+        meta: { taxonomy_type: "cc_payment" },
+      },
+    ],
+  });
+}
+
+test("trusted Chase physical institution resolves generic replacement-card payment descriptions", async () => {
+  for (const settlementDays of [1, 3, 7]) {
+    const { db, businessId } = makeTrustedChaseDb({ settlementDays, recoveryHeld: true });
+    const result = await discoverCreditCardPaymentMatchForTransaction({
+      db,
+      businessId,
+      transactionId: "checking-chase-payment",
+      targetQboAccountId: "qbo-blue",
+      validateQboAccountType: validator,
+    });
+    assert.equal(result.candidate_found, true, `${settlementDays}-day result: ${JSON.stringify(result)}`);
+    assert.equal(result.target_transaction_id, "card-chase-payment");
+    assert.equal(db.from("credit_card_payment_pairs").rows().length, 0, "discovery must not persist");
+  }
+});
+
+test("trusted Chase matching fails closed outside the window, across environments, or with reversed lineage", async () => {
+  for (const options of [{ settlementDays: 8 }, { cardEnv: "sandbox" }, { lineageStatus: "reversed" }]) {
+    const { db, businessId } = makeTrustedChaseDb(options);
+    const result = await discoverCreditCardPaymentMatchForTransaction({
+      db,
+      businessId,
+      transactionId: "checking-chase-payment",
+      targetQboAccountId: "qbo-blue",
+      validateQboAccountType: validator,
+    });
+    assert.equal(result.candidate_found, false, JSON.stringify({ options, result }));
+    assert.equal(db.from("credit_card_payment_pairs").rows().length, 0);
+  }
 });

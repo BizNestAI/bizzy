@@ -2,10 +2,23 @@ export function normalizeQboAccountType(value = "") {
   return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
 }
 
+export function hasStrongCreditCardPaymentMemo(row = {}) {
+  const text = [
+    row.name,
+    row.description,
+    row.merchant_name,
+    row.merchantName,
+    row.counterparty_name,
+    row.counterpartyName,
+    row.memo,
+  ].filter(Boolean).join(" ").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return /\b(?:credit card payment|card payment|cc payment|chase credit crd|epay chase credit crd|discover internet payment|amex epayment|american express payment)\b/.test(text);
+}
+
 export function isCreditCardPaymentWorkflow(row = {}) {
   const meta = row.meta || {};
   if (row.cc_payment_rejected === true || meta.cc_payment_rejected === true || meta.taxonomy_override === "not_cc_payment") return false;
-  return row.taxonomy_type === "cc_payment" || meta.taxonomy_type === "cc_payment" || Boolean(row.cc_payment_pair_id || meta.cc_payment_pair_id);
+  return hasStrongCreditCardPaymentMemo(row) || row.taxonomy_type === "cc_payment" || meta.taxonomy_type === "cc_payment" || Boolean(row.cc_payment_pair_id || meta.cc_payment_pair_id);
 }
 
 export function isConfirmedCreditCardPaymentPairStatus(value = "") {
@@ -172,6 +185,7 @@ export default {
   deriveCreditCardPaymentOrientation,
   deriveCreditCardPaymentStatus,
   deriveResolutionAwareCreditCardPaymentStatus,
+  hasStrongCreditCardPaymentMemo,
   isCreditCardPaymentWorkflow,
   isQboBankAccount,
   isQboCreditCardAccount,

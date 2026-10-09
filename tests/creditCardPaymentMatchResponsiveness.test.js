@@ -93,7 +93,7 @@ test("confirmed credit-card payment pairs use handled legacy state while pair au
   assert.match(page, /safe_to_auto_post: false/);
 });
 
-test("confirmation transitions optimistically and background reconciliation does not block success", () => {
+test("confirmation keeps the row visible until durable success and background reconciliation does not block success", () => {
   const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
   const client = read("src/services/bookkeeping/bookkeepingClient.js");
   const handler = page.slice(
@@ -101,12 +101,13 @@ test("confirmation transitions optimistically and background reconciliation does
     page.indexOf("const handleConfirmLoanPaymentSplit")
   );
 
-  assert.match(handler, /applyOptimisticCountTransition\(initiatingTxn, optimisticTxn\)/);
-  assert.match(handler, /setTransactions[\s\S]*confirmCreditCardPaymentMatch/);
-  assert.match(handler, /setTransactions\(previousTransactions\)/);
-  assert.match(handler, /setTabCounts\(previousTabCounts\)/);
+  const requestOffset = handler.indexOf("await confirmCreditCardPaymentMatch");
+  const visibleTransitionOffset = handler.indexOf("updateCachedCreditCardPaymentFeeds", requestOffset);
+  assert.ok(requestOffset >= 0 && visibleTransitionOffset > requestOffset, "feed transition must follow the durable success response");
+  assert.doesNotMatch(handler.slice(0, requestOffset), /status:\s*"matched"|prev\.filter/);
+  assert.doesNotMatch(handler, /setTransactions\(previousTransactions\)|setTabCounts\(previousTabCounts\)|rollbackCachedFeeds/);
   assert.match(handler, /updateCachedCreditCardPaymentFeeds/);
-  assert.match(handler, /rollbackCachedFeeds\(\)/);
+  assert.match(handler, /matching:\s*true/);
   assert.match(handler, /queueMicrotask/);
   assert.doesNotMatch(handler, /await reloadCurrentBookkeepingView/);
   assert.match(client, /Idempotency-Key/);
