@@ -2221,9 +2221,14 @@ router.post("/runs/:runId/bookkeeping/recover-handled-posting-dispositions", asy
 });
 
 router.post("/runs/:runId/bookkeeping/posting-eligibility-preview", async (req, res) => {
+  const requestId = crypto.randomUUID();
   try {
     const { runId } = req.params;
-    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    res.set("x-bizzi-request-id", requestId);
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id", message: "The Monthly Review run identifier is invalid.", request_id: requestId });
+    if (req.body == null || typeof req.body !== "object" || Array.isArray(req.body) || Object.keys(req.body).length > 0) {
+      return res.status(400).json({ ok: false, error: "invalid_posting_eligibility_preview_request", message: "The posting eligibility preview request must contain an empty JSON object.", request_id: requestId });
+    }
     const run = await fetchRun(runId);
     const handled = await fetchPostingEligibilityHandledScope(run);
     const preview = await previewPostingEligibilityRecheck({
@@ -2249,7 +2254,11 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-preview", async (req, 
       business: { id: run.business_id, name: run.business_name || null },
     });
   } catch (error) {
-    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_eligibility_preview_failed", message: "Could not safely preview posting eligibility." });
+    const schemaFailure = ["42P01", "42703", "PGRST200", "PGRST202", "PGRST204", "PGRST205"].includes(String(error?.code || "").toUpperCase());
+    const errorCode = schemaFailure ? "posting_eligibility_schema_unavailable" : "posting_eligibility_preview_failed";
+    console.error("[monthly-review] posting eligibility preview failed", { request_id: requestId, error_code: errorCode, source_error_code: error?.code || null });
+    res.set("x-bizzi-request-id", requestId);
+    return res.status(schemaFailure ? 503 : (error?.status || 500)).json({ ok: false, error: errorCode, message: "Could not safely preview posting eligibility.", request_id: requestId });
   }
 });
 

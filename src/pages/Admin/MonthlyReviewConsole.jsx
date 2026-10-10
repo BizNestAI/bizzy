@@ -292,7 +292,7 @@ export default function MonthlyReviewConsole() {
   const [loadingBookkeepingCounts, setLoadingBookkeepingCounts] = useState(false);
   const [bookkeepingCountsError, setBookkeepingCountsError] = useState("");
   const [bookkeepingReconsideration, setBookkeepingReconsideration] = useState({ loading: false, message: "", error: "" });
-  const [postingEligibilityRecheck, setPostingEligibilityRecheck] = useState({ open: false, loading: false, executing: false, preview: null, result: null, error: "" });
+  const [postingEligibilityRecheck, setPostingEligibilityRecheck] = useState({ open: false, loading: false, executing: false, preview: null, result: null, error: "", errorCode: "", requestId: "" });
   const [postingReview, setPostingReview] = useState({
     expanded: false,
     summary: null,
@@ -1314,12 +1314,12 @@ export default function MonthlyReviewConsole() {
 
   const openPostingEligibilityRecheck = useCallback(async () => {
     if (!detail?.run?.id) return;
-    setPostingEligibilityRecheck({ open: true, loading: true, executing: false, preview: null, result: null, error: "" });
+    setPostingEligibilityRecheck({ open: true, loading: true, executing: false, preview: null, result: null, error: "", errorCode: "", requestId: "" });
     try {
       const preview = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/bookkeeping/posting-eligibility-preview`, { method: "POST", body: {} });
-      setPostingEligibilityRecheck({ open: true, loading: false, executing: false, preview, result: null, error: "" });
+      setPostingEligibilityRecheck({ open: true, loading: false, executing: false, preview, result: null, error: "", errorCode: "", requestId: "" });
     } catch (error) {
-      setPostingEligibilityRecheck({ open: true, loading: false, executing: false, preview: null, result: null, error: error?.body?.message || error?.message || "Could not preview posting eligibility." });
+      setPostingEligibilityRecheck({ open: true, loading: false, executing: false, preview: null, result: null, error: error?.body?.message || error?.message || "Could not preview posting eligibility.", errorCode: error?.body?.error || "posting_eligibility_preview_failed", requestId: error?.body?.request_id || "" });
     }
   }, [detail?.run?.id]);
 
@@ -2729,6 +2729,7 @@ export default function MonthlyReviewConsole() {
                   month={month}
                   onClose={() => !postingEligibilityRecheck.executing && setPostingEligibilityRecheck((current) => ({ ...current, open: false }))}
                   onConfirm={executePostingEligibilityRecheckAction}
+                  onRetry={openPostingEligibilityRecheck}
                 />
                 <MonthlyReviewActionsBoundary
                   correlationId={renderCorrelationIdRef.current}
@@ -2758,7 +2759,7 @@ export default function MonthlyReviewConsole() {
   );
 }
 
-function PostingEligibilityRecheckModal({ state, businessName, month, onClose, onConfirm }) {
+function PostingEligibilityRecheckModal({ state, businessName, month, onClose, onConfirm, onRetry }) {
   useEffect(() => {
     if (!state?.open) return undefined;
     const previous = document.body.style.overflow;
@@ -2800,7 +2801,7 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
           {state.loading ? <div className="flex items-center gap-2 text-sm text-white/70"><Loader2 className="h-4 w-4 animate-spin" /> Building a read-only preview…</div> : null}
-          {state.error ? <div className="rounded-xl border border-rose-300/25 bg-rose-950/30 p-3 text-sm text-rose-100">{state.error}</div> : null}
+          {state.error ? <div className="rounded-xl border border-rose-300/25 bg-rose-950/30 p-3 text-sm text-rose-100"><div>{state.error}</div>{state.errorCode ? <div className="mt-2 font-mono text-xs text-rose-200/75">Code: {state.errorCode}</div> : null}{state.requestId ? <div className="mt-1 font-mono text-xs text-rose-200/75">Request: {state.requestId}</div> : null}</div> : null}
           {preview ? (
             <>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -2833,6 +2834,7 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
         </div>
         <footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-white/10 px-5 py-4">
           <button type="button" onClick={onClose} disabled={state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">Close</button>
+          {state.error && !preview ? <button type="button" onClick={onRetry} disabled={state.loading || state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">Retry</button> : null}
           {!result ? <button type="button" onClick={onConfirm} disabled={!preview || state.loading || state.executing || Number(preview?.examined || 0) === 0} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/30 bg-sky-950/40 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{state.executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Confirm recheck</button> : null}
         </footer>
       </div>

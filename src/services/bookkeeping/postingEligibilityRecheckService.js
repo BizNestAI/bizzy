@@ -118,7 +118,7 @@ async function rowsForScope({ db, businessId, month, accountScope = null, transa
   const [{ data: cats, error: catError }, { data: jobs, error: jobError }, { data: intents, error: intentError }, { data: qboConnection, error: connectionError }] = await Promise.all([
     db.from("transaction_categorizations").select("transaction_id,business_id,status,review_status,posting_status,reason,final_qbo_account_id,final_qbo_account_name,post_after,post_error,last_post_attempt_at,posting_hold_batch_id,decided_by,decided_at,meta,qbo_txn_id,posted_at,excluded_at,is_archived,updated_at").eq("business_id", businessId).in("status", HANDLED).in("transaction_id", ids),
     db.from("bookkeeping_posting_jobs").select("transaction_id,state,scheduled_at,next_attempt_at,attempt_count,lease_owner,lease_expires_at,blocking_code,qbo_intent_id,qbo_request_id,qbo_txn_id,updated_at").eq("business_id", businessId).in("transaction_id", ids),
-    db.from("qbo_posted_transactions").select("transaction_id,status,attempt_count,lease_owner,lease_expires_at,request_id,qbo_txn_id,qbo_txn_type,updated_at").eq("business_id", businessId).in("transaction_id", ids),
+    db.from("qbo_posted_transactions").select("transaction_id,status,attempt_count,lease_expires_at,request_id,qbo_txn_id,qbo_txn_type,updated_at").eq("business_id", businessId).in("transaction_id", ids),
     db.from("quickbooks_tokens").select("realm_id,qbo_env,status,is_active").eq("business_id", businessId).eq("qbo_env", qboEnvName).eq("is_active", true).eq("status", "active").order("created_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
   if (catError) throw catError;
@@ -173,32 +173,37 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
   const result = {
     ok: true, business_id: businessId, month, account_scope: accountScope || null,
     auto_post_enabled: policy.enabled === true, examined: 0, truncated: scoped.truncated,
-    counts: { eligible_to_schedule: 0, ready_auto_post_off: 0, already_scheduled: 0, processing: 0, retry_scheduled: 0, reconciling: 0, blocked: 0, returned_to_review: 0, failures: 0 },
+    counts: { eligible_to_schedule: 0, ready_auto_post_off: 0, already_scheduled: 0, processing: 0, retry_scheduled: 0, reconciling: 0, blocked: 0, returned_to_review: 0, failed: 0 },
     reason_counts: {}, rows: [],
   };
   for (const context of scoped.rows) {
     const { cat, bank, job } = context;
     result.examined += 1;
-    let outcome;
-    let why = hardBlock({ ...context, nowMs });
-    const jobDue = Date.parse(job?.next_attempt_at || job?.scheduled_at || "");
-    if (why === "already_posted") outcome = "blocked";
-    else if (why === "qbo_receipt_requires_reconciliation" || why === "provider_reconciliation_required") outcome = "reconciling";
-    else if (why === "active_provider_operation" || why === "active_worker_lease") outcome = "processing";
-    else if (job?.state === "retry_scheduled" && jobDue > nowMs) { outcome = "retry_scheduled"; why = "retry_already_scheduled"; }
-    else if (cat.post_after && Date.parse(cat.post_after) > nowMs && job?.state !== "failed") { outcome = "already_scheduled"; why = "valid_future_schedule"; }
-    else if (!why) {
-      const manual = durableManualAuthority(cat);
-      const automatic = automaticById.get(String(cat.transaction_id));
-      const automaticSafe = automatic?.category === "safe_new_post" || automatic?.category === "already_scheduled";
-      if (!manual && !automaticSafe) {
-        outcome = "returned_to_review";
-        why = automatic?.reason || "automatic_posting_safety_not_established";
-      } else {
-        outcome = policy.enabled ? "eligible_to_schedule" : "ready_auto_post_off";
-        why = manual ? "durable_manual_approval" : "current_automatic_safety_gates";
-      }
-    } else outcome = "blocked";
+    let outcome = "failed";
+    let why = "posting_eligibility_row_evaluation_failed";
+    try {
+      why = hardBlock({ ...context, nowMs });
+      const jobDue = Date.parse(job?.next_attempt_at || job?.scheduled_at || "");
+      if (why === "already_posted") outcome = "blocked";
+      else if (why === "qbo_receipt_requires_reconciliation" || why === "provider_reconciliation_required") outcome = "reconciling";
+      else if (why === "active_provider_operation" || why === "active_worker_lease") outcome = "processing";
+      else if (job?.state === "retry_scheduled" && jobDue > nowMs) { outcome = "retry_scheduled"; why = "retry_already_scheduled"; }
+      else if (cat.post_after && Date.parse(cat.post_after) > nowMs && job?.state !== "failed") { outcome = "already_scheduled"; why = "valid_future_schedule"; }
+      else if (!why) {
+        const manual = durableManualAuthority(cat);
+        const automatic = automaticById.get(String(cat.transaction_id));
+        const automaticSafe = automatic?.category === "safe_new_post" || automatic?.category === "already_scheduled";
+        if (!manual && !automaticSafe) {
+          outcome = "returned_to_review";
+          why = automatic?.reason || "automatic_posting_safety_not_established";
+        } else {
+          outcome = policy.enabled ? "eligible_to_schedule" : "ready_auto_post_off";
+          why = manual ? "durable_manual_approval" : "current_automatic_safety_gates";
+        }
+      } else outcome = "blocked";
+    } catch {
+      // A corrupt historical row is reportable, but must not abort the bounded preview.
+    }
     count(result, outcome);
     reason(result, why);
     result.rows.push({

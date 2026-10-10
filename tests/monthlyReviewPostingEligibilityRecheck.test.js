@@ -73,6 +73,42 @@ test("shared reconciliation is bounded, read-only in preview, and CAS guarded in
   assert.doesNotMatch(service, /getQBOClient|plaidClient|createPurchase|createDeposit|createCreditCardCredit/);
 });
 
+test("preview uses the deployed posting-intent schema and normalizes fatal schema failures", () => {
+  const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const intentSelect = service.match(/qbo_posted_transactions"\)\.select\("([^"]+)/)?.[1] || "";
+  assert.ok(intentSelect.includes("lease_expires_at"));
+  assert.ok(!intentSelect.includes("lease_owner"));
+  assert.match(route, /posting_eligibility_schema_unavailable/);
+  assert.match(route, /"42703"/);
+  assert.match(route, /request_id: requestId/);
+  assert.match(route, /x-bizzi-request-id/);
+  assert.doesNotMatch(route.slice(route.indexOf('posting-eligibility-preview'), route.indexOf('posting-eligibility-executions')), /error\?\.message/);
+});
+
+test("preview contract rejects a non-empty body with 400 semantics", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const previewRoute = route.slice(route.indexOf('posting-eligibility-preview'), route.indexOf('posting-eligibility-executions'));
+  assert.match(previewRoute, /Object\.keys\(req\.body\)\.length > 0/);
+  assert.match(previewRoute, /status\(400\)/);
+  assert.match(previewRoute, /invalid_posting_eligibility_preview_request/);
+});
+
+test("one malformed row becomes a sanitized failed preview outcome", () => {
+  const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
+  assert.match(service, /posting_eligibility_row_evaluation_failed/);
+  assert.match(service, /outcome = "failed"/);
+  assert.match(service, /counts: \{[^}]*failed: 0/);
+});
+
+test("preview error UI shows stable diagnostics and keeps confirmation gated", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  assert.match(page, /Code: \{state\.errorCode\}/);
+  assert.match(page, /Request: \{state\.requestId\}/);
+  assert.match(page, />Retry<\/button>/);
+  assert.match(page, /disabled=\{!preview \|\| state\.loading \|\| state\.executing/);
+});
+
 test("canonical safety evaluation protects provider evidence and special workflows", () => {
   const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
   for (const contract of [
