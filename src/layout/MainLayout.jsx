@@ -271,7 +271,7 @@ const MainLayoutCore = ({ children }) => {
 
         <AdminViewBanner />
         <AdminViewReadOnlyGuard />
-        <div style={{ position: "relative", zIndex: 1 }} className="flex flex-col min-h-screen">
+        <div style={{ position: "relative", zIndex: 1 }} className="flex h-full min-h-0 flex-col">
           {/* Header */}
           <header className="relative shrink-0 z-[30] pt-2 bg-transparent" data-bizzy-header>
             <div

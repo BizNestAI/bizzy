@@ -456,7 +456,7 @@ useEffect(() => {
               active={dataMode !== "live"}
               labelOn="Mock Mode"
               labelOff="Live Mode"
-              disabled={modeUpdating}
+              disabled={readOnly || modeUpdating}
               onChange={(value) => {
                 if (modeUpdating) return;
                 setModeUpdating(true);
@@ -489,7 +489,9 @@ useEffect(() => {
               softBorder={SOFT_BORDER}
             />
             <button
-              onClick={() => navigate('/setup?from=settings', { state: { fromSettings: true } })}
+              onClick={readOnly ? undefined : () => navigate('/setup?from=settings', { state: { fromSettings: true } })}
+              disabled={readOnly}
+              title={readOnly ? "Business setup changes are unavailable in read-only Admin View." : undefined}
               className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] transition"
               style={{
                 borderColor: SOFT_BORDER,
@@ -521,7 +523,7 @@ useEffect(() => {
                   <AccentButton onClick={handleSaveProfile} disabled={readOnly || savingProfile} className="focus-visible:outline-none">
                     {readOnly ? "Read Only" : savingProfile ? "Saving…" : "Save Changes"}
                   </AccentButton>
-                  <GhostButton onClick={handleResetPassword} className="focus-visible:outline-none">Send Reset Email</GhostButton>
+                  <GhostButton onClick={readOnly ? undefined : handleResetPassword} disabled={readOnly} className="focus-visible:outline-none">Send Reset Email</GhostButton>
                 </div>
                 <InlineMsg ok={profileSuccess} err={profileError} />
 
@@ -536,11 +538,11 @@ useEffect(() => {
                         Sign out of this device when you are finished.
                       </p>
                     </div>
-                    {!showLogoutConfirm ? (
+                    {!readOnly && !showLogoutConfirm ? (
                       <GhostButton onClick={beginLogout}>
                         Sign out
                       </GhostButton>
-                    ) : (
+                    ) : !readOnly ? (
                       <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
@@ -559,7 +561,7 @@ useEffect(() => {
                         Stay signed in
                       </GhostButton>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                   {showLogoutConfirm ? (
                     <p className="mt-3 text-xs" style={{ color: TEXT_MUTED }}>

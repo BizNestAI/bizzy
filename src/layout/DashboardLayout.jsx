@@ -479,10 +479,10 @@ const DashboardContent = ({ children }) => {
   };
 
   return (
-    <div className={`h-screen min-h-0 w-full font-sans ${textColor}`}>
+    <div className={`h-full min-h-0 w-full font-sans ${textColor}`}>
       {/* 3-col grid: [Nav space] [Center] [Insights or Handle] */}
       <div
-        className="h-screen min-h-0 grid pl-0"
+        className="h-full min-h-0 grid pl-0"
         style={{
           gridTemplateColumns: "1fr",
           columnGap: `${GRID_GAP}px`,
@@ -492,7 +492,7 @@ const DashboardContent = ({ children }) => {
         <section className="relative flex flex-col overflow-hidden bg-transparent">
           <div style={{ position: "relative", zIndex: 1, height: "100%" }} className="flex flex-col min-h-0">
             {/* Desktop Chat toggle lives in the chrome instead of the scrollable column */}
-            {!adminView.active && !isChatHome && !isMonthlyReviewAdmin &&
+            {!isChatHome && !isMonthlyReviewAdmin &&
               createPortal(
                 <ChatSwitchToggle
                   context="dashboard"

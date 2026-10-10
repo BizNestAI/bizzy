@@ -316,6 +316,7 @@ const PureSidebar = React.memo(function PureSidebar({
             }}
           >
             <button
+              data-admin-view-navigation
               onClick={(event) => {
                 if (disableNavigate) {
                   event.preventDefault();

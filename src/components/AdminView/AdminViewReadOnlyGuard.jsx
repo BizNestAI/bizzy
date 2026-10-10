@@ -8,6 +8,7 @@ const SAFE_LABEL_RE = /\b(return to monthly review|exit admin view|refresh|retry
 
 export function isAdminViewMutationControl(element) {
   if (!element) return false;
+  if (element.hasAttribute?.("data-admin-view-navigation")) return false;
   const tag = String(element.tagName || "").toLowerCase();
   if (!["button", "input"].includes(tag)) return false;
   const type = String(element.getAttribute("type") || (tag === "button" ? "button" : "")).toLowerCase();
@@ -27,7 +28,9 @@ export function isAdminViewMutationControl(element) {
 export default function AdminViewReadOnlyGuard() {
   const adminView = useAdminView();
   const location = useLocation();
-  const bookkeepingRoute = location.pathname.startsWith("/dashboard/accounting/bookkeeping");
+  const bookkeepingRoute =
+    location.pathname.startsWith("/dashboard/accounting/bookkeeping") ||
+    location.pathname.startsWith("/dashboard/leads-jobs/job-costing");
   const allowBookkeepingControls = adminView.bookkeepingAccess === true && bookkeepingRoute;
 
   useEffect(() => {

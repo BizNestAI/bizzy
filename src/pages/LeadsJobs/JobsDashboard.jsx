@@ -3058,6 +3058,7 @@ function JobAssignmentBoard({
   onImportJobs,
   onRefresh,
   readOnly = false,
+  allowTransactionAssignment = false,
 }) {
   const projectsCapabilityView = getProjectsCapabilityView(projectsCapability || {});
   const postedTransactions = transactions.filter((txn) => {
@@ -3071,7 +3072,7 @@ function JobAssignmentBoard({
       .filter((candidate) => String(candidate.candidate_status || candidate.status || "pending") === "pending")
       .map(normalizeCandidateView)
   ), [jobCandidates]);
-  const assignmentDisabled = readOnly || bucketMode !== "live";
+  const assignmentDisabled = (readOnly && !allowTransactionAssignment) || bucketMode !== "live";
   const visibleJobs = bucketMode === "completed" ? completedJobs : jobs;
   const suggestedTotal = Math.max(Number(jobCandidatesTotal || 0), pendingCandidates.length);
   const importJobsLabel = "Import Jobs";
@@ -3427,11 +3428,11 @@ function JobAssignmentBoard({
                     onDrop={onDropOnJob}
                     onViewAssigned={onViewAssigned}
                     onRetrySummary={onRetrySummary}
-                    onMarkComplete={assignmentDisabled ? null : onMarkComplete}
-                    onReopenJob={assignmentDisabled ? onReopenJob : null}
-                    onRevertCandidateJob={assignmentDisabled ? null : onRevertCandidateJob}
-                    onDeleteJob={assignmentDisabled ? null : onDeleteJob}
-                    completed={assignmentDisabled}
+                    onMarkComplete={readOnly || bucketMode !== "live" ? null : onMarkComplete}
+                    onReopenJob={readOnly ? null : onReopenJob}
+                    onRevertCandidateJob={readOnly ? null : onRevertCandidateJob}
+                    onDeleteJob={readOnly ? null : onDeleteJob}
+                    completed={bucketMode === "completed"}
                     markingComplete={String(markingCompleteJobId || "") === String(job.id)}
                     revertingCandidateJob={String(revertingCandidateJobId || "") === String(job.id)}
                     deletingJob={String(deletingJobId || "") === String(job.id)}
@@ -6311,7 +6312,7 @@ function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, l
   );
 }
 
-function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
+function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransactionAssignment = false }) {
   const location = useLocation();
   const initialLiveCache = usingDemo ? null : readJobCostingLiveCache(businessId, readOnly);
   const [transactions, setTransactions] = useState(() => initialLiveCache?.transactions || []);
@@ -7936,6 +7937,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             onImportJobs={readOnly ? null : () => setImportJobsOpen(true)}
             onRefresh={loadJobCosting}
             readOnly={readOnly}
+            allowTransactionAssignment={allowTransactionAssignment}
           />
         </div>
 
@@ -8357,6 +8359,7 @@ export default function JobsDashboard() {
   const { currentBusiness } = useBusiness?.() || {};
   const adminView = useAdminView();
   const readOnly = adminView.active && adminView.readOnly;
+  const allowTransactionAssignment = adminView.active && adminView.bookkeepingAccess === true;
   const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem("currentBusinessId") || "");
 
   const [openInvoices, setOpenInvoices] = useState([]);
@@ -8600,7 +8603,14 @@ export default function JobsDashboard() {
   }
 
   if (isJobCosting) {
-    return <JobCostingPage businessId={businessId} usingDemo={usingDemo} readOnly={readOnly} />;
+    return (
+      <JobCostingPage
+        businessId={businessId}
+        usingDemo={usingDemo}
+        readOnly={readOnly}
+        allowTransactionAssignment={allowTransactionAssignment}
+      />
+    );
   }
 
   return (

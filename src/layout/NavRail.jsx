@@ -189,6 +189,7 @@ export default function NavRail({
         >
           <button
             type="button"
+            data-admin-view-navigation
             onClick={() => navigate('/dashboard/settings')}
             onMouseEnter={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
             onFocus={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}

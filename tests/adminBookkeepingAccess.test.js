@@ -56,6 +56,8 @@ test("capability allowlist permits only explicit Books Review workflow mutations
     ["POST", "/api/bookkeeping/incoming-deposit-matches/txn-1/match-1/confirm"],
     ["POST", "/api/bookkeeping/transactions/txn-1/exclude"],
     ["POST", "/api/bookkeeping/processing/retry"],
+    ["POST", "/api/job-costing/assignment-impact-preview"],
+    ["POST", "/api/job-costing/assignments"],
   ];
   for (const [method, path] of permitted) assert.ok(matchAdminBookkeepingWrite(request(method, path)), `${method} ${path}`);
 

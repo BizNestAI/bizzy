@@ -68,11 +68,38 @@ test("Admin View chat is disabled before subscription or GPT requests while hist
 
 test("Admin View removes the fixed chat dock so Books Review pagination remains reachable", () => {
   const dashboardLayout = read("src/layout/DashboardLayout.jsx");
+  const mainLayout = read("src/layout/MainLayout.jsx");
 
   assert.match(dashboardLayout, /const adminView = useAdminView\(\)/);
   assert.match(dashboardLayout, /const showPortalBar =\s*!adminView\.active/);
   assert.match(dashboardLayout, /const showChat = !adminView\.active/);
   assert.match(dashboardLayout, /const spacerHeight = showPortalBar/);
+  assert.match(dashboardLayout, /className=\{`h-full min-h-0 w-full/);
+  assert.match(dashboardLayout, /className="h-full min-h-0 grid pl-0"/);
+  assert.match(dashboardLayout, /\{!isChatHome && !isMonthlyReviewAdmin &&/);
+  assert.match(mainLayout, /className="flex h-full min-h-0 flex-col"/);
+});
+
+test("bookkeeping-capable Admin View permits Job Costing drag assignments without enabling all job mutations", () => {
+  const jobs = read("src/pages/LeadsJobs/JobsDashboard.jsx");
+  const guard = read("src/components/AdminView/AdminViewReadOnlyGuard.jsx");
+
+  assert.match(jobs, /allowTransactionAssignment = adminView\.active && adminView\.bookkeepingAccess === true/);
+  assert.match(jobs, /\(readOnly && !allowTransactionAssignment\) \|\| bucketMode !== "live"/);
+  assert.match(jobs, /onMarkComplete=\{readOnly \|\| bucketMode !== "live" \? null : onMarkComplete\}/);
+  assert.match(guard, /startsWith\("\/dashboard\/leads-jobs\/job-costing"\)/);
+});
+
+test("Admin View can navigate to Settings while Settings mutations remain read-only", () => {
+  const guard = read("src/components/AdminView/AdminViewReadOnlyGuard.jsx");
+  const sidebar = read("src/components/UserAdmin/Sidebar.jsx");
+  const settings = read("src/pages/Settings/SettingsHome.jsx");
+
+  assert.match(guard, /hasAttribute\?\.\("data-admin-view-navigation"\)/);
+  assert.match(sidebar, /data-admin-view-navigation/);
+  assert.match(settings, /disabled=\{readOnly \|\| modeUpdating\}/);
+  assert.match(settings, /onClick=\{readOnly \? undefined : \(\) => navigate\('\/setup\?from=settings'/);
+  assert.match(settings, /onClick=\{readOnly \? undefined : handleResetPassword\} disabled=\{readOnly\}/);
 });
 
 test("Forecasts, Financials, Jobs, Tax, Docs, and Settings expose persisted reads but disable customer mutations", () => {

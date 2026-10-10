@@ -19,6 +19,8 @@ const WRITE_RULES = Object.freeze([
   ["POST", /^\/api\/bookkeeping\/vendor-rules\/from-transaction$/, "create_vendor_rule_from_approval"],
   ["POST", /^\/api\/bookkeeping\/clarifications\/submit$/, "complete_operator_request"],
   ["POST", /^\/api\/bookkeeping\/processing\/retry$/, "retry_bookkeeping_processing"],
+  ["POST", /^\/api\/job-costing\/assignment-impact-preview$/, "preview_job_transaction_assignment"],
+  ["POST", /^\/api\/job-costing\/assignments$/, "assign_transaction_to_job"],
 ]);
 
 export function adminBookkeepingRequestPath(req = {}) {
