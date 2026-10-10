@@ -1,4 +1,6 @@
 const MONTHLY_REVIEW_SOURCE = "monthly_review_posting_review";
+const MONTHLY_REVIEW_BULK_SOURCE = "monthly_review_bulk_posting_approval";
+const AUTHORIZED_MONTHLY_REVIEW_SOURCES = new Set([MONTHLY_REVIEW_SOURCE, MONTHLY_REVIEW_BULK_SOURCE]);
 
 const SOFT_REVIEW_REASONS = new Set([
   "probable_requires_review",
@@ -42,9 +44,14 @@ export function buildMonthlyReviewManualApproval({
   operationId,
   idempotencyKey = null,
   approvedAt = new Date().toISOString(),
+  source = MONTHLY_REVIEW_SOURCE,
+  previousCategorizationSource = null,
+  overrideReason = null,
+  previewId = null,
+  executionId = null,
 } = {}) {
   return {
-    source: MONTHLY_REVIEW_SOURCE,
+    source,
     authority: "admin_manual_approval",
     business_id: businessId || item.business_id || null,
     transaction_id: transactionId || item.transaction_id || null,
@@ -55,6 +62,10 @@ export function buildMonthlyReviewManualApproval({
     original_review_reason: originalManualReviewReason(item),
     operation_id: operationId || null,
     idempotency_key: idempotencyKey || null,
+    previous_categorization_source: previousCategorizationSource || item?.meta?.categorization_source || null,
+    override_reason: overrideReason || null,
+    preview_id: previewId || null,
+    execution_id: executionId || operationId || null,
   };
 }
 
@@ -62,7 +73,7 @@ export function hasAuthorizedMonthlyReviewApproval(item = {}) {
   const approval = item?.meta?.manual_approval;
   return Boolean(
     approval &&
-      approval.source === MONTHLY_REVIEW_SOURCE &&
+      AUTHORIZED_MONTHLY_REVIEW_SOURCES.has(approval.source) &&
       approval.authority === "admin_manual_approval" &&
       approval.business_id &&
       approval.transaction_id &&
@@ -101,3 +112,4 @@ export function decideManualPostingGate({ item = {}, reason, gate = "review_poli
 }
 
 export const MANUAL_POSTING_APPROVAL_SOURCE = MONTHLY_REVIEW_SOURCE;
+export const MONTHLY_REVIEW_BULK_APPROVAL_SOURCE = MONTHLY_REVIEW_BULK_SOURCE;

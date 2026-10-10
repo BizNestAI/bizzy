@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import { computePostAfterForAutoPost, getAutoPostPolicy, reEvaluateAutoPostBacklog } from "./autoPostControl.js";
 import { hasManualAccountAuthority } from "./postingDecisionAuthority.js";
 import { hasAuthorizedMonthlyReviewApproval } from "./manualPostingAuthority.js";
+import { buildMonthlyReviewManualApproval, MONTHLY_REVIEW_BULK_APPROVAL_SOURCE } from "./manualPostingAuthority.js";
+import { approveBookkeepingTransactions } from "./bookkeepingApprovalService.js";
+import { isBulkApprovablePostingReason } from "./postingEligibilityApprovalPolicy.js";
 import { hasFinalCategorizeAsNewResolution } from "./incomingDepositResolution.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 
@@ -38,6 +41,10 @@ function count(result, outcome) {
 
 function safeDescription(row = {}) {
   return String(row.merchant_name || row.counterparty_name || row.name || "Transaction").slice(0, 120);
+}
+
+function approvalSource(cat = {}) {
+  return cat.meta?.categorization_source || cat.meta?.accounting_decision_source || cat.decided_by || "existing_categorization";
 }
 
 function rowVersion({ cat, bank, job, intent }) {
@@ -104,7 +111,7 @@ function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMa
 async function rowsForScope({ db, businessId, month, accountScope = null, transactionIds = [], limit = MAX_ROWS }) {
   const [start, end] = monthBounds(month);
   let bankQuery = db.from("bank_transactions")
-    .select("id,business_id,plaid_item_id,plaid_env,plaid_account_id,date,amount,direction,pending,is_archived,name,merchant_name,counterparty_name,updated_at")
+    .select("id,business_id,plaid_item_id,plaid_env,plaid_account_id,date,amount,direction,pending,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,updated_at")
     .eq("business_id", businessId).eq("is_archived", false);
   const selectedIds = [...new Set((transactionIds || []).filter(Boolean).map(String))].slice(0, MAX_ROWS);
   if (selectedIds.length) bankQuery = bankQuery.in("id", selectedIds);
@@ -194,8 +201,10 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
         const automatic = automaticById.get(String(cat.transaction_id));
         const automaticSafe = automatic?.category === "safe_new_post" || automatic?.category === "already_scheduled";
         if (!manual && !automaticSafe) {
-          outcome = "returned_to_review";
           why = automatic?.reason || "automatic_posting_safety_not_established";
+          outcome = isBulkApprovablePostingReason(why) && cat.final_qbo_account_id
+            ? "categorized_requires_approval"
+            : "returned_to_review";
         } else {
           outcome = policy.enabled ? "eligible_to_schedule" : "ready_auto_post_off";
           why = manual ? "durable_manual_approval" : "current_automatic_safety_gates";
@@ -216,6 +225,9 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
       amount: bank.amount,
       account_name: context.sourceAccount?.name || `Account ${String(bank.plaid_account_id || "").slice(-4)}`,
       selected_gl_account: cat.final_qbo_account_name || context.qboAccount?.name || null,
+      selected_gl_account_id: cat.final_qbo_account_id || null,
+      approval_source: approvalSource(cat),
+      may_learn_vendor_rule: Boolean(bank.merchant_name || bank.counterparty_name || bank.merchant_entity_id),
       expected_post_after: outcome === "eligible_to_schedule" ? computePostAfterForAutoPost(true, 24, nowMs) : cat.post_after || null,
       categorization_updated_at: cat.updated_at || null,
       current_meta: cat.meta || {},
@@ -235,7 +247,7 @@ async function persistExecution(db, payload) {
   return { row: existing.data, created: false };
 }
 
-export async function executePostingEligibilityRecheck({ db, businessId, month, accountScope = null, transactionIds = [], previewVersion: expectedVersion, idempotencyKey, actorId, requestId = crypto.randomUUID(), graceHours = 24, nowMs = Date.now() } = {}) {
+export async function executePostingEligibilityRecheck({ db, businessId, month, accountScope = null, transactionIds = [], previewVersion: expectedVersion, idempotencyKey, actorId, requestId = crypto.randomUUID(), graceHours = 24, nowMs = Date.now(), scheduleAutomaticallyEligible = true, manualApprovals = [] } = {}) {
   if (!/^[0-9a-f-]{36}$/i.test(String(idempotencyKey || ""))) {
     const error = new Error("valid_idempotency_key_required"); error.status = 400; error.code = "valid_idempotency_key_required"; throw error;
   }
@@ -243,7 +255,7 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
   if (existing.error) throw existing.error;
   if (existing.data?.status !== "running") return { ...(existing.data.result || {}), idempotent: true, execution_id: existing.data.id };
   const preview = await previewPostingEligibilityRecheck({ db, businessId, month, accountScope, transactionIds, nowMs });
-  if (!expectedVersion || expectedVersion !== preview.preview_version) {
+  if (!expectedVersion) {
     const error = new Error("posting_eligibility_preview_stale"); error.status = 409; error.code = "posting_eligibility_preview_stale"; error.preview = preview; throw error;
   }
   const persisted = await persistExecution(db, {
@@ -259,10 +271,58 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
   }
   const result = { ok: true, request_id: requestId, execution_id: started.id, executed_at: new Date(nowMs).toISOString(), operator: actorId || null, examined: preview.examined, counts: {}, reason_counts: {}, rows: [] };
   const postAfter = computePostAfterForAutoPost(preview.auto_post_enabled, graceHours, nowMs);
+  const manualById = new Map((manualApprovals || []).map((approval) => [String(approval.transaction_id), approval]));
   for (const row of preview.rows) {
     let outcome = row.outcome;
     try {
-      if (outcome === "eligible_to_schedule" || outcome === "ready_auto_post_off") {
+      const manualRequest = manualById.get(String(row.transaction_id));
+      if (manualRequest) manualById.delete(String(row.transaction_id));
+      if (manualRequest) {
+        if (row.outcome !== "categorized_requires_approval" || !isBulkApprovablePostingReason(row.reason)) {
+          outcome = "hard_blocked";
+        } else if (manualRequest.row_version !== row.row_version) {
+          outcome = "conflicted";
+        } else {
+          const manualApproval = buildMonthlyReviewManualApproval({
+            item: { business_id: businessId, transaction_id: row.transaction_id, meta: row.current_meta },
+            businessId, transactionId: row.transaction_id, actorId,
+            selectedQboAccountId: row.selected_gl_account_id,
+            selectedQboAccountName: row.selected_gl_account,
+            operationId: started.id, idempotencyKey,
+            source: MONTHLY_REVIEW_BULK_APPROVAL_SOURCE,
+            previousCategorizationSource: row.approval_source,
+            overrideReason: row.reason,
+            previewId: expectedVersion,
+            executionId: started.id,
+          });
+          const approval = await approveBookkeepingTransactions({
+            businessId,
+            items: [{
+              txnId: row.transaction_id,
+              status: "approved",
+              resolution: "categorize_new",
+              newAccountId: row.selected_gl_account_id,
+              newAccountName: row.selected_gl_account,
+              learn_reusable_rule: manualRequest.learn_reusable_rule === true,
+              only_this_transaction: manualRequest.learn_reusable_rule !== true,
+              reason: "Approved current category from Monthly Review posting eligibility.",
+              idempotency_context: `posting-eligibility:${idempotencyKey}`,
+            }],
+            actorId,
+            actorType: "admin",
+            source: MONTHLY_REVIEW_BULK_APPROVAL_SOURCE,
+            requireNeedsReview: false,
+            extraMetaByTransactionId: { [row.transaction_id]: { manual_approval: manualApproval } },
+            db,
+          });
+          const vendorResult = approval.vendor_rule_results?.[0] || null;
+          outcome = preview.auto_post_enabled ? "manually_approved_scheduled" : "manually_approved_auto_post_off";
+          row.vendor_rule_learned = vendorResult?.ok === true && vendorResult?.skipped !== true;
+          row.vendor_rule_retry_queued = vendorResult?.queued === true;
+          if (row.vendor_rule_learned) result.counts.vendor_rules_learned = (result.counts.vendor_rules_learned || 0) + 1;
+          if (row.vendor_rule_retry_queued) result.counts.learning_retries_queued = (result.counts.learning_retries_queued || 0) + 1;
+        }
+      } else if ((outcome === "eligible_to_schedule" || outcome === "ready_auto_post_off") && scheduleAutomaticallyEligible === true && expectedVersion === preview.preview_version) {
         const { data, error } = await db.from("transaction_categorizations").update({
           post_after: preview.auto_post_enabled ? postAfter : null,
           post_error: null,
@@ -278,10 +338,8 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
         if (error) throw error;
         if (Array.isArray(data) && data.length === 0) outcome = "conflicted";
         else outcome = preview.auto_post_enabled ? "newly_scheduled" : "ready_auto_post_off";
-      } else if (outcome === "returned_to_review") {
-        const { data, error } = await db.from("transaction_categorizations").update({ status: "needs_review", post_after: null, post_error: null, meta: { ...(row.current_meta || {}), safe_to_auto_post: false, post_block_reason: row.reason, posting_eligibility_rechecked_at: new Date(nowMs).toISOString() }, updated_at: new Date(nowMs).toISOString() }).eq("business_id", businessId).eq("transaction_id", row.transaction_id).eq("updated_at", row.categorization_updated_at).in("status", HANDLED).select("transaction_id");
-        if (error) throw error;
-        if (Array.isArray(data) && data.length === 0) outcome = "conflicted";
+      } else if ((outcome === "eligible_to_schedule" || outcome === "ready_auto_post_off") && scheduleAutomaticallyEligible === true) {
+        outcome = "conflicted";
       }
     } catch {
       outcome = "failed";
@@ -291,7 +349,12 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
     const safeRow = { ...row };
     delete safeRow.current_meta;
     delete safeRow.categorization_updated_at;
-    result.rows.push({ ...safeRow, outcome, expected_post_after: outcome === "newly_scheduled" ? postAfter : null });
+    result.rows.push({ ...safeRow, outcome, expected_post_after: ["newly_scheduled", "manually_approved_scheduled"].includes(outcome) ? postAfter : null });
+  }
+  for (const transactionId of manualById.keys()) {
+    result.counts.hard_blocked = (result.counts.hard_blocked || 0) + 1;
+    result.reason_counts.transaction_outside_authoritative_scope = (result.reason_counts.transaction_outside_authoritative_scope || 0) + 1;
+    result.rows.push({ transaction_id: transactionId, outcome: "hard_blocked", reason: "transaction_outside_authoritative_scope", expected_post_after: null });
   }
   const failed = Number(result.counts.failed || 0) + Number(result.counts.conflicted || 0);
   const status = failed ? "partial" : "completed";

@@ -1323,7 +1323,7 @@ export default function MonthlyReviewConsole() {
     }
   }, [detail?.run?.id]);
 
-  const executePostingEligibilityRecheckAction = useCallback(async () => {
+  const executePostingEligibilityRecheckAction = useCallback(async ({ scheduleAutomaticallyEligible = true, manualApprovals = [] } = {}) => {
     const preview = postingEligibilityRecheck.preview;
     if (!detail?.run?.id || !preview?.preview_version || postingEligibilityRecheck.executing) return;
     const idempotencyKey = globalThis.crypto?.randomUUID?.();
@@ -1333,7 +1333,7 @@ export default function MonthlyReviewConsole() {
       const result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/bookkeeping/posting-eligibility-executions`, {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
-        body: { preview_version: preview.preview_version, idempotency_key: idempotencyKey },
+        body: { preview_version: preview.preview_version, idempotency_key: idempotencyKey, schedule_automatically_eligible: scheduleAutomaticallyEligible, manual_approvals: manualApprovals },
       });
       setPostingEligibilityRecheck((current) => ({ ...current, executing: false, result, error: "" }));
       await refreshAfterFeedAction();
@@ -2760,6 +2760,10 @@ export default function MonthlyReviewConsole() {
 }
 
 function PostingEligibilityRecheckModal({ state, businessName, month, onClose, onConfirm, onRetry }) {
+  const [selectedManualIds, setSelectedManualIds] = useState(() => new Set());
+  const [scheduleAutomatic, setScheduleAutomatic] = useState(true);
+  const [approveSelected, setApproveSelected] = useState(false);
+  const [learnReusableRule, setLearnReusableRule] = useState(true);
   useEffect(() => {
     if (!state?.open) return undefined;
     const previous = document.body.style.overflow;
@@ -2773,11 +2777,23 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [onClose, state?.executing, state?.open]);
-  if (!state?.open) return null;
-  const preview = state.preview;
-  const result = state.result;
+  const preview = state?.preview;
+  const result = state?.result;
   const counts = result?.counts || preview?.counts || {};
   const rows = result?.rows || preview?.rows || [];
+  const manualCandidates = rows.filter((row) => row.outcome === "categorized_requires_approval");
+  const hardBlocked = rows.filter((row) => ["blocked", "returned_to_review", "hard_blocked"].includes(row.outcome));
+  useEffect(() => {
+    setSelectedManualIds(new Set());
+    setScheduleAutomatic(true);
+    setApproveSelected(false);
+    setLearnReusableRule(true);
+  }, [preview?.preview_version]);
+  if (!state?.open) return null;
+  const submitRecheck = () => onConfirm?.({
+    scheduleAutomaticallyEligible: scheduleAutomatic,
+    manualApprovals: approveSelected ? manualCandidates.filter((row) => selectedManualIds.has(row.transaction_id)).map((row) => ({ transaction_id: row.transaction_id, row_version: row.row_version, learn_reusable_rule: learnReusableRule })) : [],
+  });
   const labels = {
     eligible_to_schedule: "Eligible to schedule",
     newly_scheduled: "Newly scheduled",
@@ -2788,9 +2804,15 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
     reconciling: "Receipt confirmed / reconciling",
     blocked: "Blocked",
     returned_to_review: "Returned to Needs Review",
+    categorized_requires_approval: "Categorized · approval required",
+    manually_approved_scheduled: "Manually approved and scheduled",
+    manually_approved_auto_post_off: "Approved · Auto-post off",
+    hard_blocked: "Hard-blocked",
     skipped: "Skipped",
     failed: "Failed",
     conflicted: "Changed concurrently",
+    vendor_rules_learned: "Vendor rules learned",
+    learning_retries_queued: "Learning retries queued",
   };
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 p-3 sm:p-4" role="presentation">
@@ -2812,6 +2834,11 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
               <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-xs leading-5 text-white/65">
                 No QuickBooks or Plaid call occurs. Nothing posts immediately, selected GL accounts are unchanged, and final or posted transactions remain untouched. {preview.auto_post_enabled ? "Eligible rows receive a new future grace-period timestamp." : "Eligible rows become Ready and remain unscheduled while Auto-post is off."}
               </div>
+              {manualCandidates.length ? <section className="mt-4 rounded-xl border border-amber-300/20 bg-amber-950/15 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-semibold text-amber-100">{manualCandidates.length} categorized transactions require approval</h3><p className="mt-1 text-xs text-white/55">Review each current GL category before approving it for normal scheduling.</p></div><div className="flex gap-2"><button type="button" onClick={() => setSelectedManualIds(new Set(manualCandidates.map((row) => row.transaction_id)))} className="text-xs text-sky-200">Select all</button><button type="button" onClick={() => setSelectedManualIds(new Set())} className="text-xs text-white/60">Clear all</button></div></div>
+                <div className="mt-3 overflow-x-auto"><table className="min-w-[900px] w-full text-left text-xs text-white/65"><thead><tr className="border-b border-white/10"><th className="py-2">Select</th><th>Date</th><th>Payee</th><th>Amount</th><th>Account</th><th>Current GL</th><th>Approval source</th><th>Soft blocker</th><th>Vendor rule</th></tr></thead><tbody>{manualCandidates.map((row) => <tr key={row.transaction_id} className="border-b border-white/5"><td className="py-2"><input type="checkbox" checked={selectedManualIds.has(row.transaction_id)} onChange={(event) => setSelectedManualIds((current) => { const next = new Set(current); if (event.target.checked) next.add(row.transaction_id); else next.delete(row.transaction_id); return next; })} aria-label={`Select ${row.description}`} /></td><td>{row.date}</td><td className="text-white/85">{row.description}</td><td>{row.amount}</td><td>{row.account_name}</td><td>{row.selected_gl_account}</td><td>{String(row.approval_source || "existing categorization").replaceAll("_", " ")}</td><td>{String(row.reason).replaceAll("_", " ")}</td><td>{row.may_learn_vendor_rule ? "Eligible" : "No reusable identity"}</td></tr>)}</tbody></table></div>
+              </section> : null}
+              {hardBlocked.length ? <section className="mt-4 rounded-xl border border-rose-300/15 bg-rose-950/10 p-4"><h3 className="font-semibold text-rose-100">{hardBlocked.length} Hard-blocked · operator approval cannot override</h3><div className="mt-2 space-y-2 text-xs text-white/65">{hardBlocked.map((row) => <div key={row.transaction_id} className="flex flex-wrap justify-between gap-2 border-t border-white/5 pt-2"><span>{row.date} · {row.description} · {row.selected_gl_account || "No GL account"}</span><span>{String(row.reason || "safety_review_required").replaceAll("_", " ")} · {postingEligibilityRemediation(row.reason)}</span></div>)}</div></section> : null}
               <div className="mt-4 space-y-2">
                 {Object.entries(result?.reason_counts || preview.reason_counts || {}).map(([reason, total]) => (
                   <details key={reason} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
@@ -2833,9 +2860,10 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
           ) : null}
         </div>
         <footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-white/10 px-5 py-4">
+          {!result && preview ? <div className="mr-auto space-y-2 text-xs text-white/75"><label className="flex items-center gap-2"><input type="checkbox" checked={scheduleAutomatic} onChange={(event) => setScheduleAutomatic(event.target.checked)} /> Schedule automatically eligible transactions</label><label className="flex items-center gap-2"><input type="checkbox" checked={approveSelected} onChange={(event) => setApproveSelected(event.target.checked)} disabled={selectedManualIds.size === 0} /> Approve selected categories and schedule them</label>{approveSelected ? <label className="ml-5 flex items-center gap-2"><input type="checkbox" checked={learnReusableRule} onChange={(event) => setLearnReusableRule(event.target.checked)} /> Apply this category to future transactions from this merchant</label> : null}<p className="max-w-2xl text-white/50">This action records your approval of the selected GL categories. It does not immediately contact QuickBooks. Eligible transactions will receive the normal posting grace period.</p></div> : null}
           <button type="button" onClick={onClose} disabled={state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">Close</button>
           {state.error && !preview ? <button type="button" onClick={onRetry} disabled={state.loading || state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">Retry</button> : null}
-          {!result ? <button type="button" onClick={onConfirm} disabled={!preview || state.loading || state.executing || Number(preview?.examined || 0) === 0} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/30 bg-sky-950/40 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{state.executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Confirm recheck</button> : null}
+          {!result ? <button type="button" onClick={submitRecheck} disabled={!preview || state.loading || state.executing || Number(preview?.examined || 0) === 0 || (!scheduleAutomatic && !(approveSelected && selectedManualIds.size > 0))} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/30 bg-sky-950/40 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{state.executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Confirm recheck</button> : null}
         </footer>
       </div>
     </div>
@@ -2844,6 +2872,23 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
 
 function SummaryMetric({ label, value }) {
   return <div className="rounded-xl border border-white/10 bg-white/[0.035] p-3"><div className="text-[11px] uppercase tracking-wide text-white/45">{label}</div><div className="mt-1 text-lg font-semibold text-white">{value}</div></div>;
+}
+
+function postingEligibilityRemediation(reason) {
+  const actions = {
+    pending_transaction_not_postable: "Wait for the transaction to settle.",
+    possible_qbo_duplicate: "Resolve the duplicate review.",
+    matched_or_paired_transaction: "Review the existing match or pair.",
+    incoming_deposit_resolution_required: "Complete the incoming-deposit workflow.",
+    missing_final_qbo_account: "Select a valid GL account.",
+    invalid_or_inactive_qbo_account: "Choose an active business QBO account.",
+    missing_source_qbo_mapping: "Map the bank or card account.",
+    provider_reconciliation_required: "Reconcile the provider outcome.",
+    active_provider_operation: "Wait for the active operation to finish.",
+    active_worker_lease: "Wait for the active posting lease to finish.",
+    already_posted: "No action; the transaction is final.",
+  };
+  return actions[reason] || "Resolve the safety blocker in Books Review.";
 }
 
 function BookkeepingFeedMirrorPanels({

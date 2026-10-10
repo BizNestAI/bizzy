@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { derivePostingEligibilityRecheckAvailability } from "../src/pages/Admin/postingEligibilityRecheckAvailability.js";
+import { isBulkApprovablePostingReason } from "../src/services/bookkeeping/postingEligibilityApprovalPolicy.js";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -127,6 +128,52 @@ test("canonical safety evaluation protects provider evidence and special workflo
   assert.match(service, /hasAuthorizedMonthlyReviewApproval/);
   assert.match(service, /current_automatic_safety_gates/);
   assert.match(service, /durable_manual_approval/);
+});
+
+test("soft evidence blockers are centrally allowlisted while hard gates stay outside bulk approval", () => {
+  const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
+  const policy = read("src/services/bookkeeping/postingEligibilityApprovalPolicy.js");
+  assert.match(policy, /BULK_APPROVABLE_POSTING_REASON_CODES/);
+  for (const reason of ["no_active_authoritative_business_rule", "weak_memo_evidence", "missing_safe_to_auto_post_attestation"]) assert.match(policy, new RegExp(reason));
+  for (const hard of ["pending_transaction_not_postable", "possible_qbo_duplicate", "matched_or_paired_transaction", "active_provider_operation", "active_worker_lease", "already_posted"]) {
+    assert.match(service, new RegExp(hard));
+  }
+  assert.match(service, /outcome = isBulkApprovablePostingReason\(why\)/);
+});
+
+test("63 automatic rows and 17 missing-rule rows produce distinct preview groups", () => {
+  const fixture = [
+    ...Array.from({ length: 63 }, (_, index) => ({ id: `automatic-${index}`, reason: "current_automatic_safety_gates" })),
+    ...Array.from({ length: 17 }, (_, index) => ({ id: `manual-${index}`, reason: "no_active_authoritative_business_rule" })),
+  ];
+  assert.equal(fixture.filter((row) => !isBulkApprovablePostingReason(row.reason)).length, 63);
+  assert.equal(fixture.filter((row) => isBulkApprovablePostingReason(row.reason)).length, 17);
+  assert.equal(isBulkApprovablePostingReason("possible_qbo_duplicate"), false);
+});
+
+test("bulk approval persists durable authority and delegates to canonical approval and vendor learning", () => {
+  const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
+  const authority = read("src/services/bookkeeping/manualPostingAuthority.js");
+  assert.match(service, /approveBookkeepingTransactions/);
+  assert.match(service, /MONTHLY_REVIEW_BULK_APPROVAL_SOURCE/);
+  assert.match(authority, /monthly_review_bulk_posting_approval/);
+  for (const field of ["approved_by", "approved_at", "selected_qbo_account_id", "previous_categorization_source", "override_reason", "preview_id", "execution_id"]) assert.match(authority, new RegExp(field));
+  assert.match(service, /manualRequest\.row_version !== row\.row_version/);
+  assert.match(service, /only_this_transaction: manualRequest\.learn_reusable_rule !== true/);
+  assert.match(service, /idempotency_context: `posting-eligibility:/);
+  assert.match(service, /transaction_outside_authoritative_scope/);
+});
+
+test("modal has explicit automatic and manual choices with selection controls", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  assert.match(page, /categorized transactions require approval/);
+  assert.match(page, /Select all/);
+  assert.match(page, /Clear all/);
+  assert.match(page, /Schedule automatically eligible transactions/);
+  assert.match(page, /Approve selected categories and schedule them/);
+  assert.match(page, /Apply this category to future transactions from this merchant/);
+  assert.match(page, /It does not immediately contact QuickBooks/);
+  assert.match(page, /Hard-blocked · operator approval cannot override/);
 });
 
 test("scheduling uses a new grace timestamp and auto-post off remains Ready", () => {

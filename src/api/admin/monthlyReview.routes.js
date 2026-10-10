@@ -2270,6 +2270,10 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-executions", async (re
     const run = await fetchRun(runId);
     const handled = await fetchPostingEligibilityHandledScope(run);
     const idempotencyKey = req.get("Idempotency-Key") || req.body?.idempotency_key || null;
+    const manualApprovals = Array.isArray(req.body?.manual_approvals) ? req.body.manual_approvals : [];
+    if (manualApprovals.length > MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX || manualApprovals.some((item) => !item?.transaction_id || !item?.row_version || typeof item?.learn_reusable_rule !== "boolean")) {
+      return res.status(400).json({ ok: false, error: "invalid_posting_eligibility_manual_approvals", message: "Selected category approvals are malformed.", request_id: requestId });
+    }
     const result = await executePostingEligibilityRecheck({
       db: supabase,
       businessId: run.business_id,
@@ -2281,6 +2285,8 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-executions", async (re
       actorId: req.user?.id || req.user?.sub || null,
       requestId,
       graceHours: Number(process.env.BOOKS_POST_GRACE_HOURS || 24),
+      scheduleAutomaticallyEligible: req.body?.schedule_automatically_eligible === true,
+      manualApprovals,
     });
     await logAuditEvent({
       run,

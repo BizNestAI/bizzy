@@ -70,6 +70,7 @@ function approvalIdempotencyKey({ businessId, approval, actorType }) {
     duplicate_risk_acknowledged: approval.duplicate_risk_acknowledged === true,
     reviewed_duplicate_candidate_id: approval.reviewed_duplicate_candidate_id || null,
     decision_version: approval.decision_version || null,
+    idempotency_context: approval.idempotency_context || null,
   })).digest("hex");
 }
 
@@ -593,6 +594,7 @@ export async function approveBookkeepingTransactions({
           item?.duplicate_risk_acknowledged === true
             ? Number(postingMeta?.incoming_deposit_resolution?.decision_version || 2)
             : null,
+        idempotency_context: item?.idempotency_context || null,
       };
     })
     .filter(Boolean);
