@@ -22,6 +22,7 @@ import { useInsightsUnread } from "../insights/InsightsUnreadContext";
 import { useMemo } from "react";
 import { ACCENT_HEX } from "../config/accent";
 import { shouldSuppressTabRestoreMotion } from "../utils/tabVisibilityMotionGuard";
+import { useAdminView } from "../context/AdminViewContext.jsx";
 
 const MotionDiv = motion.div;
 
@@ -109,6 +110,7 @@ function normalizeUnreadMap(raw = {}, bizId = "") {
 
 const DashboardContent = ({ children }) => {
   const location = useLocation();
+  const adminView = useAdminView();
   const { currentBusiness } = useBusiness?.() || {};
   const { quickPromptMode } = useOnboardingStatus();
   const { setExtras } = useRightExtras();   // <-- publish descriptor from here
@@ -221,11 +223,11 @@ const DashboardContent = ({ children }) => {
   const inMeetBizzi = location.pathname.includes("companion");
   const inDocs      = location.pathname.includes("bizzi-docs");
   const showPortalBar =
-    !isMonthlyReviewAdmin && !isCanvasOpen && !isChatHome && (onDashboard || inSettings || inMeetBizzi || inDocs);
+    !adminView.active && !isMonthlyReviewAdmin && !isCanvasOpen && !isChatHome && (onDashboard || inSettings || inMeetBizzi || inDocs);
 
   const disableRails = inSettings || inMeetBizzi || inDocs || isMonthlyReviewAdmin;
   const showRail = onDashboard && !disableRails && !isChatHome;
-  const showChat = !isMonthlyReviewAdmin && (onDashboard || isChatHome || inSettings || inMeetBizzi || inDocs);
+  const showChat = !adminView.active && !isMonthlyReviewAdmin && (onDashboard || isChatHome || inSettings || inMeetBizzi || inDocs);
   const suppressRouteMotion = shouldSuppressTabRestoreMotion();
 
   const railStateRef = useRef(railOpen);
@@ -461,7 +463,9 @@ const DashboardContent = ({ children }) => {
   const stableBarHeight = isCanvasOpen
     ? Math.max(DEFAULT_BAR_HEIGHT, lastBarHeightRef.current || barHeight)
     : Math.max(DEFAULT_BAR_HEIGHT, barHeight);
-  const spacerHeight = Math.max(MIN_SPACER_PX, stableBarHeight + BAR_GAP_PX + SPACER_EXTRA);
+  const spacerHeight = showPortalBar
+    ? Math.max(MIN_SPACER_PX, stableBarHeight + BAR_GAP_PX + SPACER_EXTRA)
+    : 32;
   // Position the back-to-chat toggle:
   // Anchor Chat toggle just above the hero card; keep it in view regardless of rail state
   // Keep chat toggle anchored consistently; ignore rail width changes
@@ -488,7 +492,7 @@ const DashboardContent = ({ children }) => {
         <section className="relative flex flex-col overflow-hidden bg-transparent">
           <div style={{ position: "relative", zIndex: 1, height: "100%" }} className="flex flex-col min-h-0">
             {/* Desktop Chat toggle lives in the chrome instead of the scrollable column */}
-            {!isChatHome && !isMonthlyReviewAdmin &&
+            {!adminView.active && !isChatHome && !isMonthlyReviewAdmin &&
               createPortal(
                 <ChatSwitchToggle
                   context="dashboard"

@@ -61,10 +61,18 @@ test("Admin View chat is disabled before subscription or GPT requests while hist
   assert.match(canvasBar, /if \(chatReadOnly\) return/);
   assert.match(canvasBar, /!\s*chatReadOnly \? \(/);
   assert.match(canvasBar, /disabled=\{chatReadOnly\}/);
-
   assert.match(chatsRoutes, /req\.tenantContext\?\.businessId/);
   assert.match(chatsRoutes, /if \(req\.tenantContext\?\.mode === 'admin_view'\)/);
   assert.match(chatThreads, /if \(readOnly\) return/);
+});
+
+test("Admin View removes the fixed chat dock so Books Review pagination remains reachable", () => {
+  const dashboardLayout = read("src/layout/DashboardLayout.jsx");
+
+  assert.match(dashboardLayout, /const adminView = useAdminView\(\)/);
+  assert.match(dashboardLayout, /const showPortalBar =\s*!adminView\.active/);
+  assert.match(dashboardLayout, /const showChat = !adminView\.active/);
+  assert.match(dashboardLayout, /const spacerHeight = showPortalBar/);
 });
 
 test("Forecasts, Financials, Jobs, Tax, Docs, and Settings expose persisted reads but disable customer mutations", () => {
