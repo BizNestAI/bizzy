@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { derivePostingEligibilityRecheckAvailability } from "../src/pages/Admin/postingEligibilityRecheckAvailability.js";
 import { isBulkApprovablePostingReason } from "../src/services/bookkeeping/postingEligibilityApprovalPolicy.js";
+import { resolveCompletedPostingEligibilityExecution } from "../src/services/bookkeeping/postingEligibilityExecutionState.js";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -162,6 +163,21 @@ test("bulk approval persists durable authority and delegates to canonical approv
   assert.match(service, /only_this_transaction: manualRequest\.learn_reusable_rule !== true/);
   assert.match(service, /idempotency_context: `posting-eligibility:/);
   assert.match(service, /transaction_outside_authoritative_scope/);
+  assert.match(service, /resolveCompletedPostingEligibilityExecution\(existing\.data\)/);
+  assert.doesNotMatch(service, /if \(existing\.data\?\.status !== "running"\)/);
+  assert.match(service, /conflicting_vendor_rule_categories/);
+  assert.match(service, /ruleLearningLeaders/);
+});
+
+test("first submission does not dereference a missing prior execution and retries reuse completion", () => {
+  assert.equal(resolveCompletedPostingEligibilityExecution(null), null);
+  assert.equal(resolveCompletedPostingEligibilityExecution({ id: "running-id", status: "running" }), null);
+  assert.deepEqual(resolveCompletedPostingEligibilityExecution({ id: "done-id", status: "completed", result: { ok: true, counts: { newly_scheduled: 80 } } }), {
+    ok: true,
+    counts: { newly_scheduled: 80 },
+    idempotent: true,
+    execution_id: "done-id",
+  });
 });
 
 test("modal has explicit automatic and manual choices with selection controls", () => {

@@ -5,6 +5,7 @@ import { hasAuthorizedMonthlyReviewApproval } from "./manualPostingAuthority.js"
 import { buildMonthlyReviewManualApproval, MONTHLY_REVIEW_BULK_APPROVAL_SOURCE } from "./manualPostingAuthority.js";
 import { approveBookkeepingTransactions } from "./bookkeepingApprovalService.js";
 import { isBulkApprovablePostingReason } from "./postingEligibilityApprovalPolicy.js";
+import { resolveCompletedPostingEligibilityExecution } from "./postingEligibilityExecutionState.js";
 import { hasFinalCategorizeAsNewResolution } from "./incomingDepositResolution.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 
@@ -45,6 +46,12 @@ function safeDescription(row = {}) {
 
 function approvalSource(cat = {}) {
   return cat.meta?.categorization_source || cat.meta?.accounting_decision_source || cat.decided_by || "existing_categorization";
+}
+
+function vendorRuleIdentity(bank = {}) {
+  if (bank.merchant_entity_id) return `entity:${String(bank.merchant_entity_id)}`;
+  const merchant = String(bank.merchant_name || bank.counterparty_name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return merchant.length >= 3 ? `merchant:${merchant}` : null;
 }
 
 function rowVersion({ cat, bank, job, intent }) {
@@ -228,6 +235,7 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
       selected_gl_account_id: cat.final_qbo_account_id || null,
       approval_source: approvalSource(cat),
       may_learn_vendor_rule: Boolean(bank.merchant_name || bank.counterparty_name || bank.merchant_entity_id),
+      vendor_rule_identity: vendorRuleIdentity(bank),
       expected_post_after: outcome === "eligible_to_schedule" ? computePostAfterForAutoPost(true, 24, nowMs) : cat.post_after || null,
       categorization_updated_at: cat.updated_at || null,
       current_meta: cat.meta || {},
@@ -253,7 +261,8 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
   }
   const existing = await db.from("bookkeeping_posting_eligibility_rechecks").select("*").eq("business_id", businessId).eq("idempotency_key", idempotencyKey).maybeSingle();
   if (existing.error) throw existing.error;
-  if (existing.data?.status !== "running") return { ...(existing.data.result || {}), idempotent: true, execution_id: existing.data.id };
+  const completedExecution = resolveCompletedPostingEligibilityExecution(existing.data);
+  if (completedExecution) return completedExecution;
   const preview = await previewPostingEligibilityRecheck({ db, businessId, month, accountScope, transactionIds, nowMs });
   if (!expectedVersion) {
     const error = new Error("posting_eligibility_preview_stale"); error.status = 409; error.code = "posting_eligibility_preview_stale"; error.preview = preview; throw error;
@@ -272,13 +281,32 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
   const result = { ok: true, request_id: requestId, execution_id: started.id, executed_at: new Date(nowMs).toISOString(), operator: actorId || null, examined: preview.examined, counts: {}, reason_counts: {}, rows: [] };
   const postAfter = computePostAfterForAutoPost(preview.auto_post_enabled, graceHours, nowMs);
   const manualById = new Map((manualApprovals || []).map((approval) => [String(approval.transaction_id), approval]));
+  const selectedRows = preview.rows.filter((row) => manualById.has(String(row.transaction_id)));
+  const learningGroups = new Map();
+  for (const row of selectedRows) {
+    const request = manualById.get(String(row.transaction_id));
+    if (request?.learn_reusable_rule !== true || !row.vendor_rule_identity) continue;
+    const group = learningGroups.get(row.vendor_rule_identity) || [];
+    group.push(row);
+    learningGroups.set(row.vendor_rule_identity, group);
+  }
+  const conflictingRuleRows = new Set();
+  const ruleLearningLeaders = new Set();
+  for (const group of learningGroups.values()) {
+    const accounts = new Set(group.map((row) => String(row.selected_gl_account_id || "")));
+    if (accounts.size > 1) group.forEach((row) => conflictingRuleRows.add(String(row.transaction_id)));
+    else if (group[0]) ruleLearningLeaders.add(String(group[0].transaction_id));
+  }
   for (const row of preview.rows) {
     let outcome = row.outcome;
     try {
       const manualRequest = manualById.get(String(row.transaction_id));
       if (manualRequest) manualById.delete(String(row.transaction_id));
       if (manualRequest) {
-        if (row.outcome !== "categorized_requires_approval" || !isBulkApprovablePostingReason(row.reason)) {
+        if (conflictingRuleRows.has(String(row.transaction_id))) {
+          outcome = "failed";
+          row.reason = "conflicting_vendor_rule_categories";
+        } else if (row.outcome !== "categorized_requires_approval" || !isBulkApprovablePostingReason(row.reason)) {
           outcome = "hard_blocked";
         } else if (manualRequest.row_version !== row.row_version) {
           outcome = "conflicted";
@@ -303,8 +331,8 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
               resolution: "categorize_new",
               newAccountId: row.selected_gl_account_id,
               newAccountName: row.selected_gl_account,
-              learn_reusable_rule: manualRequest.learn_reusable_rule === true,
-              only_this_transaction: manualRequest.learn_reusable_rule !== true,
+              learn_reusable_rule: manualRequest.learn_reusable_rule === true && ruleLearningLeaders.has(String(row.transaction_id)),
+              only_this_transaction: manualRequest.learn_reusable_rule !== true || !ruleLearningLeaders.has(String(row.transaction_id)),
               reason: "Approved current category from Monthly Review posting eligibility.",
               idempotency_context: `posting-eligibility:${idempotencyKey}`,
             }],
@@ -341,8 +369,9 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
       } else if ((outcome === "eligible_to_schedule" || outcome === "ready_auto_post_off") && scheduleAutomaticallyEligible === true) {
         outcome = "conflicted";
       }
-    } catch {
+    } catch (error) {
       outcome = "failed";
+      row.reason = error?.error || error?.code || "posting_eligibility_row_execution_failed";
     }
     result.counts[outcome] = (result.counts[outcome] || 0) + 1;
     result.reason_counts[row.reason] = (result.reason_counts[row.reason] || 0) + 1;

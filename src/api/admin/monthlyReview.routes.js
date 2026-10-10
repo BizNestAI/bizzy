@@ -2300,6 +2300,11 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-executions", async (re
     res.set("x-bizzi-request-id", requestId);
     return res.json(result);
   } catch (error) {
+    console.error("[monthly-review] posting eligibility execution failed", {
+      request_id: requestId,
+      error_code: error?.code || "posting_eligibility_execution_failed",
+      error_class: error?.name || "Error",
+    });
     if (error?.code === "posting_eligibility_preview_stale") {
       const rows = (error.preview?.rows || []).map((row) => {
         const safe = { ...row };
