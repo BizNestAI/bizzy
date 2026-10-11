@@ -454,6 +454,7 @@ function getManualPostSummary(txn = {}) {
       ? txn.split_transaction.lines
       : [];
   const isSplit = txn.meta?.taxonomy_type === "split_transaction" && splitLines.length >= 2;
+  const preflight = txn.provider_free_preflight || null;
   return {
     date: txn.date || "Unknown",
     description: txn.description || txn.vendor || txn.payee || "Unknown",
@@ -463,6 +464,7 @@ function getManualPostSummary(txn = {}) {
       : txn.glAccountName || txn.final_qbo_account_name || txn.suggestedAccountName || txn.currentAccount || "Unselected",
     isSplit,
     splitLines,
+    preview: preflight?.preview_ready === true ? preflight : null,
   };
 }
 
@@ -2660,7 +2662,6 @@ function BookkeepingCleanup() {
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     const txn = transactions.find((t) => t.id === txnId);
     if (!txn) return;
-    if (adminView.bookkeepingAccess && !txn.post_error && !txn.postError) return;
     manualPostTriggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
     setManualPostResult(null);
     if (permittedAction === "confirm_type") {
@@ -3992,6 +3993,20 @@ function BookkeepingCleanup() {
                         </span>
                         <span className="text-slate-500">Resolution</span>
                         <span className="min-w-0 truncate text-slate-200">{manualPostSummary.account}</span>
+                        {manualPostSummary.preview ? (
+                          <>
+                            <span className="text-slate-500">QBO entity</span>
+                            <span className="text-slate-200">{manualPostSummary.preview.qbo_entity_type}</span>
+                            <span className="text-slate-500">Source account</span>
+                            <span className="min-w-0 truncate text-slate-200">
+                              {manualPostSummary.preview.source_qbo_account_name || manualPostSummary.preview.source_qbo_account_id}
+                            </span>
+                            <span className="text-slate-500">Line GL</span>
+                            <span className="min-w-0 truncate text-slate-200">
+                              {manualPostSummary.preview.destination_qbo_account_name || manualPostSummary.preview.destination_qbo_account_id}
+                            </span>
+                          </>
+                        ) : null}
                       </div>
                       {manualPostSummary.isSplit ? (
                         <div className="mt-3 border-t border-white/8 pt-3">

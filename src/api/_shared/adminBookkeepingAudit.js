@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { supabase as defaultSupabase } from "../../services/supabaseAdmin.js";
+import { buildCanonicalPostingPreview } from "../../services/bookkeeping/canonicalPostingCompiler.js";
 
 function transactionIds(req) {
   const body = req.body || {};
@@ -104,23 +105,22 @@ export function validateAdminBookkeepingMutation({ db = defaultSupabase } = {}) 
   return async function adminBookkeepingValidationMiddleware(req, res, next) {
     const access = req.adminBookkeepingAccess;
     if (!access) return next();
-    if (access.action !== "retry_failed_qbo_posting") return next();
-
-    const { data, error } = await db
-      .from("transaction_categorizations")
-      .select("status,post_error,qbo_txn_id,posted_at")
-      .eq("business_id", access.businessId)
-      .eq("transaction_id", access.transactionId)
-      .maybeSingle();
-    if (error) return res.status(503).json({ ok: false, error: "admin_bookkeeping_validation_unavailable" });
-    const failedAndMutable = data
-      && Boolean(data.post_error)
-      && !data.qbo_txn_id
-      && !data.posted_at
-      && !["posted", "matched", "excluded", "finalized"].includes(String(data.status || ""));
-    if (!failedAndMutable) {
-      return res.status(409).json({ ok: false, error: "admin_bookkeeping_retry_not_eligible" });
+    if (access.action !== "request_qbo_posting") return next();
+    try {
+      req.adminBookkeepingPreview = await buildCanonicalPostingPreview({
+        db,
+        businessId: access.businessId,
+        transactionId: access.transactionId,
+      });
+      return next();
+    } catch (error) {
+      return res.status(error?.status || 409).json({
+        ok: false,
+        error: error?.code || "admin_bookkeeping_preview_not_ready",
+        message: error?.message || "Resolve the bookkeeping blocker before posting.",
+        action_code: "review_hard_blocker",
+        preview_ready: false,
+      });
     }
-    return next();
   };
 }

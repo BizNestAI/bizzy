@@ -107,21 +107,30 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   if (preflight?.preview_ready === false && ["map_account", "select_valid_account"].includes(preflight.next_action)) {
     return result(lifecycle, "fix_issue", { enabled: true, actionCode: preflight.next_action, failure: preflight.blocker_code, reason: preflight.blocker_reason });
   }
+  if (preflight?.preview_ready === false) {
+    const preflightAction = preflight.next_action === "resolve_issue" ? "resolve_issue" : "inspect_blocker";
+    return result(lifecycle, "fix_issue", {
+      enabled: true,
+      actionCode: preflightAction,
+      failure: preflight.blocker_code || "posting_preview_unavailable",
+      reason: preflight.blocker_reason || "Provider-free posting preview is not ready.",
+    });
+  }
   if (hasSavedInflowType && (supersededDepositMatchFailure || code === "missing_posting_schedule" || lifecycle.key === "handled_not_posted")) {
     return result(lifecycle, "fix_issue", { enabled: true, actionCode: "recheck_schedule", reason: "The saved resolution is complete; recheck eligibility and assign the posting schedule." });
   }
   const manual = hasManualAccountAuthority(row);
-  if (weakOnly && !manual) return result(lifecycle, "review", { reason: "Weak evidence requires durable manual approval before posting.", failure: code });
+  if (weakOnly && !manual) return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: "Weak evidence requires durable manual approval before posting.", failure: code });
   if (!weakOnly && (lifecycle.key === "failed" || String(row.status || "").toLowerCase() === "failed") && failure?.retryable === true) {
     return result(lifecycle, "retry_posting", { enabled: true, failure: code || "retryable_posting_failure", actionCode: "retry_posting" });
   }
   if (!weakOnly && (lifecycle.key === "failed" || String(row.status || "").toLowerCase() === "failed" || lifecycle.key === "configuration_blocked" || lifecycle.key.startsWith("blocked_"))) {
-    return result(lifecycle, "fix_issue", { reason: lifecycle.detail, failure: code || "terminal_posting_blocker" });
+    return result(lifecycle, "fix_issue", { enabled: true, actionCode: "inspect_blocker", reason: lifecycle.detail, failure: code || "terminal_posting_blocker" });
   }
 
   const handled = ["approved", "auto_approved", "handled", "failed"].includes(status);
-  if (handled && !row.final_qbo_account_id) return result(lifecycle, "review", { reason: "Confirm a valid QuickBooks account before posting." });
-  if (handled && meta.safe_to_auto_post === false && !manual) return result(lifecycle, "review", { reason: "A reviewer must confirm the account before posting." });
+  if (handled && !row.final_qbo_account_id) return result(lifecycle, "review", { enabled: true, actionCode: "select_valid_account", reason: "Confirm a valid QuickBooks account before posting." });
+  if (handled && meta.safe_to_auto_post === false && !manual) return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: "A reviewer must confirm the account before posting." });
   if (handled && (manual || meta.safe_to_auto_post === true)) {
     if (preflight && preflight.preview_ready !== true) {
       return result(lifecycle, "review", {
@@ -135,6 +144,42 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
     return result(lifecycle, "post_now", { enabled: true, confirmation: Number.isFinite(scheduledAt) && scheduledAt > nowMs });
   }
   return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: lifecycle.detail || "Review this transaction before posting." });
+}
+
+const NEXT_ACTION_CODES = Object.freeze({
+  resolve_issue: "confirm_type",
+  confirm_statement_credit: "confirm_type",
+  complete_refund_details: "complete_resolution",
+  select_valid_account: "select_gl_account",
+  map_account: "repair_account_mapping",
+  retry_duplicate_check: "retry_duplicate_check",
+  review_possible_match: "acknowledge_duplicate_risk",
+  recheck_schedule: "recheck_posting_eligibility",
+  post_now: "preview_and_post",
+  retry_posting: "preview_and_post",
+  posting: "wait_for_active_posting",
+  reconcile_qbo: "reconcile_provider_outcome",
+  finalize_posting: "reconcile_provider_outcome",
+  inspect_blocker: "review_hard_blocker",
+  waiting_for_settlement: "wait_for_active_posting",
+  completed: null,
+});
+
+export function toBookkeepingNextAction(action = {}) {
+  const actionCode = Object.prototype.hasOwnProperty.call(NEXT_ACTION_CODES, action.action_code)
+    ? NEXT_ACTION_CODES[action.action_code]
+    : "review_hard_blocker";
+  return {
+    ...action,
+    legacy_action_code: action.action_code || null,
+    action_code: actionCode,
+    enabled: actionCode ? action.enabled === true : false,
+    explanation: action.reason || action.disabled_reason || null,
+    missing_prerequisites: action.safe_failure_classification ? [action.safe_failure_classification] : [],
+    preview_compilable: action.posting_eligible === true || action.action_code === "post_now",
+    posting_allowed: action.posting_eligible === true,
+    blocker_code: action.safe_failure_classification || null,
+  };
 }
 
 export default deriveBookkeepingPostingAction;

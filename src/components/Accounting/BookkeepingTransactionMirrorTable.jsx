@@ -5,7 +5,7 @@ import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, 
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
-import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason, isUnconfirmedAutomaticPeerToPeerWorkflow } from "../../services/bookkeeping/protectedWorkflow.js";
+import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import { deriveMonthlyReviewActionState } from "../../services/bookkeeping/monthlyReviewActionState.js";
@@ -180,17 +180,12 @@ function BookkeepingTransactionMirrorRow({
   const isHandledFeed = feedStatus === "handled";
   const isActionBusy = (action) => Boolean(busyActions?.[`${action}:${row.id}`]) || busyAction === `${action}:${row.id}`;
   const manualPostBusy = isActionBusy("post") || isActionBusy("retry");
-  const postingAction = row.posting_action || deriveBookkeepingPostingAction(row);
+  const canonicalNextAction = row.bookkeeping_next_action || null;
+  const postingAction = canonicalNextAction
+    ? { ...canonicalNextAction, action_code: canonicalNextAction.legacy_action_code }
+    : row.posting_action || deriveBookkeepingPostingAction(row);
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
-  const hasFinalAccount = Boolean(row.final_qbo_account_id || row.finalQboAccountId);
-  const suggestionSource = row.suggestion_source || row.meta?.suggestion_source || null;
-  const blockerReason = row.auto_handle_decision?.reason || row.meta?.auto_handle_decision?.reason || row.post_block_reason || row.meta?.post_block_reason || null;
-  const accountStateLabel = selectedChanged
-    ? "User-selected · Not saved"
-    : hasFinalAccount
-      ? "Final approved account"
-      : `Suggested account${suggestionSource ? ` · ${String(suggestionSource).replaceAll("_", " ")}` : ""}`;
   const protectedReason = getProtectedWorkflowReason(row);
   const incomingMatch = incomingDepositMatchState(row);
   const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(row, displayResolution);
@@ -206,11 +201,9 @@ function BookkeepingTransactionMirrorRow({
     : persistedQboStatus;
   const qboLabel = qboStatus.label;
   const isPosted = qboStatus.key === "posted";
-  const isFailed = qboStatus.key === "failed";
   const ccOrientation = deriveCreditCardPaymentOrientation(row);
   const isPending = row.pending === true;
   const genericActionsBlocked = Boolean(protectedReason) && !ccWorkflowStatus;
-  const automaticP2pOverrideAvailable = isUnconfirmedAutomaticPeerToPeerWorkflow(row);
   const bankAccountLabel = formatBankAccountLabel(row);
   const bankAccountMeta = formatBankAccountMeta(row);
   const glAccountLabel = ccWorkflowStatus

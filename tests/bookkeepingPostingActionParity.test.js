@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveBookkeepingPostingAction } from "../src/services/bookkeeping/bookkeepingPostingActionEligibility.js";
+import { deriveBookkeepingPostingAction, toBookkeepingNextAction } from "../src/services/bookkeeping/bookkeepingPostingActionEligibility.js";
 
 const now = Date.parse("2026-10-04T12:00:00.000Z");
 const manual = (extra = {}) => ({
@@ -143,4 +143,19 @@ test("missing schedule blocker from authoritative lifecycle remains actionable",
   }), { nowMs: now });
   assert.equal(action.action_code, "recheck_schedule");
   assert.equal(action.label, "Recheck & schedule");
+});
+
+test("the shared next-action contract exposes one canonical UI action", () => {
+  const row = manual({ provider_free_preflight: {
+    preview_ready: true,
+    qbo_entity_type: "CreditCardCharge",
+    source_qbo_account_id: "card-1",
+    destination_qbo_account_id: "22",
+  } });
+  const contract = toBookkeepingNextAction(deriveBookkeepingPostingAction(row, { nowMs: now }));
+  assert.equal(contract.action_code, "preview_and_post");
+  assert.equal(contract.enabled, true);
+  assert.equal(contract.preview_compilable, true);
+  assert.equal(contract.posting_allowed, true);
+  assert.deepEqual(contract.missing_prerequisites, []);
 });

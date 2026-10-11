@@ -15,7 +15,7 @@ const WRITE_RULES = Object.freeze([
   ["POST", /^\/api\/bookkeeping\/incoming-deposit-matches\/([^/]+)\/([^/]+)\/reject$/, "reject_existing_qbo_match"],
   ["POST", /^\/api\/bookkeeping\/incoming-deposit-matches\/([^/]+)\/([^/]+)\/undo$/, "undo_existing_qbo_match"],
   ["POST", /^\/api\/bookkeeping\/transactions\/([^/]+)\/exclude$/, "exclude_transaction"],
-  ["POST", /^\/api\/bookkeeping\/posting\/transactions\/([^/]+)$/, "retry_failed_qbo_posting"],
+  ["POST", /^\/api\/bookkeeping\/posting\/transactions\/([^/]+)$/, "request_qbo_posting"],
   ["POST", /^\/api\/bookkeeping\/vendor-rules\/from-transaction$/, "create_vendor_rule_from_approval"],
   ["POST", /^\/api\/bookkeeping\/clarifications\/submit$/, "complete_operator_request"],
   ["POST", /^\/api\/bookkeeping\/processing\/retry$/, "retry_bookkeeping_processing"],
@@ -50,6 +50,6 @@ export const ADMIN_BOOKKEEPING_WRITE_INVENTORY = Object.freeze({
   prohibited: [
     "chat_and_ai", "billing_and_subscriptions", "memberships_and_roles", "quickbooks_connections",
     "plaid_connections", "tokens_and_secrets", "destructive_business_operations", "security_settings",
-    "cross_business_switching", "manual_posting", "auto_post_configuration", "qbo_account_creation",
+    "cross_business_switching", "unscoped_manual_posting", "auto_post_configuration", "qbo_account_creation",
   ],
 });

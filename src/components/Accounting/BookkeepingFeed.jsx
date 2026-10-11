@@ -1519,7 +1519,9 @@ export default function BookkeepingFeed({
               effectiveResolution !== "match_credit_card_payment";
             const coaEditingProtected = effectiveResolution === "match_credit_card_payment" || Boolean(ccWorkflowStatus || ccTransferLabel);
             const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly && (!selectableIds || selectableIds.has(txn.id));
-            const postingAction = txn.posting_action || deriveBookkeepingPostingAction(txn);
+            const postingAction = txn.bookkeeping_next_action
+              ? { ...txn.bookkeeping_next_action, action_code: txn.bookkeeping_next_action.legacy_action_code }
+              : txn.posting_action || deriveBookkeepingPostingAction(txn);
             const postingActionEnabled = postingAction.posting_eligible === true || postingAction.permitted_action === "confirm_type";
             const postingActionLabel = postingAction.permitted_action === "retry_posting"
               ? "Retry posting"

@@ -56,6 +56,7 @@ test("capability allowlist permits only explicit Books Review workflow mutations
     ["POST", "/api/bookkeeping/incoming-deposit-matches/txn-1/match-1/confirm"],
     ["POST", "/api/bookkeeping/transactions/txn-1/exclude"],
     ["POST", "/api/bookkeeping/processing/retry"],
+    ["POST", "/api/bookkeeping/posting/transactions/txn-1"],
     ["POST", "/api/job-costing/assignment-impact-preview"],
     ["POST", "/api/job-costing/assignments"],
   ];
@@ -118,6 +119,7 @@ test("migration and UI expose bounded bookkeeping access while retaining the rea
   const route = read("src/api/admin/customerView.routes.js");
   const layout = read("src/layout/MainLayout.jsx");
   const chat = read("src/context/BizzyChatContext.jsx");
+  const audit = read("src/api/_shared/adminBookkeepingAudit.js");
   assert.match(migration, /capabilities text\[\] not null default/);
   assert.match(migration, /capabilities <@ array\['admin_bookkeeping_write'\]/);
   assert.match(migration, /internal_admin_bookkeeping_audit_events/);
@@ -128,6 +130,9 @@ test("migration and UI expose bounded bookkeeping access while retaining the rea
   assert.match(layout, /Admin View · Bookkeeping Access/);
   assert.match(layout, /Chat, billing, integrations, memberships, and security settings remain unavailable/);
   assert.match(chat, /admin_view_read_only/);
+  assert.match(audit, /buildCanonicalPostingPreview/);
+  assert.match(audit, /request_qbo_posting/);
+  assert.match(audit, /internal_admin_bookkeeping_audit_events/);
 });
 
 test("capability checks do not trust scalar or unknown client-like values", () => {
