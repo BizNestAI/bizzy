@@ -197,6 +197,7 @@ export async function persistCreditCardInflowResolution({
     matched_qbo_transaction_id: matchedQboTransactionId || null,
     decision_source: actor ? "user" : "automated",
     operator_source: source,
+    business_id: businessId,
     decided_by: actor,
     decided_at: now,
     request_id: requestId || null,
@@ -228,5 +229,11 @@ export async function persistCreditCardInflowResolution({
     .select("transaction_id,status,final_qbo_account_id,final_qbo_account_name,meta")
     .maybeSingle();
   if (error) throw error;
-  return { ...result, row: data || { ...result.row, ...payload }, credit_card_inflow_resolution: resolutionAudit };
+  if (!data?.transaction_id) {
+    const persistenceError = new Error("credit_card_inflow_resolution_not_persisted");
+    persistenceError.code = "credit_card_inflow_resolution_not_persisted";
+    persistenceError.status = 409;
+    throw persistenceError;
+  }
+  return { ...result, row: data, credit_card_inflow_resolution: resolutionAudit };
 }

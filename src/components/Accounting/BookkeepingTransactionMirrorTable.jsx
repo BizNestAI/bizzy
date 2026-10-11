@@ -10,6 +10,7 @@ import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import { deriveMonthlyReviewActionState } from "../../services/bookkeeping/monthlyReviewActionState.js";
 import { deriveBookkeepingPostingAction } from "../../services/bookkeeping/bookkeepingPostingActionEligibility.js";
+import { resolveProtectedCreditCardInflowDecision } from "../../services/bookkeeping/incomingDepositResolution.js";
 import {
   deriveCreditCardPaymentOrientation,
   deriveResolutionAwareCreditCardPaymentStatus,
@@ -165,6 +166,7 @@ function BookkeepingTransactionMirrorRow({
   const [duplicateRiskAcknowledged, setDuplicateRiskAcknowledged] = React.useState(false);
   const [forcePostConfirmationOpen, setForcePostConfirmationOpen] = React.useState(false);
   const displayResolution = recoverOrphanedSplitResolution(resolution, Boolean(loanSplitDraft));
+  const protectedInflowDecision = resolveProtectedCreditCardInflowDecision(row);
 
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
@@ -478,6 +480,13 @@ function BookkeepingTransactionMirrorRow({
           ) : null}
         </div>
         <div className="mt-1 flex flex-wrap gap-1.5">
+          {protectedInflowDecision.final ? (
+            <div className="basis-full rounded-lg border border-emerald-300/15 bg-emerald-300/[0.06] px-2 py-1.5 text-[11px] text-emerald-50/85">
+              <span className="font-semibold">Type: {protectedInflowDecision.resolution_type === "merchant_refund" ? "Merchant refund" : "Cash back / statement credit"}</span>
+              <span className="mx-1.5 text-white/25">·</span>
+              <span>QBO disposition: Categorize as new</span>
+            </div>
+          ) : null}
           {displayResolution === "split_transaction" ? (
             <span className="text-[11px] text-amber-100/80">Split review</span>
           ) : null}

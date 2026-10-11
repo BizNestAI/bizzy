@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   hasFinalCategorizeAsNewResolution,
   isPreProviderIncomingDepositMatchFailure,
+  resolveProtectedCreditCardInflowDecision,
 } from "../src/services/bookkeeping/incomingDepositResolution.js";
 import { deriveQboPostingLifecycle } from "../src/services/bookkeeping/qboPostingLifecycle.js";
 import { getProtectedWorkflowReason } from "../src/services/bookkeeping/protectedWorkflow.js";
@@ -31,6 +32,23 @@ const finalDecision = {
     incoming_deposit_match_status: "needs_confirmation",
   },
 };
+
+test("canonical protected-inflow resolver preserves merchant refund and create-new as separate dimensions", () => {
+  const row = {
+    final_qbo_account_id: "entertainment-1",
+    meta: { credit_card_inflow_resolution: {
+      resolution_type: "merchant_refund",
+      qbo_disposition: "create_new",
+      destination_qbo_account_id: "entertainment-1",
+      decided_at: "2026-10-10T12:00:00.000Z",
+    } },
+  };
+  const resolved = resolveProtectedCreditCardInflowDecision(row);
+  assert.equal(resolved.resolution_type, "merchant_refund");
+  assert.equal(resolved.qbo_disposition, "create_new");
+  assert.equal(resolved.final, true);
+  assert.equal(hasFinalCategorizeAsNewResolution(row), true);
+});
 
 test("an unsaved dropdown choice is not durable incoming-deposit authority", () => {
   assert.equal(hasFinalCategorizeAsNewResolution({

@@ -1,4 +1,5 @@
 import { deriveCreditCardPaymentStatus, isConfirmedCreditCardPaymentPairStatus } from "./creditCardPaymentStatus.js";
+import { resolveProtectedCreditCardInflowDecision } from "./incomingDepositResolution.js";
 export const PRIMARY_BOOKKEEPING_BUCKETS = Object.freeze([
   "needs_review", "handled", "posted", "matched", "pending", "excluded",
 ]);
@@ -74,7 +75,7 @@ export function classifyBookkeepingLifecycle(row = {}) {
   const creditCardPayment = deriveCreditCardPaymentStatus(row);
   const accountType = String(row.account_type || row.account_subtype || meta.account_type || "").replace(/[\s_-]+/g, "").toLowerCase();
   const signedAmount = Number(row.signed_amount ?? row.amount ?? 0);
-  const unresolvedCreditCardInflow = accountType.includes("creditcard") && signedAmount > 0 && !meta.credit_card_inflow_resolution?.resolution_type;
+  const unresolvedCreditCardInflow = accountType.includes("creditcard") && signedAmount > 0 && !resolveProtectedCreditCardInflowDecision(row).final;
 
   let bucket;
   if (excluded) bucket = "excluded";

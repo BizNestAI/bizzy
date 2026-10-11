@@ -21,6 +21,7 @@ test("durable credit-card inflow decisions record canonical disposition and audi
   assert.match(service, /operator_source: source/);
   assert.match(service, /request_id: requestId \|\| null/);
   assert.match(service, /prior_credit_card_inflow_resolution/);
+  assert.match(service, /credit_card_inflow_resolution_not_persisted/);
 });
 
 test("unresolved credit-card inflow fails closed before any QuickBooks write", () => {

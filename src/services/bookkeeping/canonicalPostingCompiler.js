@@ -1,5 +1,6 @@
 import { getAccountingDateFromBankTransaction } from "./accountingDatePolicy.js";
 import { isCreditCardPaymentWorkflow, normalizeQboAccountType } from "./creditCardPaymentStatus.js";
+import { resolveProtectedCreditCardInflowDecision } from "./incomingDepositResolution.js";
 import crypto from "crypto";
 
 function postingError(code, message, status = 409) {
@@ -66,7 +67,7 @@ export function resolveCanonicalPostingRail({ bankTransaction = {}, categorizati
   const amount = Number(bankTransaction.amount || 0);
   const outflow = direction === "OUTFLOW" || (direction !== "INFLOW" && amount < 0);
   const inflow = direction === "INFLOW" || (direction !== "OUTFLOW" && amount > 0);
-  const creditResolution = categorization?.meta?.credit_card_inflow_resolution?.resolution_type || null;
+  const creditResolution = resolveProtectedCreditCardInflowDecision(categorization).resolution_type;
   if (!Number.isFinite(amount) || amount === 0 || (!outflow && !inflow)) {
     throw postingError("invalid_amount", "The bank transaction amount is invalid.");
   }

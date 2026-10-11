@@ -1,7 +1,34 @@
 export const INCOMING_DEPOSIT_CATEGORIZE_AS_NEW = "categorize_as_new";
+export const PROTECTED_CREDIT_CARD_INFLOW_CREATE_NEW_TYPES = Object.freeze(["merchant_refund", "credit_card_statement_credit"]);
+
+export function resolveProtectedCreditCardInflowDecision(row = {}) {
+  const meta = row.meta || row;
+  const decision = meta.credit_card_inflow_resolution;
+  const resolutionType = String(decision?.resolution_type || "").toLowerCase();
+  const qboDisposition = String(decision?.qbo_disposition || (
+    PROTECTED_CREDIT_CARD_INFLOW_CREATE_NEW_TYPES.includes(resolutionType) ? "create_new" : ""
+  )).toLowerCase();
+  const selectedQboAccountId = decision?.destination_qbo_account_id || row.final_qbo_account_id || meta.final_qbo_account_id || null;
+  const decidedAt = decision?.decided_at || null;
+  const isCreateNewResolution = PROTECTED_CREDIT_CARD_INFLOW_CREATE_NEW_TYPES.includes(resolutionType) && qboDisposition === "create_new";
+  // Decisions written before decision_version/decided_at were introduced remain
+  // authoritative under the legacy contract, which persisted the protected type.
+  const isLegacyCompatible = isCreateNewResolution && !decision?.decision_version;
+  return {
+    decision: decision || null,
+    resolution_type: resolutionType || null,
+    qbo_disposition: qboDisposition || null,
+    selected_qbo_account_id: selectedQboAccountId ? String(selectedQboAccountId) : null,
+    decided_at: decidedAt,
+    final: Boolean(isCreateNewResolution && (
+      (selectedQboAccountId && decidedAt) || isLegacyCompatible
+    )),
+  };
+}
 
 export function hasFinalCategorizeAsNewResolution(row = {}) {
   const meta = row.meta || row;
+  if (resolveProtectedCreditCardInflowDecision(row).final) return true;
   const decision = meta.incoming_deposit_resolution;
   const mode = String(
     meta.resolution_mode ||
