@@ -552,6 +552,29 @@ function BookkeepingTransactionMirrorRow({
               {isActionBusy("recover") ? "Rechecking…" : "Recheck & schedule"}
             </button>
           ) : null}
+          {isHandledFeed && postingAction.action_code === "complete_refund_details" ? (
+            <button
+              type="button"
+              onClick={() => onPost?.(row, "confirm_type")}
+              disabled={manualPostBusy}
+              className="rounded-lg border border-amber-300/20 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-300/[0.16] disabled:opacity-45"
+            >{manualPostBusy ? "Opening…" : "Complete refund details"}</button>
+          ) : null}
+          {isHandledFeed && protectedInflowDecision.final ? (
+            <button
+              type="button"
+              onClick={() => onPost?.(row, "confirm_type")}
+              disabled={manualPostBusy}
+              className="rounded-lg border border-white/12 bg-white/[0.05] px-2 py-1 text-[11px] font-semibold text-white/65 hover:bg-white/[0.1] disabled:opacity-45"
+            >Edit resolution</button>
+          ) : null}
+          {isHandledFeed && postingAction.action_code === "inspect_blocker" ? (
+            <details className="basis-full rounded-lg border border-amber-300/15 bg-amber-300/[0.06] px-2 py-1.5 text-[11px] text-amber-100">
+              <summary className="cursor-pointer font-semibold">Review blocker</summary>
+              <div className="mt-1">{postingAction.reason || postingAction.disabled_reason || "The posting state needs operator review."}</div>
+              {row.meta?.request_id || row.posting_job?.qbo_request_id ? <div className="mt-1 text-white/45">Request {row.meta?.request_id || row.posting_job?.qbo_request_id}</div> : null}
+            </details>
+          ) : null}
         </div>
         {isHandledFeed && postingAction.disabled_reason ? (
           <details className="mt-1 text-[10px] text-white/45">

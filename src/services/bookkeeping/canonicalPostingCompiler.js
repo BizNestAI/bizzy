@@ -83,6 +83,54 @@ export function resolveCanonicalPostingRail({ bankTransaction = {}, categorizati
   throw postingError("credit_card_inflow_requires_review", "Confirm whether this credit is a merchant refund, card payment, statement credit, or other activity before posting.");
 }
 
+export function deriveProviderFreePostingPreflight(row = {}, { lineAccount = null } = {}) {
+  try {
+    if (row.pending === true || row.meta?.pending === true) throw postingError("pending_transaction_not_postable", "Waiting for settlement.");
+    if (row.qbo_txn_id || row.posted_at) throw postingError("transaction_already_posted", "This transaction is already posted.");
+    if (!row.source_qbo_account_id) throw postingError("missing_qbo_account_mapping", "Map the connected account to QuickBooks.");
+    if (!row.final_qbo_account_id) throw postingError("missing_final_qbo_account", "Choose a valid QuickBooks GL account.");
+    if (!lineAccount?.qbo_account_id) throw postingError("final_qbo_account_not_found", "The selected QuickBooks GL account is unavailable.");
+    if (lineAccount.active === false) throw postingError("final_qbo_account_inactive", "The selected QuickBooks GL account is inactive.");
+    const entityType = resolveCanonicalPostingRail({
+      bankTransaction: row,
+      categorization: row,
+      mapping: { qbo_account_type: row.source_qbo_account_type },
+    });
+    return {
+      preview_ready: true,
+      qbo_entity_type: entityType,
+      source_qbo_account_id: String(row.source_qbo_account_id),
+      destination_qbo_account_id: String(row.final_qbo_account_id),
+      normalized_amount: Math.abs(Number(row.signed_amount ?? row.amount)),
+      posting_intent_status: row.posting_job?.state || "not_created",
+      blocker_code: null,
+      next_action: "post_now",
+      provider_call_required: false,
+    };
+  } catch (error) {
+    const blockerCode = error?.code || "posting_preview_unknown_failure";
+    const nextAction = ["missing_qbo_account_mapping", "invalid_qbo_account_mapping_type"].includes(blockerCode)
+      ? "map_account"
+      : ["missing_final_qbo_account", "final_qbo_account_not_found", "final_qbo_account_inactive", "final_qbo_account_inconsistent"].includes(blockerCode)
+        ? "select_valid_account"
+        : blockerCode === "credit_card_inflow_requires_review"
+          ? "resolve_issue"
+          : "inspect_blocker";
+    return {
+      preview_ready: false,
+      qbo_entity_type: null,
+      source_qbo_account_id: row.source_qbo_account_id || null,
+      destination_qbo_account_id: row.final_qbo_account_id || null,
+      normalized_amount: Number.isFinite(Math.abs(Number(row.signed_amount ?? row.amount))) ? Math.abs(Number(row.signed_amount ?? row.amount)) : null,
+      posting_intent_status: row.posting_job?.state || "not_created",
+      blocker_code: blockerCode,
+      blocker_reason: error?.message || "Posting preview could not be compiled.",
+      next_action: nextAction,
+      provider_call_required: false,
+    };
+  }
+}
+
 export async function buildCanonicalPostingPreview({ db, businessId, transactionId } = {}) {
   if (!db || !businessId || !transactionId) throw postingError("missing_posting_scope", "Posting preview context is incomplete.", 400);
   const [{ data: item, error: itemError }, { data: bankTransaction, error: bankError }] = await Promise.all([

@@ -68,6 +68,7 @@ router.put("/transactions/:transactionId/credit-card-inflow-resolution", require
       selectedQboAccountId: req.body?.selected_qbo_account_id,
       selectedQboAccountName: req.body?.selected_qbo_account_name,
       linkedOriginalTransactionId: req.body?.linked_original_transaction_id,
+      standaloneRefundAcknowledged: req.body?.standalone_refund_acknowledged === true,
       matchedAccountId: req.body?.matched_account_id,
       matchedQboTransactionId: req.body?.matched_qbo_transaction_id,
       actor: req.user?.id || req.auth?.userId || null,

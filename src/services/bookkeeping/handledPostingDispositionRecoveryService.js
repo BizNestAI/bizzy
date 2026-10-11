@@ -1,6 +1,6 @@
 import { computePostAfterForAutoPost, getAutoPostPolicy, reEvaluateAutoPostBacklog } from "./autoPostControl.js";
 import { hasManualAccountAuthority, isProtectedPostingWorkflow } from "./postingDecisionAuthority.js";
-import { hasFinalCategorizeAsNewResolution, isPreProviderIncomingDepositMatchFailure } from "./incomingDepositResolution.js";
+import { hasFinalCategorizeAsNewResolution, isPreProviderIncomingDepositMatchFailure, resolveProtectedCreditCardInflowDecision } from "./incomingDepositResolution.js";
 
 const HANDLED_STATUSES = ["approved", "auto_approved", "failed", "handled"];
 
@@ -16,10 +16,12 @@ function hasActiveOperation(row = {}) {
 
 function independentBlockReason(row = {}, bank = {}) {
   const meta = row.meta || {};
+  const protectedDecision = resolveProtectedCreditCardInflowDecision(row).decision;
   if (bank.pending === true || meta.pending === true) return "pending_transaction_not_postable";
   if (row.qbo_txn_id || meta.matched_existing_qbo === true || meta.incoming_deposit_match_status === "confirmed") return "already_matched_or_posted";
   if (meta.possible_qbo_duplicate === true || meta.duplicate_risk === true) return "possible_qbo_duplicate";
   if (isProtectedPostingWorkflow(meta)) return "protected_special_workflow";
+  if (protectedDecision?.resolution_type === "merchant_refund" && !protectedDecision.linked_original_transaction_id && protectedDecision.standalone_refund_acknowledged !== true) return "merchant_refund_details_required";
   const direction = String(bank.direction || "").toUpperCase();
   if ((direction === "INFLOW" || (!direction && Number(bank.amount || 0) > 0)) && !hasFinalCategorizeAsNewResolution(row)) return "inflow_resolution_required";
   if (!row.final_qbo_account_id) return "missing_final_qbo_account";

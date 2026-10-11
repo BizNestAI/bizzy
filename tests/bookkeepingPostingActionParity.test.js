@@ -78,6 +78,7 @@ test("protected inflow actions use task-oriented canonical action definitions", 
         qbo_disposition: "create_new",
         destination_qbo_account_id: "22",
         decided_at: "2026-10-04T11:00:00.000Z",
+        standalone_refund_acknowledged: true,
       },
     },
   });
@@ -94,4 +95,52 @@ test("protected inflow actions use task-oriented canonical action definitions", 
   assert.equal(duplicateUnavailable.action_code, "retry_duplicate_check");
   assert.equal(duplicateUnavailable.label, "Retry duplicate check");
   assert.equal(duplicateUnavailable.requires_provider_call, true);
+});
+
+test("missing refund acknowledgement and failed provider-free previews never expose Post now", () => {
+  const incompleteRefund = manual({
+    signed_amount: 72,
+    account_type: "credit card",
+    meta: { manual_qbo_account_selection: true, credit_card_inflow_resolution: {
+      decision_version: 1,
+      resolution_type: "merchant_refund",
+      qbo_disposition: "create_new",
+      destination_qbo_account_id: "22",
+      decided_at: "2026-10-04T11:00:00.000Z",
+    } },
+  });
+  assert.equal(deriveBookkeepingPostingAction(incompleteRefund, { nowMs: now }).action_code, "complete_refund_details");
+
+  const failedPreview = manual({ provider_free_preflight: {
+    preview_ready: false,
+    blocker_code: "missing_qbo_account_mapping",
+    blocker_reason: "Map the connected account to QuickBooks.",
+    next_action: "map_account",
+  } });
+  const action = deriveBookkeepingPostingAction(failedPreview, { nowMs: now });
+  assert.equal(action.action_code, "map_account");
+  assert.notEqual(action.permitted_action, "post_now");
+});
+
+test("missing schedule blocker from authoritative lifecycle remains actionable", () => {
+  const action = deriveBookkeepingPostingAction(manual({
+    signed_amount: 72,
+    account_type: "credit card",
+    qbo_posting_lifecycle: {
+      key: "configuration_blocked",
+      label: "Blocked · missing posting schedule",
+      detail: "This transaction needs attention before it can be scheduled.",
+      technical: { blocking_code: "missing_posting_schedule" },
+    },
+    meta: { manual_qbo_account_selection: true, credit_card_inflow_resolution: {
+      decision_version: 1,
+      resolution_type: "merchant_refund",
+      qbo_disposition: "create_new",
+      destination_qbo_account_id: "22",
+      decided_at: "2026-10-04T11:00:00.000Z",
+      standalone_refund_acknowledged: true,
+    } },
+  }), { nowMs: now });
+  assert.equal(action.action_code, "recheck_schedule");
+  assert.equal(action.label, "Recheck & schedule");
 });

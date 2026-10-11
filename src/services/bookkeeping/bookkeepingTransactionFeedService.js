@@ -19,6 +19,7 @@ import {
 import { normalizeTransactionResolution } from "./transactionResolutionService.js";
 import { requireCanonicalBookkeepingFeedStatus } from "./bookkeepingFeedStatusContract.js";
 import { deriveBookkeepingPostingAction } from "./bookkeepingPostingActionEligibility.js";
+import { deriveProviderFreePostingPreflight } from "./canonicalPostingCompiler.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -438,6 +439,24 @@ export async function attachCanonicalSplitsForFeed({ db = supabase, businessId, 
     const split = byTransactionId.get(String(row.id || row.transactionId || ""));
     return split ? { ...row, split_transaction: split, split_lines: Array.isArray(split.lines) ? split.lines : [] } : row;
   });
+}
+
+async function attachProviderFreePostingPreflight({ db = supabase, businessId, rows = [] } = {}) {
+  const accountIds = Array.from(new Set(rows.map((row) => String(row.final_qbo_account_id || "")).filter(Boolean)));
+  if (!businessId || !accountIds.length || typeof db?.from !== "function") {
+    return rows.map((row) => ({ ...row, provider_free_preflight: deriveProviderFreePostingPreflight(row) }));
+  }
+  const { data, error } = await db.from("qbo_accounts_cache")
+    .select("qbo_account_id,name,account_type,active")
+    .eq("business_id", businessId)
+    .in("qbo_account_id", accountIds);
+  const byId = error ? new Map() : new Map((data || []).map((account) => [String(account.qbo_account_id), account]));
+  return rows.map((row) => ({
+    ...row,
+    provider_free_preflight: deriveProviderFreePostingPreflight(row, {
+      lineAccount: byId.get(String(row.final_qbo_account_id || "")) || null,
+    }),
+  }));
 }
 
 function isHandledForPosting(row = {}) {
@@ -904,6 +923,7 @@ export async function fetchBookkeepingTransactions({
   });
   const splitEnrichedRows = await attachCanonicalSplitsForFeed({ db, businessId, rows: accountEnrichedRows });
   const jobEnrichedRows = await attachPostingJobsForFeed({ db, businessId, rows: splitEnrichedRows });
+  const preflightEnrichedRows = await attachProviderFreePostingPreflight({ db, businessId, rows: jobEnrichedRows });
   let policy = null;
   try {
     policy = await getAutoPostPolicy(db, businessId);
@@ -914,7 +934,7 @@ export async function fetchBookkeepingTransactions({
   const discoveryRows = await attachIncomingDepositDiscoveryForFeed({
     db,
     businessId,
-    rows: jobEnrichedRows,
+    rows: preflightEnrichedRows,
     nowMs,
   });
   const enrichedRows = discoveryRows.map((row) => {

@@ -27,6 +27,8 @@ const ACTION_DEFINITIONS = Object.freeze({
   select_valid_account: ["Select valid account", true, false, false, "valid_account_selected"],
   match_payment: ["Match payment", true, false, false, "payment_matched"],
   confirm_statement_credit: ["Confirm statement credit", true, true, false, "resolution_saved"],
+  complete_refund_details: ["Complete refund details", true, true, false, "refund_details_saved"],
+  inspect_blocker: ["Review blocker", true, false, false, "blocker_reviewed"],
   posting: ["Posting…", false, false, false, "posted_or_failed"],
   review: [null, false, false, false, "operator_prerequisite"],
 });
@@ -55,12 +57,17 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   const lifecycle = deriveQboPostingLifecycle(row, { nowMs });
   const meta = row.meta || {};
   const status = String(row.status || "").toLowerCase();
-  const code = lifecycle.code || row.post_error || meta.post_block_reason || meta.auto_post_block_reason || null;
+  const code = lifecycle.code || lifecycle.technical?.blocking_code || row.posting_job?.blocking_code || row.post_error || meta.post_block_reason || meta.auto_post_block_reason || null;
   const failure = code ? classifyPostingFailure(code) : null;
   const weakOnly = ["weak_memo_evidence", "probable_requires_review", "low_classifier_confidence"].includes(String(code || ""));
   const supersededDepositMatchFailure = hasFinalCategorizeAsNewResolution(row) && isPreProviderIncomingDepositMatchFailure(row);
   const creditCardPayment = deriveCreditCardPaymentStatus(row);
   const hasSavedInflowType = hasFinalCategorizeAsNewResolution(row);
+  const protectedDecision = meta.credit_card_inflow_resolution || null;
+  const merchantRefundDetailsComplete = protectedDecision?.resolution_type !== "merchant_refund" || Boolean(
+    protectedDecision?.linked_original_transaction_id || protectedDecision?.standalone_refund_acknowledged === true
+  );
+  const preflight = row.provider_free_preflight || null;
 
   if (COMPLETED_KEYS.has(lifecycle.key) || row.qbo_txn_id) return result(lifecycle, "completed", { actionCode: "completed" });
   if (row.pending === true || meta.pending === true || lifecycle.key === "pending") {
@@ -94,6 +101,12 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   if (["missing_destination_qbo_account", "missing_final_qbo_account", "inactive_destination_qbo_account", "qbo_account_incompatible"].includes(String(code || "")) || lifecycle.key === "blocked_missing_final_account") {
     return result(lifecycle, "fix_issue", { enabled: true, failure: code, actionCode: "select_valid_account" });
   }
+  if (hasSavedInflowType && !merchantRefundDetailsComplete) {
+    return result(lifecycle, "fix_issue", { enabled: true, actionCode: "complete_refund_details", reason: "Link the original charge or acknowledge that this is a standalone merchant refund." });
+  }
+  if (preflight?.preview_ready === false && ["map_account", "select_valid_account"].includes(preflight.next_action)) {
+    return result(lifecycle, "fix_issue", { enabled: true, actionCode: preflight.next_action, failure: preflight.blocker_code, reason: preflight.blocker_reason });
+  }
   if (hasSavedInflowType && (supersededDepositMatchFailure || code === "missing_posting_schedule" || lifecycle.key === "handled_not_posted")) {
     return result(lifecycle, "fix_issue", { enabled: true, actionCode: "recheck_schedule", reason: "The saved resolution is complete; recheck eligibility and assign the posting schedule." });
   }
@@ -110,10 +123,18 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   if (handled && !row.final_qbo_account_id) return result(lifecycle, "review", { reason: "Confirm a valid QuickBooks account before posting." });
   if (handled && meta.safe_to_auto_post === false && !manual) return result(lifecycle, "review", { reason: "A reviewer must confirm the account before posting." });
   if (handled && (manual || meta.safe_to_auto_post === true)) {
+    if (preflight && preflight.preview_ready !== true) {
+      return result(lifecycle, "review", {
+        enabled: true,
+        actionCode: preflight?.next_action || "inspect_blocker",
+        failure: preflight?.blocker_code || code || "posting_preview_unavailable",
+        reason: preflight?.blocker_reason || "Provider-free posting preview is not ready.",
+      });
+    }
     const scheduledAt = Date.parse(row.post_after || "");
     return result(lifecycle, "post_now", { enabled: true, confirmation: Number.isFinite(scheduledAt) && scheduledAt > nowMs });
   }
-  return result(lifecycle, "review", { reason: lifecycle.detail || "Review this transaction before posting." });
+  return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: lifecycle.detail || "Review this transaction before posting." });
 }
 
 export default deriveBookkeepingPostingAction;

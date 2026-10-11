@@ -1831,6 +1831,7 @@ export default function MonthlyReviewConsole() {
         selected_qbo_account_id: details.selectedQboAccountId || null,
         selected_qbo_account_name: details.selectedQboAccountName || null,
         expected_updated_at: row.updated_at || null,
+        standalone_refund_acknowledged: details.standaloneRefundAcknowledged === true,
       },
     });
   }, [detail?.run?.id]);
