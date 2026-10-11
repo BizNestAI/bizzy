@@ -2478,6 +2478,7 @@ router.put("/runs/:runId/transactions/:transactionId/credit-card-inflow-resoluti
       matchedQboTransactionId: req.body?.matched_qbo_transaction_id,
       actor: req.user?.id || null,
       source: "monthly_review_manual_post_credit_type",
+      requestId: req.get("x-idempotency-key") || req.get("x-request-id") || null,
     });
     return res.json(result);
   } catch (e) {

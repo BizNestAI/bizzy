@@ -71,6 +71,7 @@ router.put("/transactions/:transactionId/credit-card-inflow-resolution", require
       matchedQboTransactionId: req.body?.matched_qbo_transaction_id,
       actor: req.user?.id || req.auth?.userId || null,
       source: req.tenantContext?.mode === "admin_view" ? "admin_customer_app" : "manual_post_credit_type",
+      requestId: req.get("x-idempotency-key") || req.get("x-request-id") || null,
     });
     return res.json(result);
   } catch (err) {

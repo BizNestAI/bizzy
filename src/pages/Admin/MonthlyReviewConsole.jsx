@@ -1728,6 +1728,10 @@ export default function MonthlyReviewConsole() {
     setBusyFeedAction(actionId);
     try {
       if (!detail?.run?.id) throw new Error("Monthly Review posting context is unavailable.");
+      if (intent === "confirm_type") {
+        setManualPostingRequest({ intent, transaction: row });
+        return;
+      }
       const response = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(row.id)}/post-qbo-preview`);
       setManualPostingRequest({ intent, transaction: { ...row, posting_preview: response?.preview || null } });
     } catch (error) {
@@ -2631,7 +2635,7 @@ export default function MonthlyReviewConsole() {
                   }}
                   onApprove={(row, accountId, options) => runBookkeepingFeedAction("approve", row, accountId, options)}
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
-                  onPost={(row) => openManualPostingWorkflow("post", row)}
+                  onPost={(row, permittedAction) => openManualPostingWorkflow(permittedAction === "confirm_type" ? "confirm_type" : "post", row)}
                   onRetry={(row) => openManualPostingWorkflow("retry", row)}
                   onRecover={recoverBookkeepingFeedRow}
                   onConfirmCcPaymentMatch={handleMirrorConfirmCreditCardPaymentMatch}

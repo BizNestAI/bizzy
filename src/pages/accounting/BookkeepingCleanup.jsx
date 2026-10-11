@@ -2656,13 +2656,23 @@ function BookkeepingCleanup() {
     setCountsRefreshKey((value) => value + 1);
   };
 
-  const handleManualPostTransaction = (txnId) => {
+  const handleManualPostTransaction = (txnId, permittedAction = "post_now") => {
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     const txn = transactions.find((t) => t.id === txnId);
     if (!txn) return;
     if (adminView.bookkeepingAccess && !txn.post_error && !txn.postError) return;
     manualPostTriggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
     setManualPostResult(null);
+    if (permittedAction === "confirm_type") {
+      setManualPostResult({
+        type: "credit_card_inflow_resolution",
+        title: "What type of credit is this?",
+        message: txn.posting_action?.disabled_reason || txn.post_error || "Choose the accounting meaning before posting.",
+        transaction: txn,
+        resolutionTransaction: txn.posting_preview || txn,
+      });
+      return;
+    }
     setManualPostTxn(txn);
   };
 
@@ -2777,16 +2787,12 @@ function BookkeepingCleanup() {
     setManualPostResult(null);
     try {
       await saveCreditCardInflowResolution(businessId, txn.id, resolution, { selectedQboAccountId, selectedQboAccountName });
-      if (resolution === "merchant_refund" || resolution === "credit_card_statement_credit") {
-        await runManualPostTransaction(txn);
-        return;
-      }
       await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
       setCountsRefreshKey((value) => value + 1);
       window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: {
         severity: "info",
         title: resolution === "match_credit_card_payment" ? "Credit-card payment needs matching" : "Credit type saved",
-        body: resolution === "match_credit_card_payment" ? "Use the protected payment-matching workflow in Needs Review." : "Review the accounting treatment in Needs Review before posting.",
+        body: resolution === "match_credit_card_payment" ? "Use the protected payment-matching workflow in Needs Review." : "Eligibility was refreshed. Use Post now after reviewing the compiled QuickBooks preview.",
       } }));
     } catch (err) {
       setManualPostResult({ ...buildManualPostError(err), transaction: txn });

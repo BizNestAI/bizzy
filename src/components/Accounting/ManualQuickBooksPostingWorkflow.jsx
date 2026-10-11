@@ -39,8 +39,15 @@ function postingError(error, transaction) {
 /** Shared manual-post controller used outside the main Books Review surface. The
  * server endpoint remains the source of truth for claims, validation and receipts. */
 export default function ManualQuickBooksPostingWorkflow({ businessId, transaction, intent = "post", postRequest = null, linkRequest = null, saveCreditTypeRequest = null, onClose, onBusyChange, onComplete }) {
-  const [step, setStep] = useState(transaction ? "confirm" : null);
-  const [result, setResult] = useState(null);
+  const confirmTypeIntent = intent === "confirm_type";
+  const creditTypeResult = (source) => ({
+    type: "credit_type",
+    title: "What type of credit is this?",
+    message: source?.posting_action?.disabled_reason || source?.post_error || "Choose the accounting meaning before Bizzi prepares a QuickBooks posting preview.",
+    transaction: source,
+  });
+  const [step, setStep] = useState(transaction ? (confirmTypeIntent ? "result" : "confirm") : null);
+  const [result, setResult] = useState(() => transaction && confirmTypeIntent ? creditTypeResult(transaction) : null);
   const activeIds = useRef(new Set());
   const mountedRef = useRef(true);
   const txn = result?.transaction || transaction;
@@ -57,13 +64,13 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
 
   useEffect(() => {
     if (transaction?.id) {
-      setStep("confirm");
-      setResult(null);
+      setStep(confirmTypeIntent ? "result" : "confirm");
+      setResult(confirmTypeIntent ? creditTypeResult(transaction) : null);
     } else {
       setStep(null);
       setResult(null);
     }
-  }, [transaction?.id]);
+  }, [confirmTypeIntent, transaction]);
 
   const finish = useCallback(async (outcome) => {
     if (!mountedRef.current) return;
@@ -139,8 +146,7 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
     try {
       if (saveCreditTypeRequest) await saveCreditTypeRequest(txn, resolution, { selectedQboAccountId, selectedQboAccountName });
       else await saveCreditCardInflowResolution(businessId, txn.id, resolution, { selectedQboAccountId, selectedQboAccountName });
-      if (["merchant_refund", "credit_card_statement_credit"].includes(resolution)) await post({}, txn);
-      else await finish({ type: "review_required", resolution, transaction: txn });
+      await finish({ type: "resolution_saved", resolution, transaction: txn });
     } catch (error) {
       if (mountedRef.current) setResult(postingError(error, txn));
     }

@@ -14,6 +14,15 @@ test("canonical resolution model distinguishes credit-card inflow intents", () =
   assert.equal(normalizeTransactionResolution("credit_card_credit_other"), "credit_card_credit_other");
 });
 
+test("durable credit-card inflow decisions record canonical disposition and audit version", () => {
+  const service = read("src/services/bookkeeping/transactionResolutionService.js");
+  assert.match(service, /decision_version: 1/);
+  assert.match(service, /qbo_disposition: qboDisposition/);
+  assert.match(service, /operator_source: source/);
+  assert.match(service, /request_id: requestId \|\| null/);
+  assert.match(service, /prior_credit_card_inflow_resolution/);
+});
+
 test("unresolved credit-card inflow fails closed before any QuickBooks write", () => {
   const cron = read("src/jobs/booksPost.cron.js");
   const guard = cron.indexOf("const isUnresolvedCreditCardInflow");

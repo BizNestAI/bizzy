@@ -1811,7 +1811,7 @@ export default function BookkeepingFeed({
                       disabled={readOnly || isPosting || incomingMatchAction.loading === true || !postingActionEnabled}
                       onClick={() => {
                         if (readOnly || isPosting || !postingActionEnabled) return;
-                        onManualPost?.(txn.id);
+                        onManualPost?.(txn.id, postingAction.permitted_action);
                       }}
                       title={postingAction.disabled_reason || undefined}
                       aria-label={postingActionLabel}

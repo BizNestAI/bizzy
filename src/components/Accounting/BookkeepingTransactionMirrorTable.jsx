@@ -484,7 +484,7 @@ function BookkeepingTransactionMirrorRow({
           {isHandledFeed && ["post_now", "confirm_type"].includes(postingAction.permitted_action) ? (
             <button
               type="button"
-              onClick={() => onPost?.(row)}
+              onClick={() => onPost?.(row, postingAction.permitted_action)}
               disabled={selectedChanged || manualPostBusy || postingAction.posting_eligible === false && postingAction.permitted_action === "post_now"}
               title={selectedChanged ? "Save the selected GL account before posting." : undefined}
               aria-label={`Post ${row.payee || row.vendor || row.description || "transaction"} to QuickBooks`}

@@ -13,14 +13,26 @@ test("Monthly Review exposes first-attempt and retry manual posting through the 
   const workflow = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
 
   assert.match(page, /ManualQuickBooksPostingWorkflow/);
-  assert.match(page, /openManualPostingWorkflow\("post", row\)/);
+  assert.match(page, /openManualPostingWorkflow\(permittedAction === "confirm_type" \? "confirm_type" : "post", row\)/);
   assert.match(page, /openManualPostingWorkflow\("retry", row\)/);
   assert.match(page, /postRequest=\{monthlyReviewManualPostRequest\}/);
   assert.match(table, /Retry posting/);
   assert.match(table, /postingAction\.permitted_action/);
-  assert.match(table, /onClick=\{\(\) => onPost\?\.\(row\)\}/);
+  assert.match(table, /onClick=\{\(\) => onPost\?\.\(row, postingAction\.permitted_action\)\}/);
   assert.match(workflow, /activeIds\.current\.has\(source\.id\)/);
   assert.match(workflow, /Posting…/);
+});
+
+test("Confirm Type opens the shared resolution UI without posting or compiling a premature preview", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const workflow = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
+  const books = read("src/pages/accounting/BookkeepingCleanup.jsx");
+
+  assert.match(page, /if \(intent === "confirm_type"\) \{\s*setManualPostingRequest\(\{ intent, transaction: row \}\);\s*return;/);
+  assert.match(workflow, /confirmTypeIntent \? "result" : "confirm"/);
+  assert.match(workflow, /await finish\(\{ type: "resolution_saved", resolution, transaction: txn \}\)/);
+  assert.doesNotMatch(workflow.slice(workflow.indexOf("const chooseCreditType"), workflow.indexOf("const linkCandidate")), /await post\(/);
+  assert.match(books, /if \(permittedAction === "confirm_type"\)/);
 });
 
 test("Monthly Review manual posting preserves duplicate and credit-type decisions", () => {
@@ -44,7 +56,7 @@ test("every Monthly Review Handled row renders the shared eligibility action", (
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   assert.match(table, /getProtectedWorkflowReason\(row\)/);
   assert.match(table, /row\.posting_action \|\| deriveBookkeepingPostingAction\(row\)/);
-  assert.match(table, /onPost\?\.\(row\)/);
+  assert.match(table, /onPost\?\.\(row, postingAction\.permitted_action\)/);
   assert.match(table, /postingAction\.disabled_reason/);
   assert.match(table, /\{genericActionsBlocked \? \(/);
   assert.match(table, /Retry posting/);

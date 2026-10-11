@@ -156,6 +156,7 @@ export async function persistCreditCardInflowResolution({
   matchedQboTransactionId = null,
   actor = null,
   source = "books_review",
+  requestId = null,
 } = {}) {
   const normalized = normalizeTransactionResolution(resolution);
   if (!["merchant_refund", "match_credit_card_payment", "credit_card_statement_credit", "credit_card_credit_other"].includes(normalized)) {
@@ -180,20 +181,32 @@ export async function persistCreditCardInflowResolution({
   const result = await persistTransactionResolution({ db, businessId, transactionId, resolution: normalized, actor, source });
   const now = new Date().toISOString();
   const currentMeta = result?.row?.meta || {};
+  const qboDisposition = normalized === "match_credit_card_payment"
+    ? "match_opposite_side"
+    : normalized === "credit_card_credit_other"
+      ? "needs_review"
+      : "create_new";
   const resolutionAudit = {
+    decision_version: 1,
     resolution_type: normalized,
+    qbo_disposition: qboDisposition,
     destination_qbo_account_id: effectiveAccountId ? String(effectiveAccountId) : null,
     destination_qbo_account_name: selectedQboAccountName || null,
     linked_original_transaction_id: linkedOriginalTransactionId || null,
     matched_account_id: matchedAccountId || null,
     matched_qbo_transaction_id: matchedQboTransactionId || null,
     decision_source: actor ? "user" : "automated",
+    operator_source: source,
     decided_by: actor,
     decided_at: now,
+    request_id: requestId || null,
   };
   const payment = normalized === "match_credit_card_payment";
   const nextMeta = {
     ...currentMeta,
+    ...(currentMeta.credit_card_inflow_resolution
+      ? { prior_credit_card_inflow_resolution: currentMeta.credit_card_inflow_resolution }
+      : {}),
     credit_card_inflow_resolution: resolutionAudit,
     ...(payment ? {} : { post_block_reason: null, posting_in_progress: false }),
   };
