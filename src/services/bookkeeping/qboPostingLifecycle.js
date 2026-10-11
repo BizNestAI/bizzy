@@ -114,11 +114,11 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
     return { key: "configuration_blocked", label: jobBlock.label, tone: "danger", detail: jobBlock.detail, code: jobBlock.code };
   }
   if (!supersededDepositMatchFailure && (
-    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(blockReason) ||
+    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "duplicate_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(blockReason) ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable"].includes(row.incoming_deposit_match_status || meta.incoming_deposit_match_status)
   )) {
     const matchStatus = row.incoming_deposit_match_status || meta.incoming_deposit_match_status;
-    const unavailable = blockReason === "match_check_unavailable" || matchStatus === "match_check_unavailable";
+    const unavailable = ["match_check_unavailable", "duplicate_check_unavailable"].includes(blockReason) || matchStatus === "match_check_unavailable";
     const ambiguous = matchStatus === "ambiguous";
     return {
       key: unavailable ? "qbo_match_check_unavailable" : ambiguous ? "incoming_deposit_needs_match" : "possible_existing_qbo_match",

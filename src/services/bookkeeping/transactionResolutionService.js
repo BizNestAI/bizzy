@@ -157,6 +157,7 @@ export async function persistCreditCardInflowResolution({
   actor = null,
   source = "books_review",
   requestId = null,
+  expectedUpdatedAt = null,
 } = {}) {
   const normalized = normalizeTransactionResolution(resolution);
   if (!["merchant_refund", "match_credit_card_payment", "credit_card_statement_credit", "credit_card_credit_other"].includes(normalized)) {
@@ -166,11 +167,17 @@ export async function persistCreditCardInflowResolution({
     throw error;
   }
   const { data: existing, error: existingError } = await db.from("transaction_categorizations")
-    .select("final_qbo_account_id")
+    .select("final_qbo_account_id,post_error,post_after,meta,updated_at")
     .eq("business_id", businessId)
     .eq("transaction_id", transactionId)
     .maybeSingle();
   if (existingError) throw existingError;
+  if (expectedUpdatedAt && String(existing?.updated_at || "") !== String(expectedUpdatedAt)) {
+    const conflict = new Error("credit_card_inflow_resolution_changed_concurrently");
+    conflict.code = "credit_card_inflow_resolution_changed_concurrently";
+    conflict.status = 409;
+    throw conflict;
+  }
   const effectiveAccountId = selectedQboAccountId || existing?.final_qbo_account_id || null;
   if (["merchant_refund", "credit_card_statement_credit"].includes(normalized) && !effectiveAccountId) {
     const error = new Error("credit_card_inflow_account_required");
@@ -203,18 +210,29 @@ export async function persistCreditCardInflowResolution({
     request_id: requestId || null,
   };
   const payment = normalized === "match_credit_card_payment";
+  const obsoletePreProviderFailure = [
+    "credit_card_inflow_resolution_required",
+    "credit_card_inflow_requires_review",
+    "incoming_deposit_needs_match",
+  ].includes(String(existing?.post_error || existing?.meta?.post_block_reason || "")) &&
+    !existing?.meta?.provider_write_started_at &&
+    !existing?.meta?.qbo_write_started_at &&
+    !existing?.meta?.qbo_receipt_confirmed_at;
   const nextMeta = {
     ...currentMeta,
     ...(currentMeta.credit_card_inflow_resolution
       ? { prior_credit_card_inflow_resolution: currentMeta.credit_card_inflow_resolution }
       : {}),
     credit_card_inflow_resolution: resolutionAudit,
-    ...(payment ? {} : { post_block_reason: null, posting_in_progress: false }),
+    ...(payment ? {} : {
+      ...(obsoletePreProviderFailure ? { post_block_reason: null, auto_post_block_reason: null } : {}),
+      posting_in_progress: false,
+    }),
   };
   const payload = {
     meta: nextMeta,
     status: payment || normalized === "credit_card_credit_other" ? "needs_review" : "approved",
-    post_error: payment ? "cc_payment_pair_requires_confirmation" : null,
+    post_error: payment ? "cc_payment_pair_requires_confirmation" : obsoletePreProviderFailure ? null : existing?.post_error || null,
     post_after: null,
     updated_at: now,
     ...(effectiveAccountId && !payment ? {

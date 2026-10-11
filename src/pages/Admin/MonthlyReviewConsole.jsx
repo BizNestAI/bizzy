@@ -1777,6 +1777,12 @@ export default function MonthlyReviewConsole() {
         const message = outcome.response?.message || outcome.error?.body?.message || outcome.error?.message || "QuickBooks did not post this transaction.";
         setBookkeepingFeedActionErrors((current) => ({ ...current, [outcome.transaction.id]: message }));
       }
+      if (outcome?.type === "resolution_saved" && transactionId) {
+        setBookkeepingFeedActionErrors((current) => ({
+          ...current,
+          [transactionId]: outcome.response?.message || "Type saved; eligibility rechecked.",
+        }));
+      }
       if (outcome?.type === "queued" && outcome.response?.status_url && transactionId) {
         setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: "Posting to QuickBooks…" }));
         let operation = outcome.response;
@@ -1824,6 +1830,7 @@ export default function MonthlyReviewConsole() {
         resolution,
         selected_qbo_account_id: details.selectedQboAccountId || null,
         selected_qbo_account_name: details.selectedQboAccountName || null,
+        expected_updated_at: row.updated_at || null,
       },
     });
   }, [detail?.run?.id]);

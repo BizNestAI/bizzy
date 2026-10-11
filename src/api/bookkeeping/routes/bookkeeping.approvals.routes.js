@@ -28,6 +28,7 @@ import {
 } from "../../../services/bookkeeping/bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 import { persistCreditCardInflowResolution, persistTransactionResolution } from "../../../services/bookkeeping/transactionResolutionService.js";
+import { recoverHandledPostingDispositions } from "../../../services/bookkeeping/handledPostingDispositionRecoveryService.js";
 import {
   detectQuickBooksPaymentsProtectedWorkflow,
   hasAuthoritativeQuickBooksMatch,
@@ -72,8 +73,40 @@ router.put("/transactions/:transactionId/credit-card-inflow-resolution", require
       actor: req.user?.id || req.auth?.userId || null,
       source: req.tenantContext?.mode === "admin_view" ? "admin_customer_app" : "manual_post_credit_type",
       requestId: req.get("x-idempotency-key") || req.get("x-request-id") || null,
+      expectedUpdatedAt: req.body?.expected_updated_at || null,
     });
-    return res.json(result);
+    let eligibility = null;
+    let recheckError = null;
+    try {
+      eligibility = await recoverHandledPostingDispositions({
+        db: supabase,
+        businessId,
+        transactionIds: [req.params.transactionId],
+        limit: 1,
+        graceHours: Number(process.env.BOOKS_POST_GRACE_HOURS || 24),
+      });
+    } catch (error) {
+      recheckError = error?.code || "posting_eligibility_recheck_failed";
+    }
+    const scheduled = Number(eligibility?.scheduled || 0) > 0;
+    const remainingBlocker = Object.entries(eligibility?.reasons || {}).find(([, count]) => Number(count) > 0)?.[0] || recheckError;
+    return res.json({
+      ...result,
+      ok: true,
+      action_code: "save_protected_inflow_resolution",
+      resolution_status: "saved",
+      eligibility_status: recheckError ? "recheck_failed" : scheduled ? "eligible" : "checked",
+      schedule_status: scheduled ? "scheduled" : "not_scheduled",
+      post_after: eligibility?.post_after || null,
+      posting_intent_status: scheduled ? "created_or_reused" : "not_created",
+      remaining_blocker: scheduled ? null : remainingBlocker,
+      next_action: scheduled ? "post_now" : "recheck_schedule",
+      request_id: result?.credit_card_inflow_resolution?.request_id || null,
+      provider_calls_made: 0,
+      partial_success: Boolean(recheckError),
+      message: recheckError ? "Type saved; scheduling needs another check" : scheduled ? "Type saved and posting eligibility scheduled." : "Type saved; eligibility was rechecked.",
+      eligibility_recheck: eligibility,
+    });
   } catch (err) {
     return res.status(err?.status || 500).json({ ok: false, error: err?.code || "credit_card_inflow_resolution_save_failed", message: err?.status ? err.message : "Could not save this credit type." });
   }

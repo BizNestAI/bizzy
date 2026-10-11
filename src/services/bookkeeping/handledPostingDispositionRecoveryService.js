@@ -87,6 +87,7 @@ export async function recoverHandledPostingDispositions({
     review_required: 0,
     skipped: 0,
     conflicted: 0,
+    post_after: null,
     reasons: {},
   };
   const policy = await getAutoPostPolicy(db, businessId);
@@ -142,6 +143,7 @@ export async function recoverHandledPostingDispositions({
       });
       if (changed) {
         result.scheduled += 1;
+        result.post_after = postAfter;
         reasonBucket(result, manual ? "manual_approval_scheduled" : "automatic_safety_revalidated");
       } else {
         result.conflicted += 1;

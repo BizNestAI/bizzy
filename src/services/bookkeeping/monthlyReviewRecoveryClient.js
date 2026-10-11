@@ -3,11 +3,11 @@ export function describeMonthlyReviewRecovery(result = {}) {
     .filter(([, count]) => Number(count) > 0)
     .map(([reason]) => reason.replaceAll("_", " "));
   const why = reasons.length ? `: ${reasons.join(", ")}` : "";
-  if (result.outcome === "rescheduled" || Number(result.scheduled) > 0) return `Recovery complete: transaction rescheduled${why}.`;
-  if (result.outcome === "returned_to_needs_review" || Number(result.review_required) > 0) return `Recovery complete: returned to Needs Review${why}.`;
-  if (result.outcome === "still_blocked" || Number(result.skipped) > 0) return `Recovery complete: transaction is still blocked${why}.`;
-  if (Number(result.conflicted) > 0) return `Recovery unchanged because the transaction changed concurrently${why}.`;
-  return `Recovery complete: transaction was unchanged${why || ": no eligible state change"}.`;
+  if (result.outcome === "rescheduled" || Number(result.scheduled) > 0) return `Eligibility rechecked: transaction rescheduled${why}.`;
+  if (result.outcome === "returned_to_needs_review" || Number(result.review_required) > 0) return `Eligibility rechecked: returned to Needs Review${why}.`;
+  if (result.outcome === "still_blocked" || Number(result.skipped) > 0) return `Eligibility rechecked: transaction is still blocked${why}.`;
+  if (Number(result.conflicted) > 0) return `Recheck unchanged because the transaction changed concurrently${why}.`;
+  return `Eligibility rechecked: transaction was unchanged${why || ": no eligible state change"}.`;
 }
 
 export async function runMonthlyReviewTransactionRecovery({ request, runId, businessId, transactionId, refreshPersistedFeeds } = {}) {

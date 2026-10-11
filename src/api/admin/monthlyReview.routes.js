@@ -2479,8 +2479,41 @@ router.put("/runs/:runId/transactions/:transactionId/credit-card-inflow-resoluti
       actor: req.user?.id || null,
       source: "monthly_review_manual_post_credit_type",
       requestId: req.get("x-idempotency-key") || req.get("x-request-id") || null,
+      expectedUpdatedAt: req.body?.expected_updated_at || null,
     });
-    return res.json(result);
+    let eligibility = null;
+    let recheckError = null;
+    try {
+      eligibility = await recoverHandledPostingDispositions({
+        db: supabase,
+        businessId: run.business_id,
+        transactionIds: [transactionId],
+        limit: 1,
+        graceHours: Number(process.env.BOOKS_POST_GRACE_HOURS || 24),
+      });
+    } catch (error) {
+      recheckError = error?.code || "posting_eligibility_recheck_failed";
+    }
+    const reason = Object.entries(eligibility?.reasons || {}).find(([, count]) => Number(count) > 0)?.[0] || recheckError;
+    const scheduled = Number(eligibility?.scheduled || 0) > 0;
+    return res.json({
+      ...result,
+      ok: true,
+      action_code: "save_protected_inflow_resolution",
+      transaction_id: transactionId,
+      resolution_status: "saved",
+      eligibility_status: recheckError ? "recheck_failed" : scheduled ? "eligible" : "checked",
+      schedule_status: scheduled ? "scheduled" : "not_scheduled",
+      post_after: eligibility?.post_after || null,
+      posting_intent_status: scheduled ? "created_or_reused" : "not_created",
+      remaining_blocker: scheduled ? null : reason,
+      next_action: scheduled ? "post_now" : "recheck_schedule",
+      request_id: result?.credit_card_inflow_resolution?.request_id || null,
+      provider_calls_made: 0,
+      partial_success: Boolean(recheckError),
+      message: recheckError ? "Type saved; scheduling needs another check" : scheduled ? "Type saved and posting eligibility scheduled." : "Type saved; eligibility was rechecked.",
+      eligibility_recheck: eligibility,
+    });
   } catch (e) {
     return res.status(e?.status || 500).json({
       ok: false,

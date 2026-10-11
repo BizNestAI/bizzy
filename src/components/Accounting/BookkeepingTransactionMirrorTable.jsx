@@ -519,37 +519,37 @@ function BookkeepingTransactionMirrorRow({
               onClick={() => onInspectIncomingDepositMatch?.(row.id, null, row)}
               disabled={isActionBusy("match")}
               className="rounded-lg border border-amber-300/20 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 disabled:opacity-45"
-            >Refresh match check</button>
+            >{isActionBusy("match") ? "Checking…" : postingAction.label || "Retry duplicate check"}</button>
           ) : null}
-          {isHandledFeed && ["review", "fix_issue", "posting", "reconciling", "completed"].includes(postingAction.permitted_action) && !(possibleQboDuplicate && postingAction.permitted_action === "fix_issue") ? (
+          {isHandledFeed && postingAction.permitted_action === "posting" ? (
             <button
               type="button"
               disabled
               title={postingAction.disabled_reason || qboStatus.detail || "No posting action is available."}
               className="rounded-lg border border-white/12 bg-white/[0.05] px-2 py-1 text-[11px] font-semibold text-white/55 disabled:cursor-not-allowed"
             >
-              {{ review: "Review", fix_issue: "Fix issue", posting: "Posting…", reconciling: "Reconciling…", completed: isPosted ? "Posted" : "Matched" }[postingAction.permitted_action]}
+              Posting…
             </button>
           ) : null}
-          {isHandledFeed && possibleQboDuplicate && postingAction.permitted_action === "fix_issue" ? (
+          {isHandledFeed && postingAction.action_code === "review_possible_match" ? (
             <button
               type="button"
               onClick={() => changeResolution("match_existing_qbo")}
               disabled={resolutionBusy || isActionBusy("match")}
               className="rounded-lg border border-amber-300/25 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-300/[0.16] disabled:opacity-45"
             >
-              {resolutionBusy || isActionBusy("match") ? "Finding match…" : "Fix issue"}
+              {resolutionBusy || isActionBusy("match") ? "Finding match…" : "Review possible match"}
             </button>
           ) : null}
-          {isHandledFeed && ["review", "fix_issue"].includes(postingAction.permitted_action) ? (
+          {isHandledFeed && postingAction.action_code === "recheck_schedule" ? (
             <button
               type="button"
               onClick={(event) => onRecover?.(event, row)}
               disabled={isActionBusy("recover")}
-              title="Re-evaluate this transaction's local posting disposition without contacting QuickBooks."
+              title="Recheck local posting eligibility and assign a schedule without contacting QuickBooks."
               className="rounded-lg border border-violet-300/20 bg-violet-300/[0.1] px-2 py-1 text-[11px] font-semibold text-violet-100 hover:bg-violet-300/[0.16] disabled:opacity-45"
             >
-              {isActionBusy("recover") ? "Recovering…" : "Recover state"}
+              {isActionBusy("recover") ? "Rechecking…" : "Recheck & schedule"}
             </button>
           ) : null}
         </div>
@@ -581,7 +581,7 @@ function BookkeepingTransactionMirrorRow({
               </div>
             ))}
           </div>
-        ) : <div className="mt-1">Candidate details are stale or missing. Use Fix issue to refresh the cached match evidence.</div>}
+        ) : <div className="mt-1">Candidate details are stale or missing. Retry the duplicate check to refresh the match evidence.</div>}
       </div>
     ) : null}
     {resolution === "match_existing_qbo" && !incomingMatch.active ? (

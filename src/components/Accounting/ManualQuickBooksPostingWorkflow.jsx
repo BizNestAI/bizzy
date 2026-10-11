@@ -144,9 +144,10 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
     const selectedQboAccountId = txn.glAccountId || txn.final_qbo_account_id || txn.suggestedAccountId || null;
     const selectedQboAccountName = txn.glAccountName || txn.final_qbo_account_name || txn.suggestedAccountName || null;
     try {
-      if (saveCreditTypeRequest) await saveCreditTypeRequest(txn, resolution, { selectedQboAccountId, selectedQboAccountName });
-      else await saveCreditCardInflowResolution(businessId, txn.id, resolution, { selectedQboAccountId, selectedQboAccountName });
-      await finish({ type: "resolution_saved", resolution, transaction: txn });
+      const response = saveCreditTypeRequest
+        ? await saveCreditTypeRequest(txn, resolution, { selectedQboAccountId, selectedQboAccountName })
+        : await saveCreditCardInflowResolution(businessId, txn.id, resolution, { selectedQboAccountId, selectedQboAccountName });
+      await finish({ type: "resolution_saved", resolution, response, transaction: txn });
     } catch (error) {
       if (mountedRef.current) setResult(postingError(error, txn));
     }

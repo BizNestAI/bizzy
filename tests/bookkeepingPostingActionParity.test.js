@@ -63,3 +63,35 @@ test("posted and matched transactions never expose another write", () => {
   assert.equal(deriveBookkeepingPostingAction(manual({ status: "posted", qbo_txn_id: "123" }), { nowMs: now }).permitted_action, "completed");
   assert.equal(deriveBookkeepingPostingAction(manual({ status: "matched_existing_qbo", meta: { matched_existing_qbo: true } }), { nowMs: now }).permitted_action, "completed");
 });
+
+test("protected inflow actions use task-oriented canonical action definitions", () => {
+  const savedRefund = manual({
+    signed_amount: 72,
+    account_type: "credit card",
+    post_error: null,
+    post_after: null,
+    meta: {
+      manual_qbo_account_selection: true,
+      credit_card_inflow_resolution: {
+        decision_version: 1,
+        resolution_type: "merchant_refund",
+        qbo_disposition: "create_new",
+        destination_qbo_account_id: "22",
+        decided_at: "2026-10-04T11:00:00.000Z",
+      },
+    },
+  });
+  const recheck = deriveBookkeepingPostingAction(savedRefund, { nowMs: now });
+  assert.equal(recheck.action_code, "recheck_schedule");
+  assert.equal(recheck.label, "Recheck & schedule");
+  assert.equal(recheck.requires_provider_call, false);
+
+  const duplicateUnavailable = deriveBookkeepingPostingAction({
+    ...savedRefund,
+    post_error: "duplicate_check_unavailable",
+    meta: { ...savedRefund.meta },
+  }, { nowMs: now });
+  assert.equal(duplicateUnavailable.action_code, "retry_duplicate_check");
+  assert.equal(duplicateUnavailable.label, "Retry duplicate check");
+  assert.equal(duplicateUnavailable.requires_provider_call, true);
+});
