@@ -40,6 +40,20 @@ function count(result, outcome) {
   result.counts[outcome] = (result.counts[outcome] || 0) + 1;
 }
 
+function recoveryCounts(rows = []) {
+  const outcomes = (names) => rows.filter((row) => names.includes(row.outcome)).length;
+  return {
+    examined: rows.length,
+    eligible: outcomes(["eligible_to_schedule", "ready_auto_post_off", "newly_scheduled", "manually_approved_scheduled", "manually_approved_auto_post_off"]),
+    scheduled: outcomes(["newly_scheduled", "manually_approved_scheduled", "already_scheduled", "retry_scheduled"]),
+    retryable: rows.filter((row) => row.outcome === "retry_scheduled" || row.reason === "retry_already_scheduled").length,
+    still_blocked: outcomes(["blocked", "hard_blocked", "returned_to_review", "categorized_requires_approval"]),
+    specialized: rows.filter((row) => String(row.reason || "").endsWith("_workflow_protected")).length,
+    already_active: outcomes(["processing", "reconciling"]),
+    failed: outcomes(["failed", "conflicted"]),
+  };
+}
+
 function safeDescription(row = {}) {
   return String(row.merchant_name || row.counterparty_name || row.name || "Transaction").slice(0, 120);
 }
@@ -92,6 +106,8 @@ function durableManualAuthority(cat = {}) {
 
 function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMapping, qboAccount, recoveryBatch, nowMs }) {
   const meta = cat.meta || {};
+  // possible_qbo_duplicate remains an advisory signal here; only durable,
+  // deterministic linkage below is a non-overridable duplicate blocker.
   if (!bank) return "bank_transaction_missing";
   if (bank.pending === true) return "pending_transaction_not_postable";
   if (bank.is_archived === true || cat.is_archived === true || cat.excluded_at) return "archived_or_excluded";
@@ -102,7 +118,12 @@ function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMa
   if (job?.state === "reconciling" || meta.ambiguous_provider_outcome === true) return "provider_reconciliation_required";
   if (cat.posting_hold_batch_id && recoveryBatch?.posting_hold !== false) return "recovery_posting_hold_active";
   if (meta.matched_existing_qbo || meta.incoming_deposit_match_status === "confirmed" || meta.cc_payment_pair_id) return "matched_or_paired_transaction";
-  if (meta.possible_qbo_duplicate === true || meta.duplicate_risk === true) return "possible_qbo_duplicate";
+  const exactDuplicate =
+    meta.matched_existing_qbo === true ||
+    meta.existing_qbo_match_confirmed === true ||
+    meta.qbo_duplicate_detection_confidence === "DETERMINISTIC_EXISTING" ||
+    (Array.isArray(meta.qbo_duplicate_candidates) && meta.qbo_duplicate_candidates.some((candidate) => candidate?.deterministic === true));
+  if (exactDuplicate) return "confirmed_qbo_duplicate";
   const taxonomy = String(meta.taxonomy_type || "").toLowerCase();
   if (SPECIAL_TAXONOMIES.has(taxonomy)) return `${taxonomy || "special"}_workflow_protected`;
   const inflow = String(bank.direction || "").toUpperCase() === "INFLOW" || (!bank.direction && Number(bank.amount || 0) > 0);
@@ -207,14 +228,18 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
         const manual = durableManualAuthority(cat);
         const automatic = automaticById.get(String(cat.transaction_id));
         const automaticSafe = automatic?.category === "safe_new_post" || automatic?.category === "already_scheduled";
-        if (!manual && !automaticSafe) {
+        const ordinaryPersistedAuthority =
+          Boolean(cat.final_qbo_account_id) &&
+          String(bank.direction || "").toUpperCase() === "OUTFLOW" &&
+          !String(cat.meta?.taxonomy_type || "").trim();
+        if (!manual && !automaticSafe && !ordinaryPersistedAuthority) {
           why = automatic?.reason || "automatic_posting_safety_not_established";
           outcome = isBulkApprovablePostingReason(why) && cat.final_qbo_account_id
             ? "categorized_requires_approval"
             : "returned_to_review";
         } else {
           outcome = policy.enabled ? "eligible_to_schedule" : "ready_auto_post_off";
-          why = manual ? "durable_manual_approval" : "current_automatic_safety_gates";
+          why = manual ? "durable_manual_approval" : ordinaryPersistedAuthority ? "final_persisted_gl_authority" : "current_automatic_safety_gates";
         }
       } else outcome = "blocked";
     } catch {
@@ -243,6 +268,7 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
   }
   result.preview_version = previewVersion({ business_id: businessId, month, account_scope: accountScope, auto_post_enabled: result.auto_post_enabled }, result.rows);
   result.preview_id = result.preview_version;
+  result.recovery_counts = recoveryCounts(result.rows);
   return result;
 }
 
@@ -385,6 +411,7 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
     result.reason_counts.transaction_outside_authoritative_scope = (result.reason_counts.transaction_outside_authoritative_scope || 0) + 1;
     result.rows.push({ transaction_id: transactionId, outcome: "hard_blocked", reason: "transaction_outside_authoritative_scope", expected_post_after: null });
   }
+  result.recovery_counts = recoveryCounts(result.rows);
   const failed = Number(result.counts.failed || 0) + Number(result.counts.conflicted || 0);
   const status = failed ? "partial" : "completed";
   const auditResult = {

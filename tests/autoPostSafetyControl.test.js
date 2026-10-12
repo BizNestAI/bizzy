@@ -188,21 +188,22 @@ test("failed manual QBO writes remain actionable in the handled feed", () => {
   assert.match(transactionsService, /classifyBookkeepingLifecycle/);
   assert.match(transactionsService, /\["approved", "auto_approved", "failed", "handled"\]\.includes/);
   assert.match(feed, /\["approved", "auto_approved", "handled", "failed"\]\.includes\(String\(txn\.status/);
-  assert.match(feed, /aria-label=\{postingActionLabel\}/);
+  assert.match(feed, /data-customer-handled-actions="simple"/);
+  assert.match(feed, /postingActionLabel = isPosting \? "Posting…" : "Post Now"/);
 });
 
 test("manual posting affects only the selected transaction row and prevents repeated clicks", () => {
   const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
   const feed = readFileSync(join(root, "src/components/Accounting/BookkeepingFeed.jsx"), "utf8");
 
-  assert.match(page, /handleManualPostTransaction = \(txnId\)/);
+  assert.match(page, /handleManualPostTransaction = \(txnId, permittedAction = "post_now"\)/);
   assert.match(page, /confirmManualPostTransaction = async \(\)/);
   assert.match(page, /postTransactionToQuickBooks\(businessId, txnId, options\)/);
   assert.match(page, /new Set\(prev\)\.add\(txnId\)/);
   const handlerStart = page.indexOf("const handleManualPostTransaction");
   const handlerEnd = page.indexOf("const handleManualPostResultPrimary", handlerStart);
   assert.doesNotMatch(page.slice(handlerStart, handlerEnd), /hasIncomingDepositMatchWorkflow/);
-  assert.match(feed, /disabled=\{readOnly \|\| isPosting \|\| incomingMatchAction\.loading === true \|\| !postingActionEnabled\}/);
+  assert.match(feed, /disabled=\{\(readOnly && !adminBookkeepingAccess\) \|\| isPosting \|\| incomingMatchAction\.loading === true\}/);
 });
 
 test("manual posting uses in-app confirmation and mapping guidance modals", () => {

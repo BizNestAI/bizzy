@@ -150,7 +150,11 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
     return result(lifecycle, "fix_issue", { enabled: true, actionCode: "recheck_schedule", reason: "The saved resolution is complete; recheck eligibility and assign the posting schedule." });
   }
   const manual = hasManualAccountAuthority(row);
-  if (weakOnly && !manual) return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: "Weak evidence requires durable manual approval before posting.", failure: code });
+  const ordinaryPersistedAuthority =
+    Boolean(row.final_qbo_account_id) &&
+    String(row.direction || "").toUpperCase() === "OUTFLOW" &&
+    !String(meta.taxonomy_type || "").trim();
+  if (weakOnly && !manual && !ordinaryPersistedAuthority) return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: "Weak evidence requires durable manual approval before posting.", failure: code });
   if (!weakOnly && (lifecycle.key === "failed" || String(row.status || "").toLowerCase() === "failed") && failure?.retryable === true) {
     return result(lifecycle, "retry_posting", { enabled: true, failure: code || "retryable_posting_failure", actionCode: "retry_posting" });
   }
@@ -160,8 +164,8 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
 
   const handled = ["approved", "auto_approved", "handled", "failed"].includes(status);
   if (handled && !row.final_qbo_account_id) return result(lifecycle, "review", { enabled: true, actionCode: "select_valid_account", reason: "Confirm a valid QuickBooks account before posting." });
-  if (handled && meta.safe_to_auto_post === false && !manual) return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: "A reviewer must confirm the account before posting." });
-  if (handled && (manual || meta.safe_to_auto_post === true)) {
+  if (handled && meta.safe_to_auto_post === false && !manual && !ordinaryPersistedAuthority) return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: "A reviewer must confirm the account before posting." });
+  if (handled && (manual || meta.safe_to_auto_post === true || ordinaryPersistedAuthority)) {
     if (preflight && preflight.preview_ready !== true) {
       return result(lifecycle, "review", {
         enabled: true,

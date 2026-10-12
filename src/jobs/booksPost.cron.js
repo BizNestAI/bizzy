@@ -1015,6 +1015,21 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
   const taxonomyMeta = { ...(item?.meta || {}), taxonomy_type: item?.meta?.taxonomy_type || null };
   const requirement = getVendorPostingRequirement({ bankTxn: bank, taxonomyMeta, qboTxnType });
   if (!requirement.required) return { ok: true, requirement };
+  const ordinaryOutflow =
+    ["Purchase", "CreditCardCharge"].includes(qboTxnType) &&
+    isOutflowLike(bank) &&
+    Boolean(item?.final_qbo_account_id) &&
+    !item?.meta?.taxonomy_type &&
+    !item?.meta?.cc_payment_pair_id;
+  if (ordinaryOutflow && !(String(bank?.qbo_entity_type || "").toLowerCase() === "vendor" && bank?.qbo_entity_id)) {
+    // EntityRef is optional on ordinary QBO purchases. A final persisted GL is
+    // the accounting authority; weak payee evidence must not become a terminal
+    // posting failure or trigger provider-side vendor creation.
+    bank.qbo_entity_type = null;
+    bank.qbo_entity_id = null;
+    bank.posting_display_name = null;
+    return { ok: true, requirement, softReviewBypass: { authority: "final_persisted_gl", reason: "ordinary_outflow_vendor_optional" } };
+  }
   let vendorEnsure = null;
   const vendorSubtimings = {};
   const vendorTotalStart = Date.now();
@@ -2343,8 +2358,17 @@ export async function handleItem(item, options = {}) {
     return;
   }
   if (item.posting_hold_batch_id) {
-    await markTransactionNonPostable(item, "plaid_recovery_posting_hold");
-    return;
+    const { data: recoveryBatch, error: recoveryBatchError } = await supabase
+      .from("plaid_recovery_batches")
+      .select("id,posting_hold,status")
+      .eq("business_id", businessId)
+      .eq("id", item.posting_hold_batch_id)
+      .maybeSingle();
+    if (recoveryBatchError) throw recoveryBatchError;
+    if (!recoveryBatch || recoveryBatch.posting_hold !== false) {
+      await markTransactionNonPostable(item, "plaid_recovery_posting_hold");
+      return;
+    }
   }
   let accountingDate = null;
   try {
@@ -3665,9 +3689,13 @@ async function runOnce(options = {}) {
         return false;
       }
       const safe = authorityResolvedItem?.meta?.safe_to_auto_post === true;
-      if (item.status === "approved") return safe || item?.meta?.auto_approve_reason === "manual_user";
-      if (item.status === "auto_approved") return safe;
-      if (item.status === "failed") return safe || item?.meta?.auto_approve_reason === "manual_user";
+      const ordinaryPersistedAuthority =
+        Boolean(authorityResolvedItem?.final_qbo_account_id) &&
+        isOutflowLike(bankTxn) &&
+        !String(authorityResolvedItem?.meta?.taxonomy_type || "").trim();
+      if (item.status === "approved") return ordinaryPersistedAuthority || safe || item?.meta?.auto_approve_reason === "manual_user";
+      if (item.status === "auto_approved") return ordinaryPersistedAuthority || safe;
+      if (item.status === "failed") return ordinaryPersistedAuthority || safe || item?.meta?.auto_approve_reason === "manual_user";
       return false;
     });
     if (checkUpdates.length) {

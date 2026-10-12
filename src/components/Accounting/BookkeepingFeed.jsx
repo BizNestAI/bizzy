@@ -4,7 +4,6 @@ import ReactDOM from "react-dom";
 import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
 import { Check, CheckCircle2, ChevronDown, Loader2, Plus, RotateCcw } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
-import BookkeepingActionMenu from "./BookkeepingActionMenu.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import {
   deriveCreditCardPaymentOrientation,
@@ -1523,7 +1522,11 @@ export default function BookkeepingFeed({
             const postingAction = txn.bookkeeping_next_action
               ? { ...txn.bookkeeping_next_action, action_code: txn.bookkeeping_next_action.legacy_action_code }
               : txn.posting_action || deriveBookkeepingPostingAction(txn);
-            const actionMatrix = txn.bookkeeping_action_matrix;
+            const customerPostAction = postingAction?.permitted_action || postingAction?.action_code || null;
+            const customerCanPost = ["post_now", "preview_and_post", "retry_posting"].includes(customerPostAction);
+            const customerUndoAction = txn.bookkeeping_action_matrix?.actions?.find?.((action) => action.action_code === "undo");
+            const customerCanUndo = customerUndoAction ? customerUndoAction.enabled === true : true;
+            const postingActionLabel = isPosting ? "Posting…" : "Post Now";
             return (
               <React.Fragment key={txn.id}>
               <div
@@ -1779,18 +1782,30 @@ export default function BookkeepingFeed({
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
                 ) : isHandledStatus && !quickBooksPaymentsProtected ? (
-                  <BookkeepingActionMenu
-                    matrix={actionMatrix}
-                    busy={isPosting || incomingMatchAction.loading === true}
-                    readOnly={readOnly && !adminBookkeepingAccess}
-                    status={actionMatrix?.status_label || ""}
-                    onAction={(action) => {
-                      if (action.action_code === "undo") return onUndo?.(txn.id);
-                      if (["find_qbo_match", "retry_duplicate_check", "confirm_qbo_match"].includes(action.action_code)) return onInspectIncomingDepositMatch?.(txn.id, null, txn);
-                      if (["select_gl_account", "change_gl_account", "edit_resolution", "view_blocker"].includes(action.action_code)) return toggleExpandedRow(txn.id);
-                      return onManualPost?.(txn.id, action.is_primary ? postingAction.permitted_action : action.action_code);
-                    }}
-                  />
+                  <div className="flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap" data-customer-handled-actions="simple">
+                    <button
+                      type="button"
+                      aria-label="Undo approval"
+                      onClick={() => onUndo?.(txn.id)}
+                      disabled={(readOnly && !adminBookkeepingAccess) || isPosting || !customerCanUndo}
+                      className="inline-flex min-h-8 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-white/15 bg-white/[0.04] px-3 text-[10px] font-semibold leading-none text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <RotateCcw size={11} aria-hidden="true" />
+                      Undo
+                    </button>
+                    {customerCanPost || isPosting ? (
+                      <button
+                        type="button"
+                        aria-label={adminBookkeepingAccess ? "Retry failed QuickBooks posting" : "Post to QuickBooks"}
+                        onClick={() => onManualPost?.(txn.id, customerPostAction)}
+                        disabled={(readOnly && !adminBookkeepingAccess) || isPosting || incomingMatchAction.loading === true}
+                        className="inline-flex min-h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-sky-300/35 bg-sky-400/10 px-3 text-[10px] font-semibold leading-none text-sky-100 transition hover:bg-sky-400/16 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {isPosting ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
+                        {postingActionLabel}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (
                   incomingMatch.confirmed && allowIncomingDepositUndo && incomingMatch.matchId ? (
                     <button
