@@ -8,6 +8,7 @@ import { isBulkApprovablePostingReason } from "./postingEligibilityApprovalPolic
 import { resolveCompletedPostingEligibilityExecution } from "./postingEligibilityExecutionState.js";
 import { hasFinalCategorizeAsNewResolution } from "./incomingDepositResolution.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
+import { resolveMissingFinalAccount } from "./handledFinalAccountInvariant.js";
 
 const HANDLED = ["approved", "auto_approved", "handled", "failed"];
 const MAX_ROWS = 100;
@@ -75,6 +76,8 @@ function rowVersion({ cat, bank, job, intent }) {
     bank_updated_at: bank.updated_at || null,
     status: cat.status || null,
     account: cat.final_qbo_account_id || null,
+    suggested_account: cat.suggested_qbo_account_id || null,
+    suggested_name: cat.suggested_qbo_account_name || null,
     post_after: cat.post_after || null,
     post_error: cat.post_error || null,
     job_state: job?.state || null,
@@ -104,7 +107,7 @@ function durableManualAuthority(cat = {}) {
   return hasManualAccountAuthority(cat) && Boolean(cat.decided_by && cat.decided_at && cat.final_qbo_account_id);
 }
 
-function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMapping, qboAccount, recoveryBatch, nowMs }) {
+function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMapping, qboAccount, accountRepair, recoveryBatch, nowMs }) {
   const meta = cat.meta || {};
   // possible_qbo_duplicate remains an advisory signal here; only durable,
   // deterministic linkage below is a non-overridable duplicate blocker.
@@ -128,7 +131,8 @@ function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMa
   if (SPECIAL_TAXONOMIES.has(taxonomy)) return `${taxonomy || "special"}_workflow_protected`;
   const inflow = String(bank.direction || "").toUpperCase() === "INFLOW" || (!bank.direction && Number(bank.amount || 0) > 0);
   if (inflow && !hasFinalCategorizeAsNewResolution(cat)) return "incoming_deposit_resolution_required";
-  if (!cat.final_qbo_account_id) return "missing_final_qbo_account";
+  if (["unresolved", "ambiguous"].includes(accountRepair?.kind)) return accountRepair.reason;
+  if (!cat.final_qbo_account_id && accountRepair?.kind !== "resolved") return "missing_final_qbo_account_unresolved";
   if (!qboAccount || qboAccount.active === false) return "invalid_or_inactive_qbo_account";
   if (!sourceMapping?.qbo_account_id) return "missing_source_qbo_mapping";
   if (!sourceAccount || !sourceItem || sourceItem.is_active === false || String(sourceItem.status || "").toLowerCase() === "disconnected") return "source_account_inactive";
@@ -151,7 +155,7 @@ async function rowsForScope({ db, businessId, month, accountScope = null, transa
   const ids = bounded.map((row) => row.id);
   if (!ids.length) return { rows: [], truncated: false };
   const [{ data: cats, error: catError }, { data: jobs, error: jobError }, { data: intents, error: intentError }, { data: qboConnection, error: connectionError }] = await Promise.all([
-    db.from("transaction_categorizations").select("transaction_id,business_id,status,review_status,posting_status,reason,final_qbo_account_id,final_qbo_account_name,post_after,post_error,last_post_attempt_at,posting_hold_batch_id,decided_by,decided_at,meta,qbo_txn_id,posted_at,excluded_at,is_archived,updated_at").eq("business_id", businessId).in("status", HANDLED).in("transaction_id", ids),
+    db.from("transaction_categorizations").select("transaction_id,business_id,status,review_status,posting_status,reason,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key,final_qbo_account_id,final_qbo_account_name,final_canonical_account_key,post_after,post_error,last_post_attempt_at,posting_hold_batch_id,decided_by,decided_at,meta,qbo_txn_id,posted_at,excluded_at,is_archived,updated_at").eq("business_id", businessId).in("status", HANDLED).in("transaction_id", ids),
     db.from("bookkeeping_posting_jobs").select("transaction_id,state,scheduled_at,next_attempt_at,attempt_count,lease_owner,lease_expires_at,blocking_code,qbo_intent_id,qbo_request_id,qbo_txn_id,updated_at").eq("business_id", businessId).in("transaction_id", ids),
     db.from("qbo_posted_transactions").select("transaction_id,status,attempt_count,lease_expires_at,request_id,qbo_txn_id,qbo_txn_type,updated_at").eq("business_id", businessId).in("transaction_id", ids),
     db.from("quickbooks_tokens").select("realm_id,qbo_env,status,is_active").eq("business_id", businessId).eq("qbo_env", qboEnvName).eq("is_active", true).eq("status", "active").order("created_at", { ascending: false }).limit(1).maybeSingle(),
@@ -163,7 +167,6 @@ async function rowsForScope({ db, businessId, month, accountScope = null, transa
   const catById = new Map((cats || []).map((row) => [String(row.transaction_id), row]));
   const selectedBank = bounded.filter((row) => catById.has(String(row.id)));
   const accountIds = [...new Set(selectedBank.map((row) => row.plaid_account_id).filter(Boolean))];
-  const qboIds = [...new Set((cats || []).map((row) => row.final_qbo_account_id).filter(Boolean).map(String))];
   const holdIds = [...new Set((cats || []).map((row) => row.posting_hold_batch_id).filter(Boolean))];
   const itemIds = [...new Set(selectedBank.map((row) => row.plaid_item_id).filter(Boolean))];
   const [{ data: sourceAccounts, error: accountError }, { data: sourceItems, error: itemError }, { data: mappings, error: mappingError }, { data: qboAccounts, error: qboError }, holdResult] = await Promise.all([
@@ -171,7 +174,7 @@ async function rowsForScope({ db, businessId, month, accountScope = null, transa
     db.from("plaid_items").select("plaid_item_id,plaid_env,status,is_active").eq("business_id", businessId).in("plaid_item_id", itemIds),
     db.from("plaid_qbo_account_mappings").select("plaid_account_id,qbo_account_id,qbo_account_type").eq("business_id", businessId).in("plaid_account_id", accountIds),
     qboConnection?.realm_id
-      ? db.from("qbo_accounts_cache").select("qbo_account_id,name,account_type,active,qbo_env,realm_id").eq("business_id", businessId).eq("qbo_env", qboEnvName).eq("realm_id", qboConnection.realm_id).in("qbo_account_id", qboIds)
+      ? db.from("qbo_accounts_cache").select("qbo_account_id,name,fully_qualified_name,account_type,account_subtype,active,qbo_env,realm_id").eq("business_id", businessId).eq("qbo_env", qboEnvName).eq("realm_id", qboConnection.realm_id).eq("active", true).limit(1000)
       : Promise.resolve({ data: [], error: null }),
     holdIds.length ? db.from("plaid_recovery_batches").select("id,posting_hold,status").eq("business_id", businessId).in("id", holdIds) : Promise.resolve({ data: [], error: null }),
   ]);
@@ -181,17 +184,23 @@ async function rowsForScope({ db, businessId, month, accountScope = null, transa
   if (qboError) throw qboError;
   if (holdResult.error) throw holdResult.error;
   return {
-    rows: selectedBank.map((bank) => ({
+    rows: selectedBank.map((bank) => {
+      const cat = catById.get(String(bank.id));
+      const accountRepair = resolveMissingFinalAccount({ categorization: cat, bankTransaction: bank, qboAccounts: qboAccounts || [] });
+      const validatedFinal = (qboAccounts || []).find((row) => String(row.qbo_account_id) === String(cat.final_qbo_account_id)) || null;
+      const effectiveAccountId = accountRepair.kind === "resolved" ? accountRepair.account?.qbo_account_id : validatedFinal?.qbo_account_id;
+      return ({
       bank,
-      cat: catById.get(String(bank.id)),
+      cat,
       job: (jobs || []).find((row) => String(row.transaction_id) === String(bank.id)) || null,
       intent: (intents || []).find((row) => String(row.transaction_id) === String(bank.id)) || null,
       sourceAccount: (sourceAccounts || []).find((row) => String(row.plaid_account_id) === String(bank.plaid_account_id)) || null,
       sourceItem: (sourceItems || []).find((row) => String(row.plaid_item_id) === String(bank.plaid_item_id)) || null,
       sourceMapping: (mappings || []).find((row) => String(row.plaid_account_id) === String(bank.plaid_account_id)) || null,
-      qboAccount: (qboAccounts || []).find((row) => String(row.qbo_account_id) === String(catById.get(String(bank.id))?.final_qbo_account_id)) || null,
+      accountRepair,
+      qboAccount: (qboAccounts || []).find((row) => String(row.qbo_account_id) === String(effectiveAccountId)) || null,
       recoveryBatch: (holdResult.data || []).find((row) => String(row.id) === String(catById.get(String(bank.id))?.posting_hold_batch_id)) || null,
-    })),
+    }); }),
     truncated: (bankRows || []).length > MAX_ROWS,
   };
 }
@@ -223,13 +232,13 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
       else if (why === "qbo_receipt_requires_reconciliation" || why === "provider_reconciliation_required") outcome = "reconciling";
       else if (why === "active_provider_operation" || why === "active_worker_lease") outcome = "processing";
       else if (job?.state === "retry_scheduled" && jobDue > nowMs) { outcome = "retry_scheduled"; why = "retry_already_scheduled"; }
-      else if (cat.post_after && Date.parse(cat.post_after) > nowMs && job?.state !== "failed") { outcome = "already_scheduled"; why = "valid_future_schedule"; }
+      else if (cat.final_qbo_account_id && cat.post_after && Date.parse(cat.post_after) > nowMs && job?.state !== "failed") { outcome = "already_scheduled"; why = "valid_future_schedule"; }
       else if (!why) {
         const manual = durableManualAuthority(cat);
         const automatic = automaticById.get(String(cat.transaction_id));
         const automaticSafe = automatic?.category === "safe_new_post" || automatic?.category === "already_scheduled";
         const ordinaryPersistedAuthority =
-          Boolean(cat.final_qbo_account_id) &&
+          Boolean(cat.final_qbo_account_id || context.accountRepair?.account?.qbo_account_id) &&
           String(bank.direction || "").toUpperCase() === "OUTFLOW" &&
           !String(cat.meta?.taxonomy_type || "").trim();
         if (!manual && !automaticSafe && !ordinaryPersistedAuthority) {
@@ -239,9 +248,13 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
             : "returned_to_review";
         } else {
           outcome = policy.enabled ? "eligible_to_schedule" : "ready_auto_post_off";
-          why = manual ? "durable_manual_approval" : ordinaryPersistedAuthority ? "final_persisted_gl_authority" : "current_automatic_safety_gates";
+          why = manual
+            ? "durable_manual_approval"
+            : context.accountRepair?.kind === "resolved"
+              ? "repaired_missing_final_gl_from_authoritative_categorization"
+              : ordinaryPersistedAuthority ? "final_persisted_gl_authority" : "current_automatic_safety_gates";
         }
-      } else outcome = "blocked";
+      } else outcome = String(why || "").startsWith("missing_final_qbo_account_") ? "returned_to_review" : "blocked";
     } catch {
       // A corrupt historical row is reportable, but must not abort the bounded preview.
     }
@@ -257,7 +270,14 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
       amount: bank.amount,
       account_name: context.sourceAccount?.name || `Account ${String(bank.plaid_account_id || "").slice(-4)}`,
       selected_gl_account: cat.final_qbo_account_name || context.qboAccount?.name || null,
-      selected_gl_account_id: cat.final_qbo_account_id || null,
+      selected_gl_account_id: cat.final_qbo_account_id || context.qboAccount?.qbo_account_id || null,
+      final_account_repair: context.accountRepair?.kind === "resolved" ? {
+        account_id: context.qboAccount?.qbo_account_id,
+        account_name: context.qboAccount?.name,
+        canonical_account_key: cat.suggested_canonical_account_key || null,
+        authority: context.accountRepair.authority,
+      } : null,
+      missing_final_repair_required: context.accountRepair?.kind !== "not_required",
       approval_source: approvalSource(cat),
       may_learn_vendor_rule: Boolean(bank.merchant_name || bank.counterparty_name || bank.merchant_entity_id),
       vendor_rule_identity: vendorRuleIdentity(bank),
@@ -378,6 +398,11 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
         }
       } else if ((outcome === "eligible_to_schedule" || outcome === "ready_auto_post_off") && scheduleAutomaticallyEligible === true && expectedVersion === preview.preview_version) {
         const { data, error } = await db.from("transaction_categorizations").update({
+          ...(row.final_account_repair ? {
+            final_qbo_account_id: row.final_account_repair.account_id,
+            final_qbo_account_name: row.final_account_repair.account_name,
+            final_canonical_account_key: row.final_account_repair.canonical_account_key,
+          } : {}),
           post_after: preview.auto_post_enabled ? postAfter : null,
           post_error: null,
           meta: {
@@ -386,12 +411,38 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
             posting_eligibility_rechecked_at: new Date(nowMs).toISOString(),
             posting_eligibility_recheck_execution_id: started.id,
             posting_eligibility_authority: row.reason,
+            ...(row.final_account_repair ? {
+              handled_final_account_invariant: "repaired_from_authoritative_categorization",
+              final_account_repair_authority: row.final_account_repair.authority,
+              final_account_repaired_at: new Date(nowMs).toISOString(),
+              post_block_reason: null,
+            } : {}),
           },
           updated_at: new Date(nowMs).toISOString(),
         }).eq("business_id", businessId).eq("transaction_id", row.transaction_id).eq("updated_at", row.categorization_updated_at).in("status", HANDLED).select("transaction_id");
         if (error) throw error;
         if (Array.isArray(data) && data.length === 0) outcome = "conflicted";
         else outcome = preview.auto_post_enabled ? "newly_scheduled" : "ready_auto_post_off";
+      } else if (outcome === "returned_to_review" && row.missing_final_repair_required && expectedVersion === preview.preview_version) {
+        const { data, error } = await db.from("transaction_categorizations").update({
+          status: "needs_review",
+          review_status: "needs_review",
+          post_after: null,
+          post_error: null,
+          decided_by: null,
+          decided_at: null,
+          meta: {
+            ...(row.current_meta || {}),
+            safe_to_auto_handle: false,
+            safe_to_auto_post: false,
+            post_block_reason: row.reason,
+            handled_final_account_invariant: "returned_to_review_unresolved_final_account",
+            posting_eligibility_recheck_execution_id: started.id,
+          },
+          updated_at: new Date(nowMs).toISOString(),
+        }).eq("business_id", businessId).eq("transaction_id", row.transaction_id).eq("updated_at", row.categorization_updated_at).in("status", HANDLED).select("transaction_id");
+        if (error) throw error;
+        if (Array.isArray(data) && data.length === 0) outcome = "conflicted";
       } else if ((outcome === "eligible_to_schedule" || outcome === "ready_auto_post_off") && scheduleAutomaticallyEligible === true) {
         outcome = "conflicted";
       }

@@ -48,6 +48,9 @@ import {
   clearAutomaticTransferWorkflowMeta,
   isUnconfirmedAutomaticPeerToPeerWorkflow,
 } from "../../../services/bookkeeping/protectedWorkflow.js";
+import { enforceHandledFinalAccountInvariant } from "../../../services/bookkeeping/handledFinalAccountInvariant.js";
+
+export { enforceHandledFinalAccountInvariant } from "../../../services/bookkeeping/handledFinalAccountInvariant.js";
 
 const router = Router();
 
@@ -1442,10 +1445,10 @@ export async function runBookkeepingSuggestionPass({
     const pushRow = async (options) => {
       const { payload, txn, ...ctx } = options || {};
       if (!payload || !txn) return;
-      const stampedPayload = {
+      const stampedPayload = enforceHandledFinalAccountInvariant({
         ...payload,
         meta: withCategorizationPolicyVersion(payload.meta || {}),
-      };
+      });
       rows.push(stampedPayload);
       await maybeQueueClarification({ payload: stampedPayload, txn, ...ctx });
     };
@@ -2048,8 +2051,8 @@ export async function runBookkeepingSuggestionPass({
         }
         if (canUpgrade && autoResult.status === "auto_approved") {
           payload.status = "auto_approved";
-          payload.final_qbo_account_id = validatedAccount?.id || null;
-          payload.final_qbo_account_name = validatedAccount?.name || null;
+          payload.final_qbo_account_id = autoResult.finalAcctId || validatedAccount?.id || null;
+          payload.final_qbo_account_name = autoResult.finalAcctName || validatedAccount?.name || null;
           payload.final_canonical_account_key = payload.suggested_canonical_account_key || null;
           payload.post_after = autoResult.postAfter === undefined ? computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS) : autoResult.postAfter;
           payload.decided_by = "bizzi";
@@ -3094,8 +3097,8 @@ export async function runBookkeepingSuggestionPass({
 
     const normalizedRows = rows.map((row) => ({
       ...row,
-      decided_by: row.decided_by || "bizzi",
-      decided_at: row.decided_at || nowIso,
+      decided_by: row.decided_by === undefined ? "bizzi" : row.decided_by,
+      decided_at: row.decided_at === undefined ? nowIso : row.decided_at,
       updated_at: row.updated_at || nowIso,
     }));
 

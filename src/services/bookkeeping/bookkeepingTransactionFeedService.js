@@ -20,6 +20,7 @@ import { normalizeTransactionResolution } from "./transactionResolutionService.j
 import { requireCanonicalBookkeepingFeedStatus } from "./bookkeepingFeedStatusContract.js";
 import { deriveBookkeepingActionMatrix, deriveBookkeepingPostingAction, toBookkeepingNextAction } from "./bookkeepingPostingActionEligibility.js";
 import { deriveProviderFreePostingPreflight } from "./canonicalPostingCompiler.js";
+import { isHandledReviewStatus } from "./bookkeepingLifecycleState.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -226,8 +227,8 @@ export function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = nul
     final_qbo_account_id: finalId,
     final_qbo_account_name: finalName,
     final_canonical_account_key: cat.final_canonical_account_key || null,
-    glAccountId: finalId || suggestedId || null,
-    glAccountName: finalName || suggestedName || null,
+    glAccountId: finalId || (isHandledReviewStatus(cat.status) ? null : suggestedId) || null,
+    glAccountName: finalName || (isHandledReviewStatus(cat.status) ? null : suggestedName) || null,
     confidence: cat.confidence || null,
     reason: cat.reason || null,
     status: cat.status || "needs_review",
