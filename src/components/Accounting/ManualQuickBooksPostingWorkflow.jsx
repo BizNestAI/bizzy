@@ -48,7 +48,9 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
   });
   const [step, setStep] = useState(transaction ? (confirmTypeIntent ? "result" : "confirm") : null);
   const [result, setResult] = useState(() => transaction && confirmTypeIntent ? creditTypeResult(transaction) : null);
-  const [standaloneRefundAcknowledged, setStandaloneRefundAcknowledged] = useState(false);
+  const [standaloneRefundAcknowledged, setStandaloneRefundAcknowledged] = useState(
+    transaction?.meta?.credit_card_inflow_resolution?.standalone_refund_acknowledged === true
+  );
   const activeIds = useRef(new Set());
   const mountedRef = useRef(true);
   const txn = result?.transaction || transaction;
@@ -65,6 +67,7 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
 
   useEffect(() => {
     if (transaction?.id) {
+      setStandaloneRefundAcknowledged(transaction?.meta?.credit_card_inflow_resolution?.standalone_refund_acknowledged === true);
       setStep(confirmTypeIntent ? "result" : "confirm");
       setResult(confirmTypeIntent ? creditTypeResult(transaction) : null);
     } else {
@@ -148,6 +151,14 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
       const response = saveCreditTypeRequest
         ? await saveCreditTypeRequest(txn, resolution, { selectedQboAccountId, selectedQboAccountName, standaloneRefundAcknowledged })
         : await saveCreditCardInflowResolution(businessId, txn.id, resolution, { selectedQboAccountId, selectedQboAccountName, standaloneRefundAcknowledged });
+      if (response?.preview_ready === true && response?.preview) {
+        const updated = { ...txn, posting_preview: response.preview };
+        if (mountedRef.current) {
+          setResult({ transaction: updated });
+          setStep("confirm");
+        }
+        return;
+      }
       await finish({ type: "resolution_saved", resolution, response, transaction: txn });
     } catch (error) {
       if (mountedRef.current) setResult(postingError(error, txn));

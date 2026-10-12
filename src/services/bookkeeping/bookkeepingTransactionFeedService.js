@@ -471,6 +471,15 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   if (["processing", "reconciling"].includes(job.state)) {
     return { key: job.state === "reconciling" ? "reconciling" : "posting", label: job.state === "reconciling" ? "Checking QuickBooks" : "Posting", tone: "info", detail: "Bizzi is confirming this transaction with QuickBooks." };
   }
+  if (row.provider_free_preflight?.preview_ready === false) {
+    return {
+      key: "posting_setup_incomplete",
+      label: "Posting setup incomplete",
+      tone: "warning",
+      detail: row.provider_free_preflight.blocker_reason || "Complete the required posting setup before scheduling this transaction.",
+      technical: { blocking_code: row.provider_free_preflight.blocker_code || "posting_preview_unavailable" },
+    };
+  }
   if (job.state === "retry_scheduled" && job.next_attempt_at) {
     return { key: "retry_scheduled", label: `Retry scheduled for ${new Date(job.next_attempt_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`, tone: "warning", detail: "A controlled retry is scheduled.", technical: { job_id: job.id, attempt_count: job.attempt_count, last_error_code: job.last_error_code } };
   }

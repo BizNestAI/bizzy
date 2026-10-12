@@ -2440,6 +2440,13 @@ router.get("/runs/:runId/post-qbo-operations/:operationId", async (req, res) => 
   }
 });
 
+function postingPreviewNextAction(errorCode) {
+  if (["missing_final_qbo_account", "final_qbo_account_not_found", "final_qbo_account_inactive", "final_qbo_account_inconsistent"].includes(errorCode)) return "select_gl_account";
+  if (["missing_qbo_account_mapping", "invalid_qbo_account_mapping_type", "missing_active_qbo_connection"].includes(errorCode)) return "repair_account_mapping";
+  if (errorCode === "credit_card_inflow_requires_review") return "confirm_type";
+  return "review_hard_blocker";
+}
+
 router.get("/runs/:runId/transactions/:transactionId/post-qbo-preview", async (req, res) => {
   try {
     const { runId, transactionId } = req.params;
@@ -2451,10 +2458,14 @@ router.get("/runs/:runId/transactions/:transactionId/post-qbo-preview", async (r
     setMonthlyReviewNoStore(res);
     return res.json({ ok: true, preview });
   } catch (error) {
-    return res.status(error?.status || 500).json({
+    const status = Number(error?.status) || 503;
+    const actionCode = postingPreviewNextAction(error?.code);
+    return res.status(status).json({
       ok: false,
       error: error?.code || "posting_preview_failed",
-      message: error?.status ? error.message : "Could not safely compile the QuickBooks posting preview.",
+      message: error?.message || "Posting preview state could not be verified.",
+      action_code: actionCode,
+      preview_ready: false,
     });
   }
 });
@@ -2497,6 +2508,13 @@ router.put("/runs/:runId/transactions/:transactionId/credit-card-inflow-resoluti
     }
     const reason = Object.entries(eligibility?.reasons || {}).find(([, count]) => Number(count) > 0)?.[0] || recheckError;
     const scheduled = Number(eligibility?.scheduled || 0) > 0;
+    let preview = null;
+    let previewError = null;
+    try {
+      preview = await buildCanonicalPostingPreview({ db: supabase, businessId: run.business_id, transactionId });
+    } catch (error) {
+      previewError = { code: error?.code || "posting_preview_failed", message: error?.message || "Posting preview state could not be verified." };
+    }
     return res.json({
       ...result,
       ok: true,
@@ -2508,7 +2526,10 @@ router.put("/runs/:runId/transactions/:transactionId/credit-card-inflow-resoluti
       post_after: eligibility?.post_after || null,
       posting_intent_status: scheduled ? "created_or_reused" : "not_created",
       remaining_blocker: scheduled ? null : reason,
-      next_action: scheduled ? "post_now" : "recheck_schedule",
+      next_action: preview ? "preview_and_post" : postingPreviewNextAction(previewError?.code),
+      preview_ready: Boolean(preview),
+      preview,
+      preview_error: previewError,
       request_id: result?.credit_card_inflow_resolution?.request_id || null,
       provider_calls_made: 0,
       partial_success: Boolean(recheckError),

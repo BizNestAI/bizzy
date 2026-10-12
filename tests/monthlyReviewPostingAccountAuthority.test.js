@@ -32,6 +32,37 @@ test("canonical compiler fails closed without an approved stable account", async
   }), /Choose and save/);
 });
 
+test("credit-card refunds compile with the mapped card as source and selected GL as line", async () => {
+  const { resolveCanonicalPostingRail } = await import("../src/services/bookkeeping/canonicalPostingCompiler.js");
+  const { buildCreditCardCreditPayload } = await import("../src/services/bookkeeping/creditCardMerchantRefundPayload.js");
+  const entityType = resolveCanonicalPostingRail({
+    bankTransaction: { date: "2026-06-21", amount: 72, direction: "INFLOW" },
+    categorization: { meta: { credit_card_inflow_resolution: { resolution_type: "merchant_refund", qbo_disposition: "create_new" } } },
+    mapping: { qbo_account_type: "Credit Card" },
+  });
+  const payload = buildCreditCardCreditPayload({
+    amount: 72,
+    txnDate: "2026-06-21",
+    sourceCreditCardAccountId: "card-6735",
+    categoryAccountId: "entertainment",
+  });
+  assert.equal(entityType, "CreditCardCredit");
+  assert.equal(payload.AccountRef.value, "card-6735");
+  assert.equal(payload.Line[0].AccountBasedExpenseLineDetail.AccountRef.value, "entertainment");
+  assert.equal(payload.Credit, true);
+});
+
+test("MRP preview scopes cached accounts to the active realm and returns typed failures", () => {
+  const compiler = read("src/services/bookkeeping/canonicalPostingCompiler.js");
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  assert.match(compiler, /from\("quickbooks_tokens"\)/);
+  assert.match(compiler, /eq\("realm_id", qboConnection\.realm_id\)/);
+  assert.match(compiler, /eq\("qbo_env", qboConnection\.qbo_env \|\| qboEnvName\)/);
+  assert.match(route, /action_code: actionCode/);
+  assert.match(route, /preview_ready: false/);
+  assert.doesNotMatch(route.slice(route.indexOf('router.get("/runs/:runId/transactions/:transactionId/post-qbo-preview"'), route.indexOf('router.put("/runs/:runId/transactions/:transactionId/credit-card-inflow-resolution"')), /Could not safely compile/);
+});
+
 test("MRP preview and post share final-account authority and block unsaved dropdown changes", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
