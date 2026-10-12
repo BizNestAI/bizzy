@@ -2304,6 +2304,7 @@ export async function handleItem(item, options = {}) {
   const duplicateChallengeIdValue = options?.duplicateChallengeId || null;
   const operationId = options?.operationId || null;
   const childOperationId = options?.childOperationId || null;
+  const onProviderWriteStarted = typeof options?.onProviderWriteStarted === "function" ? options.onProviderWriteStarted : null;
   const createNewIncomeOverride = options?.createNewIncomeOverride === true || hasFinalCategorizeAsNewResolution(item);
   const duplicatePostAnyway = Boolean(
     manual && confirmPostAnyway && duplicateChallengeIdValue &&
@@ -3067,6 +3068,7 @@ export async function handleItem(item, options = {}) {
     return;
   }
 
+  await onProviderWriteStarted?.({ businessId, transactionId: txnId, requestId, qboTxnType: intentQboTxnTypeForLog });
   logPostSuccessStage("qbo_write_started", { businessId, transactionId: txnId, requestId, qboTxnType: intentQboTxnTypeForLog });
   const result = await timePostingStage(timing, "qbo_create_ms", () => postToQbo(item, bank, qbo, mapping, requestId)).catch(async (err) => {
     const normalized = err?.postingError || normalizePostingError(err, {
@@ -3306,7 +3308,7 @@ async function markFailed(item, message, { manual = false } = {}) {
     .eq("transaction_id", item.transaction_id);
 }
 
-export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false, duplicateChallengeId = null, createNewIncomeOverride = false, manualDuplicateOverride = null, operationId = null, childOperationId = null }) {
+export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false, duplicateChallengeId = null, createNewIncomeOverride = false, manualDuplicateOverride = null, operationId = null, childOperationId = null, onProviderWriteStarted = null }) {
   if (!(await businessHasPaidEntitlement(businessId))) {
     const error = new Error("entitlement_capability_denied");
     error.status = 402;
@@ -3405,15 +3407,15 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
   try {
     if (createNewIncomeOverride) {
       if (manualDuplicateOverride) {
-        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true, manualDuplicateOverride, operationId, childOperationId });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true, manualDuplicateOverride, operationId, childOperationId, onProviderWriteStarted });
       } else {
-        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true, operationId, childOperationId });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true, operationId, childOperationId, onProviderWriteStarted });
       }
     } else {
       if (manualDuplicateOverride) {
-        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride, operationId, childOperationId });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride, operationId, childOperationId, onProviderWriteStarted });
       } else {
-        const handleResult = await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, operationId, childOperationId });
+        const handleResult = await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, operationId, childOperationId, onProviderWriteStarted });
         if (handleResult?.outcome === "confirmation_required") return handleResult;
       }
     }

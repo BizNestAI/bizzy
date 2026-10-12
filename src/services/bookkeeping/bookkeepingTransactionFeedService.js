@@ -21,6 +21,8 @@ import { requireCanonicalBookkeepingFeedStatus } from "./bookkeepingFeedStatusCo
 import { deriveBookkeepingActionMatrix, deriveBookkeepingPostingAction, toBookkeepingNextAction } from "./bookkeepingPostingActionEligibility.js";
 import { deriveProviderFreePostingPreflight } from "./canonicalPostingCompiler.js";
 import { isHandledReviewStatus } from "./bookkeepingLifecycleState.js";
+import { hasActualProviderWriteBoundary } from "./providerBoundaryEvidence.js";
+export { hasActualProviderWriteBoundary } from "./providerBoundaryEvidence.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -661,7 +663,8 @@ export function interactivePostingLifecycleForFeed(operation = null, transaction
       technical: { operation_id: operation.operation_id },
     };
   }
-  if (result?.ambiguous === true || result?.state === "ambiguous") {
+  const providerWriteBegan = hasActualProviderWriteBoundary(operation, transactionId);
+  if ((result?.ambiguous === true || result?.state === "ambiguous") && providerWriteBegan) {
     return {
       key: "reconciling",
       label: "QuickBooks outcome requires reconciliation",
@@ -670,6 +673,22 @@ export function interactivePostingLifecycleForFeed(operation = null, transaction
       code: "qbo_outcome_ambiguous",
       retryable: false,
       technical: { operation_id: operation.operation_id, original_failure_code: result.internal_reason_code || operation.failure_code || null },
+    };
+  }
+  if ((result?.ambiguous === true || result?.state === "ambiguous") && !providerWriteBegan && !qboTxnId && receiptIds.length === 0 && !activeLease) {
+    return {
+      key: "failed",
+      label: "Posting failed · Posting service error",
+      tone: "danger",
+      detail: "Bizzi did not reach the QuickBooks write. This posting can be retried safely.",
+      code: "posting_internal_failure",
+      retryable: true,
+      last_attempt_at: operation.terminal_at || operation.updated_at || operation.requested_at || null,
+      technical: {
+        operation_id: operation.operation_id,
+        original_failure_code: result.internal_reason_code || operation.failure_code || null,
+        provider_write_started: false,
+      },
     };
   }
   if (operation.state === "failed" && result?.retryable === true && result?.ambiguous !== true && !qboTxnId && receiptIds.length === 0 && !activeLease) {
@@ -692,7 +711,7 @@ async function attachInteractivePostingOperationsForFeed({ db, businessId, rows,
   if (!ids.length || typeof db?.from !== "function") return rows;
   const operationQuery = db
     .from("bookkeeping_interactive_posting_commands")
-    .select("operation_id,business_id,transaction_ids,requested_at,created_at,updated_at,state,lease_expires_at,terminal_at,failure_code,failure_message,qbo_receipt_ids,transaction_results")
+    .select("operation_id,business_id,transaction_ids,requested_at,created_at,updated_at,state,lease_expires_at,terminal_at,failure_code,failure_message,qbo_receipt_ids,transaction_results,event_timeline")
     .eq("business_id", businessId);
   // Lightweight test and compatibility adapters may not implement PostgREST's
   // array-overlap filter. In that case retain the existing feed behavior.

@@ -6,6 +6,7 @@ import {
   persistMerchantApprovalVendorRule,
 } from "./autoPostControl.js";
 import { deriveBookkeepingPostingAction } from "./bookkeepingPostingActionEligibility.js";
+import { hasActualProviderWriteBoundary } from "./providerBoundaryEvidence.js";
 
 export const INTERACTIVE_POSTING_COMMAND_TYPE = "interactive_transaction_post";
 export const INTERACTIVE_COMMAND_STATES = Object.freeze({
@@ -946,6 +947,15 @@ export async function processInteractivePostingCommand({
         createNewIncomeOverride: command.merchant_snapshot?.force_soft_duplicate_override === true,
         operationId,
         childOperationId: command.merchant_snapshot?.qbo_request_id || null,
+        onProviderWriteStarted: async ({ requestId, qboTxnType }) => {
+          childOperations[row.transaction_id] = requestId || command.merchant_snapshot?.qbo_request_id || null;
+          await appendInteractivePostingCommandEvent({
+            db,
+            operationId,
+            event: "qbo_write_started",
+            extra: { transaction_id: row.transaction_id, child_operation_id: childOperations[row.transaction_id], qbo_request_id: requestId || null, qbo_txn_type: qboTxnType || null },
+          });
+        },
       });
       const childOperationId = result?.child_operation_id || result?.qbo_request_id || null;
       if (!childOperationId) {
@@ -1129,7 +1139,19 @@ export async function getInteractivePostingCommandStatus({ db = null, businessId
   const canonicalStage = externallySucceeded && command.state !== INTERACTIVE_COMMAND_STATES.POSTED ? "completed_with_warning" : command.stage;
   const terminal = TERMINAL_STATES.has(canonicalState);
   const active = !terminal;
-  const transactionResults = command.transaction_results || {};
+  const transactionResults = Object.fromEntries(Object.entries(command.transaction_results || {}).map(([transactionId, result]) => {
+    if (result?.ambiguous !== true || hasActualProviderWriteBoundary(command, transactionId)) return [transactionId, result];
+    return [transactionId, {
+      ...result,
+      state: "retryable_failure",
+      ambiguous: false,
+      retryable: true,
+      action: "retry",
+      safe_reason_code: "qbo_posting_failed",
+      safe_message: "Bizzi did not reach the QuickBooks write. This posting can be retried safely.",
+    }];
+  }));
+  const canonicalCommand = { ...command, transaction_results: transactionResults };
   return {
     ok: true,
     operation_id: operationId,
@@ -1153,7 +1175,7 @@ export async function getInteractivePostingCommandStatus({ db = null, businessId
     child_operation_ids: Object.values(command.child_operations || {}).filter(Boolean),
     retryable: !externallySucceeded && (canonicalState === INTERACTIVE_COMMAND_STATES.RETRYABLE_FAILURE || Object.values(transactionResults).some((result) => result?.retryable === true)),
     ambiguous: !externallySucceeded && Object.values(transactionResults).some((result) => result?.ambiguous === true),
-    user_message: buildInteractiveCommandUserMessage({ command, selectedIds, postedTransactionIds }),
+    user_message: buildInteractiveCommandUserMessage({ command: canonicalCommand, selectedIds, postedTransactionIds }),
     event_timeline: command.event_timeline || [],
     warnings: Array.isArray(command.warnings) ? command.warnings : [],
     rows: selectedIds.map((id) => ({

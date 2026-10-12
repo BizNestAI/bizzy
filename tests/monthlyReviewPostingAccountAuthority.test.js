@@ -228,3 +228,34 @@ test("feed selects the newest interactive failure over stale scheduled categoriz
   assert.match(table, /action\.action_code === "retry_posting"/);
   assert.match(table, /!row\.meta\?\.duplicate_override_decision/);
 });
+
+test("stored ambiguity without a real provider boundary restores retry instead of reconciliation", async () => {
+  const { interactivePostingLifecycleForFeed, hasActualProviderWriteBoundary } = await import("../src/services/bookkeeping/bookkeepingTransactionFeedService.js");
+  const transactionId = "d50f4334-e6fc-4745-8f05-4cc568c01659";
+  const falseAmbiguous = {
+    operation_id: "a94c2b21d1631d03d001105cf21a1254701535166b1cfbc835c73a8d34eb39d6",
+    transaction_ids: [transactionId],
+    requested_at: "2026-10-12T20:23:14.421Z",
+    terminal_at: "2026-10-12T20:23:21.553Z",
+    state: "failed",
+    failure_code: "interactive_posting_child_result_missing",
+    qbo_receipt_ids: [],
+    event_timeline: [
+      { event: "posting_execution_started", transaction_id: transactionId },
+    ],
+    transaction_results: { [transactionId]: { state: "ambiguous", ambiguous: true, retryable: false, internal_reason_code: "interactive_posting_child_result_missing" } },
+  };
+  assert.equal(hasActualProviderWriteBoundary(falseAmbiguous, transactionId), false);
+  const lifecycle = interactivePostingLifecycleForFeed(falseAmbiguous, transactionId);
+  assert.equal(lifecycle.key, "failed");
+  assert.equal(lifecycle.retryable, true);
+  assert.equal(lifecycle.technical.provider_write_started, false);
+
+  const trueAmbiguous = {
+    ...falseAmbiguous,
+    operation_id: "real-boundary",
+    event_timeline: [{ event: "qbo_write_started", transaction_id: transactionId }],
+  };
+  assert.equal(hasActualProviderWriteBoundary(trueAmbiguous, transactionId), true);
+  assert.equal(interactivePostingLifecycleForFeed(trueAmbiguous, transactionId).key, "reconciling");
+});
