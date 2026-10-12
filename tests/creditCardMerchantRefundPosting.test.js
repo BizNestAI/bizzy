@@ -80,10 +80,12 @@ test("an unrelated original purchase category is neither required nor serialized
 
 test("normal card purchases and the other credit workflows retain separate behavior", () => {
   const worker = read("src/jobs/booksPost.cron.js");
+  const compiler = read("src/services/bookkeeping/canonicalPostingCompiler.js");
   const purchase = worker.slice(worker.indexOf("async function postCreditCardOutflowCharge"), worker.indexOf("async function postCreditCardInflowCredit"));
-  assert.match(purchase, /const amount = Math\.abs/);
-  assert.match(purchase, /TotalAmt: amount/);
-  assert.match(purchase, /Amount: amount/);
+  assert.match(purchase, /compileCanonicalCreditCardChargePosting/);
+  assert.match(compiler, /const amount = Math\.abs/);
+  assert.match(compiler, /TotalAmt: amount/);
+  assert.match(compiler, /Amount: amount/);
   assert.doesNotMatch(purchase, /Credit: true/);
   assert.match(worker, /\["merchant_refund", "credit_card_statement_credit"\].*return "CreditCardCredit"/);
   assert.match(worker, /looksCcMeta[\s\S]*return postCcPaymentToQbo/);

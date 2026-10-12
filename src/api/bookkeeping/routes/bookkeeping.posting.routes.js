@@ -3,7 +3,7 @@ import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId, readBusinessId } from "./_bookkeepingRouteUtils.js";
-import { runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
+import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
 import { signalInteractivePostingCommandWakeup } from "../../../jobs/interactivePostingCommands.worker.js";
 import {
   getAutoPostSettings,
@@ -19,9 +19,7 @@ import {
 } from "../../../services/bookkeeping/autoPostControl.js";
 import {
   assertInteractivePostingCommandSchema,
-  authorizeInteractivePostingRetryAfterReconciliation,
   createInteractivePostingCommand,
-  fetchInteractivePostingCommand,
   getInteractivePostingCommandStatus,
   reconcileInteractivePostingCommandFromReceipts,
   requestInteractiveTransactionPosting,
@@ -36,7 +34,6 @@ import { normalizeMerchantGroupApprovalRequest, UUID_PATTERN } from "../../../co
 import crypto from "node:crypto";
 import { issueManualPostOverrideToken, verifyManualPostOverrideToken } from "../../../services/bookkeeping/manualPostOverrideToken.js";
 import { normalizePostingError } from "../../../services/bookkeeping/postingErrorNormalizer.js";
-import { buildCanonicalPostingPreview } from "../../../services/bookkeeping/canonicalPostingCompiler.js";
 
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
@@ -114,68 +111,6 @@ async function fetchExistingQboTransaction(qbo, txnType, txnId) {
     }
   }
   throw lastError || new Error(`qbo_transaction_not_found_${normalizedType}`);
-}
-
-async function loadPostingReconciliationContext({ businessId, transactionId, operationId = null }) {
-  const [{ data: transaction, error: transactionError }, { data: categorization, error: categorizationError }, { data: intent, error: intentError }] = await Promise.all([
-    supabase.from("bank_transactions").select("id,business_id,date,amount,direction,name,merchant_name,counterparty_name,plaid_account_id").eq("business_id", businessId).eq("id", transactionId).maybeSingle(),
-    supabase.from("transaction_categorizations").select("transaction_id,status,review_status,posting_status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,last_post_attempt_at,qbo_txn_id,qbo_txn_type,posted_at,meta,updated_at").eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle(),
-    supabase.from("qbo_posted_transactions").select("id,status,request_id,idempotency_key,attempt_count,last_attempt_at,last_error,qbo_txn_id,qbo_txn_type,posted_at,payload_summary,response_summary,created_at,updated_at").eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle(),
-  ]);
-  if (transactionError) throw transactionError;
-  if (categorizationError) throw categorizationError;
-  if (intentError) throw intentError;
-  if (!transaction || !categorization) {
-    const error = new Error("transaction_not_found");
-    error.code = "transaction_not_found";
-    error.status = 404;
-    throw error;
-  }
-  let command = operationId ? await fetchInteractivePostingCommand({ db: supabase, businessId, operationId }) : null;
-  if (!command) {
-    const { data, error } = await supabase.from("bookkeeping_interactive_posting_commands").select("*").eq("business_id", businessId).contains("transaction_ids", [transactionId]).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (error) throw error;
-    command = data;
-  }
-  const transactionResult = command?.transaction_results?.[String(transactionId)] || null;
-  const ambiguous = command?.state === "failed" && transactionResult?.ambiguous === true;
-  const receiptKnown = Boolean(intent?.status === "posted" && intent?.qbo_txn_id);
-  if (!ambiguous && !receiptKnown) {
-    const error = new Error("posting_reconciliation_not_required");
-    error.code = "posting_reconciliation_not_required";
-    error.status = 409;
-    throw error;
-  }
-  return { transaction, categorization, intent, command, transactionResult, ambiguous, receiptKnown };
-}
-
-function safePostingReconciliationContext(context) {
-  const { transaction, categorization, intent, command, transactionResult, receiptKnown } = context;
-  const mapping = intent?.payload_summary || {};
-  return {
-    transaction_id: transaction.id,
-    operation_id: command?.operation_id || null,
-    posting_intent_id: intent?.id || null,
-    posting_request_id: intent?.request_id || null,
-    idempotency_identity: intent?.idempotency_key || command?.idempotency_key || null,
-    state: receiptKnown ? "receipt_saved_awaiting_finalization" : "reconciliation_required",
-    source_transaction: {
-      date: transaction.date,
-      amount: transaction.amount,
-      merchant: transaction.merchant_name || transaction.counterparty_name || transaction.name || "Transaction",
-      bank_account_id: transaction.plaid_account_id,
-    },
-    intended_qbo_entity_type: intent?.qbo_txn_type || "Purchase",
-    intended_source_qbo_account: { id: mapping.mapped_qbo_account_id || null, name: mapping.mapped_qbo_account_name || null },
-    intended_gl_account: { id: categorization.final_qbo_account_id || null, name: categorization.final_qbo_account_name || null },
-    attempt_timestamp: intent?.last_attempt_at || command?.claimed_at || command?.requested_at || null,
-    attempt_count: intent?.attempt_count || command?.attempt_count || 0,
-    suspected_duplicate_candidates: categorization.meta?.duplicate_override_decision?.reviewed_candidates || categorization.meta?.qbo_duplicate_candidates || intent?.response_summary?.candidates || [],
-    receipt_known: receiptKnown,
-    qbo_entity_id: intent?.qbo_txn_id || categorization.qbo_txn_id || null,
-    failure_code: transactionResult?.safe_reason_code || command?.failure_code || null,
-    failure_message: transactionResult?.safe_message || command?.failure_message || null,
-  };
 }
 
 router.get("/posting/auto-post", requireAuth, async (req, res) => {
@@ -820,7 +755,14 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
     console.info("[bookkeeping][manual-post] auth resolved", { operationId, childOperationId, transactionId, elapsedMs: Date.now() - authStartedAt });
     const userId = req.user?.id || req.user?.sub || null;
     const overrideToken = req.body?.duplicate_check_override_token || null;
-    if (overrideToken) verifyManualPostOverrideToken(overrideToken, { businessId, transactionId, userId });
+    const manualDuplicateOverride = overrideToken
+      ? verifyManualPostOverrideToken(overrideToken, { businessId, transactionId, userId })
+      : null;
+    const confirmPostAnyway =
+      req.body?.confirm_post_anyway === true ||
+      req.body?.post_anyway === true ||
+      req.body?.confirmPostAnyway === true;
+    const duplicateChallengeId = req.body?.duplicate_challenge_id || req.body?.duplicateChallengeId || null;
     const result = await requestInteractiveTransactionPosting({
       db: supabase,
       businessId,
@@ -876,139 +818,6 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
   }
 });
 
-router.get("/posting/transactions/:transactionId/reconcile", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
-  const businessId = ensureBusinessId(req, res);
-  if (!businessId) return;
-  setNoStoreHeaders(res);
-  try {
-    await assertTaxBusinessAccess({ req, businessId, supabase });
-    const context = await loadPostingReconciliationContext({ businessId, transactionId: req.params.transactionId, operationId: req.query.operation_id || null });
-    return res.json({ ok: true, reconciliation: safePostingReconciliationContext(context) });
-  } catch (error) {
-    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_reconciliation_load_failed", message: error?.status === 409 ? "This transaction does not currently require provider reconciliation." : "Could not load the reconciliation details." });
-  }
-});
-
-router.post("/posting/transactions/:transactionId/reconcile/search", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
-  const businessId = ensureBusinessId(req, res);
-  if (!businessId) return;
-  setNoStoreHeaders(res);
-  try {
-    await assertTaxBusinessAccess({ req, businessId, supabase });
-    const context = await loadPostingReconciliationContext({ businessId, transactionId: req.params.transactionId, operationId: req.body?.operation_id || null });
-    if (context.receiptKnown) {
-      return res.json({ ok: true, read_only: true, receipt_known: true, candidates: [], reconciliation: safePostingReconciliationContext(context) });
-    }
-    const result = await runLiveDuplicatePreflight({ businessId, bankTxn: context.transaction, db: supabase });
-    const candidateIds = (result.candidates || []).map((candidate) => candidate.qbo_txn_id).filter(Boolean);
-    const { data: consumers, error: consumerError } = candidateIds.length
-      ? await supabase.from("qbo_posted_transactions").select("qbo_txn_id,transaction_id").eq("business_id", businessId).eq("status", "posted").in("qbo_txn_id", candidateIds)
-      : { data: [], error: null };
-    if (consumerError) throw consumerError;
-    const consumed = new Map((consumers || []).map((row) => [String(row.qbo_txn_id), row.transaction_id]));
-    const candidates = (result.candidates || []).map((candidate) => ({
-      ...candidate,
-      qbo_txn_type: context.intent?.qbo_txn_type || candidate.qbo_txn_type,
-      consumed_by_transaction_id: consumed.get(String(candidate.qbo_txn_id)) || null,
-      informational_only: Boolean(consumed.get(String(candidate.qbo_txn_id))),
-    }));
-    const { data: audit, error: auditError } = await supabase.from("bookkeeping_posting_reconciliations").insert({
-      business_id: businessId,
-      transaction_id: context.transaction.id,
-      operation_id: context.command.operation_id,
-      posting_intent_id: context.intent?.id || null,
-      provider_request_id: context.intent?.request_id || null,
-      actor_id: req.user?.id || req.user?.sub || null,
-      action: "search",
-      status: "completed",
-      evidence: { read_only: true, confidence: result.confidence, candidate_count: candidates.length, candidates },
-    }).select("id,created_at").maybeSingle();
-    if (auditError) throw auditError;
-    return res.json({ ok: true, read_only: true, search_id: audit?.id || null, searched_at: audit?.created_at || new Date().toISOString(), confidence: result.confidence, candidates, reconciliation: safePostingReconciliationContext(context) });
-  } catch (error) {
-    console.error("[bookkeeping][posting-reconciliation-search] failed", { business_id: businessId, transaction_id: req.params.transactionId, error: error?.code || error?.message });
-    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_reconciliation_search_failed", message: "QuickBooks could not be searched safely. No write was attempted." });
-  }
-});
-
-router.post("/posting/transactions/:transactionId/reconcile/verified-absent", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
-  const businessId = ensureBusinessId(req, res);
-  if (!businessId) return;
-  setNoStoreHeaders(res);
-  try {
-    await assertTaxBusinessAccess({ req, businessId, supabase });
-    if (req.body?.attested_absent !== true || String(req.body?.reason || "").trim().length < 8) {
-      return res.status(400).json({ ok: false, error: "accountant_absence_attestation_required", message: "Confirm that you searched QuickBooks and provide an audit reason." });
-    }
-    const context = await loadPostingReconciliationContext({ businessId, transactionId: req.params.transactionId, operationId: req.body?.operation_id || null });
-    if (context.receiptKnown) return res.status(409).json({ ok: false, error: "authoritative_qbo_receipt_exists", message: "A saved QuickBooks receipt must be finalized instead of retried." });
-    const { data: latestSearch, error: searchError } = await supabase.from("bookkeeping_posting_reconciliations").select("id,evidence,created_at").eq("business_id", businessId).eq("transaction_id", context.transaction.id).eq("operation_id", context.command.operation_id).eq("action", "search").eq("status", "completed").order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (searchError) throw searchError;
-    if (!latestSearch?.id) return res.status(409).json({ ok: false, error: "fresh_qbo_reconciliation_search_required", message: "Search QuickBooks again before attesting that the transaction is absent." });
-    const blockingCandidate = (latestSearch.evidence?.candidates || []).find((candidate) => !candidate.informational_only);
-    if (blockingCandidate) return res.status(409).json({ ok: false, error: "qbo_candidate_requires_resolution", message: "A current QuickBooks candidate must be reviewed before retrying." });
-    const preview = await buildCanonicalPostingPreview({ db: supabase, businessId, transactionId: context.transaction.id });
-    if (req.body?.confirmed_execution !== true) {
-      const { data: decision, error: decisionError } = await supabase.from("bookkeeping_posting_reconciliations").insert({
-        business_id: businessId, transaction_id: context.transaction.id, operation_id: context.command.operation_id,
-        posting_intent_id: context.intent?.id || null, provider_request_id: context.intent?.request_id || null,
-        actor_id: req.user?.id || req.user?.sub || null, action: "verified_absent", status: "pending_confirmation",
-        attestation: "verified_absent_after_read_only_qbo_search", reason: String(req.body.reason).trim().slice(0, 500),
-        evidence: { search_id: latestSearch.id, search_created_at: latestSearch.created_at, preview_token: preview.preview_token },
-      }).select("id,created_at").maybeSingle();
-      if (decisionError) throw decisionError;
-      return res.json({ ok: true, confirmation_required: true, reconciliation_id: decision.id, preview, reconciliation: safePostingReconciliationContext(context) });
-    }
-    if (!req.body?.reconciliation_id || !req.body?.preview_token || String(req.body.preview_token) !== String(preview.preview_token)) {
-      return res.status(409).json({ ok: false, error: "reconciliation_preview_changed", message: "Review the current posting preview before authorizing the retry." });
-    }
-    const { data: pending, error: pendingError } = await supabase.from("bookkeeping_posting_reconciliations").select("id,status,evidence").eq("id", req.body.reconciliation_id).eq("business_id", businessId).eq("transaction_id", context.transaction.id).eq("operation_id", context.command.operation_id).eq("action", "verified_absent").maybeSingle();
-    if (pendingError) throw pendingError;
-    if (!pending || pending.status !== "pending_confirmation" || pending.evidence?.preview_token !== preview.preview_token) return res.status(409).json({ ok: false, error: "reconciliation_confirmation_not_found", message: "Restart the reconciliation review." });
-    let { data: authorized, error: authorizeError } = await supabase.from("bookkeeping_posting_reconciliations").insert({
-      business_id: businessId, transaction_id: context.transaction.id, operation_id: context.command.operation_id,
-      posting_intent_id: context.intent?.id || null, provider_request_id: context.intent?.request_id || null,
-      actor_id: req.user?.id || req.user?.sub || null, action: "retry_authorized", status: "completed",
-      attestation: "verified_absent_after_read_only_qbo_search", reason: String(req.body.reason).trim().slice(0, 500),
-      evidence: { search_id: latestSearch.id, prior_reconciliation_id: pending.id, preview_token: preview.preview_token, stable_request_id_reused: true },
-    }).select("id,created_at").maybeSingle();
-    if (authorizeError?.code === "23505") {
-      const { data: existingAuthorization, error: existingAuthorizationError } = await supabase
-        .from("bookkeeping_posting_reconciliations")
-        .select("id,created_at")
-        .eq("business_id", businessId)
-        .eq("operation_id", context.command.operation_id)
-        .eq("action", "retry_authorized")
-        .eq("status", "completed")
-        .maybeSingle();
-      if (existingAuthorizationError) throw existingAuthorizationError;
-      authorized = existingAuthorization;
-      authorizeError = null;
-    }
-    if (authorizeError || !authorized?.id) throw authorizeError || new Error("retry_authorization_not_saved");
-    await authorizeInteractivePostingRetryAfterReconciliation({ db: supabase, businessId, transactionId: context.transaction.id, operationId: context.command.operation_id, actorId: req.user?.id || req.user?.sub || null, reconciliationId: authorized.id });
-    const wake = signalInteractivePostingCommandWakeup({ operationId: context.command.operation_id, correlationId: authorized.id });
-    return res.status(202).json({ ok: true, accepted: true, controlled_retry: true, operation_id: context.command.operation_id, posting_intent_id: context.intent?.id || null, request_id: context.intent?.request_id || null, reconciliation_id: authorized.id, worker_wakeup: wake.queued ? "direct_exact_operation" : "periodic_recovery", status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(context.command.operation_id)}?business_id=${encodeURIComponent(businessId)}` });
-  } catch (error) {
-    console.error("[bookkeeping][posting-reconciliation-absent] failed", { business_id: businessId, transaction_id: req.params.transactionId, error: error?.code || error?.message });
-    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_reconciliation_absent_failed", message: error?.status === 409 ? "The posting state changed. Refresh reconciliation before continuing." : "Could not save the reconciliation decision." });
-  }
-});
-
-router.post("/posting/transactions/:transactionId/reconcile/keep-blocked", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
-  const businessId = ensureBusinessId(req, res);
-  if (!businessId) return;
-  try {
-    await assertTaxBusinessAccess({ req, businessId, supabase });
-    const context = await loadPostingReconciliationContext({ businessId, transactionId: req.params.transactionId, operationId: req.body?.operation_id || null });
-    const { data, error } = await supabase.from("bookkeeping_posting_reconciliations").insert({ business_id: businessId, transaction_id: context.transaction.id, operation_id: context.command.operation_id, posting_intent_id: context.intent?.id || null, provider_request_id: context.intent?.request_id || null, actor_id: req.user?.id || req.user?.sub || null, action: "kept_blocked", status: "blocked", reason: String(req.body?.reason || "Deferred by accountant for later review.").slice(0, 500), evidence: { state: "reconciliation_required" } }).select("id,created_at").maybeSingle();
-    if (error) throw error;
-    return res.json({ ok: true, reconciliation_id: data.id, state: "reconciliation_required", message: "The transaction remains blocked for later reconciliation." });
-  } catch (error) {
-    return res.status(error?.status || 500).json({ ok: false, error: error?.code || "posting_reconciliation_keep_blocked_failed", message: "Could not save the reconciliation decision." });
-  }
-});
-
 router.post("/posting/transactions/:transactionId/link-existing", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
@@ -1019,9 +828,7 @@ router.post("/posting/transactions/:transactionId/link-existing", requireAuth, a
   if (!qboTxnId || !qboTxnType) return res.status(400).json({ ok: false, error: "missing_qbo_transaction" });
 
   try {
-    const monthlyReviewAction = req.get("x-bizzi-monthly-review-action");
-    const reconciliationLink = monthlyReviewAction === "reconcile-link-existing";
-    if (["link-existing", "reconcile-link-existing"].includes(monthlyReviewAction)) {
+    if (req.get("x-bizzi-monthly-review-action") === "link-existing") {
       await resolveInternalStaff({ req, roles: MONTHLY_REVIEW_STAFF_ROLES, supabase });
     } else {
       await assertTaxBusinessAccess({ req, businessId, supabase });
@@ -1034,27 +841,17 @@ router.post("/posting/transactions/:transactionId/link-existing", requireAuth, a
       .eq("transaction_id", transactionId)
       .maybeSingle();
     if (catErr) throw catErr;
-    let reconciliationContext = null;
-    let reconciliationSearch = null;
-    if (reconciliationLink) {
-      reconciliationContext = await loadPostingReconciliationContext({ businessId, transactionId, operationId: req.body?.operation_id || null });
-      const { data, error } = await supabase.from("bookkeeping_posting_reconciliations").select("id,evidence,created_at").eq("business_id", businessId).eq("transaction_id", transactionId).eq("operation_id", reconciliationContext.command.operation_id).eq("action", "search").eq("status", "completed").order("created_at", { ascending: false }).limit(1).maybeSingle();
-      if (error) throw error;
-      reconciliationSearch = data;
-      const searchedCandidate = (data?.evidence?.candidates || []).some((candidate) => String(candidate.qbo_txn_id) === String(qboTxnId) && normalizeQboTxnType(candidate.qbo_txn_type) === qboTxnType && candidate.informational_only !== true);
-      if (!searchedCandidate) return res.status(409).json({ ok: false, error: "qbo_reconciliation_candidate_not_verified", message: "Search QuickBooks again and select a current unconsumed result." });
-    }
-    if (!reconciliationLink && !cat?.meta?.possible_qbo_duplicate) {
+    if (!cat?.meta?.possible_qbo_duplicate) {
       return res.status(409).json({ ok: false, error: "qbo_duplicate_review_required" });
     }
-    if (!reconciliationLink && Date.parse(cat.meta?.qbo_duplicate_challenge_expires_at || "") <= Date.now()) {
+    if (Date.parse(cat.meta?.qbo_duplicate_challenge_expires_at || "") <= Date.now()) {
       return res.status(409).json({ ok: false, error: "qbo_duplicate_review_expired" });
     }
     const reviewedCandidate = (cat.meta?.qbo_duplicate_candidates || []).some((candidate) =>
       String(candidate?.qbo_txn_id || "") === String(qboTxnId) &&
       normalizeQboTxnType(candidate?.qbo_txn_type || null) === qboTxnType
     );
-    if (!reconciliationLink && !reviewedCandidate) {
+    if (!reviewedCandidate) {
       return res.status(409).json({ ok: false, error: "qbo_duplicate_candidate_changed" });
     }
 
@@ -1093,18 +890,6 @@ router.post("/posting/transactions/:transactionId/link-existing", requireAuth, a
     const fetchedId = existingQboTxn?.Id || existingQboTxn?.id || null;
     if (String(fetchedId || "") !== String(qboTxnId)) {
       return res.status(404).json({ ok: false, error: "qbo_transaction_not_found" });
-    }
-    if (reconciliationLink) {
-      const expectedAmount = Math.abs(Number(reconciliationContext.transaction.amount || 0));
-      const foundAmount = Math.abs(Number(existingQboTxn?.TotalAmt ?? existingQboTxn?.totalAmt ?? 0));
-      const expectedDate = Date.parse(`${reconciliationContext.transaction.date}T00:00:00Z`);
-      const foundDateText = existingQboTxn?.TxnDate || existingQboTxn?.txnDate || null;
-      const foundDate = foundDateText ? Date.parse(`${foundDateText}T00:00:00Z`) : NaN;
-      const accountId = existingQboTxn?.AccountRef?.value || existingQboTxn?.accountRef?.value || null;
-      const expectedAccountId = reconciliationContext.intent?.payload_summary?.mapped_qbo_account_id || null;
-      if (Math.abs(foundAmount - expectedAmount) > 0.005 || !Number.isFinite(foundDate) || Math.abs(foundDate - expectedDate) > 3 * 86400000 || (expectedAccountId && String(accountId || "") !== String(expectedAccountId))) {
-        return res.status(409).json({ ok: false, error: "qbo_reconciliation_candidate_mismatch", message: "The selected QuickBooks transaction does not match the expected amount, date, or source account." });
-      }
     }
 
     const { data: linkedReceipt, error: linkErr } = await supabase
@@ -1155,23 +940,6 @@ router.post("/posting/transactions/:transactionId/link-existing", requireAuth, a
       .eq("business_id", businessId)
       .eq("transaction_id", transactionId);
     if (updateErr) throw updateErr;
-
-    if (reconciliationLink) {
-      const { error: reconciliationError } = await supabase.from("bookkeeping_posting_reconciliations").insert({
-        business_id: businessId, transaction_id: transactionId, operation_id: reconciliationContext.command.operation_id,
-        posting_intent_id: receipt.id, provider_request_id: receipt.request_id || null,
-        actor_id: req.user?.id || req.user?.sub || null, action: "linked_existing", status: "completed",
-        candidate_qbo_txn_id: qboTxnId, candidate_qbo_txn_type: qboTxnType,
-        reason: String(req.body?.reason || "Accountant verified the existing QuickBooks transaction.").slice(0, 500),
-        evidence: { search_id: reconciliationSearch?.id || null, validated_business: true, validated_realm: true, validated_entity_type: true, validated_account: true, validated_amount: true, validated_date: true },
-      });
-      if (reconciliationError) throw reconciliationError;
-      await reconcileInteractivePostingCommandFromReceipts({
-        db: supabase,
-        businessId,
-        operationId: reconciliationContext.command.operation_id,
-      });
-    }
 
     const { data: bankTxn } = await supabase
       .from("bank_transactions")

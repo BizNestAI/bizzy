@@ -284,9 +284,12 @@ export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } =
   const actions = BOOKKEEPING_ACTION_ORDER.map((actionCode) => {
     const definition = MATRIX_DEFINITIONS[actionCode];
     const enabled = enabledCodes.has(actionCode);
+    const label = actionCode === "preview_and_post" && legacy.action_code === "retry_posting"
+      ? "Retry posting"
+      : definition[0];
     return {
       action_code: actionCode,
-      label: definition[0],
+      label,
       enabled,
       disabled_reason: enabled ? null : disabledReason(actionCode, context),
       is_primary: actionCode === primaryCode,
@@ -300,7 +303,7 @@ export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } =
   return {
     version: 1,
     state: final ? "final" : active ? "waiting" : pending ? "pending" : ambiguous ? "provider_outcome_uncertain" : "actionable",
-    status_label: final ? "Final" : active ? "Posting" : pending ? "Pending settlement" : ambiguous ? "QuickBooks outcome requires reconciliation" : primaryCode === "preview_and_post" ? "Ready to preview" : "Action required",
+    status_label: final ? "Final" : active ? "Posting" : pending ? "Pending settlement" : ambiguous ? "QuickBooks outcome requires reconciliation" : primaryCode === "preview_and_post" ? (legacy.action_code === "retry_posting" ? "Ready to retry" : "Ready to preview") : "Action required",
     primary_action_code: primaryCode,
     actions,
     groups: BOOKKEEPING_ACTION_GROUPS,

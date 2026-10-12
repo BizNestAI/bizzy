@@ -63,6 +63,49 @@ export function compileCanonicalDepositPosting({
   };
 }
 
+export function compileCanonicalCreditCardChargePosting({
+  bankTransaction,
+  sourceCreditCardAccount,
+  approvedLineAccount,
+  requestId = null,
+  privateNote = null,
+  lineDescription = null,
+  vendorRef = null,
+} = {}) {
+  const sourceAccountId = String(sourceCreditCardAccount?.id || "").trim();
+  const lineAccountId = String(approvedLineAccount?.id || "").trim();
+  if (!sourceAccountId) throw postingError("missing_qbo_account_mapping", "The connected credit card is not mapped to QuickBooks.");
+  if (!lineAccountId) throw postingError("missing_final_qbo_account", "Choose and save a QuickBooks GL account before posting.");
+  if (approvedLineAccount?.active === false) throw postingError("final_qbo_account_inactive", "The approved QuickBooks GL account is inactive.");
+  const amount = Math.abs(Number(bankTransaction?.signed_amount ?? bankTransaction?.amount ?? 0));
+  if (!Number.isFinite(amount) || amount === 0) throw postingError("invalid_amount", "The bank transaction amount is invalid.");
+  const date = getAccountingDateFromBankTransaction(bankTransaction || {});
+  const payload = {
+    ...(requestId ? { requestId } : {}),
+    PaymentType: "CreditCard",
+    AccountRef: { value: sourceAccountId },
+    TxnDate: date,
+    TotalAmt: amount,
+    ...(privateNote ? { PrivateNote: privateNote } : {}),
+    ...(vendorRef ? { EntityRef: { value: String(vendorRef.value), type: "Vendor" } } : {}),
+    Line: [{
+      DetailType: "AccountBasedExpenseLineDetail",
+      Amount: amount,
+      ...(lineDescription ? { Description: lineDescription } : {}),
+      AccountBasedExpenseLineDetail: { AccountRef: { value: lineAccountId } },
+    }],
+  };
+  return {
+    entity_type: "CreditCardCharge",
+    approved_final_account_id: lineAccountId,
+    destination_account: { id: sourceAccountId, name: sourceCreditCardAccount?.name || null },
+    line_account: { id: lineAccountId, name: approvedLineAccount?.name || null },
+    amount,
+    date,
+    payload,
+  };
+}
+
 export function resolveCanonicalPostingRail({ bankTransaction = {}, categorization = {}, mapping = {} } = {}) {
   const mappingType = normalizeQboAccountType(mapping.qbo_account_type);
   const direction = String(bankTransaction.direction || "").toUpperCase();
@@ -226,7 +269,13 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
             categoryAccountId: lineAccount.id,
           }),
         }
-    : {
+    : entityType === "CreditCardCharge"
+      ? compileCanonicalCreditCardChargePosting({
+          bankTransaction,
+          sourceCreditCardAccount: sourceAccount,
+          approvedLineAccount: { ...lineAccount, active: approvedAccount.active },
+        })
+      : {
         entity_type: entityType,
         approved_final_account_id: lineAccount.id,
         destination_account: sourceAccount,

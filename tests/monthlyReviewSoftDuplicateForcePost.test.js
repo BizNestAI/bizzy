@@ -21,6 +21,24 @@ test("only the exact reviewed candidate is suppressed for an authorized manual f
   assert.equal(isRejectedSoftDuplicateCandidate({ meta: { incoming_deposit_resolution: { ...item.meta.incoming_deposit_resolution, source: "books_review" } } }, { qbo_txn_id: "1263" }, { manual: true }), false);
 });
 
+test("the durable v3 Rebill decision suppresses only consumed candidate 1949", async () => {
+  const { isRejectedSoftDuplicateCandidate } = await import("../src/jobs/booksPost.cron.js");
+  const item = { meta: { duplicate_override_decision: {
+    decision: "categorize_as_new_despite_duplicate_risk",
+    decision_version: 3,
+    reviewed_candidate_ids: ["1949"],
+    reviewed_candidates: [{
+      qbo_txn_id: "1949",
+      qbo_txn_type: "CreditCardCharge",
+      informational_only: true,
+      consumed_by_another_transaction: true,
+    }],
+  } } };
+  assert.equal(isRejectedSoftDuplicateCandidate(item, { qbo_txn_id: "1949", qbo_txn_type: "CreditCardCharge" }, { manual: true }), true);
+  assert.equal(isRejectedSoftDuplicateCandidate(item, { qbo_txn_id: "1951", qbo_txn_type: "CreditCardCharge" }, { manual: true }), false);
+  assert.equal(isRejectedSoftDuplicateCandidate(item, { qbo_txn_id: "1949", qbo_txn_type: "CreditCardCharge" }, { manual: false }), false);
+});
+
 test("Admin force-post persists the reviewed decision then uses the durable command pipeline", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
   const command = read("src/services/bookkeeping/interactivePostingCommandService.js");

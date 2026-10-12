@@ -52,6 +52,34 @@ test("credit-card refunds compile with the mapped card as source and selected GL
   assert.equal(payload.Credit, true);
 });
 
+test("Rebill card outflow compiles to the proven successful Purchase payload shape", async () => {
+  const { compileCanonicalCreditCardChargePosting } = await import("../src/services/bookkeeping/canonicalPostingCompiler.js");
+  const compiled = compileCanonicalCreditCardChargePosting({
+    bankTransaction: { date: "2026-06-29", amount: -72, signed_amount: -72, direction: "OUTFLOW" },
+    sourceCreditCardAccount: { id: "19", name: "CREDIT CARD (8193) - 3" },
+    approvedLineAccount: { id: "1150040020", name: "Entertainment", active: true },
+    requestId: "bizzi_48634a3b9fedcc79aeaa0c2fdd27a27572a66da1",
+    privateNote: "Rebill Gametime · Posted by Bizzi",
+    lineDescription: "Rebill Gametime · Posted by Bizzi",
+  });
+  assert.equal(compiled.entity_type, "CreditCardCharge");
+  assert.equal(compiled.amount, 72);
+  assert.deepEqual(compiled.payload, {
+    requestId: "bizzi_48634a3b9fedcc79aeaa0c2fdd27a27572a66da1",
+    PaymentType: "CreditCard",
+    AccountRef: { value: "19" },
+    TxnDate: "2026-06-29",
+    TotalAmt: 72,
+    PrivateNote: "Rebill Gametime · Posted by Bizzi",
+    Line: [{
+      DetailType: "AccountBasedExpenseLineDetail",
+      Amount: 72,
+      Description: "Rebill Gametime · Posted by Bizzi",
+      AccountBasedExpenseLineDetail: { AccountRef: { value: "1150040020" } },
+    }],
+  });
+});
+
 test("MRP preview scopes cached accounts to the active realm and returns typed failures", () => {
   const compiler = read("src/services/bookkeeping/canonicalPostingCompiler.js");
   const route = read("src/api/admin/monthlyReview.routes.js");
@@ -121,10 +149,11 @@ test("MRP preview and post share final-account authority and block unsaved dropd
   assert.match(page, /approved_final_account_id: options\.approvedFinalAccountId/);
   assert.match(page, /confirmed_execution: options\.confirmedExecution === true/);
   assert.match(page, /preview_token: options\.previewToken/);
-  assert.match(table, /disabled=\{selectedChanged \|\| manualPostBusy/);
+  assert.match(table, /busy=\{selectedChanged \|\| manualPostBusy/);
   assert.match(modal, /preview\?\.line_gl_account\?\.name \|\| transaction\.final_qbo_account_name/);
   assert.doesNotMatch(modal, /transaction\.glAccountName \|\| transaction\.final_qbo_account_name/);
   assert.match(worker, /compileCanonicalDepositPosting/);
+  assert.match(worker, /compileCanonicalCreditCardChargePosting/);
 });
 
 test("MRP Post now immediately processes the exact durable operation and exposes polling", () => {
@@ -137,6 +166,8 @@ test("MRP Post now immediately processes the exact durable operation and exposes
   assert.match(route, /post-qbo-operations\/\$\{encodeURIComponent\(result\.operation_id\)\}/);
   assert.match(page, /outcome\.response\?\.status_url/);
   assert.match(page, /operation\?\.outcome === "processing"/);
+  assert.match(page, /patchManualPostingRow/);
+  assert.doesNotMatch(page, /window\.location\.reload\(\)/);
   assert.match(modal, /onClose\?\.\(\);\s*await onComplete\?\.\(\{ \.\.\.outcome, intent \}\)/);
   assert.match(page, /finally \{\s*setManualPostingRequest\(null\);\s*if \(transactionId\) setManualPostingBusy/);
   assert.match(modal, /<button type="button"/);

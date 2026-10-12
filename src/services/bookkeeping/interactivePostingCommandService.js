@@ -425,8 +425,8 @@ export async function requestInteractiveTransactionPosting({
     forceDecision?.decision_version >= 3 &&
     Array.isArray(forceDecision?.reviewed_candidate_ids) &&
     forceDecision.reviewed_candidate_ids.length > 0;
-  const reviewedSoftDuplicate = durableDuplicateOverride || (allowReviewedSoftDuplicate === true &&
-    (
+  const reviewedSoftDuplicate = allowReviewedSoftDuplicate === true &&
+    (durableDuplicateOverride || (
       forceDecision?.source === "monthly_review_force_post" &&
       forceDecision?.decision_version >= 2 &&
       forceDecision?.duplicate_risk_acknowledged === true &&
@@ -574,76 +574,6 @@ async function updateInteractiveCommand({ db = null, operationId, patch = {}, st
   const { data, error } = await query.select("*").maybeSingle();
   if (error) throw error;
   return data || null;
-}
-
-export async function authorizeInteractivePostingRetryAfterReconciliation({
-  db = null,
-  businessId,
-  transactionId,
-  operationId,
-  actorId = null,
-  reconciliationId = null,
-} = {}) {
-  db ||= await getDefaultSupabase();
-  const command = await fetchInteractivePostingCommand({ db, businessId, operationId });
-  const result = command.transaction_results?.[String(transactionId)] || null;
-  if (command.state !== INTERACTIVE_COMMAND_STATES.FAILED || result?.ambiguous !== true) {
-    const error = new Error("ambiguous_posting_operation_required");
-    error.code = "ambiguous_posting_operation_required";
-    error.status = 409;
-    throw error;
-  }
-  if (command.lease_expires_at && Date.parse(command.lease_expires_at) > Date.now()) {
-    const error = new Error("active_posting_lease");
-    error.code = "active_posting_lease";
-    error.status = 409;
-    throw error;
-  }
-  const transactionResults = {
-    ...(command.transaction_results || {}),
-    [String(transactionId)]: {
-      ...result,
-      state: "retry_authorized",
-      ambiguous: false,
-      retryable: true,
-      action: "retry",
-      safe_reason_code: null,
-      safe_message: "An accountant verified that the transaction is absent from QuickBooks. A controlled retry is authorized.",
-      reconciliation_id: reconciliationId,
-      reconciliation_actor_id: actorId,
-    },
-  };
-  const reopened = await updateInteractiveCommand({
-    db,
-    operationId,
-    states: [INTERACTIVE_COMMAND_STATES.FAILED],
-    patch: {
-      state: INTERACTIVE_COMMAND_STATES.ACCEPTED,
-      stage: "retry_authorized",
-      stage_started_at: nowIso(),
-      terminal_at: null,
-      claimed_at: null,
-      lease_owner: null,
-      lease_expires_at: null,
-      next_attempt_at: null,
-      failure_code: null,
-      failure_message: null,
-      transaction_results: transactionResults,
-    },
-  });
-  if (!reopened) {
-    const error = new Error("posting_operation_changed");
-    error.code = "posting_operation_changed";
-    error.status = 409;
-    throw error;
-  }
-  await appendInteractivePostingCommandEvent({
-    db,
-    operationId,
-    event: "accountant_verified_provider_absent",
-    extra: { transaction_id: transactionId, actor_id: actorId, reconciliation_id: reconciliationId },
-  });
-  return reopened;
 }
 
 export async function claimInteractivePostingCommand({
@@ -977,7 +907,10 @@ export async function processInteractivePostingCommand({
     for (const row of readyRows) {
       activeTransactionId = row.transaction_id;
       command = await setCommandStage({ db, command, state: INTERACTIVE_COMMAND_STATES.POSTING, stage: "posting" });
-      await appendInteractivePostingCommandEvent({ db, operationId, event: "qbo_create_started", extra: { transaction_id: row.transaction_id } });
+      // The child poster still performs duplicate/vendor/authorization gates.
+      // Do not label this as a provider write until that child emits its own
+      // qbo_write_started event.
+      await appendInteractivePostingCommandEvent({ db, operationId, event: "posting_execution_started", extra: { transaction_id: row.transaction_id } });
       const result = await poster({
         businessId: command.business_id,
         transactionId: row.transaction_id,

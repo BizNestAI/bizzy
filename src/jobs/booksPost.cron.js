@@ -44,6 +44,7 @@ import {
 import { decideManualPostingGate, hasAuthorizedMonthlyReviewApproval } from "../services/bookkeeping/manualPostingAuthority.js";
 import { hashManualPostOverrideContext } from "../services/bookkeeping/manualPostOverrideToken.js";
 import { createPostingError, normalizePostingError } from "../services/bookkeeping/postingErrorNormalizer.js";
+import { compileCanonicalCreditCardChargePosting } from "../services/bookkeeping/canonicalPostingCompiler.js";
 import { classifyPostingFailure } from "../services/bookkeeping/postingFailureClassification.js";
 import { hasFinalCategorizeAsNewResolution } from "../services/bookkeeping/incomingDepositResolution.js";
 import {
@@ -699,12 +700,25 @@ function summarizeQboDuplicateCandidates(candidates = []) {
 }
 
 export function isRejectedSoftDuplicateCandidate(item = {}, candidate = {}, { manual = false } = {}) {
+  const durableDecision = item?.meta?.duplicate_override_decision || {};
+  const candidateId = String(candidate?.qbo_txn_id || candidate?.qbo_entity_id || candidate?.id || "");
+  const candidateType = String(candidate?.qbo_txn_type || candidate?.qbo_entity_type || candidate?.type || "").toLowerCase();
+  if (
+    manual === true &&
+    durableDecision.decision === "categorize_as_new_despite_duplicate_risk" &&
+    Number(durableDecision.decision_version || 0) >= 3 &&
+    Array.isArray(durableDecision.reviewed_candidates)
+  ) {
+    return durableDecision.reviewed_candidates.some((reviewed) => {
+      const reviewedId = String(reviewed?.qbo_txn_id || reviewed?.qbo_entity_id || reviewed?.id || "");
+      const reviewedType = String(reviewed?.qbo_txn_type || reviewed?.qbo_entity_type || reviewed?.type || "").toLowerCase();
+      return reviewed.informational_only === true && reviewedId && reviewedId === candidateId && (!reviewedType || !candidateType || reviewedType === candidateType);
+    });
+  }
   const decision = item?.meta?.incoming_deposit_resolution || {};
   if (manual !== true || decision.source !== "monthly_review_force_post" || Number(decision.decision_version || 0) < 2 || decision.duplicate_risk_acknowledged !== true || decision.candidate_disposition !== "rejected_as_distinct_transaction") return false;
   const reviewedId = String(decision.reviewed_duplicate_candidate_id || "");
-  const candidateId = String(candidate?.qbo_txn_id || candidate?.qbo_entity_id || candidate?.id || "");
   const reviewedType = String(decision.reviewed_duplicate_candidate?.qbo_txn_type || decision.reviewed_duplicate_candidate?.qbo_entity_type || "").toLowerCase();
-  const candidateType = String(candidate?.qbo_txn_type || candidate?.qbo_entity_type || candidate?.type || "").toLowerCase();
   return Boolean(reviewedId && candidateId && reviewedId === candidateId && (!reviewedType || !candidateType || reviewedType === candidateType));
 }
 
@@ -2008,8 +2022,6 @@ async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, catego
 
 async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
   await assertTransactionNotExcluded({ db: supabase, businessId: item.business_id, transactionId: item.transaction_id });
-  const amount = Math.abs(Number(bankTxn.amount || 0));
-  const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "CC charge", requestId);
   const vendorRef = getQboEntityRef(bankTxn, "vendor");
   if (process.env.NODE_ENV !== "production") {
@@ -2020,30 +2032,16 @@ async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, 
       attached_to: vendorRef ? "cc_charge" : "none",
     });
   }
-  const payload = {
+  const compiled = compileCanonicalCreditCardChargePosting({
+    bankTransaction: bankTxn,
+    sourceCreditCardAccount: { id: mappedAccountId },
+    approvedLineAccount: { id: categoryAccountId, name: item.final_qbo_account_name, active: true },
     requestId,
-    PaymentType: "CreditCard",
-    AccountRef: { value: String(mappedAccountId) },
-    TxnDate: txnDate,
-    TotalAmt: amount,
-    PrivateNote: note,
-    ...(vendorRef
-      ? {
-          EntityRef: { value: vendorRef.value, type: "Vendor" },
-        }
-      : {}),
-    Line: [
-      {
-        DetailType: "AccountBasedExpenseLineDetail",
-        Amount: amount,
-        Description: lineDescription,
-        AccountBasedExpenseLineDetail: {
-          AccountRef: { value: String(categoryAccountId) },
-        },
-      },
-    ],
-  };
-  return createQboPurchase(qbo, payload);
+    privateNote: note,
+    lineDescription,
+    vendorRef,
+  });
+  return createQboPurchase(qbo, compiled.payload);
 }
 
 async function postCreditCardInflowCredit(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {

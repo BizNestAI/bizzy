@@ -41,7 +41,6 @@ import {
 } from "../../services/bookkeeping/autoPostControl.js";
 import { getAvailableMonthlyReviewPeriods } from "../../services/bookkeeping/monthlyReviewAvailablePeriodsService.js";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
-import { deriveBookkeepingActionMatrix, deriveBookkeepingPostingAction, toBookkeepingNextAction } from "../../services/bookkeeping/bookkeepingPostingActionEligibility.js";
 import {
   deriveTraceReconciliationStatus,
   formatPlaidAccountDisplayLabel,
@@ -688,40 +687,16 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
         return map;
       }, new Map());
     }
-    const transactionIds = rows.map((row) => row.id).filter(Boolean);
-    const { data: postingCommands, error: postingCommandsError } = transactionIds.length
-      ? await supabase.from("bookkeeping_interactive_posting_commands").select("operation_id,transaction_ids,state,stage,transaction_results,requested_at,claimed_at,updated_at").eq("business_id", businessId).overlaps("transaction_ids", transactionIds).order("created_at", { ascending: false })
-      : { data: [], error: null };
-    if (postingCommandsError) throw postingCommandsError;
-    const latestCommandByTransaction = new Map();
-    for (const command of postingCommands || []) {
-      for (const transactionId of command.transaction_ids || []) {
-        if (!latestCommandByTransaction.has(String(transactionId))) latestCommandByTransaction.set(String(transactionId), command);
-      }
-    }
     const rowsWithCandidateAvailability = rows.map((row) => {
       const candidates = (row.qbo_duplicate_candidates || []).map((candidate) => {
         const consumers = Array.from(candidateConsumers.get(String(candidate.qbo_entity_id || "")) || []);
         return classifyQboDuplicateCandidate(candidate, { transactionId: row.id, consumerTransactionIds: consumers });
       });
-      let normalized = {
+      return {
         ...row,
         qbo_duplicate_candidates: candidates,
         meta: row.meta ? { ...row.meta, qbo_duplicate_candidates: candidates } : row.meta,
       };
-      const command = latestCommandByTransaction.get(String(row.id));
-      const commandResult = command?.transaction_results?.[String(row.id)] || null;
-      if (command?.state === "failed" && commandResult?.ambiguous === true) {
-        normalized = {
-          ...normalized,
-          posting_operation: { operation_id: command.operation_id, state: command.state, stage: command.stage, requested_at: command.requested_at, claimed_at: command.claimed_at, updated_at: command.updated_at },
-          qbo_posting_lifecycle: { key: "reconciling", label: "Reconciliation required", tone: "danger", detail: commandResult.safe_message || "QuickBooks outcome must be reconciled before another write.", code: "qbo_outcome_ambiguous", technical: { operation_id: command.operation_id } },
-        };
-        normalized.posting_action = deriveBookkeepingPostingAction(normalized);
-        normalized.bookkeeping_action_matrix = deriveBookkeepingActionMatrix(normalized);
-        normalized.bookkeeping_next_action = toBookkeepingNextAction(normalized.posting_action);
-      }
-      return normalized;
     });
 
     return res.json({
