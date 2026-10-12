@@ -159,3 +159,65 @@ test("the shared next-action contract exposes one canonical UI action", () => {
   assert.equal(contract.posting_allowed, true);
   assert.deepEqual(contract.missing_prerequisites, []);
 });
+
+test("scheduled PARK MOBILE-shaped ordinary charges expose Post now despite advisory duplicate history", () => {
+  const action = deriveBookkeepingPostingAction({
+    status: "failed",
+    direction: "OUTFLOW",
+    final_qbo_account_id: "1150040008",
+    final_qbo_account_name: "Parking",
+    post_after: "2026-10-13T19:31:07.643Z",
+    posting_job: { state: "scheduled", scheduled_at: "2026-10-13T19:31:07.643Z", lease_expires_at: null },
+    provider_free_preflight: { preview_ready: true },
+    meta: {
+      safe_to_auto_post: true,
+      possible_qbo_duplicate: true,
+      qbo_duplicate_detection_confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE",
+      qbo_duplicate_candidates: [{ qbo_txn_id: "1917" }],
+    },
+  }, { nowMs: now });
+  assert.equal(action.permitted_action, "post_now");
+  assert.equal(action.posting_eligible, true);
+  assert.equal(action.confirmation_required, true);
+});
+
+test("deterministic duplicates and specialized rows do not inherit ordinary Post now", () => {
+  const exact = deriveBookkeepingPostingAction({
+    ...manual(), direction: "OUTFLOW",
+    meta: { manual_qbo_account_selection: true, qbo_duplicate_detection_confidence: "DETERMINISTIC_EXISTING" },
+    qbo_posting_lifecycle: { key: "possible_existing_qbo_match", label: "Possible QBO match", detail: "Review match" },
+  }, { nowMs: now });
+  assert.notEqual(exact.permitted_action, "post_now");
+
+  const statementCredit = deriveBookkeepingPostingAction({
+    ...manual(), direction: "INFLOW", signed_amount: 4.72, account_type: "credit card",
+    meta: { taxonomy_type: "statement_credit" },
+  }, { nowMs: now });
+  assert.notEqual(statementCredit.permitted_action, "post_now");
+});
+
+test("an approved categorize-as-new deposit keeps its deposit compiler path and can be expedited", () => {
+  const deposit = deriveBookkeepingPostingAction({
+    status: "failed",
+    direction: "INFLOW",
+    signed_amount: 500,
+    final_qbo_account_id: "12",
+    final_qbo_account_name: "Uncategorized Income",
+    post_after: "2026-10-13T19:33:38.584Z",
+    posting_job: { state: "scheduled", scheduled_at: "2026-10-13T19:33:38.584Z", qbo_intent_id: "deposit-intent" },
+    provider_free_preflight: { preview_ready: true, qbo_entity_type: "Deposit" },
+    meta: {
+      possible_qbo_duplicate: true,
+      qbo_duplicate_detection_confidence: "LOW_CONFIDENCE_FUZZY",
+      incoming_deposit_resolution: {
+        decision_version: 2,
+        resolution: "categorize_as_new",
+        approved_at: "2026-10-05T19:40:21.739Z",
+        candidate_disposition: "rejected_as_distinct_transaction",
+        selected_qbo_account_id: "12",
+      },
+    },
+  }, { nowMs: now });
+  assert.equal(deposit.permitted_action, "post_now");
+  assert.equal(deposit.posting_eligible, true);
+});

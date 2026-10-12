@@ -18,6 +18,7 @@ test("QBO posting schedule formatter renders authoritative lifecycle states", ()
     final_qbo_account_id: "qbo-meals",
     meta: { safe_to_auto_post: true },
     post_after: "2026-09-01T18:14:00.000Z",
+    posting_job: { state: "scheduled", scheduled_at: "2026-09-01T18:14:00.000Z" },
   }, { nowMs });
   assert.equal(future.key, "scheduled");
   assert.match(future.label, /Sep 1/);
@@ -28,6 +29,7 @@ test("QBO posting schedule formatter renders authoritative lifecycle states", ()
     final_qbo_account_id: "qbo-meals",
     meta: { safe_to_auto_post: true },
     post_after: "2026-08-31T15:59:00.000Z",
+    posting_job: { state: "scheduled", scheduled_at: "2026-08-31T15:59:00.000Z" },
   }, { nowMs });
   assert.equal(due.key, "ready_to_post");
   assert.equal(due.label, "Overdue — posting delayed");
@@ -70,14 +72,14 @@ test("Handled posting jobs expose retry, processing, and actionable configuratio
   assert.match(blocked.label, /Source account/);
 });
 
-test("QBO posting schedule only shows Posting from authoritative posting metadata", () => {
+test("QBO posting schedule requires a durable claimable job and only shows Posting from authoritative metadata", () => {
   assert.equal(
     formatQboPostingSchedule({
       status: "approved",
       meta: { safe_to_auto_post: true },
       post_after: "2026-08-31T15:00:00.000Z",
     }, { nowMs }).key,
-    "ready_to_post"
+    "not_scheduled"
   );
   assert.equal(
     formatQboPostingSchedule({
@@ -155,6 +157,8 @@ test("Books Review feed renders backend QBO schedule fields without deriving pos
 
   assert.match(component, /import \{ formatQboPostingSchedule \}/);
   assert.match(component, /const qboSchedule = showQboSchedule \? formatQboPostingSchedule\(txn\) : null/);
+  assert.doesNotMatch(component, /deriveBookkeepingPostingAction\(txn\)/);
+  assert.match(component, /txn\.bookkeeping_next_action/);
   assert.match(page, /showQboSchedule=\{isHandledTab\}/);
   assert.match(component, /posts: "QBO"/);
   assert.match(feedService, /post_after: cat\.post_after \|\| null/);

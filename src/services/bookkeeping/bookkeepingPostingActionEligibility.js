@@ -98,6 +98,26 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
     protectedDecision?.linked_original_transaction_id || protectedDecision?.standalone_refund_acknowledged === true
   );
   const preflight = row.provider_free_preflight || null;
+  const exactDuplicate =
+    meta.matched_existing_qbo === true ||
+    meta.existing_qbo_match_confirmed === true ||
+    meta.qbo_duplicate_detection_confidence === "DETERMINISTIC_EXISTING" ||
+    (Array.isArray(meta.qbo_duplicate_candidates) && meta.qbo_duplicate_candidates.some((candidate) => candidate?.deterministic === true));
+  const ordinaryPersistedAuthority =
+    Boolean(row.final_qbo_account_id) &&
+    String(row.direction || "").toUpperCase() === "OUTFLOW" &&
+    !String(meta.taxonomy_type || "").trim() &&
+    !meta.credit_card_inflow_resolution;
+  // This is the same accounting authority used by scheduling/recheck: a
+  // persisted final account on an ordinary settled outflow. Probable/fuzzy
+  // duplicate evidence is advisory; only a deterministic duplicate blocks.
+  const ordinaryPostingEligible = ordinaryPersistedAuthority && !exactDuplicate && preflight?.preview_ready !== false;
+  const approvedDepositPostingEligible =
+    hasSavedInflowType &&
+    String(row.direction || "").toUpperCase() === "INFLOW" &&
+    Boolean(row.final_qbo_account_id) &&
+    !exactDuplicate &&
+    preflight?.preview_ready !== false;
 
   if (COMPLETED_KEYS.has(lifecycle.key) || row.qbo_txn_id) return result(lifecycle, "completed", { actionCode: "completed" });
   if (row.pending === true || meta.pending === true || lifecycle.key === "pending") {
@@ -113,7 +133,7 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   if (lifecycle.key === "qbo_match_check_unavailable" || ["match_check_unavailable", "duplicate_check_unavailable"].includes(String(code || ""))) {
     return result(lifecycle, "refresh_match_check", { enabled: true, failure: "match_check_unavailable", actionCode: "retry_duplicate_check" });
   }
-  if (["possible_existing_qbo_match", "incoming_deposit_needs_match"].includes(lifecycle.key) && !supersededDepositMatchFailure) {
+  if (["possible_existing_qbo_match", "incoming_deposit_needs_match"].includes(lifecycle.key) && !supersededDepositMatchFailure && !ordinaryPostingEligible) {
     return result(lifecycle, "review", { enabled: true, reason: "Review the possible existing QuickBooks match before creating a new transaction.", failure: lifecycle.key, actionCode: "review_possible_match" });
   }
   if (creditCardPayment && !creditCardPayment.matched) return result(lifecycle, "review", { enabled: true, actionCode: "match_payment", reason: "Confirm the opposite-side credit-card payment." });
@@ -146,14 +166,18 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
       reason: preflight.blocker_reason || "Provider-free posting preview is not ready.",
     });
   }
+  if (ordinaryPostingEligible) {
+    const scheduledAt = Date.parse(row.post_after || row.posting_job?.scheduled_at || "");
+    return result(lifecycle, "post_now", { enabled: true, confirmation: Number.isFinite(scheduledAt) && scheduledAt > nowMs });
+  }
+  if (approvedDepositPostingEligible) {
+    const scheduledAt = Date.parse(row.post_after || row.posting_job?.scheduled_at || "");
+    return result(lifecycle, "post_now", { enabled: true, confirmation: Number.isFinite(scheduledAt) && scheduledAt > nowMs });
+  }
   if (hasSavedInflowType && (supersededDepositMatchFailure || code === "missing_posting_schedule" || lifecycle.key === "handled_not_posted")) {
     return result(lifecycle, "fix_issue", { enabled: true, actionCode: "recheck_schedule", reason: "The saved resolution is complete; recheck eligibility and assign the posting schedule." });
   }
   const manual = hasManualAccountAuthority(row);
-  const ordinaryPersistedAuthority =
-    Boolean(row.final_qbo_account_id) &&
-    String(row.direction || "").toUpperCase() === "OUTFLOW" &&
-    !String(meta.taxonomy_type || "").trim();
   if (weakOnly && !manual && !ordinaryPersistedAuthority) return result(lifecycle, "review", { enabled: true, actionCode: "inspect_blocker", reason: "Weak evidence requires durable manual approval before posting.", failure: code });
   if (!weakOnly && (lifecycle.key === "failed" || String(row.status || "").toLowerCase() === "failed") && failure?.retryable === true) {
     return result(lifecycle, "retry_posting", { enabled: true, failure: code || "retryable_posting_failure", actionCode: "retry_posting" });

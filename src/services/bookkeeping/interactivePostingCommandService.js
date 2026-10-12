@@ -406,19 +406,40 @@ export async function requestInteractiveTransactionPosting({
     error.status = 400;
     throw error;
   }
-  const { data: row, error: rowError } = await db
-    .from("transaction_categorizations")
-    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id,decided_by,updated_at")
-    .eq("business_id", businessId)
-    .eq("transaction_id", transactionId)
-    .maybeSingle();
+  const [rowResult, bankResult, jobResult] = await Promise.all([
+    db.from("transaction_categorizations")
+      .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id,decided_by,updated_at")
+      .eq("business_id", businessId)
+      .eq("transaction_id", transactionId)
+      .maybeSingle(),
+    db.from("bank_transactions")
+      .select("id,direction,pending,amount")
+      .eq("business_id", businessId)
+      .eq("id", transactionId)
+      .maybeSingle(),
+    db.from("bookkeeping_posting_jobs")
+      .select("id,state,scheduled_at,next_attempt_at,lease_owner,lease_expires_at,blocking_code,last_error_code,qbo_intent_id,qbo_request_id,qbo_txn_id")
+      .eq("business_id", businessId)
+      .eq("transaction_id", transactionId)
+      .maybeSingle(),
+  ]);
+  const { data: storedRow, error: rowError } = rowResult;
   if (rowError) throw rowError;
-  if (!row) {
+  if (bankResult.error) throw bankResult.error;
+  if (jobResult.error) throw jobResult.error;
+  if (!storedRow) {
     const error = new Error("transaction_not_found");
     error.code = "transaction_not_found";
     error.status = 404;
     throw error;
   }
+  const row = {
+    ...storedRow,
+    direction: bankResult.data?.direction || null,
+    pending: bankResult.data?.pending === true,
+    signed_amount: bankResult.data?.amount ?? null,
+    posting_job: jobResult.data || null,
+  };
   const action = deriveBookkeepingPostingAction(row);
   const forceDecision = row.meta?.duplicate_override_decision || row.meta?.incoming_deposit_resolution;
   const durableDuplicateOverride = forceDecision?.decision === "categorize_as_new_despite_duplicate_risk" &&

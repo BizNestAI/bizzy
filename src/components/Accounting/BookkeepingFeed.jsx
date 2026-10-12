@@ -13,7 +13,6 @@ import {
   isQboCreditCardAccount,
 } from "../../services/bookkeeping/creditCardPaymentStatus.js";
 import { formatQboPostingSchedule } from "../../services/bookkeeping/qboPostingLifecycle.js";
-import { deriveBookkeepingPostingAction } from "../../services/bookkeeping/bookkeepingPostingActionEligibility.js";
 import { detectProcessorSettlementActivity } from "../../services/bookkeeping/processorSettlementProfiles.js";
 import { formatNumericCalendarDate } from "../../utils/dateUtils.js";
 import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
@@ -1519,9 +1518,11 @@ export default function BookkeepingFeed({
               effectiveResolution !== "match_credit_card_payment";
             const coaEditingProtected = effectiveResolution === "match_credit_card_payment" || Boolean(ccWorkflowStatus || ccTransferLabel);
             const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly && (!selectableIds || selectableIds.has(txn.id));
+            // The backend is authoritative. The customer must never invent a
+            // provider-write action from a partial browser projection.
             const postingAction = txn.bookkeeping_next_action
               ? { ...txn.bookkeeping_next_action, action_code: txn.bookkeeping_next_action.legacy_action_code }
-              : txn.posting_action || deriveBookkeepingPostingAction(txn);
+              : txn.posting_action || null;
             const customerPostAction = postingAction?.permitted_action || postingAction?.action_code || null;
             const customerCanPost = ["post_now", "preview_and_post", "retry_posting"].includes(customerPostAction);
             const customerUndoAction = txn.bookkeeping_action_matrix?.actions?.find?.((action) => action.action_code === "undo");
