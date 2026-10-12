@@ -47,11 +47,13 @@ test("timeouts remain ambiguous while auth and rate limits have stable classific
 
 test("Deposit payload declares the required DepositLineDetail line type", () => {
   const cron = readFileSync(join(process.cwd(), "src/jobs/booksPost.cron.js"), "utf8");
+  const compiler = readFileSync(join(process.cwd(), "src/services/bookkeeping/canonicalPostingCompiler.js"), "utf8");
   const body = cron.slice(cron.indexOf("async function postBankInflowDeposit"), cron.indexOf("async function postCreditCardOutflowCharge"));
-  assert.match(body, /DetailType:\s*"DepositLineDetail"/);
-  assert.match(body, /DepositToAccountRef:\s*\{ value: String\(mappedAccountId\) \}/);
-  assert.match(body, /DepositLineDetail:[\s\S]*AccountRef:\s*\{ value: String\(categoryAccountId\) \}/);
-  assert.match(body, /Amount:\s*amount/);
+  assert.match(body, /compileCanonicalDepositPosting/);
+  assert.match(compiler, /DetailType:\s*"DepositLineDetail"/);
+  assert.match(compiler, /DepositToAccountRef:\s*\{ value: destinationAccountId \}/);
+  assert.match(compiler, /DepositLineDetail:[\s\S]*AccountRef:\s*\{ value: finalAccountId \}/);
+  assert.match(compiler, /Amount:\s*amount/);
 });
 
 test("manual route returns normalized provider metadata instead of object coercion", () => {

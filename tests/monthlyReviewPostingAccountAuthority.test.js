@@ -63,6 +63,52 @@ test("MRP preview scopes cached accounts to the active realm and returns typed f
   assert.doesNotMatch(route.slice(route.indexOf('router.get("/runs/:runId/transactions/:transactionId/post-qbo-preview"'), route.indexOf('router.put("/runs/:runId/transactions/:transactionId/credit-card-inflow-resolution"')), /Could not safely compile/);
 });
 
+test("preview uses metadata taxonomy contract and sanitizes missing-column failures", async () => {
+  const { buildCanonicalPostingPreview } = await import("../src/services/bookkeeping/canonicalPostingCompiler.js");
+  const tables = [];
+  const db = {
+    from(table) {
+      tables.push(table);
+      const query = {
+        select() { return query; },
+        eq() { return query; },
+        order() { return query; },
+        limit() { return query; },
+        async maybeSingle() {
+          if (table === "transaction_categorizations") {
+            return { data: null, error: { code: "42703", message: "column transaction_categorizations.taxonomy_type does not exist" } };
+          }
+          return { data: null, error: null };
+        },
+      };
+      return query;
+    },
+  };
+  await assert.rejects(
+    buildCanonicalPostingPreview({ db, businessId: "business-1", transactionId: "transaction-1" }),
+    (error) => error.code === "bookkeeping_schema_contract_unavailable" &&
+      error.status === 503 &&
+      !error.message.includes("taxonomy_type")
+  );
+  assert.deepEqual(tables.sort(), ["bank_transactions", "transaction_categorizations"]);
+
+  const compiler = read("src/services/bookkeeping/canonicalPostingCompiler.js");
+  const categorizationSelect = compiler.match(/from\("transaction_categorizations"\)\s*\.select\("([^"]+)"\)/)?.[1] || "";
+  assert.doesNotMatch(categorizationSelect, /taxonomy_type|cc_payment_pair_id/);
+  assert.match(categorizationSelect, /meta/);
+});
+
+test("MRP preview response hides raw PostgreSQL details and supplies a request id", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const start = route.indexOf('router.get("/runs/:runId/transactions/:transactionId/post-qbo-preview"');
+  const end = route.indexOf('router.put("/runs/:runId/transactions/:transactionId/credit-card-inflow-resolution"', start);
+  const previewRoute = route.slice(start, end);
+  assert.match(previewRoute, /crypto\.randomUUID\(\)/);
+  assert.match(previewRoute, /request_id: requestId/);
+  assert.match(previewRoute, /source_error: error\?\.cause\?\.message/);
+  assert.doesNotMatch(previewRoute, /message:\s*error\?\.cause/);
+});
+
 test("MRP preview and post share final-account authority and block unsaved dropdown changes", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");

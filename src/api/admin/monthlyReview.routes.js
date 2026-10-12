@@ -2448,6 +2448,7 @@ function postingPreviewNextAction(errorCode) {
 }
 
 router.get("/runs/:runId/transactions/:transactionId/post-qbo-preview", async (req, res) => {
+  const requestId = crypto.randomUUID();
   try {
     const { runId, transactionId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
@@ -2456,16 +2457,27 @@ router.get("/runs/:runId/transactions/:transactionId/post-qbo-preview", async (r
     await assertRunTransactionInSelectedMonth(run, transactionId);
     const preview = await buildCanonicalPostingPreview({ db: supabase, businessId: run.business_id, transactionId });
     setMonthlyReviewNoStore(res);
-    return res.json({ ok: true, preview });
+    res.set("x-bizzi-request-id", requestId);
+    return res.json({ ok: true, preview, request_id: requestId });
   } catch (error) {
     const status = Number(error?.status) || 503;
     const actionCode = postingPreviewNextAction(error?.code);
+    console.error("[monthly-review] QBO posting preview failed", {
+      request_id: requestId,
+      run_id: req.params?.runId || null,
+      transaction_id: req.params?.transactionId || null,
+      error_code: error?.code || "posting_preview_failed",
+      source_error_code: error?.cause?.code || null,
+      source_error: error?.cause?.message || error?.message || null,
+    });
+    res.set("x-bizzi-request-id", requestId);
     return res.status(status).json({
       ok: false,
       error: error?.code || "posting_preview_failed",
       message: error?.message || "Posting preview state could not be verified.",
       action_code: actionCode,
       preview_ready: false,
+      request_id: requestId,
     });
   }
 });

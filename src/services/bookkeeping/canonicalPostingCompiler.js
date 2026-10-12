@@ -145,14 +145,32 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
   if (!db || !businessId || !transactionId) throw postingError("missing_posting_scope", "Posting preview context is incomplete.", 400);
   const [{ data: item, error: itemError }, { data: bankTransaction, error: bankError }] = await Promise.all([
     db.from("transaction_categorizations")
-      .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,posted_at,updated_at,taxonomy_type,cc_payment_pair_id,meta")
+      .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,posted_at,updated_at,meta")
       .eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle(),
     db.from("bank_transactions")
       .select("id,business_id,date,amount,direction,name,merchant_name,plaid_account_id,pending,is_archived")
       .eq("business_id", businessId).eq("id", transactionId).maybeSingle(),
   ]);
-  if (itemError) throw itemError;
-  if (bankError) throw bankError;
+  if (itemError) {
+    const schemaFailure = String(itemError?.code || "") === "42703";
+    const error = postingError(
+      schemaFailure ? "bookkeeping_schema_contract_unavailable" : "posting_preview_state_unavailable",
+      schemaFailure ? "Bookkeeping preview is temporarily unavailable." : "Transaction state could not be loaded for preview.",
+      503
+    );
+    error.cause = itemError;
+    throw error;
+  }
+  if (bankError) {
+    const schemaFailure = String(bankError?.code || "") === "42703";
+    const error = postingError(
+      schemaFailure ? "bookkeeping_schema_contract_unavailable" : "posting_preview_state_unavailable",
+      schemaFailure ? "Bookkeeping preview is temporarily unavailable." : "Transaction state could not be loaded for preview.",
+      503
+    );
+    error.cause = bankError;
+    throw error;
+  }
   if (!item || !bankTransaction) throw postingError("transaction_not_found", "The transaction could not be loaded.", 404);
   if (item.qbo_txn_id || item.posted_at || String(item.status || "").toLowerCase() === "posted") throw postingError("transaction_already_posted", "This transaction is already posted.");
   if (bankTransaction.pending === true) throw postingError("pending_transaction_not_postable", "Pending bank activity cannot be posted.");
