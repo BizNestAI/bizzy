@@ -516,8 +516,10 @@ test("parent cannot report success without a durable child operation result", as
   const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
   assert.equal(status.terminal, true);
   assert.equal(status.posted_transaction_ids.length, 0);
-  assert.equal(status.rows[0].failure_code, "qbo_result_unconfirmed");
-  assert.equal(status.rows[0].ambiguous, true);
+  assert.equal(status.rows[0].failure_code, "qbo_posting_failed");
+  assert.equal(status.rows[0].ambiguous, false);
+  assert.equal(status.rows[0].retryable, true);
+  assert.equal(status.rows[0].internal_reason_code, "interactive_posting_child_result_missing");
 });
 
 test("claim is guarded by lease ownership and becomes reclaimable after expiration", async () => {

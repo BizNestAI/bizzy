@@ -90,7 +90,7 @@ function postingFailureResult({ transactionId, error, childOperationId = null } 
     safeMessage = "The selected QuickBooks account cannot be used for this transaction. Choose a compatible account and try again.";
     action = "choose_account";
     retryable = false;
-  } else if (/timeout|unknown|ambiguous|no_receipt|missing_transaction_id|child_result_missing/.test(normalized)) {
+  } else if (/timeout|unknown|ambiguous|no_receipt|missing_transaction_id/.test(normalized)) {
     safeReasonCode = "qbo_result_unconfirmed";
     safeMessage = "Bizzi could not confirm whether QuickBooks accepted this transaction. Posting is paused to prevent a duplicate.";
     action = "check_status";
@@ -446,8 +446,8 @@ export async function requestInteractiveTransactionPosting({
     forceDecision?.decision_version >= 3 &&
     Array.isArray(forceDecision?.reviewed_candidate_ids) &&
     forceDecision.reviewed_candidate_ids.length > 0;
-  const reviewedSoftDuplicate = allowReviewedSoftDuplicate === true &&
-    (durableDuplicateOverride || (
+  const reviewedSoftDuplicate = durableDuplicateOverride ||
+    (allowReviewedSoftDuplicate === true && (
       forceDecision?.source === "monthly_review_force_post" &&
       forceDecision?.decision_version >= 2 &&
       forceDecision?.duplicate_risk_acknowledged === true &&
@@ -468,7 +468,14 @@ export async function requestInteractiveTransactionPosting({
     actorId,
     selectedQboAccountId: row.final_qbo_account_id,
     selectedQboAccountName: row.final_qbo_account_name,
-    merchantSnapshot: { audit_source: auditSource, requested_action: reviewedSoftDuplicate ? "post_reviewed_soft_duplicate" : action.permitted_action, force_soft_duplicate_override: reviewedSoftDuplicate },
+    merchantSnapshot: {
+      audit_source: auditSource,
+      requested_action: reviewedSoftDuplicate ? "post_reviewed_soft_duplicate" : action.permitted_action,
+      force_soft_duplicate_override: reviewedSoftDuplicate,
+      duplicate_override_decision: durableDuplicateOverride ? forceDecision : null,
+      posting_intent_id: jobResult.data?.qbo_intent_id || null,
+      qbo_request_id: jobResult.data?.qbo_request_id || null,
+    },
     rememberForFuture: false,
     transactionIds: [transactionId],
     expectedRowVersions: { [transactionId]: row.updated_at },
@@ -480,8 +487,8 @@ export async function requestInteractiveTransactionPosting({
   // to that confirmed pre-provider failure code.
   const legacyPreProviderFailure = decision.reused === true &&
     decision.command?.state === INTERACTIVE_COMMAND_STATES.FAILED &&
-    decision.command?.failure_code === "qbo_account_not_eligible" &&
-    Object.keys(decision.command?.child_operations || {}).length === 0 &&
+    ["qbo_account_not_eligible", "interactive_posting_child_result_missing", "manual_post_not_completed"].includes(decision.command?.failure_code) &&
+    Object.values(decision.command?.child_operations || {}).every((value) => !value) &&
     (decision.command?.qbo_receipt_ids || []).length === 0;
   if (legacyPreProviderFailure) {
     await updateInteractiveCommand({
@@ -505,7 +512,7 @@ export async function requestInteractiveTransactionPosting({
       db,
       operationId: decision.operation_id,
       event: "legacy_pre_provider_validation_resumed",
-      extra: { prior_failure_code: "qbo_account_not_eligible" },
+      extra: { prior_failure_code: decision.command?.failure_code, provider_boundary_evidence: false },
     });
   }
   return {
@@ -937,6 +944,8 @@ export async function processInteractivePostingCommand({
         transactionId: row.transaction_id,
         confirmPostAnyway: false,
         createNewIncomeOverride: command.merchant_snapshot?.force_soft_duplicate_override === true,
+        operationId,
+        childOperationId: command.merchant_snapshot?.qbo_request_id || null,
       });
       const childOperationId = result?.child_operation_id || result?.qbo_request_id || null;
       if (!childOperationId) {

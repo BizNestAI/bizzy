@@ -667,6 +667,10 @@ function classifyPreExistingQboMatch({ qboCandidates = [], bankTxn, mapping, qbo
   const scored = qboCandidates
     .map((entity) => scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }))
     .filter((c) => c.qbo_txn_id && c.account_matches && c.date_matches && c.amount_matches && c.direction_matches);
+  return classifyScoredQboCandidates(scored);
+}
+
+function classifyScoredQboCandidates(scored = []) {
   const deterministic = scored.filter((c) => c.deterministic);
   if (deterministic.length === 1) return { confidence: "DETERMINISTIC_EXISTING", candidates: deterministic };
   if (deterministic.length > 1) return { confidence: "AMBIGUOUS", candidates: deterministic };
@@ -720,6 +724,10 @@ export function isRejectedSoftDuplicateCandidate(item = {}, candidate = {}, { ma
   const reviewedId = String(decision.reviewed_duplicate_candidate_id || "");
   const reviewedType = String(decision.reviewed_duplicate_candidate?.qbo_txn_type || decision.reviewed_duplicate_candidate?.qbo_entity_type || "").toLowerCase();
   return Boolean(reviewedId && candidateId && reviewedId === candidateId && (!reviewedType || !candidateType || reviewedType === candidateType));
+}
+
+export function excludeReviewedInformationalDuplicateCandidates(item = {}, candidates = [], { manual = false } = {}) {
+  return (candidates || []).filter((candidate) => !isRejectedSoftDuplicateCandidate(item, candidate, { manual }));
 }
 
 function duplicateChallengeId({ item, requestId, candidates = [] }) {
@@ -2886,13 +2894,13 @@ export async function handleItem(item, options = {}) {
       transactionId: txnId,
       qboRequestId: requestId,
     }));
-    const candidatesForCheck = qboCandidates.filter((candidate) => !isRejectedSoftDuplicateCandidate(item, candidate, { manual }));
-    if (qboCandidates.length > 0 && candidatesForCheck.length === 0) {
-      structuredManualCheckCompleted = true;
-      timing.context.reviewed_soft_duplicate_candidate_ignored = true;
-    }
-    const duplicateCheck = classifyPreExistingQboMatch({
-      qboCandidates: candidatesForCheck,
+    // Intuit returns raw Purchase objects here (Id/TxnDate/AccountRef), while
+    // the durable v3 decision stores canonical candidate identities
+    // (qbo_txn_id/qbo_txn_type). Score first, then apply the saved decision.
+    // Filtering the raw objects cannot match Id 1949 and recreates a challenge
+    // that the accountant already resolved.
+    const discoveredCheck = classifyPreExistingQboMatch({
+      qboCandidates,
       bankTxn: bank,
       mapping: {
         ...mapping,
@@ -2902,6 +2910,14 @@ export async function handleItem(item, options = {}) {
       qboTxnType: intentQboTxnType,
       requestId,
     });
+    const candidatesForCheck = excludeReviewedInformationalDuplicateCandidates(item, discoveredCheck.candidates, { manual });
+    if (discoveredCheck.candidates.length > 0 && candidatesForCheck.length === 0) {
+      structuredManualCheckCompleted = true;
+      timing.context.reviewed_soft_duplicate_candidate_ignored = true;
+    }
+    const duplicateCheck = candidatesForCheck.length === discoveredCheck.candidates.length
+      ? discoveredCheck
+      : classifyScoredQboCandidates(candidatesForCheck);
     if (duplicateCheck.confidence === "DETERMINISTIC_EXISTING") {
       const match = duplicateCheck.candidates[0];
       if (manual) {
