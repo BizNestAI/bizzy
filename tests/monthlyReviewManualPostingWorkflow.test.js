@@ -70,6 +70,17 @@ test("Handled action matrix keeps completion or resolution controls visible", ()
   }
 });
 
+test("All Actions is a controlled viewport-safe portal that closes predictably", () => {
+  const menu = read("src/components/Accounting/BookkeepingActionMenu.jsx");
+  assert.match(menu, /createPortal/);
+  assert.match(menu, /document\.addEventListener\("pointerdown"/);
+  assert.match(menu, /event\.key !== "Escape"/);
+  assert.match(menu, /triggerRef\.current\?\.focus/);
+  assert.match(menu, /window\.addEventListener\("scroll", update, true\)/);
+  assert.match(menu, /aria-haspopup="menu"/);
+  assert.doesNotMatch(menu, /<details/);
+});
+
 test("Monthly Review exposes bounded local recovery without a QuickBooks call", () => {
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   const route = read("src/api/admin/monthlyReview.routes.js");

@@ -57,7 +57,7 @@ export function hasActiveConfirmedIncomingDepositMatch(row = {}) {
 export function isPreProviderIncomingDepositMatchFailure(row = {}) {
   const meta = row.meta || {};
   const reason = String(row.post_error || meta.post_block_reason || "").toLowerCase();
-  return reason === "incoming_deposit_needs_match" &&
+  return ["incoming_deposit_needs_match", "match_check_unavailable", "duplicate_check_unavailable"].includes(reason) &&
     !row.qbo_txn_id &&
     !meta.provider_write_started_at &&
     !meta.qbo_write_started_at &&

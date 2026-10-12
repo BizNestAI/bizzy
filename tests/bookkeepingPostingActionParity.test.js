@@ -92,9 +92,9 @@ test("protected inflow actions use task-oriented canonical action definitions", 
     post_error: "duplicate_check_unavailable",
     meta: { ...savedRefund.meta },
   }, { nowMs: now });
-  assert.equal(duplicateUnavailable.action_code, "retry_duplicate_check");
-  assert.equal(duplicateUnavailable.label, "Retry duplicate check");
-  assert.equal(duplicateUnavailable.requires_provider_call, true);
+  assert.equal(duplicateUnavailable.action_code, "recheck_schedule");
+  assert.equal(duplicateUnavailable.label, "Recheck & schedule");
+  assert.equal(duplicateUnavailable.requires_provider_call, false);
 });
 
 test("missing refund acknowledgement and failed provider-free previews never expose Post now", () => {

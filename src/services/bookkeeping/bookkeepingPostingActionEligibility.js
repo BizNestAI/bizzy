@@ -13,13 +13,14 @@ const CREDIT_TYPE_CODES = new Set([
 ]);
 
 export const BOOKKEEPING_ACTION_GROUPS = Object.freeze([
-  Object.freeze({ key: "classification", label: "Classification", actions: Object.freeze(["confirm_type", "edit_type", "select_gl_account", "change_gl_account"]) }),
+  Object.freeze({ key: "classification", label: "Classification", actions: Object.freeze(["resolve_issue", "confirm_type", "edit_type", "select_gl_account", "change_gl_account"]) }),
   Object.freeze({ key: "resolution", label: "Resolution", actions: Object.freeze(["edit_resolution", "find_qbo_match", "confirm_qbo_match", "retry_duplicate_check", "acknowledge_duplicate_risk"]) }),
   Object.freeze({ key: "posting", label: "Posting", actions: Object.freeze(["repair_account_mapping", "recheck_posting_eligibility", "recover_posting_state", "preview_and_post", "retry_posting", "wait_for_posting", "reconcile_provider_outcome"]) }),
   Object.freeze({ key: "history", label: "History", actions: Object.freeze(["undo", "view_blocker"]) }),
 ]);
 
 const MATRIX_DEFINITIONS = Object.freeze({
+  resolve_issue: ["Resolve issue", false, null],
   confirm_type: ["Confirm type", false, "/api/bookkeeping/transactions/:transactionId/credit-card-inflow-resolution"],
   edit_type: ["Edit type", false, "/api/bookkeeping/transactions/:transactionId/credit-card-inflow-resolution"],
   select_gl_account: ["Select GL account", false, "/api/bookkeeping/transactions/:transactionId/account"],
@@ -130,7 +131,7 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   if (lifecycle.key === "reconciling" || ["qbo_outcome_ambiguous", "qbo_posting_receipt_update_failed"].includes(String(code || ""))) {
     return result(lifecycle, "reconciling", { enabled: true, reason: "QuickBooks outcome must be reconciled before another write.", actionCode: "reconcile_qbo" });
   }
-  if (lifecycle.key === "qbo_match_check_unavailable" || ["match_check_unavailable", "duplicate_check_unavailable"].includes(String(code || ""))) {
+  if (!supersededDepositMatchFailure && (lifecycle.key === "qbo_match_check_unavailable" || ["match_check_unavailable", "duplicate_check_unavailable"].includes(String(code || "")))) {
     return result(lifecycle, "refresh_match_check", { enabled: true, failure: "match_check_unavailable", actionCode: "retry_duplicate_check" });
   }
   if (["possible_existing_qbo_match", "incoming_deposit_needs_match"].includes(lifecycle.key) && !supersededDepositMatchFailure && !ordinaryPostingEligible) {
@@ -205,7 +206,7 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
 }
 
 const NEXT_ACTION_CODES = Object.freeze({
-  resolve_issue: "confirm_type",
+  resolve_issue: "resolve_issue",
   confirm_statement_credit: "confirm_type",
   complete_refund_details: "edit_resolution",
   select_valid_account: "select_gl_account",
@@ -253,6 +254,7 @@ function disabledReason(code, context) {
   if (context.pending) return "Available after the bank transaction settles.";
   if (context.active) return "A posting request is already processing.";
   if (context.ambiguous) return "Reconcile the QuickBooks outcome before making another change.";
+  if (code === "resolve_issue" && context.savedType) return `Already confirmed as ${context.savedTypeLabel}.`;
   if (code === "confirm_type" && context.savedType) return `Already confirmed as ${context.savedTypeLabel}.`;
   if (code === "edit_type" && !context.savedType) return "Confirm the credit type first.";
   if (code === "select_gl_account" && context.hasGl) return "A GL account is already selected.";
@@ -281,13 +283,17 @@ export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } =
   const final = COMPLETED_KEYS.has(lifecycle.key) || Boolean(row.qbo_txn_id || row.posted_at);
   const pending = row.pending === true || meta.pending === true || lifecycle.key === "pending";
   const active = lifecycle.key === "posting" || meta.posting_in_progress === true;
-  const ambiguous = lifecycle.key === "reconciling" || ["qbo_outcome_ambiguous", "qbo_posting_receipt_update_failed", "qbo_succeeded_local_finalize_pending"].includes(String(legacy.safe_failure_classification || ""));
+  const ambiguous = lifecycle.key === "reconciling" || ["reconcile_qbo", "finalize_posting"].includes(legacy.action_code) || ["qbo_outcome_ambiguous", "qbo_posting_receipt_update_failed", "qbo_succeeded_local_finalize_pending"].includes(String(legacy.safe_failure_classification || ""));
   const savedResolution = meta.credit_card_inflow_resolution || null;
   const savedType = savedResolution?.resolution_type || null;
   const savedTypeLabel = savedType === "merchant_refund" ? "Merchant refund" : savedType ? "Cash back or statement credit" : null;
   const hasGl = Boolean(row.final_qbo_account_id || savedResolution?.destination_qbo_account_id);
   const previewReady = row.provider_free_preflight?.preview_ready === true && legacy.posting_eligible === true;
-  const blocker = sanitizedBlockerCode(legacy.safe_failure_classification || row.provider_free_preflight?.blocker_code || lifecycle.code);
+  const supersededDepositMatchFailure = hasFinalCategorizeAsNewResolution(row) && isPreProviderIncomingDepositMatchFailure(row);
+  const rawBlocker = legacy.safe_failure_classification || row.provider_free_preflight?.blocker_code || lifecycle.code;
+  const blocker = supersededDepositMatchFailure && ["match_check_unavailable", "duplicate_check_unavailable", "incoming_deposit_needs_match"].includes(String(rawBlocker || ""))
+    ? null
+    : sanitizedBlockerCode(rawBlocker);
   const duplicateUnavailable = ["match_check_unavailable", "duplicate_check_unavailable"].includes(blocker);
   const possibleDuplicate = ["possible_existing_qbo_match", "incoming_deposit_needs_match"].includes(blocker) || meta.possible_qbo_duplicate === true;
   const mappingBlocked = ["missing_source_qbo_account", "missing_qbo_account_mapping", "inactive_source_qbo_account"].includes(blocker);
@@ -340,6 +346,78 @@ export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } =
     actions,
     groups: BOOKKEEPING_ACTION_GROUPS,
   };
+}
+
+export function deriveCanonicalDuplicateState(row = {}) {
+  const meta = row.meta || {};
+  if (meta.provider_outcome_unknown === true) return "provider_outcome_unknown";
+  if (meta.incoming_deposit_match_status === "confirmed" || meta.matched_existing_qbo === true) return "confirmed_existing_match";
+  if (meta.duplicate_check_in_progress === true) return "checking";
+  if (meta.duplicate_override_decision || (hasFinalCategorizeAsNewResolution(row) && meta.incoming_deposit_match_check === "unavailable_manual_override")) return "reviewed_distinct";
+  const candidates = Array.isArray(meta.qbo_duplicate_candidates) ? meta.qbo_duplicate_candidates : [];
+  const blockingCandidates = candidates.filter((candidate) => candidate?.informational_only !== true && candidate?.consumed_by_another_transaction !== true);
+  if (blockingCandidates.length) return "candidate_requires_review";
+  const reason = String(row.post_error || meta.post_block_reason || "").toLowerCase();
+  if (["match_check_unavailable", "duplicate_check_unavailable"].includes(reason)) return "check_failed_retryable";
+  if (meta.incoming_deposit_match_status === "unchecked" || meta.possible_qbo_duplicate === true) return "unresolved";
+  if (meta.duplicate_check_not_required === true) return "not_required";
+  return "clear";
+}
+
+export function deriveCanonicalBookkeepingWorkflow(row = {}, { nowMs = Date.now() } = {}) {
+  const postingAction = deriveBookkeepingPostingAction(row, { nowMs });
+  const nextAction = toBookkeepingNextAction(postingAction);
+  const actionMatrix = deriveBookkeepingActionMatrix(row, { nowMs });
+  const enabled = actionMatrix.actions.filter((action) => action.enabled);
+  const primary = actionMatrix.actions.find((action) => action.is_primary) || null;
+  const duplicateState = deriveCanonicalDuplicateState(row);
+  const blockingReasons = [
+    postingAction.safe_failure_classification,
+    row.provider_free_preflight?.preview_ready === false ? row.provider_free_preflight?.blocker_code : null,
+  ].filter((reason) => {
+    if (!reason) return false;
+    if (duplicateState === "reviewed_distinct" && ["match_check_unavailable", "duplicate_check_unavailable", "incoming_deposit_needs_match"].includes(String(reason))) return false;
+    return true;
+  });
+  const advisoryReasons = [];
+  if (["clear", "reviewed_distinct", "not_required"].includes(duplicateState) && row.meta?.possible_qbo_duplicate === true) {
+    advisoryReasons.push("duplicate_evidence_resolved");
+  }
+  const workflow = {
+    version: 1,
+    workflow_state: actionMatrix.state,
+    primary_action: primary?.action_code || null,
+    primary_action_label: primary?.label || null,
+    primary_action_enabled: primary?.enabled === true,
+    allowed_actions: enabled.map((action) => action.action_code),
+    blocking_reasons: Array.from(new Set(blockingReasons)),
+    advisory_reasons: advisoryReasons,
+    duplicate_state: duplicateState,
+    posting_entity: row.provider_free_preflight?.qbo_entity_type || null,
+    preview_ready: row.provider_free_preflight?.preview_ready === true,
+    processing: actionMatrix.state === "waiting",
+    provider_outcome: actionMatrix.state === "provider_outcome_uncertain" ? "unknown" : row.qbo_txn_id ? "confirmed_success" : "not_started",
+    request_id: row.posting_job?.qbo_request_id || null,
+    posting_action: postingAction,
+    next_action: nextAction,
+    action_matrix: actionMatrix,
+  };
+  return { ...workflow, invariant_violations: validateCanonicalBookkeepingWorkflow(workflow) };
+}
+
+export function validateCanonicalBookkeepingWorkflow(workflow = {}) {
+  const violations = [];
+  const waiting = ["waiting", "pending"].includes(workflow.workflow_state);
+  if (workflow.workflow_state === "final") {
+    if (workflow.primary_action !== null) violations.push("final_state_has_primary_action");
+    return violations;
+  }
+  if (!workflow.primary_action) violations.push("non_final_state_missing_primary_action");
+  if (!waiting && workflow.primary_action_enabled !== true) violations.push("actionable_primary_action_disabled");
+  if (workflow.primary_action_enabled === true && !workflow.allowed_actions?.includes(workflow.primary_action)) violations.push("primary_action_not_allowed");
+  if (workflow.primary_action === "reconcile_provider_outcome" && workflow.provider_outcome !== "unknown") violations.push("reconciliation_without_unknown_provider_outcome");
+  if (["clear", "reviewed_distinct", "not_required"].includes(workflow.duplicate_state) && workflow.primary_action === "retry_duplicate_check") violations.push("resolved_duplicate_state_requests_retry");
+  return violations;
 }
 
 export default deriveBookkeepingPostingAction;

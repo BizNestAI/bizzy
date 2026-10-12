@@ -221,11 +221,12 @@ function BookkeepingTransactionMirrorRow({
   const isHandledFeed = feedStatus === "handled";
   const isActionBusy = (action) => Boolean(busyActions?.[`${action}:${row.id}`]) || busyAction === `${action}:${row.id}`;
   const manualPostBusy = isActionBusy("post") || isActionBusy("retry");
-  const canonicalNextAction = row.bookkeeping_next_action || null;
+  const canonicalWorkflow = row.bookkeeping_workflow || null;
+  const canonicalNextAction = canonicalWorkflow?.next_action || row.bookkeeping_next_action || null;
   const postingAction = canonicalNextAction
     ? { ...canonicalNextAction, action_code: canonicalNextAction.legacy_action_code }
     : row.posting_action || deriveBookkeepingPostingAction(row);
-  const actionMatrix = row.bookkeeping_action_matrix;
+  const actionMatrix = canonicalWorkflow?.action_matrix || row.bookkeeping_action_matrix;
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
@@ -548,7 +549,7 @@ function BookkeepingTransactionMirrorRow({
                 busy={selectedChanged || manualPostBusy || isActionBusy("recover") || isActionBusy("match")}
                 status={actionMatrix?.status_label || ""}
                 onAction={(action) => {
-                  if (["confirm_type", "edit_type", "edit_resolution"].includes(action.action_code)) return onPost?.(row, "confirm_type");
+                  if (["resolve_issue", "confirm_type", "edit_type", "edit_resolution"].includes(action.action_code)) return onPost?.(row, "confirm_type");
                   if (["find_qbo_match", "confirm_qbo_match", "retry_duplicate_check", "acknowledge_duplicate_risk"].includes(action.action_code)) return changeResolution("match_existing_qbo");
                   if (["select_gl_account", "change_gl_account"].includes(action.action_code)) return null;
                   if (["recheck_posting_eligibility", "recover_posting_state"].includes(action.action_code)) return onRecover?.({ preventDefault() {}, stopPropagation() {} }, row);

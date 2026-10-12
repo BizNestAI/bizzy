@@ -18,7 +18,7 @@ import {
 } from "./quickBooksPaymentsProtectedWorkflow.js";
 import { normalizeTransactionResolution } from "./transactionResolutionService.js";
 import { requireCanonicalBookkeepingFeedStatus } from "./bookkeepingFeedStatusContract.js";
-import { deriveBookkeepingActionMatrix, deriveBookkeepingPostingAction, toBookkeepingNextAction } from "./bookkeepingPostingActionEligibility.js";
+import { deriveCanonicalBookkeepingWorkflow } from "./bookkeepingPostingActionEligibility.js";
 import { deriveProviderFreePostingPreflight } from "./canonicalPostingCompiler.js";
 import { isHandledReviewStatus } from "./bookkeepingLifecycleState.js";
 import { hasActualProviderWriteBoundary } from "./providerBoundaryEvidence.js";
@@ -1060,12 +1060,13 @@ export async function fetchBookkeepingTransactions({
   const enrichedRows = discoveryRows.map((row) => {
     const qboPostingLifecycle = buildPostingLifecycleForFeed(row, policy, nowMs);
     const nextRow = qboPostingLifecycle ? { ...row, qbo_posting_lifecycle: qboPostingLifecycle } : row;
-    const postingAction = deriveBookkeepingPostingAction(nextRow, { nowMs });
+    const workflow = deriveCanonicalBookkeepingWorkflow(nextRow, { nowMs });
     return {
       ...nextRow,
-      posting_action: postingAction,
-      bookkeeping_next_action: toBookkeepingNextAction(postingAction),
-      bookkeeping_action_matrix: deriveBookkeepingActionMatrix(nextRow, { nowMs }),
+      bookkeeping_workflow: workflow,
+      posting_action: workflow.posting_action,
+      bookkeeping_next_action: workflow.next_action,
+      bookkeeping_action_matrix: workflow.action_matrix,
     };
   });
   return { rows: enrichedRows, totalCount };
