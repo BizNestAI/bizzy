@@ -49,6 +49,10 @@ import {
   isUnconfirmedAutomaticPeerToPeerWorkflow,
 } from "../../../services/bookkeeping/protectedWorkflow.js";
 import { enforceHandledFinalAccountInvariant } from "../../../services/bookkeeping/handledFinalAccountInvariant.js";
+import {
+  FINAL_CATEGORIZATION_SOURCES,
+  persistAuthoritativeFinalCategorizations,
+} from "../../../services/bookkeeping/finalCategorizationPersistenceService.js";
 
 export { enforceHandledFinalAccountInvariant } from "../../../services/bookkeeping/handledFinalAccountInvariant.js";
 
@@ -3102,12 +3106,34 @@ export async function runBookkeepingSuggestionPass({
       updated_at: row.updated_at || nowIso,
     }));
 
-    const upserted = await persistUnresolvedCategorizationRows({
+    const finalRows = normalizedRows.filter((row) =>
+      ["auto_approved", "approved", "handled"].includes(String(row.status || "").toLowerCase()) &&
+      row.final_qbo_account_id && row.final_qbo_account_name
+    );
+    const unresolvedRows = normalizedRows.filter((row) => !finalRows.includes(row));
+    const finalized = finalRows.length ? await persistAuthoritativeFinalCategorizations({
       db: supabase,
       businessId,
-      rows: normalizedRows,
+      rows: finalRows,
+      approvalSource: FINAL_CATEGORIZATION_SOURCES.AUTOMATIC,
+      actorType: "automation",
+      ruleSourceIdForRow: (row) =>
+        row.meta?.vendor_rule_id ||
+        row.meta?.approved_vendor_rule_id ||
+        row.meta?.universal_vendor_hint_id ||
+        row.meta?.auto_handle_decision?.source ||
+        null,
+      provenanceForRow: (row) =>
+        row.meta?.categorization_source || row.meta?.evidence_source || row.meta?.suggestion_source || "automatic_categorization",
+      requireNeedsReview: false,
+    }) : [];
+    const unresolved = await persistUnresolvedCategorizationRows({
+      db: supabase,
+      businessId,
+      rows: unresolvedRows,
       knownExistingIds: Object.keys(existingMap),
     });
+    const upserted = [...finalized, ...unresolved];
 
     await refreshOperatorRequestSummaryBestEffort({
       businessId,

@@ -24,6 +24,10 @@ import {
   resolveManualApprovalBookkeepingMeta as resolveManualApprovalPostingMeta,
 } from "./postingDecisionAuthority.js";
 import { INCOMING_DEPOSIT_CATEGORIZE_AS_NEW } from "./incomingDepositResolution.js";
+import {
+  FINAL_CATEGORIZATION_SOURCES,
+  persistAuthoritativeFinalCategorizations,
+} from "./finalCategorizationPersistenceService.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -718,14 +722,36 @@ export async function approveBookkeepingTransactions({
   });
 
   const atomicPayload = payload.map(({ approval_idempotency_key, ...row }) => ({ ...row, approval_idempotency_key }));
-  const { data, error } = await db.rpc("approve_bookkeeping_transactions_atomic", {
-    p_business_id: businessId,
-    p_actor_id: actorId,
-    p_actor_type: actorType,
-    p_approvals: atomicPayload,
-    p_require_needs_review: requireNeedsReview === true,
-  });
-  if (error) throw new BookkeepingApprovalError("approve_failed", 500, { message: error.message });
+  let data;
+  try {
+    const finalRows = atomicPayload.filter((row) => row.final_qbo_account_id && row.final_qbo_account_name);
+    const workflowRows = atomicPayload.filter((row) => !row.final_qbo_account_id || !row.final_qbo_account_name);
+    const finalized = finalRows.length ? await persistAuthoritativeFinalCategorizations({
+        db,
+        businessId,
+        rows: finalRows,
+        approvalSource: actorType === "admin" ? FINAL_CATEGORIZATION_SOURCES.ADMIN : FINAL_CATEGORIZATION_SOURCES.CUSTOMER,
+        actorId,
+        actorType,
+        provenanceForRow: () => source,
+        requireNeedsReview,
+      }) : [];
+    let workflows = [];
+    if (workflowRows.length) {
+      const result = await db.rpc("approve_bookkeeping_transactions_atomic", {
+        p_business_id: businessId,
+        p_actor_id: actorId,
+        p_actor_type: actorType,
+        p_approvals: workflowRows,
+        p_require_needs_review: requireNeedsReview === true,
+      });
+      if (result.error) throw result.error;
+      workflows = result.data || [];
+    }
+    data = [...finalized, ...workflows];
+  } catch (error) {
+    throw new BookkeepingApprovalError("approve_failed", 500, { message: error.message });
+  }
 
   for (const pair of confirmedCcPairs.values()) {
     await linkCategorizationToCreditCardPair({ db, businessId, pair });

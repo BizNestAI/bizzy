@@ -5,6 +5,10 @@ import {
   enforceHandledFinalAccountInvariant,
   resolveMissingFinalAccount,
 } from "../src/services/bookkeeping/handledFinalAccountInvariant.js";
+import {
+  buildAuthoritativeFinalCategorization,
+  FINAL_CATEGORIZATION_SOURCES,
+} from "../src/services/bookkeeping/finalCategorizationPersistenceService.js";
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -92,4 +96,40 @@ test("unresolved legacy contradictions return to review in the same bounded rech
   const source = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
   assert.match(source, /outcome === "returned_to_review" && row\.missing_final_repair_required/);
   assert.match(source, /handled_final_account_invariant: "returned_to_review_unresolved_final_account"/);
+});
+
+test("automatic, customer, and admin categorization share one authoritative commit shape", () => {
+  for (const source of Object.values(FINAL_CATEGORIZATION_SOURCES)) {
+    const row = buildAuthoritativeFinalCategorization({
+      businessId: "business-1",
+      row: {
+        transaction_id: "transaction-1",
+        status: source === "automatic_rule" ? "auto_approved" : "approved",
+        final_qbo_account_id: "1150040001",
+        final_qbo_account_name: "Meals",
+        meta: { evidence_source: "deterministic_rule" },
+      },
+      approvalSource: source,
+      actorId: source === "automatic_rule" ? null : "actor-1",
+      ruleSourceId: source === "automatic_rule" ? "rule-1" : null,
+      provenance: "test_provenance",
+      nowIso: "2026-10-12T12:00:00.000Z",
+    });
+    assert.equal(row.business_id, "business-1");
+    assert.equal(row.meta.approval_source, source);
+    assert.equal(row.meta.final_categorization.source, source);
+    assert.equal(row.meta.final_categorization.approved_at, "2026-10-12T12:00:00.000Z");
+    assert.equal(row.meta.final_categorization.provenance, "test_provenance");
+    assert.ok(row.approval_idempotency_key);
+  }
+});
+
+test("normal automatic and manual paths call the same canonical persistence service", () => {
+  const suggestions = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
+  const approvals = read("src/services/bookkeeping/bookkeepingApprovalService.js");
+  assert.match(suggestions, /persistAuthoritativeFinalCategorizations\(\{/);
+  assert.match(approvals, /persistAuthoritativeFinalCategorizations\(\{/);
+  assert.match(suggestions, /FINAL_CATEGORIZATION_SOURCES\.AUTOMATIC/);
+  assert.match(approvals, /FINAL_CATEGORIZATION_SOURCES\.ADMIN/);
+  assert.match(approvals, /FINAL_CATEGORIZATION_SOURCES\.CUSTOMER/);
 });
