@@ -440,7 +440,7 @@ function BookkeepingTransactionMirrorRow({
                 disabled={!selectedAccountId || !duplicateRiskAcknowledged || isActionBusy("approve")}
                 className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
               >
-                {isActionBusy("approve") ? "Requesting post..." : "Post to QuickBooks anyway"}
+                {isActionBusy("approve") ? "Saving review..." : "Review duplicate risk"}
               </button>
             </>
           ) : null}
@@ -527,7 +527,7 @@ function BookkeepingTransactionMirrorRow({
                 <div>{candidate.txn_date || "Date unavailable"} · {candidate.amount_minor == null ? "Amount unavailable" : formatMoney(Number(candidate.amount_minor) / 100)}</div>
                 <div>{candidate.document_number || candidate.description || "No reference or memo"}</div>
                 <div className="sm:col-span-2">Evidence: {(candidate.reason_codes || []).join(", ").replaceAll("_", " ") || row.qbo_duplicate_detection_confidence || "possible duplicate"}</div>
-                <div>{candidate.consumed_by_another_transaction ? "Already used by another bank transaction" : "Available; revalidated on approval"}</div>
+                <div>{candidate.candidate_state === "already_linked_to_another_transaction" || candidate.consumed_by_another_transaction ? "Already used by another bank transaction · informational only" : "Available; revalidated on approval"}</div>
               </div>
             ))}
           </div>
@@ -671,7 +671,7 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
           </button>
           <button ref={confirmButtonRef} type="button" onClick={onConfirm} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/[0.12] px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-300/[0.18] focus:outline-none focus:ring-2 focus:ring-emerald-300/35 disabled:opacity-45">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
-            {busy ? "Requesting post..." : "Post to QuickBooks anyway"}
+                {busy ? "Preparing preview..." : "Post as new anyway"}
           </button>
         </div>
       </section>

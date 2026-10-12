@@ -19,6 +19,7 @@ import {
   requestInteractiveTransactionPosting,
 } from "../../services/bookkeeping/interactivePostingCommandService.js";
 import { buildCanonicalPostingPreview } from "../../services/bookkeeping/canonicalPostingCompiler.js";
+import { classifyQboDuplicateCandidate, canOverrideReviewedCandidate } from "../../services/bookkeeping/qboDuplicateCandidateClassification.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
@@ -687,10 +688,10 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
       }, new Map());
     }
     const rowsWithCandidateAvailability = rows.map((row) => {
-      const candidates = (row.qbo_duplicate_candidates || []).map((candidate) => ({
-        ...candidate,
-        consumed_by_another_transaction: Array.from(candidateConsumers.get(String(candidate.qbo_entity_id || "")) || []).some((transactionId) => transactionId !== String(row.id)),
-      }));
+      const candidates = (row.qbo_duplicate_candidates || []).map((candidate) => {
+        const consumers = Array.from(candidateConsumers.get(String(candidate.qbo_entity_id || "")) || []);
+        return classifyQboDuplicateCandidate(candidate, { transactionId: row.id, consumerTransactionIds: consumers });
+      });
       return {
         ...row,
         qbo_duplicate_candidates: candidates,
@@ -2060,6 +2061,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
     if (currentCategorization?.meta?.posting_in_progress === true || currentCategorization?.meta?.active_operation_id || currentCategorization?.meta?.post_intent_id || currentCategorization?.meta?.operation_lease_owner || currentCategorization?.meta?.provider_write_started_at || currentCategorization?.meta?.qbo_write_started_at || currentCategorization?.meta?.qbo_receipt_confirmed_at) {
       return res.status(409).json({ ok: false, error: "provider_write_ambiguity_requires_review", message: "This transaction has provider-write evidence and cannot be overridden here." });
     }
+    let reviewedCandidates = [];
     if (isHandledDuplicateOverride) {
       const candidateIds = Array.from(new Set([
         ...(currentCategorization?.meta?.qbo_duplicate_candidates || []).map((candidate) => candidate?.qbo_txn_id),
@@ -2073,12 +2075,51 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
           .eq("status", "posted")
           .in("qbo_txn_id", candidateIds);
         if (consumedCandidatesError) throw consumedCandidatesError;
-        if ((consumedCandidates || []).some((receipt) => String(receipt.transaction_id) !== String(transactionId))) {
-          return res.status(409).json({ ok: false, error: "qbo_duplicate_candidate_already_linked", message: "This QuickBooks candidate is already linked to another bank transaction and requires review." });
+        const consumersByCandidate = (consumedCandidates || []).reduce((map, receipt) => {
+          const key = String(receipt.qbo_txn_id || "");
+          if (!map.has(key)) map.set(key, []);
+          map.get(key).push(receipt.transaction_id);
+          return map;
+        }, new Map());
+        reviewedCandidates = (currentCategorization?.meta?.qbo_duplicate_candidates || []).map((candidate) => classifyQboDuplicateCandidate(candidate, {
+          transactionId,
+          consumerTransactionIds: consumersByCandidate.get(String(candidate?.qbo_txn_id || candidate?.qbo_entity_id || "")) || [],
+        }));
+        if (reviewedCandidates.some((candidate) => !canOverrideReviewedCandidate(candidate))) {
+          return res.status(409).json({ ok: false, error: "duplicate_override_protected_candidate", message: "This QuickBooks candidate cannot be overridden. Reconcile the existing transaction first." });
         }
       }
     }
     const reviewedCandidateId = currentCategorization?.meta?.qbo_duplicate_candidates?.[0]?.qbo_txn_id || existingForceCandidateId || null;
+    const duplicateOverrideRequestId = String(req.get("x-request-id") || req.get("x-correlation-id") || crypto.randomUUID());
+    const { data: overrideBankTransaction, error: overrideBankTransactionError } = isHandledDuplicateOverride
+      ? await supabase.from("bank_transactions").select("id,date,amount,direction,plaid_account_id,pending").eq("business_id", run.business_id).eq("id", transactionId).maybeSingle()
+      : { data: null, error: null };
+    if (overrideBankTransactionError) throw overrideBankTransactionError;
+    const sourceQboAccountId = reviewedCandidates.find((candidate) => candidate.source_qbo_account_id)?.source_qbo_account_id || null;
+    const duplicateOverrideDecision = isHandledDuplicateOverride ? {
+      decision: "categorize_as_new_despite_duplicate_risk",
+      decision_version: 3,
+      business_id: run.business_id,
+      transaction_id: transactionId,
+      operator_id: req.user?.id || req.user?.sub || null,
+      operator_role: req.tenantContext?.mode === "admin_view" ? "admin_view" : "monthly_review_admin",
+      decided_at: new Date().toISOString(),
+      reviewed_candidates: reviewedCandidates,
+      reviewed_candidate_ids: reviewedCandidates.map((candidate) => candidate.qbo_txn_id || candidate.qbo_entity_id).filter(Boolean),
+      selected_qbo_account_id: accountId,
+      source_qbo_account_id: sourceQboAccountId,
+      transaction_fingerprint: overrideBankTransaction ? {
+        date: overrideBankTransaction.date,
+        amount: overrideBankTransaction.amount,
+        direction: overrideBankTransaction.direction || (Number(overrideBankTransaction.amount) < 0 ? "OUTFLOW" : "INFLOW"),
+        plaid_account_id: overrideBankTransaction.plaid_account_id,
+      } : null,
+      acknowledgement_text_version: "duplicate-risk-categorize-new-v1",
+      acknowledgement_text: "I reviewed the possible QuickBooks matches and want to categorize this transaction as new anyway.",
+      request_id: duplicateOverrideRequestId,
+      idempotency_id: `force-soft-duplicate:${transactionId}:${reviewedCandidateId}:v3`,
+    } : null;
 
     const approval = await approveBookkeepingTransactions({
       businessId: run.business_id,
@@ -2097,6 +2138,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       actorType: "admin",
       source: postToQuickBooksAnyway ? "monthly_review_force_post" : "monthly_review",
       requireNeedsReview: !isHandledDuplicateOverride,
+      extraMetaByTransactionId: duplicateOverrideDecision ? { [transactionId]: { duplicate_override_decision: duplicateOverrideDecision } } : {},
       db: supabase,
     });
     const categorization = approval.rows?.find((row) => String(row.transaction_id) === String(transactionId)) || approval.rows?.[0] || null;
@@ -2125,17 +2167,27 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
     const summaries = await buildSummaries(run.business_id, run.review_month);
     await syncRunStatus(runId, summaries);
     let postingRequest = null;
+    let postingPreview = null;
     if (postToQuickBooksAnyway) {
       if (!isHandledDuplicateOverride || !reviewedCandidateId) {
         return res.status(409).json({ ok: false, error: "reviewed_duplicate_candidate_required", message: "Review a current QuickBooks candidate before posting anyway." });
       }
+      // Persist the operator's scoped decision first, then prove that the exact
+      // canonical provider-free payload can compile before creating an intent.
+      // A typed compiler failure leaves the durable decision available for
+      // correction/retry and guarantees that no QuickBooks command was queued.
+      postingPreview = await buildCanonicalPostingPreview({
+        db: supabase,
+        businessId: run.business_id,
+        transactionId,
+      });
       postingRequest = await requestInteractiveTransactionPosting({
         db: supabase,
         businessId: run.business_id,
         transactionId,
         actorId: req.user?.id || req.user?.sub || null,
         auditSource: "monthly_review_force_post",
-        idempotencyKey: `force-soft-duplicate:${transactionId}:${reviewedCandidateId}:v2`,
+        idempotencyKey: duplicateOverrideDecision?.idempotency_id || `force-soft-duplicate:${transactionId}:${reviewedCandidateId}:v3`,
         allowReviewedSoftDuplicate: true,
       });
       signalInteractivePostingCommandWakeup({ operationId: postingRequest.operation_id });
@@ -2152,6 +2204,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       operator_response_resolution: null,
       warnings: approval.warnings || [],
       vendor_rule_results: approval.vendor_rule_results || [],
+      posting_preview: postingPreview,
       posting_result: postingRequest,
       final_result: postingRequest ? { state: "posting_in_progress", message: "Posting request accepted. QuickBooks has not yet confirmed the transaction.", operation_id: postingRequest.operation_id } : null,
     });

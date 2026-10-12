@@ -28,12 +28,15 @@ test("Admin force-post persists the reviewed decision then uses the durable comm
   const ui = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   assert.match(route, /post_to_qbo_anyway/);
   assert.match(route, /monthly_review_force_post/);
-  assert.match(route, /force-soft-duplicate:\$\{transactionId\}:\$\{reviewedCandidateId\}:v2/);
+  assert.match(route, /force-soft-duplicate:\$\{transactionId\}:\$\{reviewedCandidateId\}:v3/);
   assert.match(route, /requestInteractiveTransactionPosting\(/);
+  const forcePostBlock = route.slice(route.indexOf("let postingRequest = null"), route.indexOf("res.status(postingRequest ? 202 : 200)"));
+  assert.ok(forcePostBlock.indexOf("buildCanonicalPostingPreview") < forcePostBlock.indexOf("requestInteractiveTransactionPosting"));
   assert.match(command, /force_soft_duplicate_override/);
   assert.match(command, /createNewIncomeOverride: command\.merchant_snapshot\?\.force_soft_duplicate_override === true/);
   assert.match(worker, /candidatesForCheck = qboCandidates\.filter/);
-  assert.match(ui, /Post to QuickBooks anyway/);
+  assert.match(ui, /Review duplicate risk/);
+  assert.match(ui, /Post as new anyway/);
   assert.match(ui, /ForcePostConfirmationModal/);
   assert.match(ui, /createPortal/);
   assert.doesNotMatch(ui, /globalThis\.confirm/);
@@ -44,8 +47,24 @@ test("hard blocker checks remain before force-post command creation", () => {
   for (const code of [
     "confirmed_or_posted_transaction_protected",
     "provider_write_ambiguity_requires_review",
-    "qbo_duplicate_candidate_already_linked",
     "duplicate_risk_acknowledgement_required",
   ]) assert.match(route, new RegExp(code));
   assert.match(route, /\.eq\("business_id", run\.business_id\)/);
+});
+
+test("consumed duplicate candidates are informational for categorize-as-new but remain unmatchable", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const linkRoute = read("src/api/bookkeeping/routes/bookkeeping.posting.routes.js");
+  assert.match(route, /classifyQboDuplicateCandidate/);
+  assert.match(route, /reviewedCandidates/);
+  assert.doesNotMatch(route.slice(route.indexOf("let reviewedCandidates"), route.indexOf("const reviewedCandidateId")), /qbo_duplicate_candidate_already_linked/);
+  assert.match(linkRoute, /qbo_duplicate_candidate_already_linked/);
+});
+
+test("force-post persists a scoped versioned decision and request identity", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  for (const field of ["categorize_as_new_despite_duplicate_risk", "reviewed_candidates", "selected_qbo_account_id", "source_qbo_account_id", "transaction_fingerprint", "acknowledgement_text_version", "request_id"]) {
+    assert.match(route, new RegExp(field));
+  }
+  assert.match(route, /extraMetaByTransactionId/);
 });
