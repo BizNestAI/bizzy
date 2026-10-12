@@ -550,6 +550,7 @@ function BookkeepingTransactionMirrorRow({
                   if (["find_qbo_match", "confirm_qbo_match", "retry_duplicate_check", "acknowledge_duplicate_risk"].includes(action.action_code)) return changeResolution("match_existing_qbo");
                   if (["select_gl_account", "change_gl_account"].includes(action.action_code)) return null;
                   if (["recheck_posting_eligibility", "recover_posting_state"].includes(action.action_code)) return onRecover?.({ preventDefault() {}, stopPropagation() {} }, row);
+                  if (action.action_code === "reconcile_provider_outcome") return onPost?.(row, "reconcile_provider_outcome");
                   if (action.action_code === "preview_and_post") return postingAction.permitted_action === "retry_posting" ? onRetry?.(row) : onPost?.(row, postingAction.permitted_action);
                   return null;
                 }}

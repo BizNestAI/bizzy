@@ -1129,16 +1129,17 @@ export default function MonthlyReviewConsole() {
       if (!isAllowedAdminViewReturnOrigin(event.origin)) return;
       const target = normalizeMonthlyReviewReturnUrl(detail.returnUrl);
       if (!target) return;
-      try { window.focus?.(); } catch {}
+      try { window.focus?.(); } catch { /* Browser focus is best effort. */ }
       if (target === window.location.href) {
-        window.location.reload();
+        loadBookkeepingFeedCounts();
+        loadPostingReview();
       } else {
         window.location.assign(target);
       }
     };
     window.addEventListener("message", onAdminViewReturn);
     return () => window.removeEventListener("message", onAdminViewReturn);
-  }, []);
+  }, [loadBookkeepingFeedCounts, loadPostingReview]);
 
   const selectBusiness = useCallback((businessId) => {
     if (!businessId || String(businessId) === String(selectedBusinessId)) return;
@@ -1303,6 +1304,21 @@ export default function MonthlyReviewConsole() {
       bookkeepingFeeds[status]?.expanded ? loadBookkeepingFeed(status, { reset: true }) : Promise.resolve()
     )));
   }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadPostingReview, loadQboPnlSnapshot, loadSourceLedger]);
+
+  const patchBookkeepingRowState = useCallback((transactionId, updater, { remove = false } = {}) => {
+    setBookkeepingFeeds((current) => {
+      const next = { ...current };
+      for (const status of Object.keys(BOOKKEEPING_FEED_CONFIG)) {
+        const feed = current[status];
+        if (!feed) continue;
+        const rows = remove
+          ? (feed.rows || []).filter((row) => String(row.id) !== String(transactionId))
+          : (feed.rows || []).map((row) => String(row.id) === String(transactionId) ? updater(row) : row);
+        next[status] = { ...feed, rows };
+      }
+      return next;
+    });
+  }, []);
 
   const refreshAfterRecovery = useCallback(async () => {
     await Promise.all([
@@ -1733,6 +1749,11 @@ export default function MonthlyReviewConsole() {
         setManualPostingRequest({ intent, transaction: row });
         return;
       }
+      if (intent === "reconcile_provider_outcome") {
+        const response = await safeFetch(`/api/bookkeeping/posting/transactions/${encodeURIComponent(row.id)}/reconcile?business_id=${encodeURIComponent(selectedBusinessId)}${row.posting_operation?.operation_id ? `&operation_id=${encodeURIComponent(row.posting_operation.operation_id)}` : ""}`, { cache: "no-store" });
+        setManualPostingRequest({ intent: "reconcile", transaction: { ...row, posting_reconciliation: response.reconciliation } });
+        return;
+      }
       const response = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(row.id)}/post-qbo-preview`);
       setManualPostingRequest({ intent, transaction: { ...row, posting_preview: response?.preview || null } });
     } catch (error) {
@@ -1800,12 +1821,21 @@ export default function MonthlyReviewConsole() {
               : "Posting is still in progress. Refresh Monthly Review to check its durable operation.";
         setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: message }));
       }
-      await refreshAfterFeedAction();
+      if (transactionId) {
+        if (["matched", "posted"].includes(outcome?.type)) {
+          patchBookkeepingRowState(transactionId, (row) => row, { remove: true });
+        } else if (outcome?.type === "queued") {
+          patchBookkeepingRowState(transactionId, (row) => ({ ...row, qbo_posting_lifecycle: { key: "posting", label: "Posting requested", tone: "warning", detail: `Checking QuickBooks · Request ${outcome.response?.request_id || outcome.response?.operation_id || "saved"}` } }));
+        } else if (outcome?.type === "kept_blocked") {
+          patchBookkeepingRowState(transactionId, (row) => ({ ...row, qbo_posting_lifecycle: { key: "reconciling", label: "Reconciliation required", tone: "danger", detail: outcome.response?.message || "Blocked for later reconciliation." } }));
+        }
+        await loadBookkeepingFeedCounts();
+      }
     } finally {
       setManualPostingRequest(null);
       if (transactionId) setManualPostingBusy(transactionId, false, intent);
     }
-  }, [refreshAfterFeedAction, setManualPostingBusy]);
+  }, [loadBookkeepingFeedCounts, patchBookkeepingRowState, setManualPostingBusy]);
 
   const monthlyReviewManualPostRequest = useCallback(async (row, options = {}) => {
     if (!detail?.run?.id || !row?.id) throw new Error("Monthly Review posting context is unavailable.");
@@ -1853,6 +1883,36 @@ export default function MonthlyReviewConsole() {
       },
     });
   }, [selectedBusinessId]);
+
+  const monthlyReviewReconciliationSearchRequest = useCallback(async (row) => safeFetch(`/api/bookkeeping/posting/transactions/${encodeURIComponent(row.id)}/reconcile/search`, {
+    method: "POST",
+    body: { business_id: selectedBusinessId, operation_id: row.posting_reconciliation?.operation_id || row.posting_operation?.operation_id || null },
+  }), [selectedBusinessId]);
+
+  const monthlyReviewReconciliationLinkRequest = useCallback(async (row, candidate) => safeFetch(`/api/bookkeeping/posting/transactions/${encodeURIComponent(row.id)}/link-existing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-business-id": selectedBusinessId, "x-bizzi-monthly-review-action": "reconcile-link-existing" },
+    body: { business_id: selectedBusinessId, operation_id: row.posting_reconciliation?.operation_id || row.posting_operation?.operation_id || null, qbo_txn_id: candidate.qbo_txn_id, qbo_txn_type: candidate.qbo_txn_type, reason: "Accountant selected the verified QuickBooks result during posting reconciliation." },
+  }), [selectedBusinessId]);
+
+  const monthlyReviewReceiptReconcileRequest = useCallback(async (row) => {
+    const operationId = row.posting_reconciliation?.operation_id || row.posting_operation?.operation_id;
+    if (!operationId) throw new Error("The durable posting operation is unavailable.");
+    return safeFetch(`/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(operationId)}/reconcile-receipt`, {
+      method: "POST",
+      body: { business_id: selectedBusinessId },
+    });
+  }, [selectedBusinessId]);
+
+  const monthlyReviewVerifiedAbsentRequest = useCallback(async (row, options = {}) => safeFetch(`/api/bookkeeping/posting/transactions/${encodeURIComponent(row.id)}/reconcile/verified-absent`, {
+    method: "POST",
+    body: { business_id: selectedBusinessId, operation_id: row.posting_reconciliation?.operation_id || row.posting_operation?.operation_id || null, attested_absent: true, reason: options.reason, reconciliation_id: options.reconciliationId || null, preview_token: options.previewToken || null, confirmed_execution: options.confirmedExecution === true },
+  }), [selectedBusinessId]);
+
+  const monthlyReviewKeepBlockedRequest = useCallback(async (row, reason) => safeFetch(`/api/bookkeeping/posting/transactions/${encodeURIComponent(row.id)}/reconcile/keep-blocked`, {
+    method: "POST",
+    body: { business_id: selectedBusinessId, operation_id: row.posting_reconciliation?.operation_id || row.posting_operation?.operation_id || null, reason },
+  }), [selectedBusinessId]);
 
   const handleMirrorConfirmLoanPaymentSplit = useCallback(async (row, split) => {
     if (!selectedBusinessId || !row?.id) return;
@@ -2756,6 +2816,11 @@ export default function MonthlyReviewConsole() {
                       intent={manualPostingRequest.intent || "post"}
                       postRequest={monthlyReviewManualPostRequest}
                       linkRequest={monthlyReviewLinkRequest}
+                      reconciliationSearchRequest={monthlyReviewReconciliationSearchRequest}
+                      reconciliationLinkRequest={monthlyReviewReconciliationLinkRequest}
+                      receiptReconcileRequest={monthlyReviewReceiptReconcileRequest}
+                      verifiedAbsentRequest={monthlyReviewVerifiedAbsentRequest}
+                      keepBlockedRequest={monthlyReviewKeepBlockedRequest}
                       saveCreditTypeRequest={monthlyReviewSaveCreditTypeRequest}
                       onClose={() => setManualPostingRequest(null)}
                       onBusyChange={setManualPostingBusy}

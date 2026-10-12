@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 import {
   assertInteractivePostingCommandSchema,
+  authorizeInteractivePostingRetryAfterReconciliation,
   claimInteractivePostingCommand,
   claimInteractivePostingCommands,
   createInteractivePostingCommand,
@@ -74,6 +75,50 @@ test("interactive posting command is durable and idempotent before worker proces
   assert.equal(db.store.bookkeeping_interactive_posting_commands.length, 1);
   assert.equal(db.store.bookkeeping_interactive_posting_commands[0].state, "accepted");
   assert.deepEqual(db.store.bookkeeping_interactive_posting_commands[0].transaction_ids, [TXN_ID]);
+});
+
+test("accountant reconciliation reopens the same ambiguous operation exactly once", async () => {
+  const db = makeDb();
+  const created = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "1150040001",
+    transactionIds: [TXN_ID],
+    idempotencyKey: "ambiguous-reconciliation",
+  });
+  const stored = db.store.bookkeeping_interactive_posting_commands[0];
+  stored.state = "failed";
+  stored.stage = "failed";
+  stored.failure_code = "interactive_posting_child_result_missing";
+  stored.transaction_results = {
+    [TXN_ID]: { transaction_id: TXN_ID, state: "failed", ambiguous: true, retryable: false },
+  };
+
+  const reopened = await authorizeInteractivePostingRetryAfterReconciliation({
+    db,
+    businessId: BUSINESS_ID,
+    transactionId: TXN_ID,
+    operationId: created.operation_id,
+    actorId: "accountant-1",
+    reconciliationId: "reconciliation-1",
+  });
+
+  assert.equal(reopened.operation_id, created.operation_id);
+  assert.equal(reopened.state, "accepted");
+  assert.equal(reopened.stage, "retry_authorized");
+  assert.equal(reopened.transaction_results[TXN_ID].ambiguous, false);
+  assert.equal(reopened.transaction_results[TXN_ID].reconciliation_id, "reconciliation-1");
+  await assert.rejects(
+    authorizeInteractivePostingRetryAfterReconciliation({
+      db,
+      businessId: BUSINESS_ID,
+      transactionId: TXN_ID,
+      operationId: created.operation_id,
+      reconciliationId: "reconciliation-2",
+    }),
+    (error) => error?.code === "ambiguous_posting_operation_required"
+  );
+  assert.equal(db.store.bookkeeping_interactive_posting_commands.length, 1);
 });
 
 test("approval fails closed before intent persistence when command migration is missing", async () => {
