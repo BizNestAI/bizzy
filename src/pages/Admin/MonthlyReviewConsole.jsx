@@ -1655,6 +1655,7 @@ export default function MonthlyReviewConsole() {
           [transactionId]: "Rule created · Undo · Manage rule",
         }));
       }
+      return result;
     } catch (e) {
       const reasonCode = e?.body?.reason_code || e?.body?.error || "";
       const explanation = e?.body?.message || e?.message || "Could not complete bookkeeping action.";

@@ -166,15 +166,55 @@ function BookkeepingTransactionMirrorRow({
   const [resolutionBusy, setResolutionBusy] = React.useState(false);
   const [duplicateRiskAcknowledged, setDuplicateRiskAcknowledged] = React.useState(false);
   const [forcePostConfirmationOpen, setForcePostConfirmationOpen] = React.useState(false);
+  const [postingRequest, setPostingRequest] = React.useState(null);
+  const [postingPollExpired, setPostingPollExpired] = React.useState(false);
   const displayResolution = recoverOrphanedSplitResolution(resolution, Boolean(loanSplitDraft));
   const protectedInflowDecision = resolveProtectedCreditCardInflowDecision(row);
 
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
     setResolution(effectiveTransactionResolution(row));
-    setDuplicateRiskAcknowledged(false);
+    setDuplicateRiskAcknowledged(Boolean(row.meta?.duplicate_override_decision));
     setForcePostConfirmationOpen(false);
   }, [initialAccountId, row.id, row.updated_at]);
+
+  const refreshPostingStatus = React.useCallback(async () => {
+    if (!postingRequest?.status_url) return null;
+    const response = await fetch(postingRequest.status_url, { credentials: "same-origin", cache: "no-store" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body?.message || "Could not refresh posting status.");
+    setPostingRequest((current) => ({ ...current, operation: body.operation || body, outcome: body.outcome || null }));
+    return body;
+  }, [postingRequest?.status_url]);
+
+  React.useEffect(() => {
+    if (!postingRequest?.status_url || postingRequest?.operation?.terminal) return undefined;
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    let timer = null;
+    const poll = async () => {
+      if (Date.now() - startedAt >= 45000) {
+        setPostingPollExpired(true);
+        return;
+      }
+      try {
+        const response = await fetch(postingRequest.status_url, { credentials: "same-origin", cache: "no-store", signal: controller.signal });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body?.message || "posting_status_unavailable");
+        const operation = body.operation || body;
+        setPostingRequest((current) => ({ ...current, operation, outcome: body.outcome || null }));
+        if (operation?.terminal) return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+      }
+      timer = window.setTimeout(poll, 1500);
+    };
+    timer = window.setTimeout(poll, 1000);
+    return () => {
+      controller.abort();
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [postingRequest?.status_url, postingRequest?.operation?.terminal]);
 
   const persistedQboStatus = deriveMirrorQboPostingStatus(row);
   const isNeedsReviewFeed = feedStatus === "needs_review";
@@ -191,7 +231,21 @@ function BookkeepingTransactionMirrorRow({
   const protectedReason = getProtectedWorkflowReason(row);
   const incomingMatch = incomingDepositMatchState(row);
   const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(row, displayResolution);
-  const qboStatus = displayResolution === "match_credit_card_payment" && ccWorkflowStatus
+  const operationRow = postingRequest?.operation?.rows?.find((item) => String(item.transaction_id) === String(row.id));
+  const postingOutcome = postingRequest?.outcome;
+  const requestActive = Boolean(postingRequest) && !postingRequest?.operation?.terminal;
+  const requestStatus = postingRequest ? (
+    postingOutcome === "posted" || operationRow?.posted
+      ? { key: "posted", label: "Posted", tone: "good", detail: operationRow?.qbo_txn_id ? `QuickBooks transaction ${operationRow.qbo_txn_id}` : "QuickBooks confirmed the transaction." }
+      : postingOutcome === "reconciliation_required" || postingRequest?.operation?.ambiguous
+        ? { key: "reconciling", label: "Reconciliation required", tone: "danger", detail: "Do not resubmit. Check the existing QuickBooks outcome first." }
+        : postingRequest?.operation?.retryable
+          ? { key: "retry_scheduled", label: "Retry scheduled", tone: "warning", detail: postingRequest.operation.user_message }
+          : postingRequest?.operation?.terminal
+            ? { key: "failed", label: "Posting failed", tone: "danger", detail: postingRequest.operation.user_message }
+            : { key: "posting", label: postingPollExpired ? "Still queued · worker has not started" : "Posting requested", tone: "warning", detail: `Checking QuickBooks · Request ${postingRequest.request_id || postingRequest.operation_id}` }
+  ) : null;
+  const qboStatus = requestStatus || (displayResolution === "match_credit_card_payment" && ccWorkflowStatus
     ? {
         key: ccWorkflowStatus.key,
         label: ccWorkflowStatus.label,
@@ -200,7 +254,7 @@ function BookkeepingTransactionMirrorRow({
           ? "Credit-card payment match confirmed."
           : "Select and confirm the opposite-side credit-card payment.",
       }
-    : persistedQboStatus;
+    : persistedQboStatus);
   const qboLabel = qboStatus.label;
   const isPosted = qboStatus.key === "posted";
   const ccOrientation = deriveCreditCardPaymentOrientation(row);
@@ -431,16 +485,16 @@ function BookkeepingTransactionMirrorRow({
           {isHandledFeed && resolution === "categorize_new" && possibleQboDuplicate && !isPending ? (
             <>
               <label className="flex basis-full items-start gap-2 rounded-lg border border-amber-300/20 bg-amber-300/[0.07] px-2 py-2 text-[11px] leading-4 text-amber-50/90">
-                <input type="checkbox" className="mt-0.5" checked={duplicateRiskAcknowledged} onChange={(event) => setDuplicateRiskAcknowledged(event.target.checked)} />
-                <span>I reviewed the possible QuickBooks match and want to categorize this transaction as new anyway. This could create a duplicate.</span>
+                <input type="checkbox" className="mt-0.5" checked={duplicateRiskAcknowledged} disabled={Boolean(row.meta?.duplicate_override_decision) || requestActive} onChange={(event) => setDuplicateRiskAcknowledged(event.target.checked)} />
+                <span>{row.meta?.duplicate_override_decision ? "Duplicate-risk review saved. This transaction was approved as distinct from the suspected QuickBooks record." : "I reviewed the possible QuickBooks match and want to categorize this transaction as new anyway. This could create a duplicate."}</span>
               </label>
               <button
                 type="button"
                 onClick={() => setForcePostConfirmationOpen(true)}
-                disabled={!selectedAccountId || !duplicateRiskAcknowledged || isActionBusy("approve")}
+                disabled={!selectedAccountId || !duplicateRiskAcknowledged || isActionBusy("approve") || Boolean(postingRequest)}
                 className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
               >
-                {isActionBusy("approve") ? "Saving review..." : "Review duplicate risk"}
+                {requestActive ? "Posting requested" : isActionBusy("approve") ? "Saving review..." : "Review duplicate risk"}
               </button>
             </>
           ) : null}
@@ -514,6 +568,8 @@ function BookkeepingTransactionMirrorRow({
             {rowError}
           </div>
         ) : null}
+        {requestActive ? <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-100"><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />Checking QuickBooks · {postingRequest.request_id || postingRequest.operation_id}</div> : null}
+        {postingPollExpired ? <button type="button" onClick={() => { setPostingPollExpired(false); void refreshPostingStatus(); }} className="text-[11px] font-semibold text-sky-200 underline">Refresh posting status</button> : null}
       </div>
     </div>
     {possibleQboDuplicate && resolution !== "match_existing_qbo" ? (
@@ -584,9 +640,13 @@ function BookkeepingTransactionMirrorRow({
       selectedAccountLabel={selectedAccountName(selectedAccountId, accounts) || selectedAccountId}
       candidate={row.qbo_duplicate_candidates?.[0] || null}
       onCancel={() => setForcePostConfirmationOpen(false)}
-      onConfirm={() => {
+      onConfirm={async () => {
         setForcePostConfirmationOpen(false);
-        onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged: true, duplicateOverride: true, postToQboAnyway: true });
+        const accepted = await onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged: true, duplicateOverride: true, postToQboAnyway: true });
+        if (accepted?.accepted && accepted?.operation_id && accepted?.status_url) {
+          setPostingPollExpired(false);
+          setPostingRequest({ ...accepted, operation: { state: accepted.posting_state, terminal: false, rows: [] } });
+        }
       }}
     />
     </>

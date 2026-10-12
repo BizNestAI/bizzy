@@ -2206,7 +2206,17 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       vendor_rule_results: approval.vendor_rule_results || [],
       posting_preview: postingPreview,
       posting_result: postingRequest,
-      final_result: postingRequest ? { state: "posting_in_progress", message: "Posting request accepted. QuickBooks has not yet confirmed the transaction.", operation_id: postingRequest.operation_id } : null,
+      accepted: postingRequest?.accepted === true,
+      posting_intent_id: postingRequest?.posting_intent_id || null,
+      operation_id: postingRequest?.operation_id || null,
+      request_id: postingRequest?.request_id || null,
+      posting_state: postingRequest?.posting_state || null,
+      newly_created: postingRequest?.newly_created ?? null,
+      reused: postingRequest?.reused ?? null,
+      immediate_processing_requested: postingRequest?.immediate_processing_requested ?? null,
+      next_status_check_at: postingRequest?.next_status_check_at || null,
+      status_url: postingRequest ? `/api/admin/monthly-review/runs/${encodeURIComponent(runId)}/post-qbo-operations/${encodeURIComponent(postingRequest.operation_id)}` : null,
+      final_result: postingRequest ? { state: "posting_requested", message: "Posting requested. Checking QuickBooks status.", operation_id: postingRequest.operation_id, request_id: postingRequest.request_id } : null,
     });
   } catch (e) {
     console.error("[monthly-review] feed approval failed", e?.message || e);

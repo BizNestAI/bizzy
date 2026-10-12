@@ -68,3 +68,23 @@ test("force-post persists a scoped versioned decision and request identity", () 
   }
   assert.match(route, /extraMetaByTransactionId/);
 });
+
+test("force-post acceptance is durable, idempotent, and drives bounded status-only UI polling", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const command = read("src/services/bookkeeping/interactivePostingCommandService.js");
+  const ui = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  for (const field of ["posting_intent_id", "operation_id", "request_id", "posting_state", "newly_created", "reused", "immediate_processing_requested", "next_status_check_at", "status_url"]) {
+    assert.match(route, new RegExp(field));
+  }
+  assert.match(command, /duplicate_override_decision/);
+  assert.match(command, /categorize_as_new_despite_duplicate_risk/);
+  assert.match(command, /posting_intent_id: decision\.operation_id/);
+  assert.match(ui, /Posting requested/);
+  assert.match(ui, /Checking QuickBooks/);
+  assert.match(ui, /setTimeout\(poll, 1500\)/);
+  assert.match(ui, /Date\.now\(\) - startedAt >= 45000/);
+  assert.match(ui, /controller\.abort\(\)/);
+  assert.match(ui, /Refresh posting status/);
+  const pollingBlock = ui.slice(ui.indexOf("const refreshPostingStatus"), ui.indexOf("const persistedQboStatus"));
+  assert.doesNotMatch(pollingBlock, /method:\s*["']POST["']/);
+});

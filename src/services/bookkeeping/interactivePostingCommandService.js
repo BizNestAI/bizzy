@@ -420,13 +420,19 @@ export async function requestInteractiveTransactionPosting({
     throw error;
   }
   const action = deriveBookkeepingPostingAction(row);
-  const forceDecision = row.meta?.incoming_deposit_resolution;
+  const forceDecision = row.meta?.duplicate_override_decision || row.meta?.incoming_deposit_resolution;
+  const durableDuplicateOverride = forceDecision?.decision === "categorize_as_new_despite_duplicate_risk" &&
+    forceDecision?.decision_version >= 3 &&
+    Array.isArray(forceDecision?.reviewed_candidate_ids) &&
+    forceDecision.reviewed_candidate_ids.length > 0;
   const reviewedSoftDuplicate = allowReviewedSoftDuplicate === true &&
-    forceDecision?.source === "monthly_review_force_post" &&
-    forceDecision?.decision_version >= 2 &&
-    forceDecision?.duplicate_risk_acknowledged === true &&
-    forceDecision?.candidate_disposition === "rejected_as_distinct_transaction" &&
-    Boolean(forceDecision?.reviewed_duplicate_candidate_id);
+    (durableDuplicateOverride || (
+      forceDecision?.source === "monthly_review_force_post" &&
+      forceDecision?.decision_version >= 2 &&
+      forceDecision?.duplicate_risk_acknowledged === true &&
+      forceDecision?.candidate_disposition === "rejected_as_distinct_transaction" &&
+      Boolean(forceDecision?.reviewed_duplicate_candidate_id)
+    ));
   if ((!reviewedSoftDuplicate && !["post_now", "retry_posting"].includes(action.permitted_action)) || (!reviewedSoftDuplicate && action.posting_eligible !== true)) {
     const error = new Error(action.disabled_reason || "posting_action_not_permitted");
     error.code = action.safe_failure_classification || "posting_action_not_permitted";
@@ -485,8 +491,14 @@ export async function requestInteractiveTransactionPosting({
     ok: true,
     accepted: true,
     status: "accepted",
+    posting_intent_id: decision.operation_id,
     operation_id: decision.operation_id,
+    request_id: decision.operation_id,
+    posting_state: decision.command?.state || INTERACTIVE_COMMAND_STATES.ACCEPTED,
+    newly_created: decision.reused !== true,
     reused: decision.reused === true,
+    immediate_processing_requested: true,
+    next_status_check_at: new Date(Date.now() + 1500).toISOString(),
     transaction_id: transactionId,
     prior_state: row.status,
     posting_action: action,
