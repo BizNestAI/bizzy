@@ -18,7 +18,7 @@ import {
 } from "./quickBooksPaymentsProtectedWorkflow.js";
 import { normalizeTransactionResolution } from "./transactionResolutionService.js";
 import { requireCanonicalBookkeepingFeedStatus } from "./bookkeepingFeedStatusContract.js";
-import { deriveBookkeepingPostingAction, toBookkeepingNextAction } from "./bookkeepingPostingActionEligibility.js";
+import { deriveBookkeepingActionMatrix, deriveBookkeepingPostingAction, toBookkeepingNextAction } from "./bookkeepingPostingActionEligibility.js";
 import { deriveProviderFreePostingPreflight } from "./canonicalPostingCompiler.js";
 
 function makeCorrelationId(prefix = "feed") {
@@ -954,6 +954,7 @@ export async function fetchBookkeepingTransactions({
       ...nextRow,
       posting_action: postingAction,
       bookkeeping_next_action: toBookkeepingNextAction(postingAction),
+      bookkeeping_action_matrix: deriveBookkeepingActionMatrix(nextRow, { nowMs }),
     };
   });
   return { rows: enrichedRows, totalCount };

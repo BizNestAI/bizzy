@@ -11,14 +11,15 @@ test("Monthly Review exposes first-attempt and retry manual posting through the 
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   const workflow = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
+  const menu = read("src/components/Accounting/BookkeepingActionMenu.jsx");
 
   assert.match(page, /ManualQuickBooksPostingWorkflow/);
   assert.match(page, /openManualPostingWorkflow\(permittedAction === "confirm_type" \? "confirm_type" : "post", row\)/);
   assert.match(page, /openManualPostingWorkflow\("retry", row\)/);
   assert.match(page, /postRequest=\{monthlyReviewManualPostRequest\}/);
-  assert.match(table, /Retry posting/);
+  assert.match(menu, /All actions/);
   assert.match(table, /postingAction\.permitted_action/);
-  assert.match(table, /onClick=\{\(\) => onPost\?\.\(row, postingAction\.permitted_action\)\}/);
+  assert.match(table, /onPost\?\.\(row, postingAction\.permitted_action\)/);
   assert.match(workflow, /activeIds\.current\.has\(source\.id\)/);
   assert.match(workflow, /Posting…/);
 });
@@ -30,7 +31,7 @@ test("Confirm Type opens the shared resolution UI without posting or compiling a
 
   assert.match(page, /if \(intent === "confirm_type"\) \{\s*setManualPostingRequest\(\{ intent, transaction: row \}\);\s*return;/);
   assert.match(workflow, /confirmTypeIntent \? "result" : "confirm"/);
-  assert.match(workflow, /await finish\(\{ type: "resolution_saved", resolution, transaction: txn \}\)/);
+  assert.match(workflow, /await finish\(\{ type: "resolution_saved", resolution, response, transaction: txn \}\)/);
   assert.doesNotMatch(workflow.slice(workflow.indexOf("const chooseCreditType"), workflow.indexOf("const linkCandidate")), /await post\(/);
   assert.match(books, /if \(permittedAction === "confirm_type"\)/);
 });
@@ -56,16 +57,16 @@ test("every Monthly Review Handled row renders the shared eligibility action", (
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   assert.match(table, /getProtectedWorkflowReason\(row\)/);
   assert.match(table, /row\.posting_action \|\| deriveBookkeepingPostingAction\(row\)/);
-  assert.match(table, /onPost\?\.\(row, postingAction\.permitted_action\)/);
-  assert.match(table, /postingAction\.disabled_reason/);
+  assert.match(table, /BookkeepingActionMenu/);
+  assert.match(table, /matrix=\{actionMatrix\}/);
   assert.match(table, /\{genericActionsBlocked \? \(/);
-  assert.match(table, /Retry posting/);
+  assert.match(table, /row\.bookkeeping_action_matrix/);
 });
 
 test("Handled action matrix keeps completion or resolution controls visible", () => {
-  const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
-  for (const label of ["Post now", "Retry posting", "Confirm type", "Refresh match check", "Fix issue", "Review", "Posting…", "Reconciling…"]) {
-    assert.match(table, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${label} must be represented`);
+  const eligibility = read("src/services/bookkeeping/bookkeepingPostingActionEligibility.js");
+  for (const action of ["confirm_type", "edit_resolution", "retry_duplicate_check", "recover_posting_state", "preview_and_post", "wait_for_posting", "reconcile_provider_outcome", "view_blocker"]) {
+    assert.match(eligibility, new RegExp(action), `${action} must be represented`);
   }
 });
 
@@ -74,8 +75,8 @@ test("Monthly Review exposes bounded local recovery without a QuickBooks call", 
   const route = read("src/api/admin/monthlyReview.routes.js");
   const recoveryClient = read("src/services/bookkeeping/monthlyReviewRecoveryClient.js");
 
-  assert.match(table, /Recover state/);
-  assert.match(table, /onRecover\?\.\(event, row\)/);
+  assert.match(table, /recover_posting_state/);
+  assert.match(table, /onRecover\?\./);
   assert.match(recoveryClient, /recover-handled-posting-dispositions/);
   assert.match(recoveryClient, /transaction_ids: \[transactionId\]/);
   assert.match(recoveryClient, /business_id: businessId/);

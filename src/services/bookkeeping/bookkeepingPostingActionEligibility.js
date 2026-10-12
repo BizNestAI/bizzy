@@ -12,6 +12,35 @@ const CREDIT_TYPE_CODES = new Set([
   "statement_credit_review_required",
 ]);
 
+export const BOOKKEEPING_ACTION_GROUPS = Object.freeze([
+  Object.freeze({ key: "classification", label: "Classification", actions: Object.freeze(["confirm_type", "edit_type", "select_gl_account", "change_gl_account"]) }),
+  Object.freeze({ key: "resolution", label: "Resolution", actions: Object.freeze(["edit_resolution", "find_qbo_match", "confirm_qbo_match", "retry_duplicate_check", "acknowledge_duplicate_risk"]) }),
+  Object.freeze({ key: "posting", label: "Posting", actions: Object.freeze(["repair_account_mapping", "recheck_posting_eligibility", "recover_posting_state", "preview_and_post", "wait_for_posting", "reconcile_provider_outcome"]) }),
+  Object.freeze({ key: "history", label: "History", actions: Object.freeze(["undo", "view_blocker"]) }),
+]);
+
+const MATRIX_DEFINITIONS = Object.freeze({
+  confirm_type: ["Confirm type", false, "/api/bookkeeping/transactions/:transactionId/credit-card-inflow-resolution"],
+  edit_type: ["Edit type", false, "/api/bookkeeping/transactions/:transactionId/credit-card-inflow-resolution"],
+  select_gl_account: ["Select GL account", false, "/api/bookkeeping/transactions/:transactionId/account"],
+  change_gl_account: ["Change GL account", false, "/api/bookkeeping/transactions/:transactionId/account"],
+  edit_resolution: ["Categorize as new", false, "/api/bookkeeping/transactions/:transactionId/resolution"],
+  find_qbo_match: ["Find QuickBooks match", true, "/api/bookkeeping/transactions/:transactionId/qbo-match"],
+  confirm_qbo_match: ["Confirm QuickBooks match", true, "/api/bookkeeping/transactions/:transactionId/qbo-match/confirm"],
+  retry_duplicate_check: ["Retry duplicate check", true, "/api/bookkeeping/transactions/:transactionId/qbo-match"],
+  acknowledge_duplicate_risk: ["Review duplicate risk", false, "/api/bookkeeping/transactions/:transactionId/duplicate-risk"],
+  repair_account_mapping: ["Repair account mapping", false, "/api/bookkeeping/accounts/:plaidAccountId/qbo-mapping"],
+  recheck_posting_eligibility: ["Recheck eligibility", false, "/api/bookkeeping/transactions/:transactionId/posting-eligibility"],
+  recover_posting_state: ["Recover posting state", false, "/api/bookkeeping/transactions/:transactionId/posting-recovery"],
+  preview_and_post: ["Preview & post", true, "/api/bookkeeping/posting/transactions/:transactionId"],
+  wait_for_posting: ["Posting…", false, null],
+  reconcile_provider_outcome: ["Reconcile QuickBooks outcome", true, "/api/bookkeeping/posting/transactions/:transactionId/reconcile"],
+  undo: ["Undo", true, "/api/bookkeeping/transactions/:transactionId/undo"],
+  view_blocker: ["View blocker/details", false, null],
+});
+
+export const BOOKKEEPING_ACTION_ORDER = Object.freeze(BOOKKEEPING_ACTION_GROUPS.flatMap((group) => group.actions));
+
 const ACTION_DEFINITIONS = Object.freeze({
   completed: [null, false, false, false, "finalized"],
   waiting_for_settlement: [null, false, false, false, "settled"],
@@ -149,7 +178,7 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
 const NEXT_ACTION_CODES = Object.freeze({
   resolve_issue: "confirm_type",
   confirm_statement_credit: "confirm_type",
-  complete_refund_details: "complete_resolution",
+  complete_refund_details: "edit_resolution",
   select_valid_account: "select_gl_account",
   map_account: "repair_account_mapping",
   retry_duplicate_check: "retry_duplicate_check",
@@ -157,18 +186,19 @@ const NEXT_ACTION_CODES = Object.freeze({
   recheck_schedule: "recheck_posting_eligibility",
   post_now: "preview_and_post",
   retry_posting: "preview_and_post",
-  posting: "wait_for_active_posting",
+  posting: "wait_for_posting",
   reconcile_qbo: "reconcile_provider_outcome",
   finalize_posting: "reconcile_provider_outcome",
-  inspect_blocker: "review_hard_blocker",
-  waiting_for_settlement: "wait_for_active_posting",
+  match_payment: "edit_resolution",
+  inspect_blocker: "view_blocker",
+  waiting_for_settlement: "wait_for_posting",
   completed: null,
 });
 
 export function toBookkeepingNextAction(action = {}) {
   const actionCode = Object.prototype.hasOwnProperty.call(NEXT_ACTION_CODES, action.action_code)
     ? NEXT_ACTION_CODES[action.action_code]
-    : "review_hard_blocker";
+    : "view_blocker";
   return {
     ...action,
     legacy_action_code: action.action_code || null,
@@ -179,6 +209,101 @@ export function toBookkeepingNextAction(action = {}) {
     preview_compilable: action.posting_eligible === true || action.action_code === "post_now",
     posting_allowed: action.posting_eligible === true,
     blocker_code: action.safe_failure_classification || null,
+  };
+}
+
+const SAFE_BLOCKER_PATTERN = /^[a-z][a-z0-9_]{1,79}$/;
+
+function sanitizedBlockerCode(value) {
+  const code = String(value || "").toLowerCase();
+  return SAFE_BLOCKER_PATTERN.test(code) ? code : null;
+}
+
+function disabledReason(code, context) {
+  if (context.final) return "Final posted or matched transactions cannot be changed here.";
+  if (context.pending) return "Available after the bank transaction settles.";
+  if (context.active) return "A posting request is already processing.";
+  if (context.ambiguous) return "Reconcile the QuickBooks outcome before making another change.";
+  if (code === "confirm_type" && context.savedType) return `Already confirmed as ${context.savedTypeLabel}.`;
+  if (code === "edit_type" && !context.savedType) return "Confirm the credit type first.";
+  if (code === "select_gl_account" && context.hasGl) return "A GL account is already selected.";
+  if (code === "change_gl_account" && !context.hasGl) return "Select a GL account first.";
+  if (["preview_and_post", "recheck_posting_eligibility"].includes(code) && !context.hasGl) return "Available after selecting a GL account.";
+  if (code === "preview_and_post" && !context.previewReady) return "QuickBooks preview must compile first.";
+  if (code === "retry_duplicate_check" && !context.duplicateUnavailable) return "Duplicate verification is currently available.";
+  if (code === "acknowledge_duplicate_risk" && !context.possibleDuplicate) return "No unresolved duplicate risk was found.";
+  if (code === "repair_account_mapping" && !context.mappingBlocked) return "The source account is already mapped to QuickBooks.";
+  if (code === "reconcile_provider_outcome" && !context.ambiguous) return "No uncertain QuickBooks outcome needs reconciliation.";
+  if (code === "wait_for_posting" && !context.active) return "No posting request is currently processing.";
+  if (code === "confirm_qbo_match" && !context.matchCandidate) return "Find and select a QuickBooks match first.";
+  if (code === "view_blocker" && !context.blocker) return "No blocker details are available.";
+  return "Not available for the transaction's current bookkeeping state.";
+}
+
+/**
+ * Complete, stable action contract for MRP and Admin View. This function is the
+ * only place that promotes an action to primary or enables a provider write.
+ */
+export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } = {}) {
+  const legacy = deriveBookkeepingPostingAction(row, { nowMs });
+  const next = toBookkeepingNextAction(legacy);
+  const meta = row.meta || {};
+  const lifecycle = deriveQboPostingLifecycle(row, { nowMs });
+  const final = COMPLETED_KEYS.has(lifecycle.key) || Boolean(row.qbo_txn_id || row.posted_at);
+  const pending = row.pending === true || meta.pending === true || lifecycle.key === "pending";
+  const active = lifecycle.key === "posting" || meta.posting_in_progress === true;
+  const ambiguous = lifecycle.key === "reconciling" || ["qbo_outcome_ambiguous", "qbo_posting_receipt_update_failed", "qbo_succeeded_local_finalize_pending"].includes(String(legacy.safe_failure_classification || ""));
+  const savedResolution = meta.credit_card_inflow_resolution || null;
+  const savedType = savedResolution?.resolution_type || null;
+  const savedTypeLabel = savedType === "merchant_refund" ? "Merchant refund" : savedType ? "Cash back or statement credit" : null;
+  const hasGl = Boolean(row.final_qbo_account_id || savedResolution?.destination_qbo_account_id);
+  const previewReady = row.provider_free_preflight?.preview_ready === true && legacy.posting_eligible === true;
+  const blocker = sanitizedBlockerCode(legacy.safe_failure_classification || row.provider_free_preflight?.blocker_code || lifecycle.code);
+  const duplicateUnavailable = ["match_check_unavailable", "duplicate_check_unavailable"].includes(blocker);
+  const possibleDuplicate = ["possible_existing_qbo_match", "incoming_deposit_needs_match"].includes(blocker) || meta.possible_qbo_duplicate === true;
+  const mappingBlocked = ["missing_source_qbo_account", "missing_qbo_account_mapping", "inactive_source_qbo_account"].includes(blocker);
+  const matchCandidate = Boolean(meta.incoming_deposit_match_id || meta.qbo_match_id || row.qbo_match_id);
+  const mutable = !final && !pending && !active && !ambiguous;
+  const isHandled = ["approved", "auto_approved", "handled", "failed"].includes(String(row.status || "").toLowerCase());
+  const primaryCode = final ? null : next.action_code;
+  const context = { final, pending, active, ambiguous, savedType, savedTypeLabel, hasGl, previewReady, blocker, duplicateUnavailable, possibleDuplicate, mappingBlocked, matchCandidate };
+
+  const enabledCodes = new Set();
+  if (primaryCode && next.enabled) enabledCodes.add(primaryCode);
+  if (mutable && savedType) enabledCodes.add("edit_type");
+  if (mutable && hasGl) enabledCodes.add("change_gl_account");
+  if (mutable && !hasGl) enabledCodes.add("select_gl_account");
+  if (mutable) enabledCodes.add("edit_resolution");
+  if (mutable && isHandled) enabledCodes.add("find_qbo_match");
+  if (mutable && matchCandidate) enabledCodes.add("confirm_qbo_match");
+  if (mutable && blocker) enabledCodes.add("view_blocker");
+  if (mutable && isHandled && !row.qbo_txn_id && !row.posted_at) enabledCodes.add("undo");
+  if (!previewReady) enabledCodes.delete("preview_and_post");
+  if (active || ambiguous || pending || final) enabledCodes.delete("preview_and_post");
+
+  const actions = BOOKKEEPING_ACTION_ORDER.map((actionCode) => {
+    const definition = MATRIX_DEFINITIONS[actionCode];
+    const enabled = enabledCodes.has(actionCode);
+    return {
+      action_code: actionCode,
+      label: definition[0],
+      enabled,
+      disabled_reason: enabled ? null : disabledReason(actionCode, context),
+      is_primary: actionCode === primaryCode,
+      requires_confirmation: actionCode === "preview_and_post" ? legacy.confirmation_required === true : ["confirm_qbo_match", "acknowledge_duplicate_risk", "undo"].includes(actionCode),
+      provider_call_possible: definition[1],
+      endpoint: definition[2],
+      blocker_code: actionCode === primaryCode || actionCode === "view_blocker" ? blocker : null,
+    };
+  });
+
+  return {
+    version: 1,
+    state: final ? "final" : active ? "waiting" : pending ? "pending" : ambiguous ? "provider_outcome_uncertain" : "actionable",
+    status_label: final ? "Final" : active ? "Posting" : pending ? "Pending settlement" : ambiguous ? "QuickBooks outcome requires reconciliation" : primaryCode === "preview_and_post" ? "Ready to preview" : "Action required",
+    primary_action_code: primaryCode,
+    actions,
+    groups: BOOKKEEPING_ACTION_GROUPS,
   };
 }
 

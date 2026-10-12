@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { AlertTriangle, Loader2, X } from "lucide-react";
 import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, TransactionResolutionSelector, incomingDepositMatchState } from "./BookkeepingFeed.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
+import BookkeepingActionMenu from "./BookkeepingActionMenu.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
@@ -184,6 +185,7 @@ function BookkeepingTransactionMirrorRow({
   const postingAction = canonicalNextAction
     ? { ...canonicalNextAction, action_code: canonicalNextAction.legacy_action_code }
     : row.posting_action || deriveBookkeepingPostingAction(row);
+  const actionMatrix = row.bookkeeping_action_matrix;
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
@@ -483,90 +485,22 @@ function BookkeepingTransactionMirrorRow({
           {displayResolution === "split_transaction" ? (
             <span className="text-[11px] text-amber-100/80">Split review</span>
           ) : null}
-          {isHandledFeed && ["post_now", "confirm_type"].includes(postingAction.permitted_action) ? (
-            <button
-              type="button"
-              onClick={() => onPost?.(row, postingAction.permitted_action)}
-              disabled={selectedChanged || manualPostBusy || postingAction.posting_eligible === false && postingAction.permitted_action === "post_now"}
-              title={selectedChanged ? "Save the selected GL account before posting." : undefined}
-              aria-label={`Post ${row.payee || row.vendor || row.description || "transaction"} to QuickBooks`}
-              className="inline-flex items-center gap-1 rounded-lg border border-sky-300/20 bg-sky-300/[0.1] px-2 py-1 text-[11px] font-semibold text-sky-100 hover:bg-sky-300/[0.16] disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {manualPostBusy ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
-              {manualPostBusy ? "Posting…" : postingAction.permitted_action === "confirm_type" ? "Confirm type" : "Post now"}
-            </button>
-          ) : null}
-          {isHandledFeed && postingAction.permitted_action === "retry_posting" ? (
-            <button
-              type="button"
-              onClick={() => onRetry?.(row)}
-              disabled={isActionBusy("retry")}
-              className="rounded-lg border border-amber-300/20 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-300/[0.16] disabled:opacity-45"
-            >
-              {isActionBusy("retry") ? "Retrying..." : "Retry posting"}
-            </button>
-          ) : null}
-          {isHandledFeed && postingAction.permitted_action === "refresh_match_check" ? (
-            <button
-              type="button"
-              onClick={() => onInspectIncomingDepositMatch?.(row.id, null, row)}
-              disabled={isActionBusy("match")}
-              className="rounded-lg border border-amber-300/20 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 disabled:opacity-45"
-            >{isActionBusy("match") ? "Checking…" : postingAction.label || "Retry duplicate check"}</button>
-          ) : null}
-          {isHandledFeed && postingAction.permitted_action === "posting" ? (
-            <button
-              type="button"
-              disabled
-              title={postingAction.disabled_reason || qboStatus.detail || "No posting action is available."}
-              className="rounded-lg border border-white/12 bg-white/[0.05] px-2 py-1 text-[11px] font-semibold text-white/55 disabled:cursor-not-allowed"
-            >
-              Posting…
-            </button>
-          ) : null}
-          {isHandledFeed && postingAction.action_code === "review_possible_match" ? (
-            <button
-              type="button"
-              onClick={() => changeResolution("match_existing_qbo")}
-              disabled={resolutionBusy || isActionBusy("match")}
-              className="rounded-lg border border-amber-300/25 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-300/[0.16] disabled:opacity-45"
-            >
-              {resolutionBusy || isActionBusy("match") ? "Finding match…" : "Review possible match"}
-            </button>
-          ) : null}
-          {isHandledFeed && postingAction.action_code === "recheck_schedule" ? (
-            <button
-              type="button"
-              onClick={(event) => onRecover?.(event, row)}
-              disabled={isActionBusy("recover")}
-              title="Recheck local posting eligibility and assign a schedule without contacting QuickBooks."
-              className="rounded-lg border border-violet-300/20 bg-violet-300/[0.1] px-2 py-1 text-[11px] font-semibold text-violet-100 hover:bg-violet-300/[0.16] disabled:opacity-45"
-            >
-              {isActionBusy("recover") ? "Rechecking…" : "Recheck & schedule"}
-            </button>
-          ) : null}
-          {isHandledFeed && postingAction.action_code === "complete_refund_details" ? (
-            <button
-              type="button"
-              onClick={() => onPost?.(row, "confirm_type")}
-              disabled={manualPostBusy}
-              className="rounded-lg border border-amber-300/20 bg-amber-300/[0.1] px-2 py-1 text-[11px] font-semibold text-amber-100 hover:bg-amber-300/[0.16] disabled:opacity-45"
-            >{manualPostBusy ? "Opening…" : "Complete refund details"}</button>
-          ) : null}
-          {isHandledFeed && protectedInflowDecision.final ? (
-            <button
-              type="button"
-              onClick={() => onPost?.(row, "confirm_type")}
-              disabled={manualPostBusy}
-              className="rounded-lg border border-white/12 bg-white/[0.05] px-2 py-1 text-[11px] font-semibold text-white/65 hover:bg-white/[0.1] disabled:opacity-45"
-            >Edit resolution</button>
-          ) : null}
-          {isHandledFeed && postingAction.action_code === "inspect_blocker" ? (
-            <details className="basis-full rounded-lg border border-amber-300/15 bg-amber-300/[0.06] px-2 py-1.5 text-[11px] text-amber-100">
-              <summary className="cursor-pointer font-semibold">Review blocker</summary>
-              <div className="mt-1">{postingAction.reason || postingAction.disabled_reason || "The posting state needs operator review."}</div>
-              {row.meta?.request_id || row.posting_job?.qbo_request_id ? <div className="mt-1 text-white/45">Request {row.meta?.request_id || row.posting_job?.qbo_request_id}</div> : null}
-            </details>
+          {isHandledFeed ? (
+            <div className="basis-full">
+              <BookkeepingActionMenu
+                matrix={actionMatrix}
+                busy={manualPostBusy || isActionBusy("recover") || isActionBusy("match")}
+                status={actionMatrix?.status_label || ""}
+                onAction={(action) => {
+                  if (["confirm_type", "edit_type", "edit_resolution"].includes(action.action_code)) return onPost?.(row, "confirm_type");
+                  if (["find_qbo_match", "confirm_qbo_match", "retry_duplicate_check", "acknowledge_duplicate_risk"].includes(action.action_code)) return changeResolution("match_existing_qbo");
+                  if (["select_gl_account", "change_gl_account"].includes(action.action_code)) return null;
+                  if (["recheck_posting_eligibility", "recover_posting_state"].includes(action.action_code)) return onRecover?.({ preventDefault() {}, stopPropagation() {} }, row);
+                  if (action.action_code === "preview_and_post") return postingAction.permitted_action === "retry_posting" ? onRetry?.(row) : onPost?.(row, postingAction.permitted_action);
+                  return null;
+                }}
+              />
+            </div>
           ) : null}
         </div>
         {isHandledFeed && postingAction.disabled_reason ? (

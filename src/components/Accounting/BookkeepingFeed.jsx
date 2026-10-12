@@ -2,8 +2,9 @@ import React from "react";
 import { getBookkeepingExclusionEligibility } from "../../services/bookkeeping/exclusionEligibility.js";
 import ReactDOM from "react-dom";
 import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
-import { Check, CheckCircle2, ChevronDown, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
+import { Check, CheckCircle2, ChevronDown, Loader2, Plus, RotateCcw } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
+import BookkeepingActionMenu from "./BookkeepingActionMenu.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import {
   deriveCreditCardPaymentOrientation,
@@ -1522,21 +1523,7 @@ export default function BookkeepingFeed({
             const postingAction = txn.bookkeeping_next_action
               ? { ...txn.bookkeeping_next_action, action_code: txn.bookkeeping_next_action.legacy_action_code }
               : txn.posting_action || deriveBookkeepingPostingAction(txn);
-            const postingActionEnabled = postingAction.posting_eligible === true || postingAction.permitted_action === "confirm_type";
-            const postingActionLabel = postingAction.permitted_action === "retry_posting"
-              ? "Retry posting"
-              : postingAction.permitted_action === "confirm_type"
-                ? "Confirm type"
-                : postingAction.permitted_action === "posting"
-                  ? "Posting…"
-                  : postingAction.permitted_action === "reconciling"
-                    ? "Reconciling…"
-                    : postingAction.permitted_action === "fix_issue"
-                      ? "Fix issue"
-                      : postingAction.permitted_action === "review"
-                        ? "Review"
-                        : "Post now";
-
+            const actionMatrix = txn.bookkeeping_action_matrix;
             return (
               <React.Fragment key={txn.id}>
               <div
@@ -1792,45 +1779,18 @@ export default function BookkeepingFeed({
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
                 ) : isHandledStatus && !quickBooksPaymentsProtected ? (
-                  <div className="flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap">
-                    <button
-                      type="button"
-                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold leading-none text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
-                      disabled={readOnly || isPosting}
-                      onClick={() => {
-                        if (readOnly || isPosting) return;
-                        onUndo?.(txn.id);
-                      }}
-                      title={readOnly ? "Billing required to edit transactions." : "Undo approval"}
-                      aria-label="Undo approval"
-                    >
-                      <RotateCcw size={11} strokeWidth={2.2} aria-hidden="true" />
-                      Undo
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold leading-none text-emerald-100/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-emerald-300/65 hover:bg-emerald-500/16 disabled:cursor-not-allowed disabled:opacity-45"
-                      disabled={readOnly || isPosting || incomingMatchAction.loading === true || !postingActionEnabled}
-                      onClick={() => {
-                        if (readOnly || isPosting || !postingActionEnabled) return;
-                        onManualPost?.(txn.id, postingAction.permitted_action);
-                      }}
-                      title={postingAction.disabled_reason || undefined}
-                      aria-label={postingActionLabel}
-                    >
-                      <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
-                      {isPosting || incomingMatchAction.loading === true ? (
-                        <span role="status" aria-label="Posting to QuickBooks" className="inline-flex items-baseline">
-                          <span>Posting</span>
-                          <span aria-hidden="true" className="inline-flex w-[1.1em] justify-start">
-                            <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "0ms" }}>.</span>
-                            <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "120ms" }}>.</span>
-                            <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "240ms" }}>.</span>
-                          </span>
-                        </span>
-                      ) : postingActionLabel}
-                    </button>
-                  </div>
+                  <BookkeepingActionMenu
+                    matrix={actionMatrix}
+                    busy={isPosting || incomingMatchAction.loading === true}
+                    readOnly={readOnly && !adminBookkeepingAccess}
+                    status={actionMatrix?.status_label || ""}
+                    onAction={(action) => {
+                      if (action.action_code === "undo") return onUndo?.(txn.id);
+                      if (["find_qbo_match", "retry_duplicate_check", "confirm_qbo_match"].includes(action.action_code)) return onInspectIncomingDepositMatch?.(txn.id, null, txn);
+                      if (["select_gl_account", "change_gl_account", "edit_resolution", "view_blocker"].includes(action.action_code)) return toggleExpandedRow(txn.id);
+                      return onManualPost?.(txn.id, action.is_primary ? postingAction.permitted_action : action.action_code);
+                    }}
+                  />
                 ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (
                   incomingMatch.confirmed && allowIncomingDepositUndo && incomingMatch.matchId ? (
                     <button
