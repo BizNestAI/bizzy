@@ -15,7 +15,7 @@ const CREDIT_TYPE_CODES = new Set([
 export const BOOKKEEPING_ACTION_GROUPS = Object.freeze([
   Object.freeze({ key: "classification", label: "Classification", actions: Object.freeze(["confirm_type", "edit_type", "select_gl_account", "change_gl_account"]) }),
   Object.freeze({ key: "resolution", label: "Resolution", actions: Object.freeze(["edit_resolution", "find_qbo_match", "confirm_qbo_match", "retry_duplicate_check", "acknowledge_duplicate_risk"]) }),
-  Object.freeze({ key: "posting", label: "Posting", actions: Object.freeze(["repair_account_mapping", "recheck_posting_eligibility", "recover_posting_state", "preview_and_post", "wait_for_posting", "reconcile_provider_outcome"]) }),
+  Object.freeze({ key: "posting", label: "Posting", actions: Object.freeze(["repair_account_mapping", "recheck_posting_eligibility", "recover_posting_state", "preview_and_post", "retry_posting", "wait_for_posting", "reconcile_provider_outcome"]) }),
   Object.freeze({ key: "history", label: "History", actions: Object.freeze(["undo", "view_blocker"]) }),
 ]);
 
@@ -33,6 +33,7 @@ const MATRIX_DEFINITIONS = Object.freeze({
   recheck_posting_eligibility: ["Recheck eligibility", false, "/api/bookkeeping/transactions/:transactionId/posting-eligibility"],
   recover_posting_state: ["Recover posting state", false, "/api/bookkeeping/transactions/:transactionId/posting-recovery"],
   preview_and_post: ["Preview & post", true, "/api/bookkeeping/posting/transactions/:transactionId"],
+  retry_posting: ["Retry posting", true, "/api/bookkeeping/posting/transactions/:transactionId"],
   wait_for_posting: ["Posting…", false, null],
   reconcile_provider_outcome: ["Reconcile QuickBooks outcome", true, "/api/bookkeeping/posting/transactions/:transactionId/reconcile"],
   undo: ["Undo", true, "/api/bookkeeping/transactions/:transactionId/undo"],
@@ -185,7 +186,7 @@ const NEXT_ACTION_CODES = Object.freeze({
   review_possible_match: "acknowledge_duplicate_risk",
   recheck_schedule: "recheck_posting_eligibility",
   post_now: "preview_and_post",
-  retry_posting: "preview_and_post",
+  retry_posting: "retry_posting",
   posting: "wait_for_posting",
   reconcile_qbo: "reconcile_provider_outcome",
   finalize_posting: "reconcile_provider_outcome",
@@ -228,8 +229,8 @@ function disabledReason(code, context) {
   if (code === "edit_type" && !context.savedType) return "Confirm the credit type first.";
   if (code === "select_gl_account" && context.hasGl) return "A GL account is already selected.";
   if (code === "change_gl_account" && !context.hasGl) return "Select a GL account first.";
-  if (["preview_and_post", "recheck_posting_eligibility"].includes(code) && !context.hasGl) return "Available after selecting a GL account.";
-  if (code === "preview_and_post" && !context.previewReady) return "QuickBooks preview must compile first.";
+  if (["preview_and_post", "retry_posting", "recheck_posting_eligibility"].includes(code) && !context.hasGl) return "Available after selecting a GL account.";
+  if (["preview_and_post", "retry_posting"].includes(code) && !context.previewReady) return "QuickBooks preview must compile first.";
   if (code === "retry_duplicate_check" && !context.duplicateUnavailable) return "Duplicate verification is currently available.";
   if (code === "acknowledge_duplicate_risk" && !context.possibleDuplicate) return "No unresolved duplicate risk was found.";
   if (code === "repair_account_mapping" && !context.mappingBlocked) return "The source account is already mapped to QuickBooks.";
@@ -278,22 +279,25 @@ export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } =
   if (mutable && matchCandidate) enabledCodes.add("confirm_qbo_match");
   if (mutable && blocker) enabledCodes.add("view_blocker");
   if (mutable && isHandled && !row.qbo_txn_id && !row.posted_at) enabledCodes.add("undo");
-  if (!previewReady) enabledCodes.delete("preview_and_post");
-  if (active || ambiguous || pending || final) enabledCodes.delete("preview_and_post");
+  if (!previewReady) {
+    enabledCodes.delete("preview_and_post");
+    enabledCodes.delete("retry_posting");
+  }
+  if (active || ambiguous || pending || final) {
+    enabledCodes.delete("preview_and_post");
+    enabledCodes.delete("retry_posting");
+  }
 
   const actions = BOOKKEEPING_ACTION_ORDER.map((actionCode) => {
     const definition = MATRIX_DEFINITIONS[actionCode];
     const enabled = enabledCodes.has(actionCode);
-    const label = actionCode === "preview_and_post" && legacy.action_code === "retry_posting"
-      ? "Retry posting"
-      : definition[0];
     return {
       action_code: actionCode,
-      label,
+      label: definition[0],
       enabled,
       disabled_reason: enabled ? null : disabledReason(actionCode, context),
       is_primary: actionCode === primaryCode,
-      requires_confirmation: actionCode === "preview_and_post" ? legacy.confirmation_required === true : ["confirm_qbo_match", "acknowledge_duplicate_risk", "undo"].includes(actionCode),
+      requires_confirmation: ["preview_and_post", "retry_posting"].includes(actionCode) ? legacy.requires_confirmation === true : ["confirm_qbo_match", "acknowledge_duplicate_risk", "undo"].includes(actionCode),
       provider_call_possible: definition[1],
       endpoint: definition[2],
       blocker_code: actionCode === primaryCode || actionCode === "view_blocker" ? blocker : null,
@@ -303,7 +307,7 @@ export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } =
   return {
     version: 1,
     state: final ? "final" : active ? "waiting" : pending ? "pending" : ambiguous ? "provider_outcome_uncertain" : "actionable",
-    status_label: final ? "Final" : active ? "Posting" : pending ? "Pending settlement" : ambiguous ? "QuickBooks outcome requires reconciliation" : primaryCode === "preview_and_post" ? (legacy.action_code === "retry_posting" ? "Ready to retry" : "Ready to preview") : "Action required",
+    status_label: final ? "Final" : active ? "Posting" : pending ? "Pending settlement" : ambiguous ? "QuickBooks outcome requires reconciliation" : primaryCode === "retry_posting" ? "Ready to retry" : primaryCode === "preview_and_post" ? "Ready to preview" : "Action required",
     primary_action_code: primaryCode,
     actions,
     groups: BOOKKEEPING_ACTION_GROUPS,

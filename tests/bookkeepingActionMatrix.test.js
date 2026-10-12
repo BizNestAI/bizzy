@@ -56,6 +56,36 @@ test("provider-free preview is the sole gate for Preview & post", () => {
   assert.equal(action(failed, "view_blocker").blocker_code, "posting_preview_unavailable");
 });
 
+test("a definite pre-provider failure exposes retry_posting as the sole primary posting action", () => {
+  const matrix = deriveBookkeepingActionMatrix(base({
+    qbo_posting_lifecycle: {
+      key: "failed",
+      label: "Posting failed",
+      detail: "Nothing was sent to QuickBooks.",
+      code: "posting_internal_failure",
+      retryable: true,
+    },
+    meta: {
+      manual_qbo_account_selection: true,
+      duplicate_override_decision: { version: 3, informational_only: true },
+    },
+  }), { nowMs });
+  assert.equal(matrix.primary_action_code, "retry_posting");
+  assert.deepEqual(action(matrix, "retry_posting"), {
+    action_code: "retry_posting",
+    label: "Retry posting",
+    enabled: true,
+    disabled_reason: null,
+    is_primary: true,
+    requires_confirmation: true,
+    provider_call_possible: true,
+    endpoint: "/api/bookkeeping/posting/transactions/:transactionId",
+    blocker_code: "posting_internal_failure",
+  });
+  assert.equal(action(matrix, "preview_and_post").enabled, false);
+  assert.equal(action(matrix, "preview_and_post").is_primary, false);
+});
+
 test("ordinary card outflows do not require inflow classification", () => {
   const matrix = deriveBookkeepingActionMatrix(base(), { nowMs });
   assert.equal(matrix.primary_action_code, "preview_and_post");

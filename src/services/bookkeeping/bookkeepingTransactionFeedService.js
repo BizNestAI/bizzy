@@ -466,6 +466,9 @@ function isHandledForPosting(row = {}) {
 function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now()) {
   if (row.qbo_txn_id) return null;
   if (!isHandledForPosting(row)) return null;
+  // Interactive posting is the newest execution authority. A terminal command
+  // must outrank an older scheduled job/categorization projection.
+  if (row.interactive_posting_lifecycle) return row.interactive_posting_lifecycle;
   const meta = row.meta || {};
   const job = row.posting_job || {};
   if (["processing", "reconciling"].includes(job.state)) {
@@ -618,6 +621,93 @@ async function attachPostingJobsForFeed({ db, businessId, rows }) {
   }
   const jobs = new Map((data || []).map((job) => [String(job.transaction_id), job]));
   return rows.map((row) => ({ ...row, posting_job: jobs.get(String(row.id || row.transactionId)) || null }));
+}
+
+function operationTime(operation = {}) {
+  return Date.parse(operation.requested_at || operation.created_at || operation.updated_at || 0) || 0;
+}
+
+export function selectLatestInteractivePostingOperation(operations = [], transactionId) {
+  return operations
+    .filter((operation) => (operation.transaction_ids || []).some((id) => String(id) === String(transactionId)))
+    .sort((left, right) => operationTime(right) - operationTime(left))[0] || null;
+}
+
+export function interactivePostingLifecycleForFeed(operation = null, transactionId, { nowMs = Date.now() } = {}) {
+  if (!operation) return null;
+  const result = operation.transaction_results?.[transactionId] || operation.transaction_results?.[String(transactionId)] || null;
+  const receiptIds = Array.isArray(operation.qbo_receipt_ids) ? operation.qbo_receipt_ids : [];
+  const qboTxnId = result?.qbo_txn_id || null;
+  const leaseExpiresAt = Date.parse(operation.lease_expires_at || "");
+  const activeLease = Number.isFinite(leaseExpiresAt) && leaseExpiresAt > nowMs;
+  const active = ["accepted", "queued", "processing", "claimed"].includes(String(operation.state || "").toLowerCase()) && activeLease;
+
+  if (qboTxnId || receiptIds.length > 0 || result?.posted === true) {
+    return {
+      key: "posted",
+      label: "Posted",
+      tone: "good",
+      detail: qboTxnId ? `QuickBooks transaction ${qboTxnId}` : "QuickBooks confirmed the transaction.",
+      technical: { operation_id: operation.operation_id },
+    };
+  }
+  if (active) {
+    return {
+      key: "posting",
+      label: "Posting",
+      tone: "warning",
+      detail: "A posting operation is already in progress.",
+      technical: { operation_id: operation.operation_id },
+    };
+  }
+  if (result?.ambiguous === true || result?.state === "ambiguous") {
+    return {
+      key: "reconciling",
+      label: "QuickBooks outcome requires reconciliation",
+      tone: "danger",
+      detail: result.safe_message || operation.failure_message || "Confirm the QuickBooks outcome before another write.",
+      code: "qbo_outcome_ambiguous",
+      retryable: false,
+      technical: { operation_id: operation.operation_id, original_failure_code: result.internal_reason_code || operation.failure_code || null },
+    };
+  }
+  if (operation.state === "failed" && result?.retryable === true && result?.ambiguous !== true && !qboTxnId && receiptIds.length === 0 && !activeLease) {
+    return {
+      key: "failed",
+      label: "Posting failed · Posting service error",
+      tone: "danger",
+      detail: result.safe_message || operation.failure_message || "Bizzi did not reach QuickBooks. This posting can be retried safely.",
+      code: "posting_internal_failure",
+      retryable: true,
+      last_attempt_at: operation.terminal_at || operation.updated_at || operation.requested_at || null,
+      technical: { operation_id: operation.operation_id, original_failure_code: result.internal_reason_code || operation.failure_code || null },
+    };
+  }
+  return null;
+}
+
+async function attachInteractivePostingOperationsForFeed({ db, businessId, rows, nowMs = Date.now() }) {
+  const ids = rows.map((row) => row.id || row.transactionId).filter(Boolean);
+  if (!ids.length || typeof db?.from !== "function") return rows;
+  const operationQuery = db
+    .from("bookkeeping_interactive_posting_commands")
+    .select("operation_id,business_id,transaction_ids,requested_at,created_at,updated_at,state,lease_expires_at,terminal_at,failure_code,failure_message,qbo_receipt_ids,transaction_results")
+    .eq("business_id", businessId);
+  // Lightweight test and compatibility adapters may not implement PostgREST's
+  // array-overlap filter. In that case retain the existing feed behavior.
+  if (typeof operationQuery?.overlaps !== "function") return rows;
+  const { data, error } = await operationQuery.overlaps("transaction_ids", ids)
+    .order("requested_at", { ascending: false });
+  if (error) {
+    if (["42P01", "42703"].includes(error.code) || String(error.message || "").includes("does not exist")) return rows;
+    throw error;
+  }
+  return rows.map((row) => {
+    const transactionId = row.id || row.transactionId;
+    const operation = selectLatestInteractivePostingOperation(data || [], transactionId);
+    const lifecycle = interactivePostingLifecycleForFeed(operation, transactionId, { nowMs });
+    return operation ? { ...row, interactive_posting_operation: operation, interactive_posting_lifecycle: lifecycle } : row;
+  });
 }
 
 function shouldDiscoverIncomingDepositForFeed(row = {}) {
@@ -932,7 +1022,8 @@ export async function fetchBookkeepingTransactions({
   });
   const splitEnrichedRows = await attachCanonicalSplitsForFeed({ db, businessId, rows: accountEnrichedRows });
   const jobEnrichedRows = await attachPostingJobsForFeed({ db, businessId, rows: splitEnrichedRows });
-  const preflightEnrichedRows = await attachProviderFreePostingPreflight({ db, businessId, rows: jobEnrichedRows });
+  const operationEnrichedRows = await attachInteractivePostingOperationsForFeed({ db, businessId, rows: jobEnrichedRows });
+  const preflightEnrichedRows = await attachProviderFreePostingPreflight({ db, businessId, rows: operationEnrichedRows });
   let policy = null;
   try {
     policy = await getAutoPostPolicy(db, businessId);

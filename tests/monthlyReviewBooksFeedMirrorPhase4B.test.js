@@ -402,7 +402,8 @@ test("mirror row presenter preserves customer-answer, QBO, and special-workflow 
   assert.doesNotMatch(tableSource, />\s*Special workflow\s*</);
   assert.doesNotMatch(tableSource, /formatAccountType/);
   assert.doesNotMatch(tableSource, /safeFetch/);
-  assert.doesNotMatch(tableSource, /fetch\(|createQbo|runBooksPostOnce|postSingleBookkeepingTransactionNow/);
+  assert.doesNotMatch(tableSource, /createQbo|runBooksPostOnce|postSingleBookkeepingTransactionNow/);
+  assert.match(tableSource, /fetch\(postingRequest\.status_url/);
   assert.match(tableSource, /onApprove/);
   assert.match(tableSource, /onPost/);
   assert.match(tableSource, /onRetry/);

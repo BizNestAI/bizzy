@@ -68,22 +68,20 @@ test("same request retries reuse the stable Intuit requestid for every QBO trans
   assert.match(cron, /requestId,[\s\S]*FromAccountRef/);
   assert.match(cron, /requestId,[\s\S]*ToAccountRef/);
   assert.match(cron, /requestId,[\s\S]*PaymentType: "Cash"/);
-  assert.match(cron, /requestId,[\s\S]*DepositToAccountRef/);
-  assert.match(cron, /requestId,[\s\S]*AccountRef: \{ value: String\(mappedAccountId\) \}/);
+  assert.match(cron, /compileCanonicalDepositPosting\(\{[\s\S]*requestId/);
+  assert.match(cron, /compileCanonicalCreditCardChargePosting\(\{[\s\S]*requestId/);
 });
 
 test("credit-card funded expenses create QBO Purchases with CreditCard payment type", () => {
   const cron = read("src/jobs/booksPost.cron.js");
   const ccBody = cron.slice(cron.indexOf("async function postCreditCardOutflowCharge"), cron.indexOf("async function postToQbo"));
 
-  assert.match(ccBody, /const payload = \{/);
-  assert.match(ccBody, /return createQboPurchase\(qbo, payload\)/);
-  assert.match(ccBody, /PaymentType: "CreditCard"/);
-  assert.match(ccBody, /AccountRef: \{ value: String\(mappedAccountId\) \}/);
-  assert.match(ccBody, /TotalAmt: amount/);
-  assert.match(ccBody, /Amount: amount/);
-  assert.match(ccBody, /AccountBasedExpenseLineDetail:[\s\S]*AccountRef: \{ value: String\(categoryAccountId\) \}/);
-  assert.match(ccBody, /EntityRef: \{ value: vendorRef\.value, type: "Vendor" \}/);
+  assert.match(ccBody, /compileCanonicalCreditCardChargePosting\(\{/);
+  assert.match(ccBody, /sourceCreditCardAccount: \{ id: mappedAccountId \}/);
+  assert.match(ccBody, /approvedLineAccount: \{ id: categoryAccountId/);
+  assert.match(ccBody, /requestId,/);
+  assert.match(ccBody, /vendorRef,/);
+  assert.match(ccBody, /return createQboPurchase\(qbo, compiled\.payload\)/);
   assert.doesNotMatch(ccBody, /createCreditCardCharge|creditcardcharge\?\.create|creditCardCharge\?\.create/);
 });
 

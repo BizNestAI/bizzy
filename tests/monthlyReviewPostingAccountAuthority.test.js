@@ -173,3 +173,58 @@ test("MRP Post now immediately processes the exact durable operation and exposes
   assert.match(modal, /<button type="button"/);
   assert.doesNotMatch(modal, /<button(?! type="button")/);
 });
+
+test("feed selects the newest interactive failure over stale scheduled categorization state", async () => {
+  const {
+    selectLatestInteractivePostingOperation,
+    interactivePostingLifecycleForFeed,
+  } = await import("../src/services/bookkeeping/bookkeepingTransactionFeedService.js");
+  const transactionId = "d50f4334-e6fc-4745-8f05-4cc568c01659";
+  const olderAmbiguous = {
+    operation_id: "older",
+    transaction_ids: [transactionId],
+    requested_at: "2026-10-12T03:21:03.942Z",
+    state: "failed",
+    qbo_receipt_ids: [],
+    transaction_results: { [transactionId]: { state: "ambiguous", ambiguous: true, retryable: false } },
+  };
+  const latestDefiniteFailure = {
+    operation_id: "1bb4363b820823fc134c7e77ab0d39cc430dca08dba0e0b09e1d7190b87c1e95",
+    transaction_ids: [transactionId],
+    requested_at: "2026-10-12T16:38:07.382Z",
+    terminal_at: "2026-10-12T16:38:13.351Z",
+    state: "failed",
+    lease_expires_at: null,
+    failure_code: "manual_post_not_completed",
+    qbo_receipt_ids: [],
+    transaction_results: {
+      [transactionId]: {
+        state: "retryable_failure",
+        ambiguous: false,
+        retryable: true,
+        posted: false,
+        qbo_txn_id: null,
+        internal_reason_code: "manual_post_not_completed",
+      },
+    },
+  };
+  const selected = selectLatestInteractivePostingOperation([olderAmbiguous, latestDefiniteFailure], transactionId);
+  assert.equal(selected.operation_id, latestDefiniteFailure.operation_id);
+  assert.deepEqual(interactivePostingLifecycleForFeed(selected, transactionId, { nowMs: Date.parse("2026-10-12T17:00:00Z") }), {
+    key: "failed",
+    label: "Posting failed · Posting service error",
+    tone: "danger",
+    detail: "Bizzi did not reach QuickBooks. This posting can be retried safely.",
+    code: "posting_internal_failure",
+    retryable: true,
+    last_attempt_at: "2026-10-12T16:38:13.351Z",
+    technical: {
+      operation_id: latestDefiniteFailure.operation_id,
+      original_failure_code: "manual_post_not_completed",
+    },
+  });
+
+  const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  assert.match(table, /action\.action_code === "retry_posting"/);
+  assert.match(table, /!row\.meta\?\.duplicate_override_decision/);
+});

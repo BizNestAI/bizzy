@@ -488,14 +488,16 @@ function BookkeepingTransactionMirrorRow({
                 <input type="checkbox" className="mt-0.5" checked={duplicateRiskAcknowledged} disabled={Boolean(row.meta?.duplicate_override_decision) || requestActive} onChange={(event) => setDuplicateRiskAcknowledged(event.target.checked)} />
                 <span>{row.meta?.duplicate_override_decision ? "Duplicate-risk review saved. This transaction was approved as distinct from the suspected QuickBooks record." : "I reviewed the possible QuickBooks match and want to categorize this transaction as new anyway. This could create a duplicate."}</span>
               </label>
-              <button
-                type="button"
-                onClick={() => setForcePostConfirmationOpen(true)}
-                disabled={!selectedAccountId || !duplicateRiskAcknowledged || isActionBusy("approve") || Boolean(postingRequest)}
-                className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
-              >
-                {requestActive ? "Posting requested" : isActionBusy("approve") ? "Saving review..." : "Review duplicate risk"}
-              </button>
+              {!row.meta?.duplicate_override_decision ? (
+                <button
+                  type="button"
+                  onClick={() => setForcePostConfirmationOpen(true)}
+                  disabled={!selectedAccountId || !duplicateRiskAcknowledged || isActionBusy("approve") || Boolean(postingRequest)}
+                  className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
+                >
+                  {requestActive ? "Posting requested" : isActionBusy("approve") ? "Saving review..." : "Review duplicate risk"}
+                </button>
+              ) : null}
             </>
           ) : null}
           {isHandledFeed && resolution === "categorize_new" && !possibleQboDuplicate && !genericActionsBlocked && !isPending ? (
@@ -550,7 +552,8 @@ function BookkeepingTransactionMirrorRow({
                   if (["find_qbo_match", "confirm_qbo_match", "retry_duplicate_check", "acknowledge_duplicate_risk"].includes(action.action_code)) return changeResolution("match_existing_qbo");
                   if (["select_gl_account", "change_gl_account"].includes(action.action_code)) return null;
                   if (["recheck_posting_eligibility", "recover_posting_state"].includes(action.action_code)) return onRecover?.({ preventDefault() {}, stopPropagation() {} }, row);
-                  if (action.action_code === "preview_and_post") return postingAction.permitted_action === "retry_posting" ? onRetry?.(row) : onPost?.(row, postingAction.permitted_action);
+                  if (action.action_code === "retry_posting") return onRetry?.(row);
+                  if (action.action_code === "preview_and_post") return onPost?.(row, postingAction.permitted_action);
                   return null;
                 }}
               />
