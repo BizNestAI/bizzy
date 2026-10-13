@@ -32,3 +32,11 @@ test("changing the date scope resets pagination instead of mutating feed rows", 
   assert.match(page, /setPage\(1\);\s*\}, \[accountFilter, activeTab, dateRange, rowsPerPage, showCategorized\]\)/);
   assert.doesNotMatch(page, /DateRangeFilter[\s\S]{0,500}approveTransactions/);
 });
+
+test("clear dates empties the draft and restores an unbounded N/A filter", () => {
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  assert.match(page, /value === "none"/);
+  assert.match(page, /label: "N\/A", range: "all", rangeStart: null, rangeEnd: null/);
+  assert.match(page, />Clear dates<\/button>/);
+  assert.match(page, /setCustomStart\(""\); setCustomEnd\(""\); onChange\("none"\)/);
+});
