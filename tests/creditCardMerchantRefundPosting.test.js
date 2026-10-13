@@ -65,6 +65,46 @@ test("refund accounting direction comes from Credit true and uses the selected E
   assert.equal(payload.Line[0].Amount, 75.76);
 });
 
+test("Adobe and successful same-card Gametime refunds use the identical Purchase-credit contract", () => {
+  const adobe = buildCreditCardCreditPayload({
+    requestId: "bizzi_dcf9fbb9377cac35dd83f9085d00f06888561c90",
+    amount: 32.16,
+    txnDate: "2026-06-10",
+    sourceCreditCardAccountId: "19",
+    categoryAccountId: "24",
+    privateNote: "Adobe · Posted by Bizzi",
+    lineDescription: "Adobe merchant refund",
+  });
+  const gametime = buildCreditCardCreditPayload({
+    requestId: "bizzi_b2760dda0abf6a374f201a0938cc7393fca1ffed",
+    amount: 72,
+    txnDate: "2026-06-21",
+    sourceCreditCardAccountId: "19",
+    categoryAccountId: "1150040020",
+    privateNote: "Gametime · Posted by Bizzi",
+    lineDescription: "Gametime merchant refund",
+  });
+  for (const payload of [adobe, gametime]) {
+    assert.equal(payload.PaymentType, "CreditCard");
+    assert.equal(payload.Credit, true);
+    assert.equal(payload.AccountRef.value, "19");
+    assert.equal(payload.Line[0].DetailType, "AccountBasedExpenseLineDetail");
+    assert.equal(qboAmountFieldsAreNonnegative(payload), true);
+  }
+  assert.equal(adobe.TotalAmt, 32.16);
+  assert.equal(adobe.Line[0].Amount, 32.16);
+  assert.equal(adobe.Line[0].AccountBasedExpenseLineDetail.AccountRef.value, "24");
+  assert.equal(adobe.EntityRef, undefined);
+});
+
+test("logical CreditCardCredit is dispatched only through the supported Purchase adapter", () => {
+  const worker = read("src/jobs/booksPost.cron.js");
+  const creditPath = worker.slice(worker.indexOf("async function postCreditCardInflowCredit"), worker.indexOf("async function markLoanPaymentSplitRequired"));
+  assert.match(creditPath, /buildCreditCardCreditPayload/);
+  assert.match(creditPath, /return createQboPurchase\(qbo, payload\)/);
+  assert.doesNotMatch(creditPath, /createCreditCardCredit|createQboCreditCardCredit/);
+});
+
 test("an unrelated original purchase category is neither required nor serialized", () => {
   const payload = buildCreditCardCreditPayload({
     amount: playstationRefund.amount,

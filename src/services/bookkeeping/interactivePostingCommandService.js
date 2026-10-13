@@ -81,7 +81,12 @@ function postingFailureResult({ transactionId, error, childOperationId = null } 
   let retryable = true;
   let ambiguous = false;
 
-  if (/possible.*duplicate|duplicate_preflight|existing_qbo|match.*review/.test(normalized)) {
+  if (/posting_action_not_permitted/.test(normalized)) {
+    safeReasonCode = "pre_provider_posting_failure";
+    safeMessage = "Posting failed before contacting QuickBooks.";
+    action = "retry";
+    retryable = true;
+  } else if (/possible.*duplicate|duplicate_preflight|existing_qbo|match.*review/.test(normalized)) {
     safeReasonCode = "possible_existing_qbo_transaction";
     safeMessage = "A possible existing QuickBooks transaction must be reviewed first.";
     action = "review_match";
@@ -224,7 +229,7 @@ async function validateDirectTransactionPost({ db, command, transactionIds = [] 
           .eq("transaction_id", transactionId)
           .maybeSingle(),
         db.from("bank_transactions")
-          .select("id,business_id,pending")
+          .select("id,business_id,pending,direction,signed_amount,amount")
           .eq("business_id", command.business_id)
           .eq("id", transactionId)
           .maybeSingle(),
@@ -261,7 +266,16 @@ async function validateDirectTransactionPost({ db, command, transactionIds = [] 
       throw error;
     }
     const forceSoftDuplicate = command.merchant_snapshot?.force_soft_duplicate_override === true;
-    const action = deriveBookkeepingPostingAction(categorization);
+    // Revalidate the same accounting shape used when Post Now was accepted.
+    // Omitting the bank direction here made resolved credit-card inflows look
+    // ineligible even though preview had already compiled them successfully.
+    const eligibilityRow = {
+      ...categorization,
+      direction: bankTransaction.direction || null,
+      pending: bankTransaction.pending === true || bankTransaction.is_pending === true,
+      signed_amount: bankTransaction.signed_amount ?? bankTransaction.amount ?? null,
+    };
+    const action = deriveBookkeepingPostingAction(eligibilityRow);
     if (!forceSoftDuplicate && (!action.posting_eligible || !["post_now", "retry_posting"].includes(action.permitted_action))) {
       const error = new Error(action.disabled_reason || "posting_action_not_permitted");
       error.code = action.safe_failure_classification || "posting_action_not_permitted";
@@ -488,7 +502,7 @@ export async function requestInteractiveTransactionPosting({
   // to that confirmed pre-provider failure code.
   const legacyPreProviderFailure = decision.reused === true &&
     decision.command?.state === INTERACTIVE_COMMAND_STATES.FAILED &&
-    ["qbo_account_not_eligible", "interactive_posting_child_result_missing", "manual_post_not_completed"].includes(decision.command?.failure_code) &&
+    ["qbo_account_not_eligible", "posting_action_not_permitted", "interactive_posting_child_result_missing", "manual_post_not_completed"].includes(decision.command?.failure_code) &&
     Object.values(decision.command?.child_operations || {}).every((value) => !value) &&
     (decision.command?.qbo_receipt_ids || []).length === 0;
   if (legacyPreProviderFailure) {
@@ -1102,6 +1116,12 @@ export async function processInteractivePostingCommand({
       failure.parent_operation_id = operationId;
       transactionResults[activeTransactionId] = failure;
       childOperations[activeTransactionId] = failure.child_operation_id;
+    } else if (code === "posting_action_not_permitted") {
+      for (const transactionId of transactionIds) {
+        const failure = postingFailureResult({ transactionId, error: err });
+        failure.parent_operation_id = operationId;
+        transactionResults[transactionId] = failure;
+      }
     }
     await markMerchantBacklogApprovalOperationFailed({
       db,

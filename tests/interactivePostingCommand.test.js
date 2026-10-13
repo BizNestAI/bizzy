@@ -208,6 +208,86 @@ test("row-level Post Now accepts an approved income account without merchant exp
   assert.deepEqual(result.posted_transaction_ids, [TXN_ID]);
 });
 
+test("Adobe-shaped merchant refund preserves bank direction during worker revalidation and posts once", async () => {
+  const db = makeDb();
+  const adobeId = "9e9c70f6-bd9c-4fa5-841a-1df04168f067";
+  db.store.qbo_accounts_cache.push({
+    business_id: BUSINESS_ID,
+    qbo_account_id: "24",
+    name: "Software",
+    account_type: "Expense",
+    active: true,
+  });
+  db.store.transaction_categorizations = [{
+    business_id: BUSINESS_ID,
+    transaction_id: adobeId,
+    status: "approved",
+    review_status: "handled",
+    posting_status: "not_scheduled",
+    final_qbo_account_id: "24",
+    post_error: null,
+    updated_at: "2026-10-12T21:51:48.300997+00:00",
+    meta: {
+      manual_qbo_account_selection: true,
+      post_block_reason: "match_check_unavailable",
+      incoming_deposit_match_check: "unavailable_manual_override",
+      credit_card_inflow_resolution: {
+        decision_version: 1,
+        decided_at: "2026-10-12T21:27:12.614Z",
+        resolution_type: "merchant_refund",
+        qbo_disposition: "create_new",
+        destination_qbo_account_id: "24",
+        standalone_refund_acknowledged: true,
+      },
+    },
+  }];
+  db.store.bank_transactions = [{
+    id: adobeId,
+    business_id: BUSINESS_ID,
+    pending: false,
+    direction: "INFLOW",
+    signed_amount: 32.16,
+    amount: 32.16,
+  }];
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "24",
+    transactionIds: [adobeId],
+    expectedRowVersions: { [adobeId]: "2026-10-12T21:51:48.300997+00:00" },
+    rememberForFuture: false,
+    merchantSnapshot: { audit_source: "monthly_review", requested_action: "post_now", qbo_request_id: "bizzi_stable_adobe" },
+    idempotencyKey: "manual-post:adobe:stable",
+  });
+  let writes = 0;
+  const postTransactionNow = async ({ businessId, transactionId, onProviderWriteStarted }) => {
+    writes += 1;
+    await onProviderWriteStarted?.({ requestId: "bizzi_stable_adobe", qboTxnType: "CreditCardCredit" });
+    db.store.qbo_posted_transactions.push({
+      id: "adobe-receipt",
+      business_id: businessId,
+      transaction_id: transactionId,
+      status: "posted",
+      qbo_txn_id: "qbo-adobe-credit",
+      qbo_txn_type: "CreditCardCredit",
+      posted_at: "2026-10-12T22:00:00.000Z",
+    });
+    return { ok: true, qbo_txn_id: "qbo-adobe-credit", qbo_txn_type: "CreditCardCredit", child_operation_id: "bizzi_stable_adobe" };
+  };
+
+  const duplicatePreflight = async () => ({ confidence: "NO_MATCH", candidates: [] });
+  const first = await processInteractivePostingCommand({ db, operationId: command.operation_id, postTransactionNow, duplicatePreflight });
+  const second = await processInteractivePostingCommand({ db, operationId: command.operation_id, postTransactionNow, duplicatePreflight });
+  assert.equal(first.ok, true);
+  assert.equal(second.claimed, false);
+  assert.equal(writes, 1);
+  assert.equal(db.store.qbo_posted_transactions[0].qbo_txn_type, "CreditCardCredit");
+  const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
+  assert.equal(status.state, "posted");
+  assert.equal(status.rows[0].qbo_txn_id, "qbo-adobe-credit");
+  assert.ok(status.event_timeline.some((event) => event.event === "qbo_write_started"));
+});
+
 test("duplicate worker notifications do not create duplicate postings", async () => {
   const db = makeDb();
   const command = await createInteractivePostingCommand({
