@@ -29,7 +29,7 @@ const MATRIX_DEFINITIONS = Object.freeze({
   find_qbo_match: ["Find QuickBooks match", true, "/api/bookkeeping/transactions/:transactionId/qbo-match"],
   confirm_qbo_match: ["Confirm QuickBooks match", true, "/api/bookkeeping/transactions/:transactionId/qbo-match/confirm"],
   retry_duplicate_check: ["Retry duplicate check", true, "/api/bookkeeping/transactions/:transactionId/qbo-match"],
-  acknowledge_duplicate_risk: ["Review duplicate risk", false, "/api/bookkeeping/transactions/:transactionId/duplicate-risk"],
+  acknowledge_duplicate_risk: ["Review possible duplicate", false, "/api/bookkeeping/transactions/:transactionId/duplicate-risk"],
   repair_account_mapping: ["Repair account mapping", false, "/api/bookkeeping/accounts/:plaidAccountId/qbo-mapping"],
   recheck_posting_eligibility: ["Recheck eligibility", false, "/api/bookkeeping/transactions/:transactionId/posting-eligibility"],
   recover_posting_state: ["Recover posting state", false, "/api/bookkeeping/transactions/:transactionId/posting-recovery"],
@@ -383,9 +383,31 @@ export function deriveCanonicalBookkeepingWorkflow(row = {}, { nowMs = Date.now(
   if (["clear", "reviewed_distinct", "not_required"].includes(duplicateState) && row.meta?.possible_qbo_duplicate === true) {
     advisoryReasons.push("duplicate_evidence_resolved");
   }
+  const receiptSaved = postingAction.action_code === "finalize_posting";
+  const scheduled = actionMatrix.state === "pending" && Boolean(row.post_after || row.posting_job?.scheduled_at);
+  const operation = row.interactive_posting_operation || {};
+  const operationResult = operation.transaction_results?.[row.id || row.transaction_id] || {};
+  const providerWriteStarted = (operation.event_timeline || []).some((event) => ["qbo_write_started", "provider_http_request_started"].includes(event?.event));
+  const canonicalState = row.qbo_txn_id || row.posted_at
+    ? "posted"
+    : ["waiting", "pending"].includes(actionMatrix.state) && !scheduled
+      ? "processing"
+      : scheduled
+        ? "scheduled"
+        : receiptSaved
+          ? "receipt_saved_local_finalization_required"
+          : actionMatrix.state === "provider_outcome_uncertain" || operationResult.ambiguous === true
+            ? "provider_outcome_unknown"
+            : duplicateState === "candidate_requires_review" || duplicateState === "unresolved"
+              ? "duplicate_review_required"
+              : primary?.action_code === "retry_posting"
+                ? providerWriteStarted ? "provider_rejected_retryable" : "pre_provider_retryable"
+                : ["resolve_issue", "select_gl_account", "repair_account_mapping", "view_blocker"].includes(primary?.action_code)
+                  ? "resolution_required"
+                  : "ready_to_preview";
   const workflow = {
     version: 1,
-    workflow_state: actionMatrix.state,
+    workflow_state: canonicalState,
     primary_action: primary?.action_code || null,
     primary_action_label: primary?.label || null,
     primary_action_enabled: primary?.enabled === true,
@@ -398,6 +420,16 @@ export function deriveCanonicalBookkeepingWorkflow(row = {}, { nowMs = Date.now(
     processing: actionMatrix.state === "waiting",
     provider_outcome: actionMatrix.state === "provider_outcome_uncertain" ? "unknown" : row.qbo_txn_id ? "confirmed_success" : "not_started",
     request_id: row.posting_job?.qbo_request_id || null,
+    technical_details: {
+      request_id: row.posting_job?.qbo_request_id || row.meta?.qbo_request_id || null,
+      operation_id: operation.operation_id || null,
+      failure_stage: operation.stage || null,
+      normalized_failure_class: postingAction.safe_failure_classification || operationResult.safe_reason_code || null,
+      attempt_number: operation.attempt_count ?? row.posting_job?.attempt_count ?? null,
+      last_attempt_at: row.last_post_attempt_at || operation.updated_at || null,
+      qbo_write_started: providerWriteStarted,
+      receipt_exists: Boolean(row.qbo_txn_id || operation.qbo_receipt_ids?.length),
+    },
     posting_action: postingAction,
     next_action: nextAction,
     action_matrix: actionMatrix,
@@ -407,8 +439,8 @@ export function deriveCanonicalBookkeepingWorkflow(row = {}, { nowMs = Date.now(
 
 export function validateCanonicalBookkeepingWorkflow(workflow = {}) {
   const violations = [];
-  const waiting = ["waiting", "pending"].includes(workflow.workflow_state);
-  if (workflow.workflow_state === "final") {
+  const waiting = ["processing", "scheduled"].includes(workflow.workflow_state);
+  if (workflow.workflow_state === "posted") {
     if (workflow.primary_action !== null) violations.push("final_state_has_primary_action");
     return violations;
   }

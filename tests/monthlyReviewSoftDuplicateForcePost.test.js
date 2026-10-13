@@ -54,8 +54,8 @@ test("Admin force-post persists the reviewed decision then uses the durable comm
   assert.match(command, /createNewIncomeOverride: command\.merchant_snapshot\?\.force_soft_duplicate_override === true/);
   assert.match(worker, /discoveredCheck = classifyPreExistingQboMatch/);
   assert.match(worker, /excludeReviewedInformationalDuplicateCandidates\(item, discoveredCheck\.candidates/);
-  assert.match(ui, /Review duplicate risk/);
-  assert.match(ui, /Post as new anyway/);
+  assert.match(ui, /Review possible duplicate/);
+  assert.match(ui, /Confirm separate transaction/);
   assert.match(ui, /ForcePostConfirmationModal/);
   assert.match(ui, /createPortal/);
   assert.match(ui, /data-monthly-review-duplicate-risk-dialog/);

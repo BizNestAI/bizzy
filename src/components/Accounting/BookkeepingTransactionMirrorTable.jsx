@@ -280,7 +280,8 @@ function BookkeepingTransactionMirrorRow({
   });
   const ccAction = ccPaymentActionState?.[row.id] || {};
   const incomingAction = incomingDepositMatchActionState?.[row.id] || {};
-  const possibleQboDuplicate = row.possible_qbo_duplicate === true || row.meta?.possible_qbo_duplicate === true;
+  const duplicateDecisionSaved = canonicalWorkflow?.duplicate_state === "reviewed_distinct" || Boolean(row.meta?.duplicate_override_decision);
+  const possibleQboDuplicate = !duplicateDecisionSaved && (row.possible_qbo_duplicate === true || row.meta?.possible_qbo_duplicate === true);
   const duplicateRisk = (incomingMatch.active || possibleQboDuplicate) && !incomingMatch.confirmed;
   const actionControl = deriveMonthlyReviewActionState({
     row,
@@ -496,7 +497,7 @@ function BookkeepingTransactionMirrorRow({
                   disabled={!selectedAccountId || !duplicateRiskAcknowledged || isActionBusy("approve") || Boolean(postingRequest)}
                   className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
                 >
-                  {requestActive ? "Posting requested" : isActionBusy("approve") ? "Saving review..." : "Review duplicate risk"}
+                  {requestActive ? "Saving review" : isActionBusy("approve") ? "Saving review..." : "Review possible duplicate"}
                 </button>
               ) : null}
             </>
@@ -567,6 +568,21 @@ function BookkeepingTransactionMirrorRow({
             <div className="mt-1 rounded-md border border-white/10 bg-black/20 px-2 py-1.5">{postingAction.disabled_reason}</div>
           </details>
         ) : null}
+        {isHandledFeed && canonicalWorkflow?.technical_details?.operation_id ? (
+          <details className="mt-1 text-[10px] text-white/45">
+            <summary className="cursor-pointer">Technical details</summary>
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 rounded-md border border-white/10 bg-black/20 px-2 py-1.5">
+              <dt>Request</dt><dd className="truncate font-mono">{canonicalWorkflow.technical_details.request_id || "Not assigned"}</dd>
+              <dt>Operation</dt><dd className="truncate font-mono">{canonicalWorkflow.technical_details.operation_id}</dd>
+              <dt>Stage</dt><dd>{canonicalWorkflow.technical_details.failure_stage || "Not recorded"}</dd>
+              <dt>Failure class</dt><dd>{canonicalWorkflow.technical_details.normalized_failure_class || "None"}</dd>
+              <dt>Attempt</dt><dd>{canonicalWorkflow.technical_details.attempt_number ?? "Not recorded"}</dd>
+              <dt>Last attempt</dt><dd>{canonicalWorkflow.technical_details.last_attempt_at || "Not recorded"}</dd>
+              <dt>QBO write started</dt><dd>{canonicalWorkflow.technical_details.qbo_write_started ? "Yes" : "No"}</dd>
+              <dt>Receipt</dt><dd>{canonicalWorkflow.technical_details.receipt_exists ? "Saved" : "None"}</dd>
+            </dl>
+          </details>
+        ) : null}
         {rowError ? (
           <div className="mt-1 rounded-lg border border-amber-300/18 bg-amber-300/[0.08] px-2 py-1 text-[11px] text-amber-100">
             {rowError}
@@ -593,6 +609,12 @@ function BookkeepingTransactionMirrorRow({
           </div>
         ) : <div className="mt-1">Candidate details are stale or missing. Retry the duplicate check to refresh the match evidence.</div>}
       </div>
+    ) : null}
+    {duplicateDecisionSaved && (row.qbo_duplicate_candidates || []).length ? (
+      <details className="border-t border-white/[0.07] bg-black/[0.08] px-4 py-2 text-[11px] text-white/45">
+        <summary className="cursor-pointer">Reviewed duplicate evidence</summary>
+        <div className="mt-2">Confirmed separate from QuickBooks {(row.qbo_duplicate_candidates || []).map((candidate) => `${candidate.qbo_entity_type || candidate.qbo_txn_type || "transaction"} ${candidate.qbo_entity_id || candidate.qbo_txn_id || ""}`).join(", ")}.</div>
+      </details>
     ) : null}
     {resolution === "match_existing_qbo" && !incomingMatch.active ? (
       <div className="border-t border-white/10 bg-black/20 px-4 py-4" role="status">
@@ -646,11 +668,7 @@ function BookkeepingTransactionMirrorRow({
       onCancel={() => setForcePostConfirmationOpen(false)}
       onConfirm={async () => {
         setForcePostConfirmationOpen(false);
-        const accepted = await onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged: true, duplicateOverride: true, postToQboAnyway: true });
-        if (accepted?.accepted && accepted?.operation_id && accepted?.status_url) {
-          setPostingPollExpired(false);
-          setPostingRequest({ ...accepted, operation: { state: accepted.posting_state, terminal: false, rows: [] } });
-        }
+        await onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged: true, duplicateOverride: true, postToQboAnyway: false });
       }}
     />
     </>
@@ -705,9 +723,9 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
             </div>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/75">Duplicate-risk override</div>
-              <h2 id={`force-post-title-${row.id}`} className="mt-1.5 text-[22px] font-semibold tracking-[-0.02em] text-white">Post to QuickBooks anyway?</h2>
+              <h2 id={`force-post-title-${row.id}`} className="mt-1.5 text-[22px] font-semibold tracking-[-0.02em] text-white">Confirm this is a separate transaction</h2>
               <p id={`force-post-description-${row.id}`} className="mt-2 max-w-lg text-sm leading-6 text-white/55">
-                Review the bank transaction and suspected QuickBooks record before posting this as a distinct transaction.
+                Review the bank transaction and suspected QuickBooks record. This saves the accounting decision; you can preview the posting next.
               </p>
             </div>
           </div>
@@ -728,7 +746,7 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
             />
           </div>
           <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.065] px-4 py-3.5 text-sm leading-6 text-amber-50/85 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
-            The suspected candidate will remain in the audit history as rejected for this bank transaction. Posting will use the existing durable, idempotent posting pipeline.
+            The suspected candidate will remain in the audit history as rejected for this bank transaction. No QuickBooks write occurs in this step.
           </div>
         </div>
 
@@ -738,7 +756,7 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
           </button>
           <button ref={confirmButtonRef} type="button" onClick={onConfirm} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/35 bg-[linear-gradient(180deg,rgba(52,211,153,0.22),rgba(52,211,153,0.13))] px-5 py-2.5 text-sm font-semibold text-emerald-50 shadow-[0_10px_30px_rgba(16,185,129,0.12),inset_0_1px_0_rgba(255,255,255,0.09)] transition hover:border-emerald-300/50 hover:bg-emerald-300/[0.22] focus:outline-none focus:ring-2 focus:ring-emerald-300/40 disabled:opacity-45">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
-                {busy ? "Preparing preview..." : "Post as new anyway"}
+                {busy ? "Saving decision..." : "Confirm separate transaction"}
           </button>
         </div>
       </section>

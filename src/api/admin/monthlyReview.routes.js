@@ -2088,6 +2088,11 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
         if (reviewedCandidates.some((candidate) => !canOverrideReviewedCandidate(candidate))) {
           return res.status(409).json({ ok: false, error: "duplicate_override_protected_candidate", message: "This QuickBooks candidate cannot be overridden. Reconcile the existing transaction first." });
         }
+        reviewedCandidates = reviewedCandidates.map((candidate) => ({
+          ...candidate,
+          informational_only: true,
+          reviewed_disposition: "rejected_as_distinct_transaction",
+        }));
       }
     }
     const reviewedCandidateId = currentCategorization?.meta?.qbo_duplicate_candidates?.[0]?.qbo_txn_id || existingForceCandidateId || null;

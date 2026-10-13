@@ -72,7 +72,7 @@ function sanitizeMessage(value = "") {
   return String(value || "Posting could not finish.").replace(/\s+/g, " ").slice(0, 500);
 }
 
-function postingFailureResult({ transactionId, error, childOperationId = null } = {}) {
+function postingFailureResult({ transactionId, error, childOperationId = null, providerWriteStarted = false } = {}) {
   const internalCode = String(error?.code || error?.message || "interactive_posting_failed");
   const normalized = internalCode.toLowerCase();
   let safeReasonCode = "qbo_posting_failed";
@@ -81,9 +81,9 @@ function postingFailureResult({ transactionId, error, childOperationId = null } 
   let retryable = true;
   let ambiguous = false;
 
-  if (/posting_action_not_permitted/.test(normalized)) {
+  if (!providerWriteStarted && /posting_action_not_permitted|manual_post_not_completed|child_result_missing|posting_lock|prepare|compile|validation/.test(normalized)) {
     safeReasonCode = "pre_provider_posting_failure";
-    safeMessage = "Posting failed before contacting QuickBooks.";
+    safeMessage = "Bizzi could not prepare this posting. QuickBooks was not changed.";
     action = "retry";
     retryable = true;
   } else if (/possible.*duplicate|duplicate_preflight|existing_qbo|match.*review/.test(normalized)) {
@@ -96,7 +96,7 @@ function postingFailureResult({ transactionId, error, childOperationId = null } 
     safeMessage = "The selected QuickBooks account cannot be used for this transaction. Choose a compatible account and try again.";
     action = "choose_account";
     retryable = false;
-  } else if (/timeout|unknown|ambiguous|no_receipt|missing_transaction_id/.test(normalized)) {
+  } else if (providerWriteStarted && /timeout|unknown|ambiguous|no_receipt|missing_transaction_id|econnreset|socket/.test(normalized)) {
     safeReasonCode = "qbo_result_unconfirmed";
     safeMessage = "Bizzi could not confirm whether QuickBooks accepted this transaction. Posting is paused to prevent a duplicate.";
     action = "check_status";
@@ -1112,6 +1112,7 @@ export async function processInteractivePostingCommand({
         transactionId: activeTransactionId,
         error: err,
         childOperationId: childOperations[activeTransactionId] || err?.child_operation_id || err?.qbo_request_id || null,
+        providerWriteStarted: hasActualProviderWriteBoundary(command, activeTransactionId),
       });
       failure.parent_operation_id = operationId;
       transactionResults[activeTransactionId] = failure;
@@ -1225,7 +1226,8 @@ function buildInteractiveCommandUserMessage({ command, selectedIds, postedTransa
   const result = Object.values(command.transaction_results || {}).find((item) => item?.safe_message);
   if (result?.safe_message) return result.safe_message;
   if (command.state === INTERACTIVE_COMMAND_STATES.BLOCKED) return "This transaction did not pass the posting safety check. Review its details before trying again.";
-  if (command.state === INTERACTIVE_COMMAND_STATES.FAILED) return "QuickBooks could not complete this posting. Nothing was posted. Try again.";
-  if (command.state === INTERACTIVE_COMMAND_STATES.RETRYABLE_FAILURE) return "QuickBooks could not complete the posting check. Nothing was posted. Try again.";
+  if (command.state === INTERACTIVE_COMMAND_STATES.FAILED && !hasActualProviderWriteBoundary(command)) return "Bizzi could not prepare this posting. QuickBooks was not changed.";
+  if (command.state === INTERACTIVE_COMMAND_STATES.FAILED) return "Bizzi could not confirm QuickBooks’ result. Reconciliation is required before retrying.";
+  if (command.state === INTERACTIVE_COMMAND_STATES.RETRYABLE_FAILURE) return "Bizzi could not prepare this posting. QuickBooks was not changed.";
   return "Posting to QuickBooks.";
 }

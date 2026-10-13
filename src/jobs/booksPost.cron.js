@@ -705,8 +705,11 @@ function summarizeQboDuplicateCandidates(candidates = []) {
 
 export function isRejectedSoftDuplicateCandidate(item = {}, candidate = {}, { manual = false } = {}) {
   const durableDecision = item?.meta?.duplicate_override_decision || {};
-  const candidateId = String(candidate?.qbo_txn_id || candidate?.qbo_entity_id || candidate?.id || "");
-  const candidateType = String(candidate?.qbo_txn_type || candidate?.qbo_entity_type || candidate?.type || "").toLowerCase();
+  // Candidate identity is provider-boundary data. Intuit returns PascalCase
+  // objects while discovery and persisted decisions use canonical snake_case.
+  // Normalize identity here so every supported entity follows one contract.
+  const candidateId = String(candidate?.qbo_txn_id || candidate?.qbo_entity_id || candidate?.Id || candidate?.id || "");
+  const candidateType = String(candidate?.qbo_txn_type || candidate?.qbo_entity_type || candidate?.EntityType || candidate?.entityType || candidate?.type || "").toLowerCase();
   if (
     manual === true &&
     durableDecision.decision === "categorize_as_new_despite_duplicate_risk" &&
@@ -714,9 +717,12 @@ export function isRejectedSoftDuplicateCandidate(item = {}, candidate = {}, { ma
     Array.isArray(durableDecision.reviewed_candidates)
   ) {
     return durableDecision.reviewed_candidates.some((reviewed) => {
-      const reviewedId = String(reviewed?.qbo_txn_id || reviewed?.qbo_entity_id || reviewed?.id || "");
-      const reviewedType = String(reviewed?.qbo_txn_type || reviewed?.qbo_entity_type || reviewed?.type || "").toLowerCase();
-      return reviewed.informational_only === true && reviewedId && reviewedId === candidateId && (!reviewedType || !candidateType || reviewedType === candidateType);
+      const reviewedId = String(reviewed?.qbo_txn_id || reviewed?.qbo_entity_id || reviewed?.Id || reviewed?.id || "");
+      const reviewedType = String(reviewed?.qbo_txn_type || reviewed?.qbo_entity_type || reviewed?.EntityType || reviewed?.entityType || reviewed?.type || "").toLowerCase();
+      // Inclusion in a validated v3 decision is the authority. The candidate's
+      // pre-decision classification (available/consumed) must not be reused as
+      // its post-decision disposition.
+      return reviewedId && reviewedId === candidateId && (!reviewedType || !candidateType || reviewedType === candidateType);
     });
   }
   const decision = item?.meta?.incoming_deposit_resolution || {};

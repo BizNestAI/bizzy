@@ -33,6 +33,25 @@ test("saved v3 informational duplicate is excluded after canonical scoring", () 
   assert.deepEqual(excludeReviewedInformationalDuplicateCandidates(item, [canonicalCandidate], { manual: true }), []);
 });
 
+test("saved v3 distinct decision matches raw Intuit Id and is authoritative despite its pre-decision classification", () => {
+  const item = { meta: { duplicate_override_decision: {
+    ...decision,
+    reviewed_candidates: [{ qbo_txn_id: "1263", qbo_txn_type: "Deposit", informational_only: false }],
+  } } };
+  assert.equal(isRejectedSoftDuplicateCandidate(item, { Id: "1263", EntityType: "Deposit" }, { manual: true }), true);
+  assert.deepEqual(excludeReviewedInformationalDuplicateCandidates(item, [{ Id: "1263", EntityType: "Deposit" }], { manual: true }), []);
+});
+
+test("raw provider identities normalize consistently across supported posting entities", () => {
+  for (const qboType of ["Deposit", "Purchase", "CreditCardCredit", "CreditCardCharge"]) {
+    const item = { meta: { duplicate_override_decision: {
+      ...decision,
+      reviewed_candidates: [{ qbo_txn_id: "shared-1", qbo_txn_type: qboType }],
+    } } };
+    assert.equal(isRejectedSoftDuplicateCandidate(item, { Id: "shared-1", EntityType: qboType }, { manual: true }), true);
+  }
+});
+
 test("unreviewed exact duplicate remains protected", () => {
   const item = { meta: { duplicate_override_decision: decision } };
   const other = { qbo_txn_id: "2000", qbo_txn_type: "CreditCardCharge" };
