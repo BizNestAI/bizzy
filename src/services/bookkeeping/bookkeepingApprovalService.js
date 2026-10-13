@@ -28,6 +28,14 @@ import {
   FINAL_CATEGORIZATION_SOURCES,
   persistAuthoritativeFinalCategorizations,
 } from "./finalCategorizationPersistenceService.js";
+import {
+  buildSpecializedInflowDecision,
+  canCompleteSettledAccountingReview,
+  CREDIT_CARD_INFLOW_TYPE_REQUIRED_MESSAGE,
+  hasFinalSpecializedTypeAuthority,
+  normalizeSpecializedInflowResolution,
+  supersedeProvisionalClassification,
+} from "./specializedTypeAuthority.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -74,6 +82,7 @@ function approvalIdempotencyKey({ businessId, approval, actorType }) {
     duplicate_risk_acknowledged: approval.duplicate_risk_acknowledged === true,
     reviewed_duplicate_candidate_id: approval.reviewed_duplicate_candidate_id || null,
     decision_version: approval.decision_version || null,
+    credit_card_inflow_resolution: approval.meta?.credit_card_inflow_resolution?.resolution_type || null,
     idempotency_context: approval.idempotency_context || null,
   })).digest("hex");
 }
@@ -306,7 +315,7 @@ export async function approveBookkeepingTransactions({
 
   const { data: bankTxns, error: bankErr } = await db
     .from("bank_transactions")
-    .select("id,date,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id,pending,accounting_review_required,accounting_review_reason")
+    .select("id,date,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id,pending,pending_resolution_state,pending_resolution_payload,pending_resolved_at,pending_resolved_by,accounting_review_required,accounting_review_reason,accounting_review_payload")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .in("id", txnIds);
@@ -322,6 +331,13 @@ export async function approveBookkeepingTransactions({
     acc[row.id] = row;
     return acc;
   }, {});
+
+  const plaidAccountIds = Array.from(new Set((bankTxns || []).map((row) => row.plaid_account_id).filter(Boolean)));
+  const { data: sourceMappings, error: sourceMappingError } = plaidAccountIds.length
+    ? await db.from("plaid_qbo_account_mappings").select("plaid_account_id,qbo_account_type").eq("business_id", businessId).in("plaid_account_id", plaidAccountIds)
+    : { data: [], error: null };
+  if (sourceMappingError) throw new BookkeepingApprovalError("account_mapping_fetch_failed", 500, { message: sourceMappingError.message });
+  const sourceTypeByPlaidAccount = new Map((sourceMappings || []).map((row) => [String(row.plaid_account_id), String(row.qbo_account_type || "").toLowerCase().replace(/[^a-z]/g, "")]));
 
   const pendingIds = (bankTxns || []).filter((row) => row.pending === true).map((row) => row.id);
   if (pendingIds.length) {
@@ -339,9 +355,51 @@ export async function approveBookkeepingTransactions({
     throw new BookkeepingApprovalError("pending_transaction_not_postable", 400, { transactions: pendingIds });
   }
 
-  const reviewIds = (bankTxns || []).filter((row) => row.accounting_review_required === true).map((row) => row.id);
+  const unresolvedCreditCardInflowIds = (bankTxns || []).filter((row) => {
+    const isInflow = String(row.direction || "").toUpperCase() === "INFLOW" || Number(row.amount || 0) > 0;
+    if (!isInflow || sourceTypeByPlaidAccount.get(String(row.plaid_account_id)) !== "creditcard") return false;
+    if (hasFinalSpecializedTypeAuthority({ meta: existingMetaMap[row.id] || {} })) return false;
+    const item = items.find((candidate) => String(txnIdFromItem(candidate)) === String(row.id));
+    return !normalizeSpecializedInflowResolution(item?.credit_card_inflow_resolution || item?.inflow_type);
+  }).map((row) => row.id);
+  if (unresolvedCreditCardInflowIds.length) {
+    throw new BookkeepingApprovalError("credit_card_inflow_type_required", 400, {
+      transactions: unresolvedCreditCardInflowIds,
+      message: CREDIT_CARD_INFLOW_TYPE_REQUIRED_MESSAGE,
+      action_code: "confirm_type",
+    });
+  }
+
+  const accountingReviewRows = (bankTxns || []).filter((row) => row.accounting_review_required === true);
+  const reviewIds = accountingReviewRows.filter((row) => {
+    if (row.accounting_review_reason !== "operator_confirmed_settlement") return false;
+    const item = items.find((candidate) => String(txnIdFromItem(candidate)) === String(row.id));
+    const decision = buildSpecializedInflowDecision({
+      resolution: item?.credit_card_inflow_resolution || item?.inflow_type,
+      accountId: finalIdFromItem(item),
+      accountName: finalNameFromItem(item),
+      actor: actorId,
+      source,
+      decidedAt: nowIso,
+      statementAuthority: row.pending_resolution_payload || null,
+    });
+    return !canCompleteSettledAccountingReview({ bankTransaction: row, decision });
+  }).map((row) => row.id);
   if (reviewIds.length) {
-    throw new BookkeepingApprovalError("plaid_accounting_review_required", 400, { transactions: reviewIds });
+    throw new BookkeepingApprovalError("credit_card_inflow_type_required", 400, {
+      transactions: reviewIds,
+      message: CREDIT_CARD_INFLOW_TYPE_REQUIRED_MESSAGE,
+      action_code: "confirm_type",
+    });
+  }
+  const protectedAccountingReviewIds = accountingReviewRows
+    .filter((row) => row.accounting_review_reason !== "operator_confirmed_settlement")
+    .map((row) => row.id);
+  if (protectedAccountingReviewIds.length) {
+    throw new BookkeepingApprovalError("plaid_accounting_review_required", 400, {
+      transactions: protectedAccountingReviewIds,
+      message: "This transaction still requires accounting review before it can be approved.",
+    });
   }
 
   const protectedQuickBooksPayments = (bankTxns || [])
@@ -505,6 +563,50 @@ export async function approveBookkeepingTransactions({
         ...(existingMetaMap[txnId] || {}),
         ...(extraMetaByTransactionId?.[txnId] || {}),
       };
+      const requestedInflowResolution = normalizeSpecializedInflowResolution(item?.credit_card_inflow_resolution || item?.inflow_type);
+      if (requestedInflowResolution === "match_credit_card_payment") {
+        throw new BookkeepingApprovalError("credit_card_payment_requires_match", 409, {
+          transactions: [txnId],
+          message: "Credit-card payments must be confirmed through the protected matching workflow.",
+        });
+      }
+      if (requestedInflowResolution === "credit_card_credit_other") {
+        throw new BookkeepingApprovalError("credit_card_inflow_type_required", 400, {
+          transactions: [txnId], message: CREDIT_CARD_INFLOW_TYPE_REQUIRED_MESSAGE, action_code: "confirm_type",
+        });
+      }
+      const specializedDecision = buildSpecializedInflowDecision({
+        resolution: requestedInflowResolution,
+        accountId: explicitFinalId,
+        accountName: explicitFinalName,
+        actor: actorId,
+        source,
+        decidedAt: nowIso,
+        statementAuthority: bankTxn?.pending_resolution_payload || null,
+      });
+      if (specializedDecision) {
+        const authoritativeMeta = supersedeProvisionalClassification(mergedMeta, {
+          finalType: specializedDecision.resolution_type,
+          actor: actorId,
+          timestamp: nowIso,
+          source,
+          decisionVersion: specializedDecision.decision_version,
+        });
+        Object.assign(mergedMeta, authoritativeMeta, {
+          credit_card_inflow_resolution: specializedDecision,
+          accounting_review_completed: {
+            reason: bankTxn?.accounting_review_reason || null,
+            completed_by: actorId,
+            completed_at: nowIso,
+            source,
+            statement_settlement_authority: bankTxn?.pending_resolution_payload || null,
+          },
+        });
+        delete mergedMeta.post_block_reason;
+        delete mergedMeta.auto_post_block_reason;
+        delete mergedMeta.protected_review_reason;
+        delete mergedMeta.protected_review_required;
+      }
       // A new explicit approval starts a new posting generation. Do not let
       // the cancellation marker written by a prior Undo suppress this one.
       delete mergedMeta.posting_cancelled_at;

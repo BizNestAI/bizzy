@@ -138,6 +138,8 @@ function monthlyReviewApprovalErrorMessage(error) {
     transaction_excluded: "Excluded transactions cannot be approved through this action.",
     invalid_qbo_account: "The selected QuickBooks account is not active for this business.",
     incoming_deposit_match_required: "Review the possible QuickBooks match or confirm the duplicate-risk warning before categorizing this deposit as new.",
+    credit_card_inflow_type_required: "Confirm whether this credit-card inflow is a merchant refund, statement credit, or payment before approving it.",
+    plaid_accounting_review_required: "This transaction still requires accounting review before it can be approved.",
   };
   return messages[code] || (error?.status && error?.message ? error.message : "Could not approve transaction. The transaction remains in Needs Review.");
 }
@@ -2206,6 +2208,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
         learn_reusable_rule: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false ? false : true,
         only_this_transaction: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false,
         reason: req.body?.reason || "Approved from Monthly Review Needs Review feed.",
+        credit_card_inflow_resolution: req.body?.credit_card_inflow_resolution || null,
       }],
       actorId: req.user?.id,
       actorType: "admin",

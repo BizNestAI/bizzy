@@ -1631,6 +1631,7 @@ export default function MonthlyReviewConsole() {
             post_to_qbo_anyway: options?.postToQboAnyway === true,
             learn_reusable_rule: learnReusableRule,
             only_this_transaction: learnReusableRule === false,
+            credit_card_inflow_resolution: options?.creditCardInflowResolution || null,
           },
         });
       } else if (actionKey === "reclassify") {
@@ -1682,7 +1683,7 @@ export default function MonthlyReviewConsole() {
     } catch (e) {
       const reasonCode = e?.body?.reason_code || e?.body?.error || "";
       const explanation = e?.body?.message || e?.message || "Could not complete bookkeeping action.";
-      const message = reasonCode && !explanation.includes(reasonCode)
+      const message = actionKey === "approve" ? explanation : reasonCode && !explanation.includes(reasonCode)
         ? `${explanation} (${reasonCode})`
         : explanation;
       if (actionKey === "approve" || actionKey === "reclassify") {

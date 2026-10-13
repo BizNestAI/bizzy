@@ -4,6 +4,39 @@ const FINAL_SPECIALIZED_RESOLUTIONS = new Set([
   "credit_card_credit_other",
 ]);
 
+export const CREDIT_CARD_INFLOW_TYPE_REQUIRED_MESSAGE = "Confirm whether this credit-card inflow is a merchant refund, statement credit, or payment before approving it.";
+
+export function normalizeSpecializedInflowResolution(value) {
+  const resolution = normalized(value);
+  return ["merchant_refund", "credit_card_statement_credit", "match_credit_card_payment", "credit_card_credit_other"].includes(resolution) ? resolution : null;
+}
+
+export function buildSpecializedInflowDecision({ resolution, accountId, accountName = null, actor = null, source = "books_review", decidedAt = new Date().toISOString(), statementAuthority = null } = {}) {
+  const normalizedResolution = normalizeSpecializedInflowResolution(resolution);
+  if (!FINAL_SPECIALIZED_RESOLUTIONS.has(normalizedResolution) || !accountId || !actor) return null;
+  return {
+    decision_version: 3,
+    resolution_type: normalizedResolution,
+    qbo_disposition: normalizedResolution === "credit_card_credit_other" ? "needs_review" : "categorize_as_new",
+    destination_qbo_account_id: String(accountId),
+    destination_qbo_account_name: accountName || null,
+    decision_source: "user",
+    operator_source: source,
+    decided_by: actor,
+    decided_at: decidedAt,
+    statement_settlement_authority: statementAuthority || null,
+  };
+}
+
+export function canCompleteSettledAccountingReview({ bankTransaction = {}, decision = null } = {}) {
+  return bankTransaction.pending !== true &&
+    bankTransaction.pending_resolution_state === "promoted_to_settled" &&
+    bankTransaction.accounting_review_required === true &&
+    bankTransaction.accounting_review_reason === "operator_confirmed_settlement" &&
+    Boolean(bankTransaction.pending_resolution_payload?.confirmed_at) &&
+    Boolean(decision && FINAL_SPECIALIZED_RESOLUTIONS.has(normalized(decision.resolution_type)) && decision.destination_qbo_account_id && decision.decided_by && decision.decided_at);
+}
+
 const PROVISIONAL_TRANSFER_TYPES = new Set([
   "transfer",
   "transfer_internal",
@@ -109,6 +142,8 @@ export function isObsoletePreProviderClassificationFailure(row = {}) {
 
 export default {
   applySpecializedTypeAuthority,
+  buildSpecializedInflowDecision,
+  canCompleteSettledAccountingReview,
   hasConfirmedTransferOrPaymentPair,
   hasFinalSpecializedTypeAuthority,
   hasProviderFinality,

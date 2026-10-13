@@ -160,6 +160,7 @@ function BookkeepingTransactionMirrorRow({
       ? row.cc_payment_bank_qbo_account_id || row.meta?.cc_payment_bank_qbo_account_id
       : row.cc_payment_cc_qbo_account_id || row.meta?.cc_payment_cc_qbo_account_id) ||
     "";
+  const protectedInflowDecision = resolveProtectedCreditCardInflowDecision(row);
   const initialAccountId = rowCcTargetId || row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || "";
   const [selectedAccountId, setSelectedAccountId] = React.useState(initialAccountId);
   const [selectedCcCandidateId, setSelectedCcCandidateId] = React.useState("");
@@ -168,19 +169,20 @@ function BookkeepingTransactionMirrorRow({
   const [resolutionError, setResolutionError] = React.useState("");
   const [resolutionBusy, setResolutionBusy] = React.useState(false);
   const [duplicateRiskAcknowledged, setDuplicateRiskAcknowledged] = React.useState(false);
+  const [selectedInflowType, setSelectedInflowType] = React.useState(() => protectedInflowDecision?.resolution_type || "");
   const [pendingModal, setPendingModal] = React.useState({ open: false, loading: false, context: null, error: "", action: "" });
   const [pendingForm, setPendingForm] = React.useState({ reason: "", statementDate: row.date || "", statementAmount: Math.abs(Number(row.amount || 0)).toFixed(2) });
   const [forcePostConfirmationOpen, setForcePostConfirmationOpen] = React.useState(false);
   const [postingRequest, setPostingRequest] = React.useState(null);
   const [postingPollExpired, setPostingPollExpired] = React.useState(false);
   const displayResolution = recoverOrphanedSplitResolution(resolution, Boolean(loanSplitDraft));
-  const protectedInflowDecision = resolveProtectedCreditCardInflowDecision(row);
 
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
     setResolution(effectiveTransactionResolution(row));
     setDuplicateRiskAcknowledged(Boolean(row.meta?.duplicate_override_decision));
     setForcePostConfirmationOpen(false);
+    setSelectedInflowType(protectedInflowDecision?.resolution_type || "");
   }, [initialAccountId, row.id, row.updated_at]);
 
   const refreshPostingStatus = React.useCallback(async () => {
@@ -288,6 +290,10 @@ function BookkeepingTransactionMirrorRow({
   const duplicateDecisionSaved = canonicalWorkflow?.duplicate_state === "reviewed_distinct" || Boolean(row.meta?.duplicate_override_decision);
   const possibleQboDuplicate = !duplicateDecisionSaved && (row.possible_qbo_duplicate === true || row.meta?.possible_qbo_duplicate === true);
   const duplicateRisk = (incomingMatch.active || possibleQboDuplicate) && !incomingMatch.confirmed;
+  const isCreditCardInflow = String(row.source_qbo_account_type || row.meta?.source_qbo_account_type || "").toLowerCase().replace(/[^a-z]/g, "") === "creditcard" &&
+    (String(row.direction || "").toUpperCase() === "INFLOW" || Number(row.amount || 0) > 0);
+  const needsInflowType = isNeedsReviewFeed && isCreditCardInflow && !protectedInflowDecision.final;
+  const approvableInflowType = ["merchant_refund", "credit_card_statement_credit"].includes(selectedInflowType);
   const actionControl = deriveMonthlyReviewActionState({
     row,
     resolution: displayResolution,
@@ -488,6 +494,23 @@ function BookkeepingTransactionMirrorRow({
           ) : null}
           {isNeedsReviewFeed && actionControl.kind === "approve_categorization" ? (
             <>
+              {needsInflowType ? (
+                <label className="basis-full space-y-1 text-[11px] text-white/65">
+                  <span className="font-semibold text-amber-100">Confirm type</span>
+                  <select
+                    value={selectedInflowType}
+                    onChange={(event) => setSelectedInflowType(event.target.value)}
+                    className="w-full rounded-lg border border-amber-300/25 bg-[#101312] px-2 py-2 text-white"
+                  >
+                    <option value="">Choose credit type…</option>
+                    <option value="merchant_refund">Merchant Refund</option>
+                    <option value="credit_card_statement_credit">Cash Back / Statement Credit</option>
+                    <option value="match_credit_card_payment">Credit Card Payment / Transfer</option>
+                    <option value="credit_card_credit_other">Keep for review</option>
+                  </select>
+                  {!approvableInflowType ? <span className="block text-amber-100/75">Confirm whether this credit-card inflow is a merchant refund, statement credit, or payment before approving it.</span> : null}
+                </label>
+              ) : null}
               <div className="basis-full text-[11px] text-white/42">
                 {learnReusableRule
                   ? `Future transactions from ${row.payee || row.vendor || row.description || "this merchant"} will use ${selectedAccountName(selectedAccountId, accounts) || "the selected account"}.`
@@ -509,8 +532,8 @@ function BookkeepingTransactionMirrorRow({
               ) : null}
               <button
                 type="button"
-                onClick={() => onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged })}
-                disabled={!actionControl.enabled || isActionBusy("approve")}
+                onClick={() => onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged, creditCardInflowResolution: needsInflowType ? selectedInflowType : protectedInflowDecision.resolution_type })}
+                disabled={!actionControl.enabled || isActionBusy("approve") || (needsInflowType && !approvableInflowType)}
                 className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
               >
                 {isActionBusy("approve") ? "Approving..." : "Approve"}
