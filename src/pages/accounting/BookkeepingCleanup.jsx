@@ -250,9 +250,6 @@ function monthDateFilter(year, monthIndex) {
 }
 
 function resolveBookkeepingDateFilter(value = "all") {
-  if (value === "none") {
-    return { value: "none", label: "N/A", range: "all", rangeStart: null, rangeEnd: null };
-  }
   if (["this_month", "last_30", "last_90", "all"].includes(value)) {
     return { value, range: value, rangeStart: null, rangeEnd: null };
   }
@@ -323,7 +320,7 @@ function DateRangeFilter({ value, onChange }) {
             <label className="text-[10px] text-slate-400">End<input aria-label="End date" type="date" value={customEnd} min={customStart || undefined} onChange={(event) => setCustomEnd(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-black/25 px-2.5 py-2 text-xs text-slate-100 [color-scheme:dark]" /></label>
           </div>
           <div className="mt-3 flex justify-end gap-2">
-            <button type="button" onClick={() => { setCustomStart(""); setCustomEnd(""); onChange("none"); setOpen(false); }} className="mr-auto rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-slate-300 hover:border-white/20 hover:bg-white/[0.05] hover:text-white">Clear dates</button>
+            <button type="button" onClick={() => { setCustomStart(""); setCustomEnd(""); onChange("all"); setOpen(false); }} className="mr-auto rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-slate-300 hover:border-white/20 hover:bg-white/[0.05] hover:text-white">Clear dates</button>
             <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.05]">Cancel</button>
             <button type="button" disabled={!customStart || !customEnd || customStart > customEnd} onClick={() => { onChange(`custom:${customStart}:${customEnd}`); setOpen(false); }} className="rounded-lg border border-emerald-300/30 bg-emerald-400/12 px-3 py-2 text-xs font-semibold text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40">Apply dates</button>
           </div>
