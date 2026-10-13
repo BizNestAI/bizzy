@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, CircleAlert, Link2, UploadCloud } from "lucide-react";
+import { CalendarDays, CheckCircle2, CircleAlert, Link2, UploadCloud } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
@@ -207,13 +207,6 @@ const TABS = [
   { key: "excluded", label: "Excluded", icon: CircleAlert },
 ];
 
-const DATE_RANGE_OPTIONS = [
-  { value: "this_month", label: "This month" },
-  { value: "last_30", label: "Last 30 days" },
-  { value: "last_90", label: "Last 90 days" },
-  { value: "all", label: "All dates" },
-];
-
 const DEMO_ACCOUNT_OPTIONS = [{ value: "all", label: "All Accounts" }, ...DEMO_ACCOUNTS.map((a) => ({ value: a.id, label: a.name }))];
 const DEMO_ACCOUNT_LIST = DEMO_ACCOUNTS;
 const TXN_DATA = MOCK_TRANSACTIONS;
@@ -230,6 +223,111 @@ const BOOKS_ACCOUNT_CACHE_PREFIX = "bizzi:books-review:accounts:";
 const BOOKS_TXN_CACHE_PREFIX = "bizzi:books-review:transactions:";
 const BOOKS_TXN_CACHE_TTL_MS = 5 * 60 * 1000;
 const APPROVAL_LEDGER_CONFIRMATION_GRACE_MS = 5_000;
+
+function localIsoDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addCalendarDaysIso(value, days = 1) {
+  const [year, month, day] = String(value || "").split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return localIsoDate(new Date(year, month - 1, day + days, 12));
+}
+
+function monthDateFilter(year, monthIndex) {
+  const start = new Date(year, monthIndex, 1, 12);
+  const endExclusive = new Date(year, monthIndex + 1, 1, 12);
+  return {
+    value: `month:${localIsoDate(start).slice(0, 7)}`,
+    label: start.toLocaleDateString(undefined, { month: "long", year: "numeric" }),
+    range: "custom",
+    rangeStart: localIsoDate(start),
+    rangeEnd: localIsoDate(endExclusive),
+  };
+}
+
+function resolveBookkeepingDateFilter(value = "all") {
+  if (["this_month", "last_30", "last_90", "all"].includes(value)) {
+    return { value, range: value, rangeStart: null, rangeEnd: null };
+  }
+  if (String(value).startsWith("month:")) {
+    const [year, month] = String(value).slice(6).split("-").map(Number);
+    if (year && month >= 1 && month <= 12) return monthDateFilter(year, month - 1);
+  }
+  if (String(value).startsWith("custom:")) {
+    const [, start, endInclusive] = String(value).split(":");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(start || "") && /^\d{4}-\d{2}-\d{2}$/.test(endInclusive || "") && start <= endInclusive) {
+      return {
+        value,
+        label: `${new Date(`${start}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} – ${new Date(`${endInclusive}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`,
+        range: "custom",
+        rangeStart: start,
+        rangeEnd: addCalendarDaysIso(endInclusive),
+      };
+    }
+  }
+  return { value: "all", range: "all", rangeStart: null, rangeEnd: null };
+}
+
+function DateRangeFilter({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const ref = useRef(null);
+  const [months] = useState(() => {
+    const now = new Date();
+    return Array.from({ length: 12 }, (_, index) => monthDateFilter(now.getFullYear(), now.getMonth() - index));
+  });
+  const resolved = resolveBookkeepingDateFilter(value);
+  const presetLabels = { all: "All dates", this_month: "This month", last_30: "Last 30 days", last_90: "Last 90 days" };
+
+  useEffect(() => {
+    const close = (event) => {
+      if (ref.current && !ref.current.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, []);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={() => setOpen((current) => !current)} aria-expanded={open} className="flex max-w-[280px] items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-medium text-slate-100 transition-colors" style={{ background: PANEL_BG, borderColor: open ? "rgba(16,185,129,0.55)" : PANEL_BORDER, boxShadow: "0 10px 26px rgba(0,0,0,0.35)" }}>
+        <CalendarDays className="h-3.5 w-3.5 text-emerald-300" aria-hidden="true" />
+        <span className="truncate">{resolved.label || presetLabels[resolved.value] || "All dates"}</span>
+        <span className="text-sm text-slate-300">▾</span>
+      </button>
+      {open ? (
+        <div className="absolute left-0 z-30 mt-2 w-[min(92vw,420px)] rounded-2xl border p-3 text-sm shadow-[0_22px_55px_rgba(0,0,0,0.58)]" style={{ background: "rgba(21,23,23,0.99)", borderColor: PANEL_BORDER }}>
+          <div className="grid grid-cols-2 gap-1.5">
+            {[{ value: "all", label: "All dates" }, { value: "this_month", label: "This month" }, { value: "last_30", label: "Last 30 days" }, { value: "last_90", label: "Last 90 days" }].map((option) => (
+              <button key={option.value} type="button" onClick={() => { onChange(option.value); setOpen(false); }} className={`rounded-lg px-3 py-2 text-left text-xs transition ${value === option.value ? "bg-emerald-400/12 text-emerald-200" : "bg-white/[0.035] text-slate-200 hover:bg-white/[0.07]"}`}>{option.label}</button>
+            ))}
+          </div>
+          <div className="my-3 border-t border-white/8" />
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Choose a month</div>
+          <div className="grid max-h-36 grid-cols-2 gap-1 overflow-y-auto pr-1">
+            {months.map((month) => (
+              <button key={month.value} type="button" onClick={() => { onChange(month.value); setOpen(false); }} className={`rounded-lg px-3 py-2 text-left text-xs transition ${value === month.value ? "bg-emerald-400/12 text-emerald-200" : "text-slate-200 hover:bg-white/[0.06]"}`}>{month.label}</button>
+            ))}
+          </div>
+          <div className="my-3 border-t border-white/8" />
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Custom range</div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-[10px] text-slate-400">Start<input aria-label="Start date" type="date" value={customStart} max={customEnd || undefined} onChange={(event) => setCustomStart(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-black/25 px-2.5 py-2 text-xs text-slate-100 [color-scheme:dark]" /></label>
+            <label className="text-[10px] text-slate-400">End<input aria-label="End date" type="date" value={customEnd} min={customStart || undefined} onChange={(event) => setCustomEnd(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-black/25 px-2.5 py-2 text-xs text-slate-100 [color-scheme:dark]" /></label>
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.05]">Cancel</button>
+            <button type="button" disabled={!customStart || !customEnd || customStart > customEnd} onClick={() => { onChange(`custom:${customStart}:${customEnd}`); setOpen(false); }} className="rounded-lg border border-emerald-300/30 bg-emerald-400/12 px-3 py-2 text-xs font-semibold text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40">Apply dates</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function buildAccountCacheKey(businessId) {
   if (!businessId) return null;
@@ -691,6 +789,11 @@ function isWithinBookkeepingDateRange(dateStr, dateRange, { ignoreRange = false,
   }
   if (dateRange === "last_30") return diffDays <= 30;
   if (dateRange === "last_90") return diffDays <= 90;
+  const resolved = resolveBookkeepingDateFilter(dateRange);
+  if (resolved.range === "custom") {
+    const date = localIsoDate(d);
+    return (!resolved.rangeStart || date >= resolved.rangeStart) && (!resolved.rangeEnd || date < resolved.rangeEnd);
+  }
   return true;
 }
 
@@ -849,6 +952,7 @@ function BookkeepingCleanup() {
 
   const [activeTab, setActiveTab] = useState("needs_review");
   const [dateRange, setDateRange] = useState("all");
+  const dateFilter = useMemo(() => resolveBookkeepingDateFilter(dateRange), [dateRange]);
   const [accountFilter, setAccountFilter] = useState(() => (usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : null));
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -1207,14 +1311,16 @@ function BookkeepingCleanup() {
     try {
       const counts = await fetchTransactionCounts(businessId, {
         account_id: accountFilter,
-        range: dateRange,
+        range: dateFilter.range,
+        range_start: dateFilter.rangeStart,
+        range_end: dateFilter.rangeEnd,
       });
       setTabCounts(overlayPendingApprovalCounts(counts));
     } catch (e) {
       console.warn("[bookkeeping] transaction counts fetch failed", e?.message || e);
       setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
     }
-  }, [accountFilter, businessId, dateRange, usingDemo, overlayPendingApprovalCounts]);
+  }, [accountFilter, businessId, dateFilter, usingDemo, overlayPendingApprovalCounts]);
 
   useEffect(() => {
     loadTabCounts();
@@ -1429,7 +1535,7 @@ function BookkeepingCleanup() {
       const matchesTab = matchesBooksTab(txn, activeTab);
       const txnAcct = getTxnAccountKey(txn);
       const matchesAccount = !accountFilterNormalized || txnAcct === accountFilterNormalized;
-      const matchesRange = isWithinBookkeepingDateRange(txn.date, dateRange, { ignoreRange: usingDemo, now });
+      const matchesRange = isWithinBookkeepingDateRange(txn.date, dateRange, { now });
       return matchesTab && matchesAccount && matchesRange;
     });
 
@@ -1444,7 +1550,7 @@ function BookkeepingCleanup() {
       (acc, txn) => {
         const txnAcct = getTxnAccountKey(txn);
         if (accountFilterNormalized && txnAcct !== accountFilterNormalized) return acc;
-        if (!isWithinBookkeepingDateRange(txn.date, dateRange, { ignoreRange: true, now })) return acc;
+        if (!isWithinBookkeepingDateRange(txn.date, dateRange, { now })) return acc;
         if (matchesBooksTab(txn, "needs_review")) acc.needs_review += 1;
         if (matchesBooksTab(txn, "handled")) acc.handled += 1;
         if (matchesBooksTab(txn, "posted")) acc.posted += 1;
@@ -3166,7 +3272,9 @@ function BookkeepingCleanup() {
       const res = await fetchTransactions(businessId, {
         status: ["handled", "posted", "matched", "pending", "excluded"].includes(activeTab) ? activeTab : "needs_review",
         account_id: accountFilter,
-        range: dateRange,
+        range: dateFilter.range,
+        range_start: dateFilter.rangeStart,
+        range_end: dateFilter.rangeEnd,
         page,
         page_size: rowsPerPage,
       }, {
@@ -3260,7 +3368,7 @@ function BookkeepingCleanup() {
         }
       }
     }
-  }, [activeTab, accountFilter, businessId, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus, loadProcessingStatus, reconcileApprovalLedgerAfterRows, suppressLedgerRowsFromNeedsReview]);
+  }, [activeTab, accountFilter, businessId, dateFilter, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus, loadProcessingStatus, reconcileApprovalLedgerAfterRows, suppressLedgerRowsFromNeedsReview]);
 
   reloadTransactionsRef.current = reloadTransactions;
 
@@ -3539,7 +3647,7 @@ function BookkeepingCleanup() {
       <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm mb-2 text-slate-300">
         <label className="flex items-center gap-2">
           <span className="text-slate-400">Date</span>
-          <Select value={dateRange} onChange={setDateRange} options={DATE_RANGE_OPTIONS} />
+          <DateRangeFilter value={dateRange} onChange={setDateRange} />
         </label>
         <label className="flex items-center gap-2">
           <span className="text-slate-400">Rows</span>

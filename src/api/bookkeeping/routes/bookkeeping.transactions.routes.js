@@ -184,15 +184,20 @@ router.get("/transactions/counts", requireAuth, async (req, res) => {
 
   const accountId = req.query?.account_id || req.query?.plaid_account_id || null;
   const rangeParam = (req.query?.range || "this_month").toLowerCase();
+  const rangeStart = req.query?.range_start ? normalizeDate(req.query.range_start) : undefined;
+  const rangeEnd = req.query?.range_end ? normalizeDate(req.query.range_end) : null;
+  if ((req.query?.range_start && !rangeStart) || (req.query?.range_end && !rangeEnd) || (rangeStart && rangeEnd && rangeStart >= rangeEnd)) {
+    return res.status(400).json({ ok: false, error: "invalid_date_range", message: "Choose a valid date range." });
+  }
 
   try {
     const [needsReview, handled, posted, matched, pending, excluded] = await Promise.all([
-      countBookkeepingTransactions({ businessId, statusFilter: "needs_review", accountId, rangeParam }),
-      countBookkeepingTransactions({ businessId, statusFilter: "handled", accountId, rangeParam }),
-      countBookkeepingTransactions({ businessId, statusFilter: "posted", accountId, rangeParam }),
-      countBookkeepingTransactions({ businessId, statusFilter: "matched", accountId, rangeParam }),
-      countBookkeepingTransactions({ businessId, statusFilter: "pending", accountId, rangeParam }),
-      countBookkeepingTransactions({ businessId, statusFilter: "excluded", accountId, rangeParam }),
+      countBookkeepingTransactions({ businessId, statusFilter: "needs_review", accountId, rangeParam, rangeStart, rangeEnd }),
+      countBookkeepingTransactions({ businessId, statusFilter: "handled", accountId, rangeParam, rangeStart, rangeEnd }),
+      countBookkeepingTransactions({ businessId, statusFilter: "posted", accountId, rangeParam, rangeStart, rangeEnd }),
+      countBookkeepingTransactions({ businessId, statusFilter: "matched", accountId, rangeParam, rangeStart, rangeEnd }),
+      countBookkeepingTransactions({ businessId, statusFilter: "pending", accountId, rangeParam, rangeStart, rangeEnd }),
+      countBookkeepingTransactions({ businessId, statusFilter: "excluded", accountId, rangeParam, rangeStart, rangeEnd }),
     ]);
     const counts = { needs_review: needsReview, handled, posted, matched, pending, excluded };
 
@@ -219,6 +224,11 @@ router.get("/transactions", requireAuth, async (req, res) => {
   }
   const accountId = req.query?.account_id || req.query?.plaid_account_id || null;
   const rangeParam = (req.query?.range || "this_month").toLowerCase();
+  const rangeStart = req.query?.range_start ? normalizeDate(req.query.range_start) : undefined;
+  const rangeEnd = req.query?.range_end ? normalizeDate(req.query.range_end) : null;
+  if ((req.query?.range_start && !rangeStart) || (req.query?.range_end && !rangeEnd) || (rangeStart && rangeEnd && rangeStart >= rangeEnd)) {
+    return res.status(400).json({ ok: false, error: "invalid_date_range", message: "Choose a valid date range." });
+  }
   const page = Math.max(parseInt(req.query?.page, 10) || 1, 1);
   const pageSize = Math.min(Math.max(parseInt(req.query?.page_size, 10) || 25, 1), 200);
 
@@ -228,6 +238,8 @@ router.get("/transactions", requireAuth, async (req, res) => {
       statusFilter,
       accountId,
       rangeParam,
+      rangeStart,
+      rangeEnd,
       page,
       pageSize,
     });
