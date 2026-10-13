@@ -1,3 +1,9 @@
+import {
+  hasConfirmedTransferOrPaymentPair,
+  hasProviderFinality,
+  supersedeProvisionalClassification,
+} from "./specializedTypeAuthority.js";
+
 export const TRANSACTION_RESOLUTIONS = Object.freeze([
   "categorize_new",
   "match_existing_qbo",
@@ -168,11 +174,17 @@ export async function persistCreditCardInflowResolution({
     throw error;
   }
   const { data: existing, error: existingError } = await db.from("transaction_categorizations")
-    .select("final_qbo_account_id,post_error,post_after,meta,updated_at")
+    .select("status,posted_at,qbo_txn_id,final_qbo_account_id,post_error,post_after,meta,updated_at")
     .eq("business_id", businessId)
     .eq("transaction_id", transactionId)
     .maybeSingle();
   if (existingError) throw existingError;
+  if (hasProviderFinality(existing || {}) || (normalized !== "match_credit_card_payment" && hasConfirmedTransferOrPaymentPair(existing || {}))) {
+    const conflict = new Error("credit_card_inflow_resolution_conflicts_with_finalized_workflow");
+    conflict.code = "credit_card_inflow_resolution_conflicts_with_finalized_workflow";
+    conflict.status = 409;
+    throw conflict;
+  }
   if (expectedUpdatedAt && String(existing?.updated_at || "") !== String(expectedUpdatedAt)) {
     const conflict = new Error("credit_card_inflow_resolution_changed_concurrently");
     conflict.code = "credit_card_inflow_resolution_changed_concurrently";
@@ -195,7 +207,7 @@ export async function persistCreditCardInflowResolution({
       ? "needs_review"
       : "create_new";
   const resolutionAudit = {
-    decision_version: 1,
+    decision_version: 2,
     resolution_type: normalized,
     qbo_disposition: qboDisposition,
     destination_qbo_account_id: effectiveAccountId ? String(effectiveAccountId) : null,
@@ -216,12 +228,24 @@ export async function persistCreditCardInflowResolution({
     "credit_card_inflow_resolution_required",
     "credit_card_inflow_requires_review",
     "incoming_deposit_needs_match",
+    "taxonomy_requires_review",
+    "transfer_posting_not_supported",
+    "bank_transfer_posting_not_supported",
+    "special_workflow_requires_review",
+    "inflow_resolution_required",
   ].includes(String(existing?.post_error || existing?.meta?.post_block_reason || "")) &&
     !existing?.meta?.provider_write_started_at &&
     !existing?.meta?.qbo_write_started_at &&
     !existing?.meta?.qbo_receipt_confirmed_at;
+  const authoritativeMeta = payment ? currentMeta : supersedeProvisionalClassification(currentMeta, {
+    finalType: normalized,
+    actor,
+    timestamp: now,
+    source,
+    decisionVersion: 2,
+  });
   const nextMeta = {
-    ...currentMeta,
+    ...authoritativeMeta,
     ...(currentMeta.credit_card_inflow_resolution
       ? { prior_credit_card_inflow_resolution: currentMeta.credit_card_inflow_resolution }
       : {}),

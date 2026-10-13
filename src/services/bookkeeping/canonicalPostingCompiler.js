@@ -4,6 +4,7 @@ import { resolveProtectedCreditCardInflowDecision } from "./incomingDepositResol
 import { buildCreditCardCreditPayload } from "./creditCardMerchantRefundPayload.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import crypto from "crypto";
+import { applySpecializedTypeAuthority } from "./specializedTypeAuthority.js";
 
 function postingError(code, message, status = 409) {
   const error = new Error(message || code);
@@ -107,6 +108,7 @@ export function compileCanonicalCreditCardChargePosting({
 }
 
 export function resolveCanonicalPostingRail({ bankTransaction = {}, categorization = {}, mapping = {} } = {}) {
+  categorization = applySpecializedTypeAuthority(categorization);
   const mappingType = normalizeQboAccountType(mapping.qbo_account_type);
   const direction = String(bankTransaction.direction || "").toUpperCase();
   const amount = Number(bankTransaction.amount || 0);
@@ -129,6 +131,7 @@ export function resolveCanonicalPostingRail({ bankTransaction = {}, categorizati
 }
 
 export function deriveProviderFreePostingPreflight(row = {}, { lineAccount = null } = {}) {
+  row = applySpecializedTypeAuthority(row);
   try {
     if (row.pending === true || row.meta?.pending === true) throw postingError("pending_transaction_not_postable", "Waiting for settlement.");
     if (row.qbo_txn_id || row.posted_at) throw postingError("transaction_already_posted", "This transaction is already posted.");

@@ -1,4 +1,5 @@
 import { hasFinalCategorizeAsNewResolution } from "./incomingDepositResolution.js";
+import { applySpecializedTypeAuthority } from "./specializedTypeAuthority.js";
 
 export function isProtectedCreditCardPaymentWorkflow(row = {}) {
   const meta = row.meta || {};
@@ -76,6 +77,7 @@ export function clearAutomaticTransferWorkflowMeta(meta = {}, audit = {}) {
 }
 
 export function getProtectedWorkflowReason(row = {}) {
+  row = applySpecializedTypeAuthority(row);
   const meta = row.meta || {};
   const taxonomy = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
   const reason = String(row.accounting_review_reason || row.meta?.accounting_review_reason || "").toLowerCase();

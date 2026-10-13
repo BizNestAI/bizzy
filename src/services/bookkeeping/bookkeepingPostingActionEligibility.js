@@ -3,6 +3,7 @@ import { hasManualAccountAuthority } from "./postingDecisionAuthority.js";
 import { classifyPostingFailure } from "./postingFailureClassification.js";
 import { hasFinalCategorizeAsNewResolution, isPreProviderIncomingDepositMatchFailure } from "./incomingDepositResolution.js";
 import { deriveCreditCardPaymentStatus } from "./creditCardPaymentStatus.js";
+import { applySpecializedTypeAuthority } from "./specializedTypeAuthority.js";
 
 const COMPLETED_KEYS = new Set(["posted", "matched_existing_qbo", "credit_card_payment_matched"]);
 const CREDIT_TYPE_CODES = new Set([
@@ -85,6 +86,7 @@ function result(lifecycle, action, { enabled = false, reason = null, failure = n
 }
 
 export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } = {}) {
+  row = applySpecializedTypeAuthority(row);
   const lifecycle = deriveQboPostingLifecycle(row, { nowMs });
   const meta = row.meta || {};
   const status = String(row.status || "").toLowerCase();

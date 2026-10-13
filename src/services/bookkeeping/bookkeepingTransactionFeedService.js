@@ -22,6 +22,7 @@ import { deriveCanonicalBookkeepingWorkflow } from "./bookkeepingPostingActionEl
 import { deriveProviderFreePostingPreflight } from "./canonicalPostingCompiler.js";
 import { isHandledReviewStatus } from "./bookkeepingLifecycleState.js";
 import { hasActualProviderWriteBoundary } from "./providerBoundaryEvidence.js";
+import { applySpecializedTypeAuthority } from "./specializedTypeAuthority.js";
 export { hasActualProviderWriteBoundary } from "./providerBoundaryEvidence.js";
 
 function makeCorrelationId(prefix = "feed") {
@@ -147,6 +148,7 @@ function stripIncomingDepositReviewForRewardCredit(normalized = {}) {
 }
 
 export function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, operatorRequest = null) {
+  cat = applySpecializedTypeAuthority(cat);
   const meta = cat.meta || {};
   const duplicateCandidates = Array.isArray(meta.qbo_duplicate_candidates)
     ? meta.qbo_duplicate_candidates.slice(0, 5).map((candidate) => ({

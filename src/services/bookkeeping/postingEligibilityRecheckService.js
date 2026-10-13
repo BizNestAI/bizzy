@@ -9,6 +9,7 @@ import { resolveCompletedPostingEligibilityExecution } from "./postingEligibilit
 import { hasFinalCategorizeAsNewResolution } from "./incomingDepositResolution.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import { resolveMissingFinalAccount } from "./handledFinalAccountInvariant.js";
+import { applySpecializedTypeAuthority, hasFinalSpecializedTypeAuthority } from "./specializedTypeAuthority.js";
 
 const HANDLED = ["approved", "auto_approved", "handled", "failed"];
 const MAX_ROWS = 100;
@@ -98,6 +99,7 @@ function previewVersion(scope, rows) {
 }
 
 function durableManualAuthority(cat = {}) {
+  if (hasFinalSpecializedTypeAuthority(cat)) return true;
   const approval = cat.meta?.manual_approval;
   if (hasAuthorizedMonthlyReviewApproval(cat)) {
     return String(approval.business_id) === String(cat.business_id) &&
@@ -108,6 +110,7 @@ function durableManualAuthority(cat = {}) {
 }
 
 function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMapping, qboAccount, accountRepair, recoveryBatch, nowMs }) {
+  cat = applySpecializedTypeAuthority(cat);
   const meta = cat.meta || {};
   // possible_qbo_duplicate remains an advisory signal here; only durable,
   // deterministic linkage below is a non-overridable duplicate blocker.
@@ -191,7 +194,7 @@ async function rowsForScope({ db, businessId, month, accountScope = null, transa
       const effectiveAccountId = accountRepair.kind === "resolved" ? accountRepair.account?.qbo_account_id : validatedFinal?.qbo_account_id;
       return ({
       bank,
-      cat,
+      cat: applySpecializedTypeAuthority(cat),
       job: (jobs || []).find((row) => String(row.transaction_id) === String(bank.id)) || null,
       intent: (intents || []).find((row) => String(row.transaction_id) === String(bank.id)) || null,
       sourceAccount: (sourceAccounts || []).find((row) => String(row.plaid_account_id) === String(bank.plaid_account_id)) || null,

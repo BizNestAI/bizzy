@@ -47,6 +47,7 @@ import { createPostingError, normalizePostingError } from "../services/bookkeepi
 import { compileCanonicalCreditCardChargePosting } from "../services/bookkeeping/canonicalPostingCompiler.js";
 import { classifyPostingFailure } from "../services/bookkeeping/postingFailureClassification.js";
 import { hasFinalCategorizeAsNewResolution } from "../services/bookkeeping/incomingDepositResolution.js";
+import { applySpecializedTypeAuthority } from "../services/bookkeeping/specializedTypeAuthority.js";
 import {
   buildLoanPaymentPurchasePayload,
   fetchConfirmedLoanPaymentSplit,
@@ -813,6 +814,7 @@ function summarizePostingError(err) {
 }
 
 function resolveQboTxnType(item, bankTxn, mapping) {
+  item = applySpecializedTypeAuthority(item);
   const mappedType = (mapping?.qbo_account_type || "").toLowerCase();
   const isBank = mappedType === "bank";
   const isCreditCard = mappedType === "creditcard" || mappedType === "credit_card" || mappedType === "credit card";
@@ -2179,6 +2181,7 @@ async function postSplitTransactionPurchase(item, bankTxn, qbo, mapping, request
 }
 
 async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
+  item = applySpecializedTypeAuthority(item);
   item = applyManualAccountAuthorityToPostingItem(item);
   if (!qbo) throw new Error("qbo_client_unavailable");
   if (!bankTxn) throw new Error("missing_bank_transaction");
@@ -3676,7 +3679,7 @@ async function runOnce(options = {}) {
         }
         return true;
       }
-      const authorityResolvedItem = applyManualAccountAuthorityToPostingItem(item);
+      const authorityResolvedItem = applyManualAccountAuthorityToPostingItem(applySpecializedTypeAuthority(item));
       if (authorityResolvedItem?.meta?.taxonomy_type === "transfer_internal") {
         if (process.env.NODE_ENV !== "production") {
           log.info("[books-post] skipping transfer taxonomy txn", item.transaction_id);
