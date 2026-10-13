@@ -53,6 +53,7 @@ export default function BookkeepingTransactionMirrorTable({
   onCreateAccount,
   onCreatedAccountSelect,
   onResolutionChange,
+  onResolvePending,
   accountTypes,
   emptyMessage = "No transactions in this feed.",
 }) {
@@ -108,6 +109,7 @@ export default function BookkeepingTransactionMirrorTable({
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
             onResolutionChange={onResolutionChange}
+            onResolvePending={onResolvePending}
             accountTypes={accountTypes}
           />
         ))}
@@ -147,6 +149,7 @@ function BookkeepingTransactionMirrorRow({
   onCreateAccount,
   onCreatedAccountSelect,
   onResolutionChange,
+  onResolvePending,
   accountTypes,
 }) {
   const rowCcPairRole = row.cc_payment_pair_role || row.meta?.cc_payment_pair_role || null;
@@ -165,6 +168,8 @@ function BookkeepingTransactionMirrorRow({
   const [resolutionError, setResolutionError] = React.useState("");
   const [resolutionBusy, setResolutionBusy] = React.useState(false);
   const [duplicateRiskAcknowledged, setDuplicateRiskAcknowledged] = React.useState(false);
+  const [pendingModal, setPendingModal] = React.useState({ open: false, loading: false, context: null, error: "", action: "" });
+  const [pendingForm, setPendingForm] = React.useState({ reason: "", statementDate: row.date || "", statementAmount: Math.abs(Number(row.amount || 0)).toFixed(2) });
   const [forcePostConfirmationOpen, setForcePostConfirmationOpen] = React.useState(false);
   const [postingRequest, setPostingRequest] = React.useState(null);
   const [postingPollExpired, setPostingPollExpired] = React.useState(false);
@@ -320,6 +325,30 @@ function BookkeepingTransactionMirrorRow({
     }
   };
 
+  const openPendingResolution = async () => {
+    setPendingModal({ open: true, loading: true, context: null, error: "", action: "" });
+    try {
+      const context = await onResolvePending?.(row, "load", {});
+      setPendingModal({ open: true, loading: false, context, error: "", action: "" });
+    } catch (error) {
+      setPendingModal({ open: true, loading: false, context: null, error: error?.body?.message || error?.message || "Could not load pending evidence.", action: "" });
+    }
+  };
+
+  const performPendingResolution = async (action, payload = {}) => {
+    setPendingModal((current) => ({ ...current, loading: true, error: "", action }));
+    try {
+      const response = await onResolvePending?.(row, action, payload);
+      if (action === "refresh-status") {
+        setPendingModal({ open: true, loading: false, context: response?.result || response, error: "", action: "" });
+      } else {
+        setPendingModal({ open: false, loading: false, context: null, error: "", action: "" });
+      }
+    } catch (error) {
+      setPendingModal((current) => ({ ...current, loading: false, error: error?.body?.message || error?.message || "Could not resolve this transaction.", action: "" }));
+    }
+  };
+
   return (
     <>
     <div className={`${MIRROR_TABLE_GRID} items-center gap-3 px-4 py-3 text-sm text-white/75`}>
@@ -424,6 +453,11 @@ function BookkeepingTransactionMirrorRow({
       </div>
 
       <div className="space-y-1.5">
+        {isPending ? (
+          <button type="button" onClick={openPendingResolution} className="w-full rounded-lg border border-amber-300/25 bg-amber-300/[0.1] px-2 py-1.5 text-[11px] font-semibold text-amber-50 hover:bg-amber-300/[0.16]">
+            Resolve pending
+          </button>
+        ) : null}
         {genericActionsBlocked ? (
           <div className="rounded-lg border border-amber-300/18 bg-amber-300/[0.08] px-2 py-1 text-[11px] text-amber-100" title={protectedReason.detail || protectedReason.label}>
             {protectedReason.label}
@@ -634,6 +668,13 @@ function BookkeepingTransactionMirrorRow({
         />
       </div>
     ) : null}
+    <PendingResolutionModal
+      state={pendingModal}
+      form={pendingForm}
+      onFormChange={setPendingForm}
+      onClose={() => !pendingModal.loading && setPendingModal((current) => ({ ...current, open: false }))}
+      onAction={performPendingResolution}
+    />
     <SplitTransactionModal
       mode={loanSplitDraft?.mode || "loan_payment"}
       open={Boolean(loanSplitDraft)}
@@ -673,6 +714,19 @@ function BookkeepingTransactionMirrorRow({
     />
     </>
   );
+}
+
+function PendingResolutionModal({ state, form, onFormChange, onClose, onAction }) {
+  if (!state?.open || typeof document === "undefined") return null;
+  const context = state.context;
+  const tx = context?.transaction || {};
+  const labels = { recent_pending: `Pending · ${tx.pending_age_days ?? "?"} days`, stale_pending_check_required: "Stale pending · Review required", posted_replacement_found: "Replacement found", authorization_expired_or_removed: "Authorization expired", promoted_to_settled: "Settlement confirmed", excluded_pending_authorization: "Excluded authorization", linked_to_posted_replacement: "Linked to posted replacement" };
+  const cells = [["Merchant", tx.merchant], ["Amount", tx.amount == null ? "—" : formatMoney(tx.amount)], ["Authorized date", tx.authorized_date || tx.date], ["Account", `${tx.account_name || "Account"}${tx.account_mask ? ` ••••${tx.account_mask}` : ""}`], ["Pending age", `${tx.pending_age_days ?? "—"} days`], ["Plaid provenance", tx.provenance], ["Last provider update", tx.last_provider_update ? new Date(tx.last_provider_update).toLocaleString() : "Unknown"], ["Suggested GL (non-final)", tx.suggested_gl || "None"], ["Posted replacement", context?.replacement_found ? "Found" : "Not found"], ["QuickBooks candidate", context?.qbo_candidate_found ? "Found" : "Not found"]];
+  return createPortal(<div className="fixed inset-0 z-[10000] flex h-[100dvh] w-screen items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-md" role="presentation"><section role="dialog" aria-modal="true" className="my-auto max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-amber-300/25 bg-[#0d1210] shadow-2xl shadow-black/70"><div className="flex items-start justify-between border-b border-white/10 p-5"><div><div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/75">Pending transaction review</div><h3 className="mt-1 text-xl font-semibold text-white">Resolve pending</h3><p className="mt-1 text-sm text-white/55">Investigate settlement without posting anything to QuickBooks.</p></div><button type="button" onClick={onClose} className="rounded-lg p-2 text-white/45 hover:bg-white/10 hover:text-white"><X className="h-4 w-4" /></button></div><div className="space-y-4 p-5">
+    {state.loading && !context ? <div className="flex items-center gap-2 py-8 text-sm text-white/55"><Loader2 className="h-4 w-4 animate-spin" />Loading provider evidence…</div> : null}
+    {context ? <><div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.07] px-3 py-2 text-sm font-semibold text-amber-100">{labels[context.lifecycle] || context.lifecycle}</div><div className="grid gap-2 sm:grid-cols-2">{cells.map(([label, value]) => <div key={label} className="rounded-xl border border-white/10 bg-white/[0.035] p-3"><div className="text-[10px] uppercase tracking-[0.14em] text-white/35">{label}</div><div className="mt-1 text-sm text-white/80">{value || "—"}</div></div>)}</div><div className="grid gap-3 sm:grid-cols-2"><label className="text-xs text-white/55">Statement-confirmed date<input type="date" value={form.statementDate} onChange={(event) => onFormChange((current) => ({ ...current, statementDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-white/12 bg-black/25 px-3 py-2 text-sm text-white [color-scheme:dark]" /></label><label className="text-xs text-white/55">Statement amount<input type="number" step="0.01" value={form.statementAmount} onChange={(event) => onFormChange((current) => ({ ...current, statementAmount: event.target.value }))} className="mt-1 w-full rounded-lg border border-white/12 bg-black/25 px-3 py-2 text-sm text-white" /></label></div><label className="block text-xs text-white/55">Operator reason<textarea value={form.reason} onChange={(event) => onFormChange((current) => ({ ...current, reason: event.target.value }))} className="mt-1 min-h-20 w-full rounded-lg border border-white/12 bg-black/25 px-3 py-2 text-sm text-white" placeholder="Evidence supporting this decision" /></label><div className="flex flex-wrap justify-end gap-2 border-t border-white/10 pt-4"><button type="button" disabled={state.loading} onClick={onClose} className="rounded-lg border border-white/12 px-3 py-2 text-sm text-white/70">Keep pending</button><button type="button" disabled={state.loading} onClick={() => onAction("refresh-status")} className="rounded-lg border border-sky-300/20 bg-sky-300/[0.08] px-3 py-2 text-sm font-semibold text-sky-100">Refresh status</button>{context.replacement_found ? <button type="button" disabled={state.loading} onClick={() => onAction("use-posted-replacement", { replacement_transaction_id: context.replacement?.id })} className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-3 py-2 text-sm font-semibold text-emerald-100">Use posted replacement</button> : null}<button type="button" disabled={state.loading || !form.reason.trim()} onClick={() => onAction("exclude-authorization", { reason: form.reason })} className="rounded-lg border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-sm font-semibold text-amber-100 disabled:opacity-40">Exclude expired authorization</button><button type="button" disabled={state.loading || context.replacement_found || !form.reason.trim() || !form.statementDate || !form.statementAmount} onClick={() => onAction("confirm-settled", { reason: form.reason, statement_date: form.statementDate, statement_amount: Number(form.statementAmount) })} className="rounded-lg border border-emerald-300/25 bg-emerald-300/[0.12] px-3 py-2 text-sm font-semibold text-emerald-50 disabled:opacity-40">Confirm settled from statement</button></div></> : null}
+    {state.error ? <div className="rounded-xl border border-rose-300/20 bg-rose-300/[0.08] px-3 py-2 text-sm text-rose-100">{state.error}</div> : null}
+  </div></section></div>, document.body);
 }
 
 function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selectedAccountLabel, candidate, onCancel, onConfirm }) {

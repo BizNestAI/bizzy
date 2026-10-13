@@ -390,7 +390,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const { data: byTxnId, error: byTxnIdErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
           )
           .eq("business_id", businessId)
           .in("plaid_transaction_id", exactPlaidIds);
@@ -400,7 +400,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const { data: byPendingId, error: byPendingIdErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
           )
           .eq("business_id", businessId)
           .in("pending_transaction_id", exactPlaidIds);
@@ -414,7 +414,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const { data: candidateRows, error: candidateErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
           )
           .eq("business_id", businessId)
           .eq("is_archived", false)
@@ -431,7 +431,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const { data: physicalRows, error: physicalErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
           )
           .eq("business_id", businessId)
           .eq("is_archived", false)
@@ -446,7 +446,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const { data: byCanonical, error: byCanonicalErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
           )
           .eq("business_id", businessId)
           .eq("is_archived", false)
@@ -509,6 +509,11 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
           if (existing.pending_transaction_id) protectedRemovedIds.add(existing.pending_transaction_id);
           rowsForIdUpsert.push({
             ...row,
+            // A statement-confirmed settlement remains eligible while Plaid
+            // still repeats the old authorization. A later finalized row is
+            // allowed through and reconciles onto this stable identity.
+            pending: existing.pending_resolution_state === "promoted_to_settled" && row.pending === true ? false : row.pending,
+            pending_resolution_state: existing.pending_resolution_state || null,
             id: existing.id,
             pending_source_transaction_id: existing.pending && !row.pending ? existing.id : null,
             canonical_match_reason: existing.pending && !row.pending ? "pending_lifecycle_merge" : row.canonical_match_reason,
@@ -564,13 +569,17 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const cat = catByTxnId.get(row.id);
         const posted = cat?.status === "posted" || Boolean(cat?.qbo_txn_id || cat?.posted_at || cat?.reconciled_at);
         const excluded = cat?.status === "excluded" || Boolean(cat?.excluded_at || cat?.meta?.excluded_at);
-        if (excluded && existing?.pending === true && row.pending !== true && hasMaterialTransactionChange(existing, row)) {
+        if (excluded && existing?.pending === true && row.pending !== true) {
           excludedFinalizedReopens.push({
             transactionId: row.id,
             accountId: row.plaid_account_id,
             prior: existing,
             finalized: row,
           });
+        }
+        if (existing?.pending_resolution_state === "promoted_to_settled" && row.pending !== true && hasMaterialTransactionChange(existing, row)) {
+          row.accounting_review_required = true;
+          row.accounting_review_reason = "operator_confirmed_settlement_material_provider_change";
         }
         if (posted && hasMaterialTransactionChange(existing, row)) {
           protectedRemovedIds.add(existing?.plaid_transaction_id);
@@ -1110,4 +1119,24 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
   }
 
   return { ok: true, synced, skipped, bookkeeping_enqueued: bookkeepingEnqueued };
+}
+
+// Operator-triggered pending resolution must not sweep every connected Item.
+// This still uses Plaid's canonical cursor protocol, but is bounded to the one
+// Item that owns the selected transaction.
+export async function runPlaidSyncForItemForBusiness(businessId, plaidItemId, { force = true } = {}) {
+  if (!businessId || !plaidItemId) throw new Error("missing_plaid_item_scope");
+  const plaid = getPlaidClient();
+  if (!plaid) throw new Error("plaid_not_configured");
+  const { data: item, error } = await supabase
+    .from("plaid_items")
+    .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active,sync_lease_owner,sync_lease_expires_at")
+    .eq("business_id", businessId)
+    .eq("plaid_item_id", plaidItemId)
+    .eq("plaid_env", plaidEnvName)
+    .maybeSingle();
+  if (error) throw error;
+  if (!item) throw new Error("plaid_item_not_found");
+  if (!isPlaidItemEligibleForScheduledSync(item)) throw new Error("plaid_item_not_active");
+  return runSyncForItem(plaid, businessId, item, { force });
 }

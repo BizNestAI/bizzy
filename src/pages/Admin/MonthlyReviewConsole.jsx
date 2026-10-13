@@ -133,6 +133,7 @@ function buildInitialBookkeepingFeeds() {
     key,
     {
       expanded: false,
+      resolutionCounts: null,
       rows: [],
       totalCount: null,
       page: 0,
@@ -714,6 +715,7 @@ export default function MonthlyReviewConsole() {
           next[key] = {
             ...current[key],
             totalCount: Number(counts[key] || 0),
+            resolutionCounts: key === "pending" ? data?.pending_resolution_counts || null : current[key]?.resolutionCounts || null,
           };
         });
         return next;
@@ -1519,6 +1521,24 @@ export default function MonthlyReviewConsole() {
       },
     });
   }, [month, selectedBusinessId]);
+
+  const handlePendingResolution = useCallback(async (row, action, payload = {}) => {
+    if (!selectedBusinessId || !row?.id) throw new Error("Missing pending transaction context.");
+    const base = `/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(row.id)}/pending-resolution`;
+    if (action === "load") return safeFetch(`${base}?month=${encodeURIComponent(month)}`);
+    const response = await safeFetch(`${base}/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: { ...payload, month, idempotency_key: globalThis.crypto?.randomUUID?.() || `pending-${row.id}-${Date.now()}` },
+      timeoutMs: action === "refresh-status" ? 45_000 : 20_000,
+    });
+    await loadBookkeepingFeedCounts();
+    await Promise.all([
+      bookkeepingFeeds.pending?.expanded ? loadBookkeepingFeed("pending", { reset: true }) : Promise.resolve(),
+      bookkeepingFeeds.needs_review?.expanded ? loadBookkeepingFeed("needs_review", { reset: true }) : Promise.resolve(),
+      bookkeepingFeeds.handled?.expanded ? loadBookkeepingFeed("handled", { reset: true }) : Promise.resolve(),
+    ]);
+    return response;
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, month, selectedBusinessId]);
 
   const handleMirrorMarkCreditCardPayment = useCallback(async (row) => {
     if (!selectedBusinessId || !row?.id) return;
@@ -2705,6 +2725,7 @@ export default function MonthlyReviewConsole() {
                   onConfirmIncomingDepositMatch={handleMirrorConfirmIncomingDepositMatch}
                   onRejectIncomingDepositMatch={handleMirrorRejectIncomingDepositMatch}
                   onResolutionChange={handleMirrorResolutionChange}
+                  onResolvePending={handlePendingResolution}
                   onCreateAccount={createMonthlyReviewQboAccount}
                   onCreatedAccountSelect={injectSourceLedgerAccount}
                   accountTypes={qboAccountTypes}
@@ -3002,6 +3023,7 @@ function BookkeepingFeedMirrorPanels({
   onConfirmIncomingDepositMatch,
   onRejectIncomingDepositMatch,
   onResolutionChange,
+  onResolvePending,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -3111,6 +3133,7 @@ function BookkeepingFeedMirrorPanels({
             onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
             onRejectIncomingDepositMatch={onRejectIncomingDepositMatch}
             onResolutionChange={onResolutionChange}
+            onResolvePending={onResolvePending}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
             accountTypes={accountTypes}
@@ -3586,6 +3609,7 @@ function BookkeepingFeedMirrorSection({
   onConfirmIncomingDepositMatch,
   onRejectIncomingDepositMatch,
   onResolutionChange,
+  onResolvePending,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -3594,6 +3618,7 @@ function BookkeepingFeedMirrorSection({
   const totalCount = feed?.totalCount ?? 0;
   const hasMore = feed?.hasMore === true;
   const expanded = Boolean(feed?.expanded);
+  const pendingCounts = status === "pending" ? feed?.resolutionCounts : null;
   return (
     <div className="rounded-xl border border-white/10 bg-black/15">
       <button
@@ -3613,6 +3638,7 @@ function BookkeepingFeedMirrorSection({
           {loadingCounts && totalCount === null ? "..." : Number(totalCount || 0).toLocaleString()} transactions
         </div>
       </button>
+      {pendingCounts ? <div className="flex flex-wrap gap-2 border-t border-white/[0.06] px-4 py-2 text-[10px] text-white/50"><span>Recent {pendingCounts.recent_pending || 0}</span><span>Stale {pendingCounts.stale_pending || 0}</span><span>Replacement found {pendingCounts.replacement_found || 0}</span><span className="text-amber-100/75">Action required {pendingCounts.operator_action_required || 0}</span></div> : null}
       {expanded ? (
         <div className="space-y-3 border-t border-white/10 p-3">
           {feed?.error ? (
@@ -3656,6 +3682,7 @@ function BookkeepingFeedMirrorSection({
               onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
               onRejectIncomingDepositMatch={onRejectIncomingDepositMatch}
               onResolutionChange={onResolutionChange}
+              onResolvePending={onResolvePending}
               onCreateAccount={onCreateAccount}
               onCreatedAccountSelect={onCreatedAccountSelect}
               accountTypes={accountTypes}
