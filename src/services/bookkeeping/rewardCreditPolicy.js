@@ -37,6 +37,9 @@ export function isCreditCardAccountContext(row = {}) {
 export function hasStrongRewardCreditDescriptor(value = "") {
   const text = normalizeText(value);
   return (
+    /^(?:automatic )?statement credit$/.test(text) ||
+    /^(?:cash back|cashback) reward$/.test(text) ||
+    /^card reward credit$/.test(text) ||
     /\bredeem(?:ed|ing)? cash back\b/.test(text) ||
     /\bcash back redemption\b/.test(text) ||
     /\bcashback redemption\b/.test(text) ||
@@ -90,9 +93,13 @@ export function transactionRewardText(row = {}) {
 
 export function isCashBackRewardCredit(row = {}) {
   const text = transactionRewardText(row);
+  const descriptors = [
+    row.name, row.description, row.merchant_name, row.counterparty_name,
+    row.original_description, row.meta?.name, row.meta?.description,
+  ].filter(Boolean);
   if (!isPositiveInflow(row)) return false;
   if (!isCreditCardAccountContext(row)) return false;
-  if (!hasStrongRewardCreditDescriptor(text)) return false;
+  if (!descriptors.some((value) => hasStrongRewardCreditDescriptor(value))) return false;
   if (hasCreditCardPaymentDescriptor(text)) return false;
   if (hasStrongRefundDescriptor(text)) return false;
   if (hasTransferDescriptor(text)) return false;
@@ -101,4 +108,45 @@ export function isCashBackRewardCredit(row = {}) {
 
 export function rewardCreditIntent(row = {}) {
   return isCashBackRewardCredit(row) ? "credit_card_rewards" : null;
+}
+
+export function deterministicStatementCreditDecision(row = {}, categorization = {}, {
+  accountId = null,
+  accountName = null,
+  now = new Date().toISOString(),
+  source = "deterministic_statement_credit_policy",
+} = {}) {
+  const meta = categorization.meta || {};
+  const activeOrUnknownProviderOperation =
+    meta.provider_write_started_at || meta.qbo_write_started_at ||
+    meta.ambiguous_provider_outcome === true || meta.unknown_provider_outcome === true;
+  const finalized =
+    categorization.qbo_txn_id || categorization.posted_at || categorization.status === "posted" ||
+    meta.qbo_receipt_confirmed_at || meta.provider_receipt_confirmed_at;
+  const matchedOrDuplicate =
+    meta.matched_existing_qbo === true || meta.existing_qbo_match_confirmed === true ||
+    meta.incoming_deposit_match_status === "confirmed" ||
+    meta.qbo_duplicate_detection_confidence === "DETERMINISTIC_EXISTING" ||
+    (Array.isArray(meta.qbo_duplicate_candidates) && meta.qbo_duplicate_candidates.some((candidate) => candidate?.deterministic === true));
+  const confirmedPair =
+    meta.cc_payment_pair_id || meta.transfer_pair_id || meta.internal_transfer_pair_id ||
+    ["confirmed", "posting", "posted"].includes(String(meta.cc_payment_pair_status || meta.transfer_pair_status || "").toLowerCase());
+  const destinationId = accountId || categorization.final_qbo_account_id || null;
+  if (!destinationId || row.pending === true || activeOrUnknownProviderOperation || finalized || matchedOrDuplicate || confirmedPair) return null;
+  if (!isCashBackRewardCredit(row)) return null;
+  return {
+    decision_version: 3,
+    canonical_type: "cash_back_statement_credit",
+    resolution_type: "credit_card_statement_credit",
+    qbo_disposition: "categorize_as_new",
+    destination_qbo_account_id: String(destinationId),
+    destination_qbo_account_name: accountName || categorization.final_qbo_account_name || null,
+    decision_source: "automated",
+    operator_source: source,
+    confidence: "deterministic",
+    provenance: "normalized_descriptor_mapped_credit_card_no_stronger_contradiction",
+    safety_eligible: true,
+    decided_by: "bizzi",
+    decided_at: now,
+  };
 }

@@ -46,6 +46,7 @@ function makeDb() {
     qbo_account_creation_intents: [],
     clarification_requests: [],
     vendor_rules: [],
+    plaid_qbo_account_mappings: [],
   };
   return {
     rows,
@@ -729,6 +730,7 @@ test("statement credit can promote to Credit Card Rewards without opening transf
       amount: 1.63,
       signed_amount: 1.63,
       direction: "INFLOW",
+      account_type: "credit card",
     },
     cat: {
       suggested_qbo_account_id: "rewards-current",
@@ -755,6 +757,14 @@ test("statement credit can promote to Credit Card Rewards without opening transf
       meta: { suggestion_source: "plaid_mapping", taxonomy_type: "transfer_internal" },
     },
   });
+  db.rows.bank_transactions.find((row) => row.id === "txn-statement-credit").plaid_account_id = "discover-card";
+  db.rows.bank_transactions.find((row) => row.id === "txn-card-payment").plaid_account_id = "discover-card";
+  db.rows.plaid_qbo_account_mappings.push({
+    business_id: BUSINESS_ID,
+    plaid_account_id: "discover-card",
+    qbo_account_id: "discover-qbo-card",
+    qbo_account_type: "CreditCard",
+  });
 
   const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
   const credit = db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-statement-credit");
@@ -764,6 +774,13 @@ test("statement credit can promote to Credit Card Rewards without opening transf
   assert.equal(credit.status, "auto_approved");
   assert.equal(credit.final_qbo_account_name, "Credit Card Rewards");
   assert.equal(credit.meta.taxonomy_auto_handle_reason, "statement_credit_rewards_income");
+  assert.equal(credit.meta.credit_card_inflow_resolution.canonical_type, "cash_back_statement_credit");
+  assert.equal(credit.meta.credit_card_inflow_resolution.resolution_type, "credit_card_statement_credit");
+  assert.equal(credit.meta.credit_card_inflow_resolution.qbo_disposition, "categorize_as_new");
+  assert.equal(credit.meta.credit_card_inflow_resolution.destination_qbo_account_id, "rewards-current");
+  assert.equal(credit.meta.credit_card_inflow_resolution.safety_eligible, true);
+  assert.equal(credit.meta.taxonomy_type, undefined);
+  assert.equal(credit.meta.superseded_provisional_classification.prior_type, "transfer_internal");
   assert.equal(payment.status, "needs_review");
   assert.equal(payment.final_qbo_account_id, null);
   assert.match(payment.meta.auto_handle_decision.reason, /transfer_internal|review|missing_source|cc_payment/);

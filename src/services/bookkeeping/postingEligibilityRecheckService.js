@@ -9,7 +9,8 @@ import { resolveCompletedPostingEligibilityExecution } from "./postingEligibilit
 import { hasFinalCategorizeAsNewResolution } from "./incomingDepositResolution.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import { resolveMissingFinalAccount } from "./handledFinalAccountInvariant.js";
-import { applySpecializedTypeAuthority, hasFinalSpecializedTypeAuthority } from "./specializedTypeAuthority.js";
+import { applySpecializedTypeAuthority, hasFinalSpecializedTypeAuthority, supersedeProvisionalClassification } from "./specializedTypeAuthority.js";
+import { deterministicStatementCreditDecision } from "./rewardCreditPolicy.js";
 
 const HANDLED = ["approved", "auto_approved", "handled", "failed"];
 const MAX_ROWS = 100;
@@ -188,7 +189,37 @@ async function rowsForScope({ db, businessId, month, accountScope = null, transa
   if (holdResult.error) throw holdResult.error;
   return {
     rows: selectedBank.map((bank) => {
-      const cat = catById.get(String(bank.id));
+      const storedCat = catById.get(String(bank.id));
+      const sourceMapping = (mappings || []).find((row) => String(row.plaid_account_id) === String(bank.plaid_account_id)) || null;
+      const deterministicDecision = deterministicStatementCreditDecision({
+        ...bank,
+        account_type: sourceMapping?.qbo_account_type,
+      }, storedCat, {
+        accountId: storedCat.final_qbo_account_id,
+        accountName: storedCat.final_qbo_account_name,
+        source: "posting_eligibility_recheck",
+      });
+      const cat = deterministicDecision && !hasFinalSpecializedTypeAuthority(storedCat)
+        ? {
+            ...storedCat,
+            post_error: null,
+            meta: {
+              ...supersedeProvisionalClassification(storedCat.meta || {}, {
+                finalType: deterministicDecision.canonical_type,
+                actor: "bizzi",
+                timestamp: deterministicDecision.decided_at,
+                source: deterministicDecision.operator_source,
+                decisionVersion: deterministicDecision.decision_version,
+              }),
+              user_selected_resolution: "credit_card_statement_credit",
+              qbo_disposition: "categorize_as_new",
+              credit_card_inflow_resolution: deterministicDecision,
+              safe_to_auto_handle: true,
+              safe_to_auto_post: true,
+            },
+            deterministic_statement_credit_recovery_required: true,
+          }
+        : storedCat;
       const accountRepair = resolveMissingFinalAccount({ categorization: cat, bankTransaction: bank, qboAccounts: qboAccounts || [] });
       const validatedFinal = (qboAccounts || []).find((row) => String(row.qbo_account_id) === String(cat.final_qbo_account_id)) || null;
       const effectiveAccountId = accountRepair.kind === "resolved" ? accountRepair.account?.qbo_account_id : validatedFinal?.qbo_account_id;
@@ -199,7 +230,7 @@ async function rowsForScope({ db, businessId, month, accountScope = null, transa
       intent: (intents || []).find((row) => String(row.transaction_id) === String(bank.id)) || null,
       sourceAccount: (sourceAccounts || []).find((row) => String(row.plaid_account_id) === String(bank.plaid_account_id)) || null,
       sourceItem: (sourceItems || []).find((row) => String(row.plaid_item_id) === String(bank.plaid_item_id)) || null,
-      sourceMapping: (mappings || []).find((row) => String(row.plaid_account_id) === String(bank.plaid_account_id)) || null,
+      sourceMapping,
       accountRepair,
       qboAccount: (qboAccounts || []).find((row) => String(row.qbo_account_id) === String(effectiveAccountId)) || null,
       recoveryBatch: (holdResult.data || []).find((row) => String(row.id) === String(catById.get(String(bank.id))?.posting_hold_batch_id)) || null,
@@ -287,6 +318,7 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
       expected_post_after: outcome === "eligible_to_schedule" ? computePostAfterForAutoPost(true, 24, nowMs) : cat.post_after || null,
       categorization_updated_at: cat.updated_at || null,
       current_meta: cat.meta || {},
+      deterministic_statement_credit_recovery_required: cat.deterministic_statement_credit_recovery_required === true,
     });
   }
   result.preview_version = previewVersion({ business_id: businessId, month, account_scope: accountScope, auto_post_enabled: result.auto_post_enabled }, result.rows);

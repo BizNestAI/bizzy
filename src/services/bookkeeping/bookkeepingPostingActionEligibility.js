@@ -58,7 +58,7 @@ const ACTION_DEFINITIONS = Object.freeze({
   map_account: ["Map account", true, false, false, "source_account_mapped"],
   select_valid_account: ["Select valid account", true, false, false, "valid_account_selected"],
   match_payment: ["Match payment", true, false, false, "payment_matched"],
-  confirm_statement_credit: ["Confirm statement credit", true, true, false, "resolution_saved"],
+  confirm_statement_credit: ["Resolve & post", true, true, false, "resolution_saved"],
   complete_refund_details: ["Complete refund details", true, true, false, "refund_details_saved"],
   inspect_blocker: ["Review blocker", true, false, false, "blocker_reviewed"],
   posting: ["Posting…", false, false, false, "posted_or_failed"],
@@ -146,7 +146,12 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
       String(row.plaid_account_type || row.account_type || "").toLowerCase().includes("credit") &&
       !meta.credit_card_inflow_resolution)
   ) {
-    return result(lifecycle, "confirm_type", { enabled: true, failure: code || "credit_card_inflow_resolution_required", actionCode: "resolve_issue" });
+    return result(lifecycle, "confirm_type", {
+      enabled: true,
+      failure: code || "credit_card_inflow_resolution_required",
+      actionCode: "confirm_statement_credit",
+      reason: "Confirm whether this credit is a statement credit, merchant refund, payment, or transfer.",
+    });
   }
   if (["missing_source_qbo_account", "missing_qbo_account_mapping", "inactive_source_qbo_account"].includes(String(code || ""))) {
     return result(lifecycle, "fix_issue", { enabled: true, failure: code, actionCode: "map_account" });

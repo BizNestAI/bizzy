@@ -112,6 +112,7 @@ const INCOMING_DEPOSIT_META_KEYS = [
 ];
 
 function stripIncomingDepositReviewForRewardCredit(normalized = {}) {
+  if (normalized.meta?.credit_card_inflow_resolution?.resolution_type) return normalized;
   if (!isCashBackRewardCredit(normalized)) return normalized;
   const meta = { ...(normalized.meta || {}) };
   for (const key of INCOMING_DEPOSIT_META_KEYS) delete meta[key];

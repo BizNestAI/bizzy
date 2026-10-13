@@ -10,7 +10,8 @@ export function resolveProtectedCreditCardInflowDecision(row = {}) {
   )).toLowerCase();
   const selectedQboAccountId = decision?.destination_qbo_account_id || row.final_qbo_account_id || meta.final_qbo_account_id || null;
   const decidedAt = decision?.decided_at || null;
-  const isCreateNewResolution = PROTECTED_CREDIT_CARD_INFLOW_CREATE_NEW_TYPES.includes(resolutionType) && qboDisposition === "create_new";
+  const isCreateNewResolution = PROTECTED_CREDIT_CARD_INFLOW_CREATE_NEW_TYPES.includes(resolutionType) &&
+    ["create_new", INCOMING_DEPOSIT_CATEGORIZE_AS_NEW].includes(qboDisposition);
   // Decisions written before decision_version/decided_at were introduced remain
   // authoritative under the legacy contract, which persisted the protected type.
   const isLegacyCompatible = isCreateNewResolution && !decision?.decision_version;

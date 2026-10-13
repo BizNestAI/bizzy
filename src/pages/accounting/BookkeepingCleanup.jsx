@@ -2771,7 +2771,20 @@ function BookkeepingCleanup() {
     if (!txn) return;
     manualPostTriggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
     setManualPostResult(null);
+    const needsCreditType = !txn.meta?.credit_card_inflow_resolution &&
+      Number(txn.signed_amount ?? txn.amount ?? 0) > 0 &&
+      String(txn.plaid_account_type || txn.account_type || "").toLowerCase().includes("credit");
     if (permittedAction === "confirm_type") {
+      setManualPostResult({
+        type: "credit_card_inflow_resolution",
+        title: "What type of credit is this?",
+        message: txn.posting_action?.disabled_reason || txn.post_error || "Choose the accounting meaning before posting.",
+        transaction: txn,
+        resolutionTransaction: txn.posting_preview || txn,
+      });
+      return;
+    }
+    if (permittedAction === "resolve_issue" && needsCreditType) {
       setManualPostResult({
         type: "credit_card_inflow_resolution",
         title: "What type of credit is this?",
@@ -2894,13 +2907,20 @@ function BookkeepingCleanup() {
     const selectedQboAccountName = txn.glAccountName || txn.final_qbo_account_name || txn.suggestedAccountName || null;
     setManualPostResult(null);
     try {
-      await saveCreditCardInflowResolution(businessId, txn.id, resolution, { selectedQboAccountId, selectedQboAccountName });
-      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
-      setCountsRefreshKey((value) => value + 1);
+      const saved = await saveCreditCardInflowResolution(businessId, txn.id, resolution, { selectedQboAccountId, selectedQboAccountName });
+      const resolvedTxn = {
+        ...txn,
+        ...(saved?.row || {}),
+        meta: { ...(txn.meta || {}), ...(saved?.row?.meta || {}) },
+        glAccountId: saved?.row?.final_qbo_account_id || selectedQboAccountId,
+        glAccountName: saved?.row?.final_qbo_account_name || selectedQboAccountName,
+      };
+      setTransactions((rows) => rows.map((row) => String(row.id) === String(txn.id) ? resolvedTxn : row));
+      if (resolution !== "match_credit_card_payment") setManualPostTxn(resolvedTxn);
       window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: {
         severity: "info",
         title: resolution === "match_credit_card_payment" ? "Credit-card payment needs matching" : "Credit type saved",
-        body: resolution === "match_credit_card_payment" ? "Use the protected payment-matching workflow in Needs Review." : "Eligibility was refreshed. Use Post now after reviewing the compiled QuickBooks preview.",
+        body: resolution === "match_credit_card_payment" ? "Use the protected payment-matching workflow in Needs Review." : "Review the compiled QuickBooks preview, then confirm Post now.",
       } }));
     } catch (err) {
       setManualPostResult({ ...buildManualPostError(err), transaction: txn });

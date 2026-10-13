@@ -205,7 +205,7 @@ export async function persistCreditCardInflowResolution({
     ? "match_opposite_side"
     : normalized === "credit_card_credit_other"
       ? "needs_review"
-      : "create_new";
+      : "categorize_as_new";
   const resolutionAudit = {
     decision_version: 2,
     resolution_type: normalized,

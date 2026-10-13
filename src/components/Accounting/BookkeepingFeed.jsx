@@ -1524,7 +1524,9 @@ export default function BookkeepingFeed({
               ? { ...txn.bookkeeping_next_action, action_code: txn.bookkeeping_next_action.legacy_action_code }
               : txn.posting_action || null;
             const customerPostAction = postingAction?.permitted_action || postingAction?.action_code || null;
-            const customerCanPost = ["post_now", "preview_and_post", "retry_posting"].includes(customerPostAction);
+            // Handled rows always expose one guided entry point. The action may
+            // resolve missing accounting setup before it reaches provider write.
+            const customerCanPost = isHandledStatus && !isPosted && !isPending;
             const customerUndoAction = txn.bookkeeping_action_matrix?.actions?.find?.((action) => action.action_code === "undo");
             const customerCanUndo = customerUndoAction ? customerUndoAction.enabled === true : true;
             const postingActionLabel = isPosting ? "Posting…" : "Post Now";

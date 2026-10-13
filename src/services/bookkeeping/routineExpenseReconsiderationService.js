@@ -30,7 +30,8 @@ import {
   isPaymentProcessingFeeIntent,
   isStrongIntuitPaymentProcessingFeeDescriptor,
 } from "./paymentProcessingFeeIntent.js";
-import { hasStrongRewardCreditDescriptor, isCashBackRewardCredit } from "./rewardCreditPolicy.js";
+import { deterministicStatementCreditDecision, hasStrongRewardCreditDescriptor, isCashBackRewardCredit } from "./rewardCreditPolicy.js";
+import { supersedeProvisionalClassification } from "./specializedTypeAuthority.js";
 import { persistUnresolvedCategorizationRows } from "./bookkeepingLifecycleState.js";
 
 const MAX_RECONSIDERATION_LIMIT = 500;
@@ -398,6 +399,27 @@ function statementCreditRewardsEvidence({ bankTxn = {}, account = {}, meta = {},
     (intent === "credit_card_rewards" || /\breward|cash back|statement credit\b/.test(normalizeText(account?.name || ""))) &&
     (rewardText || rewardHint)
   );
+}
+
+function withDeterministicStatementCreditDecision({ bankTxn, categorization, account, meta, now }) {
+  const decision = deterministicStatementCreditDecision(bankTxn, categorization, {
+    accountId: account?.id,
+    accountName: account?.name,
+    now,
+  });
+  if (!decision) return meta;
+  return {
+    ...supersedeProvisionalClassification(meta, {
+      finalType: decision.canonical_type,
+      actor: "bizzi",
+      timestamp: now,
+      source: decision.operator_source,
+      decisionVersion: decision.decision_version,
+    }),
+    user_selected_resolution: "credit_card_statement_credit",
+    qbo_disposition: "categorize_as_new",
+    credit_card_inflow_resolution: decision,
+  };
 }
 
 async function buildBusinessHistoryIndex({ db, businessId }) {
@@ -836,7 +858,19 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
 
   const { data: txns, error: txErr } = await txQuery;
   if (txErr) throw txErr;
-  const txnById = new Map((txns || []).map((txn) => [txn.id, txn]));
+  const plaidAccountIds = [...new Set((txns || []).map((txn) => txn.plaid_account_id).filter(Boolean))];
+  const mappingResult = plaidAccountIds.length
+    ? await db.from("plaid_qbo_account_mappings")
+        .select("plaid_account_id,qbo_account_id,qbo_account_type")
+        .eq("business_id", businessId)
+        .in("plaid_account_id", plaidAccountIds)
+    : { data: [], error: null };
+  if (mappingResult.error) throw mappingResult.error;
+  const sourceMappingByPlaidAccount = new Map((mappingResult.data || []).map((mapping) => [String(mapping.plaid_account_id), mapping]));
+  const txnById = new Map((txns || []).map((txn) => {
+    const sourceMapping = sourceMappingByPlaidAccount.get(String(txn.plaid_account_id || ""));
+    return [txn.id, { ...txn, account_type: sourceMapping?.qbo_account_type || null }];
+  }));
   const bookkeepingStartDate = await getBookkeepingStartDate(db, businessId);
   const autoPostEnabled = await getAutoPostToQuickBooks(db, businessId);
   const businessHistoryIndex = await buildBusinessHistoryIndex({ db, businessId });
@@ -1457,6 +1491,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       });
       if (decision.auto_handle === true && account.id && account.name) {
         const postAfter = computePostAfterForAutoPost(autoPostEnabled, Number(process.env.BOOKS_POST_GRACE_HOURS || 24));
+        const coherentDecisionMeta = allowStatementCredit
+          ? withDeterministicStatementCreditDecision({ bankTxn, categorization: cat, account, meta: decisionMeta, now: nowIso })
+          : decisionMeta;
         updates.push({
           business_id: businessId,
           transaction_id: cat.transaction_id,
@@ -1473,7 +1510,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           decided_by: "bizzi",
           decided_at: nowIso,
           meta: {
-            ...decisionMeta,
+            ...coherentDecisionMeta,
             auto_approve_reason: "routine_expense_fully_resolved",
             auto_handled_reason: decision.reason,
           },
@@ -1496,7 +1533,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
             confidence: universalHint.confidence || "high",
             post_after: postAfter,
             qbo_txn_id: null,
-            meta: decisionMeta,
+            meta: coherentDecisionMeta,
           },
         });
         continue;
@@ -1730,6 +1767,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     }
 
     const postAfter = computePostAfterForAutoPost(autoPostEnabled, Number(process.env.BOOKS_POST_GRACE_HOURS || 24));
+    const coherentDecisionMeta = allowStatementCredit
+      ? withDeterministicStatementCreditDecision({ bankTxn, categorization: cat, account, meta: decisionMeta, now: nowIso })
+      : decisionMeta;
     updates.push({
       business_id: businessId,
       transaction_id: cat.transaction_id,
@@ -1745,7 +1785,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       decided_by: "bizzi",
       decided_at: nowIso,
       meta: withCategorizationPolicyVersion({
-        ...decisionMeta,
+        ...coherentDecisionMeta,
         auto_approve_reason: decisionMeta.auto_approve_reason || "routine_expense_fully_resolved",
         auto_handled_reason: decision.reason,
       }),
