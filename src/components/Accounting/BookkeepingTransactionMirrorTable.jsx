@@ -682,7 +682,8 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
 
   return createPortal(
     <div
-      className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 py-6 backdrop-blur-sm"
+      data-monthly-review-duplicate-risk-dialog
+      className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex h-[100dvh] w-screen items-center justify-center overflow-y-auto px-4 py-6 sm:px-6"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onCancel?.();
@@ -693,17 +694,19 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
         aria-modal="true"
         aria-labelledby={`force-post-title-${row.id}`}
         aria-describedby={`force-post-description-${row.id}`}
-        className="w-full max-w-xl overflow-hidden rounded-2xl border border-amber-300/20 bg-[#0d100f] text-white shadow-[0_30px_100px_rgba(0,0,0,0.8)]"
+        className="relative isolate w-full max-w-2xl overflow-hidden rounded-[24px] border border-white/[0.11] bg-[linear-gradient(145deg,rgba(17,22,20,0.985),rgba(8,12,11,0.99))] text-white shadow-[0_36px_120px_rgba(0,0,0,0.72),0_0_0_1px_rgba(255,255,255,0.025)]"
       >
-        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-5 sm:px-6">
+        <div aria-hidden="true" className="pointer-events-none absolute -right-24 -top-28 h-64 w-64 rounded-full bg-amber-300/[0.07] blur-3xl" />
+        <div aria-hidden="true" className="pointer-events-none absolute -bottom-28 -left-24 h-64 w-64 rounded-full bg-emerald-300/[0.055] blur-3xl" />
+        <div className="relative flex items-start justify-between gap-4 border-b border-white/[0.08] px-5 py-5 sm:px-7 sm:py-6">
           <div className="flex items-start gap-3">
-            <div className="mt-0.5 rounded-xl border border-amber-300/20 bg-amber-300/[0.09] p-2.5 text-amber-200">
+            <div className="mt-0.5 rounded-2xl border border-amber-300/25 bg-[linear-gradient(145deg,rgba(253,224,71,0.14),rgba(253,224,71,0.055))] p-3 text-amber-200 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
               <AlertTriangle className="h-5 w-5" aria-hidden="true" />
             </div>
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-200/75">Duplicate-risk override</div>
-              <h2 id={`force-post-title-${row.id}`} className="mt-1 text-xl font-semibold tracking-tight">Post to QuickBooks anyway?</h2>
-              <p id={`force-post-description-${row.id}`} className="mt-2 text-sm leading-5 text-white/55">
+              <h2 id={`force-post-title-${row.id}`} className="mt-1.5 text-[22px] font-semibold tracking-[-0.02em] text-white">Post to QuickBooks anyway?</h2>
+              <p id={`force-post-description-${row.id}`} className="mt-2 max-w-lg text-sm leading-6 text-white/55">
                 Review the bank transaction and suspected QuickBooks record before posting this as a distinct transaction.
               </p>
             </div>
@@ -713,7 +716,7 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
           </button>
         </div>
 
-        <div className="space-y-3 px-5 py-5 sm:px-6">
+        <div className="relative space-y-4 px-5 py-5 sm:px-7 sm:py-6">
           <div className="grid gap-3 sm:grid-cols-2">
             <ConfirmationDetail label="Bank transaction" value={`${formatMoney(row.amount)} · ${row.date || "Date unavailable"}`} />
             <ConfirmationDetail label="Destination account" value={bankAccountLabel || "Account unavailable"} />
@@ -724,16 +727,16 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
               tone="warning"
             />
           </div>
-          <div className="rounded-xl border border-amber-300/15 bg-amber-300/[0.06] px-4 py-3 text-sm leading-5 text-amber-50/85">
+          <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.065] px-4 py-3.5 text-sm leading-6 text-amber-50/85 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
             The suspected candidate will remain in the audit history as rejected for this bank transaction. Posting will use the existing durable, idempotent posting pipeline.
           </div>
         </div>
 
-        <div className="flex flex-col-reverse gap-2 border-t border-white/10 bg-white/[0.02] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+        <div className="relative flex flex-col-reverse gap-2.5 border-t border-white/[0.08] bg-black/10 px-5 py-4 sm:flex-row sm:justify-end sm:px-7 sm:py-5">
           <button type="button" onClick={onCancel} disabled={busy} className="rounded-xl border border-white/12 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-white/70 transition hover:bg-white/[0.08] disabled:opacity-45">
             Cancel
           </button>
-          <button ref={confirmButtonRef} type="button" onClick={onConfirm} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/[0.12] px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-300/[0.18] focus:outline-none focus:ring-2 focus:ring-emerald-300/35 disabled:opacity-45">
+          <button ref={confirmButtonRef} type="button" onClick={onConfirm} disabled={busy} className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/35 bg-[linear-gradient(180deg,rgba(52,211,153,0.22),rgba(52,211,153,0.13))] px-5 py-2.5 text-sm font-semibold text-emerald-50 shadow-[0_10px_30px_rgba(16,185,129,0.12),inset_0_1px_0_rgba(255,255,255,0.09)] transition hover:border-emerald-300/50 hover:bg-emerald-300/[0.22] focus:outline-none focus:ring-2 focus:ring-emerald-300/40 disabled:opacity-45">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
                 {busy ? "Preparing preview..." : "Post as new anyway"}
           </button>
@@ -746,7 +749,7 @@ function ForcePostConfirmationModal({ open, busy, row, bankAccountLabel, selecte
 
 function ConfirmationDetail({ label, value, tone = "default" }) {
   return (
-    <div className={`rounded-xl border px-3.5 py-3 ${tone === "warning" ? "border-amber-300/15 bg-amber-300/[0.045]" : "border-white/10 bg-white/[0.035]"}`}>
+    <div className={`rounded-2xl border px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] ${tone === "warning" ? "border-amber-300/20 bg-amber-300/[0.05]" : "border-white/[0.09] bg-white/[0.035]"}`}>
       <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">{label}</div>
       <div className="mt-1.5 text-sm font-medium leading-5 text-white/85">{value}</div>
     </div>

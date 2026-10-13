@@ -58,7 +58,16 @@ test("Admin force-post persists the reviewed decision then uses the durable comm
   assert.match(ui, /Post as new anyway/);
   assert.match(ui, /ForcePostConfirmationModal/);
   assert.match(ui, /createPortal/);
+  assert.match(ui, /data-monthly-review-duplicate-risk-dialog/);
   assert.doesNotMatch(ui, /globalThis\.confirm/);
+});
+
+test("duplicate-risk confirmation uses a full-viewport blurred backdrop", () => {
+  const css = read("src/index.css");
+  const ui = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  assert.match(css, /\[data-monthly-review-duplicate-risk-dialog\]\.bizzy-modal-main-backdrop\s*\{[\s\S]*?left:\s*0 !important;[\s\S]*?width:\s*100vw !important;[\s\S]*?min-height:\s*100dvh;[\s\S]*?backdrop-filter:\s*blur\(16px\)/);
+  assert.match(ui, /fixed inset-0 z-\[10000\][^"\n]*h-\[100dvh\][^"\n]*w-screen/);
+  assert.match(ui, /createPortal\([\s\S]*?document\.body/);
 });
 
 test("hard blocker checks remain before force-post command creation", () => {
