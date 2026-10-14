@@ -77,6 +77,13 @@ export function classifyPostingFailure(value, { retryable = null, qboWriteMayHav
 
 export function formatPostingFailureLabel(value) {
   const failure = classifyPostingFailure(value);
+  if (["qbo_transaction_rejected", "qbo_account_incompatible"].includes(failure.code)) {
+    return `QuickBooks rejected · ${failure.label.replace(/^QBO rejected\s*/i, "")}`;
+  }
+  if (["qbo_succeeded_local_finalize_pending", "qbo_posting_receipt_update_failed"].includes(failure.code)) {
+    return "Receipt saved · finalizing";
+  }
+  if (failure.retryable) return "Posting failed · retry available";
   return `Posting failed · ${failure.label}`;
 }
 

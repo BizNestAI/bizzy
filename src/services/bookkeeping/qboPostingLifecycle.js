@@ -96,10 +96,31 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   const postingJob = row.posting_job || row.bookkeeping_posting_job || {};
   const jobBlock = structuredBlockReason(row);
 
+  if (
+    ["possible_qbo_duplicate", "existing_qbo_match_found"].includes(String(postingJob.last_error_code || row.post_error || "")) &&
+    !hasQboTxn &&
+    !meta.qbo_write_started_at &&
+    !meta.provider_write_started_at
+  ) {
+    return {
+      key: "blocked_before_posting",
+      label: "Blocked before posting · Possible duplicate",
+      tone: "warning",
+      detail: "Bizzi stopped before sending a write to QuickBooks because similar activity was found.",
+      code: String(postingJob.last_error_code || row.post_error),
+      retryable: false,
+      technical: {
+        reason: String(postingJob.last_error_code || row.post_error),
+        provider_write_started: false,
+        operation_id: postingJob.qbo_request_id || meta.qbo_request_id || null,
+      },
+    };
+  }
+
   if (["processing", "reconciling"].includes(postingJob.state)) {
     return {
       key: postingJob.state === "reconciling" ? "reconciling" : "posting",
-      label: postingJob.state === "reconciling" ? "Checking QuickBooks" : "Posting",
+      label: postingJob.state === "reconciling" ? "QuickBooks outcome requires reconciliation" : "Posting",
       tone: "warning",
       detail: "Bizzi is confirming this transaction with QuickBooks.",
     };
@@ -271,7 +292,7 @@ export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) 
       detail: lifecycle.detail || "Bizzi is sending this transaction to QuickBooks.",
     };
   }
-  if (lifecycle.key === "reconciling" || lifecycle.key === "retry_scheduled" || lifecycle.key === "configuration_blocked") {
+  if (lifecycle.key === "reconciling" || lifecycle.key === "retry_scheduled" || lifecycle.key === "configuration_blocked" || lifecycle.key === "blocked_before_posting") {
     return lifecycle;
   }
   if (

@@ -70,6 +70,7 @@ import { compileCanonicalDepositPosting } from "../services/bookkeeping/canonica
 import { buildCreditCardCreditPayload } from "../services/bookkeeping/creditCardMerchantRefundPayload.js";
 import { businessHasPaidEntitlement, filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 import { processVendorRuleLearningRetryJobs } from "../services/bookkeeping/vendorRuleLearningRetryService.js";
+import { isAdvisoryDuplicateSimilarity } from "../services/bookkeeping/qboDuplicateSimilarityPolicy.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
@@ -3004,11 +3005,24 @@ export async function handleItem(item, options = {}) {
       }
       return;
     }
+    const advisoryDuplicateSimilarity = !manual && isAdvisoryDuplicateSimilarity({
+      confidence: duplicateCheck.confidence,
+      candidates: duplicateCheck.candidates,
+      bankTransaction: bank,
+      categorization: item,
+      sourceMapping: mapping,
+      qboTxnType: intentQboTxnType,
+    });
+    if (advisoryDuplicateSimilarity) {
+      timing.context.duplicate_similarity_advisory = true;
+      timing.context.duplicate_similarity_confidence = duplicateCheck.confidence;
+      timing.context.duplicate_similarity_candidate_count = duplicateCheck.candidates.length;
+    }
     if (!duplicatePostAnyway && (
       duplicateCheck.confidence === "HIGH_CONFIDENCE_PROBABLE_DUPLICATE" ||
       duplicateCheck.confidence === "LOW_CONFIDENCE_FUZZY" ||
       duplicateCheck.confidence === "AMBIGUOUS"
-    )) {
+    ) && !advisoryDuplicateSimilarity) {
       if (manual) {
         return recordManualFuzzyDuplicateChallenge({ item, bankTxn: bank, requestId, confidence: duplicateCheck.confidence, candidates: duplicateCheck.candidates });
       }
