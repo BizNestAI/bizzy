@@ -22,8 +22,10 @@ const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
 const BASE_COL_WIDTHS = [36, 90, 220, 160, 245, 105, 180];
 const BASE_MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 180];
-const QBO_COL_WIDTH = 120;
-const QBO_MIN_COL_WIDTH = 105;
+// Keep a complete localized timestamp (including AM/PM) visible. The table can
+// scroll horizontally on narrow viewports instead of clipping posting time.
+const QBO_COL_WIDTH = 152;
+const QBO_MIN_COL_WIDTH = 152;
 
 const QBO_SCHEDULE_TONE_CLASSES = {
   good: "border-emerald-400/25 bg-emerald-500/10 text-emerald-100",
@@ -1764,13 +1766,13 @@ export default function BookkeepingFeed({
                 })()}
               </div>
               {activeFeed === "handled" && showQboSchedule && qboSchedule ? (
-                <div className="flex min-w-0 items-center justify-center px-2 text-center" title={qboSchedule.detail}>
+                <div className="flex min-w-0 items-center justify-center px-2 text-center" title={[qboSchedule.label, qboSchedule.detail].filter(Boolean).join(" — ")}>
                   <span
-                    className={`inline-flex max-w-full items-center justify-center rounded-full border px-2 py-[3px] text-[10px] font-semibold leading-tight ${
+                    className={`inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-full border px-2 py-[3px] text-[10px] font-semibold leading-tight ${
                       QBO_SCHEDULE_TONE_CLASSES[qboSchedule.tone] || QBO_SCHEDULE_TONE_CLASSES.neutral
                     }`}
                   >
-                    <span className="truncate">{qboSchedule.label}</span>
+                    <span className="whitespace-nowrap">{qboSchedule.label}</span>
                   </span>
                 </div>
               ) : null}

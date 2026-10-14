@@ -407,7 +407,7 @@ test("settings status payload includes recovery history immediately and cold loa
   assert.match(settings, /RecoverySummarySkeleton/);
   assert.match(settings, /h-\[148px\]/);
   assert.doesNotMatch(settings, /Promise\.all\(institutions\.map\(async \(inst\)/);
-  assert.match(settings, /PLAID_STATUS_CACHE_VERSION = 2/);
+  assert.match(settings, /PLAID_STATUS_CACHE_VERSION = 3/);
 });
 
 test("posting hold release is explicitly confirmed and remains independent of auto-post", () => {

@@ -139,7 +139,9 @@ function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMa
   if (!cat.final_qbo_account_id && accountRepair?.kind !== "resolved") return "missing_final_qbo_account_unresolved";
   if (!qboAccount || qboAccount.active === false) return "invalid_or_inactive_qbo_account";
   if (!sourceMapping?.qbo_account_id) return "missing_source_qbo_mapping";
-  if (!sourceAccount || !sourceItem || sourceItem.is_active === false || String(sourceItem.status || "").toLowerCase() === "disconnected") return "source_account_inactive";
+  // Plaid connection state controls future ingestion only. Already-imported
+  // transactions remain postable through their independently validated QBO mapping.
+  if (!sourceAccount || !sourceItem) return "source_account_missing";
   if (String(bank.plaid_env || "") !== String(sourceAccount.plaid_env || "") || String(sourceItem.plaid_env || "") !== String(sourceAccount.plaid_env || "")) return "source_environment_mismatch";
   return null;
 }

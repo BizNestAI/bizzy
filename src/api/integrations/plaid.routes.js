@@ -23,6 +23,7 @@ import { admitReplacementRecoveryBatch, bootstrapReplacementRecoveryState, confi
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from "../_shared/entitlementAuth.js";
 import { consumePlaidLinkState, createPlaidLinkState } from "../../services/plaid/plaidLinkStateService.js";
+import { setPlaidAccountConnectionState } from "../../services/plaid/plaidAccountConnectionState.js";
 
 const router = Router();
 const primaryOwner = requireBusinessRole(["owner"]);
@@ -342,7 +343,46 @@ router.post("/sync", requireAuth, plaidMutationRateLimit, providerSync, async (r
   }
 });
 
-router.post("/disconnect-item", requireAuth, primaryOwner, providerDisconnect, async (req, res) => {
+async function handleAccountConnectionState(req, res, nextState) {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  const plaidAccountId = String(req.params?.plaidAccountId || "").trim();
+  const actorUserId = req.auth?.userId || req.user?.id || req.user?.user_id || null;
+  const requestId = String(req.get("x-idempotency-key") || req.get("x-request-id") || crypto.randomUUID());
+  res.set("x-request-id", requestId);
+  if (!plaidAccountId) return res.status(400).json({ ok: false, error: "missing_plaid_account_id" });
+
+  try {
+    const account = await setPlaidAccountConnectionState({
+      db: supabase,
+      businessId,
+      plaidAccountId,
+      actorUserId,
+      nextState,
+      expectedVersion: Number.isInteger(req.body?.expected_version) ? req.body.expected_version : null,
+      requestId,
+      source: "settings_integrations",
+    });
+    return res.json({ ok: true, request_id: requestId, account, provider_called: false });
+  } catch (error) {
+    const code = String(error?.message || "account_connection_state_update_failed");
+    const status = error?.status || (/not_found/.test(code) ? 404 : /conflict/.test(code) ? 409 : 400);
+    const message = code.includes("plaid_item_relink_required")
+      ? "This institution must be reconnected before this account can resume syncing."
+      : code.includes("version_conflict")
+        ? "This account changed in another session. Refresh and try again."
+        : "The account connection state could not be updated.";
+    return res.status(status).json({ ok: false, request_id: requestId, error: code, message });
+  }
+}
+
+router.post("/accounts/:plaidAccountId/disconnect", requireAuth, plaidMutationRateLimit, primaryOwner, providerDisconnect,
+  (req, res) => handleAccountConnectionState(req, res, "disconnected"));
+
+router.post("/accounts/:plaidAccountId/reconnect", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin,
+  (req, res) => handleAccountConnectionState(req, res, "connected"));
+
+router.post("/disconnect-item", requireAuth, plaidMutationRateLimit, primaryOwner, providerDisconnect, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const plaidItemId = req.body?.plaid_item_id || req.body?.item_id || null;
@@ -352,6 +392,8 @@ router.post("/disconnect-item", requireAuth, primaryOwner, providerDisconnect, a
 
   try {
     const plaid = getPlaidClient();
+    const actorUserId = req.auth?.userId || req.user?.id || req.user?.user_id || null;
+    const requestId = String(req.get("x-idempotency-key") || req.get("x-request-id") || crypto.randomUUID());
     const { data: item, error: itemErr } = await supabase
       .from("plaid_items")
       .select("plaid_item_id,plaid_access_token")
@@ -447,6 +489,11 @@ router.post("/disconnect-item", requireAuth, primaryOwner, providerDisconnect, a
     }
 
     const nowIso = new Date().toISOString();
+    const { data: accountSnapshots, error: accountSnapshotsError } = await supabase
+      .from("plaid_accounts")
+      .select("plaid_account_id,plaid_item_id,plaid_env,is_active,connection_state,connection_state_version,disconnected_at")
+      .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId);
+    if (accountSnapshotsError) throw accountSnapshotsError;
     await supabase
       .from("plaid_items")
       .update({
@@ -464,12 +511,24 @@ router.post("/disconnect-item", requireAuth, primaryOwner, providerDisconnect, a
       .from("plaid_accounts")
       .update({
         is_active: false,
+        connection_state: "disconnected",
         disconnected_at: nowIso,
+        disconnected_by: actorUserId,
+        disconnect_metadata: { source: "institution_disconnect", request_id: requestId },
         updated_at: nowIso,
       })
       .eq("business_id", businessId)
       .eq("plaid_env", plaidEnvName)
       .eq("plaid_item_id", plaidItemId);
+    if (accountSnapshots?.length) {
+      const { error: auditError } = await supabase.from("plaid_account_connection_audit").upsert(accountSnapshots.map((account) => ({
+        business_id: businessId, plaid_account_id: account.plaid_account_id, plaid_item_id: account.plaid_item_id,
+        plaid_env: account.plaid_env || plaidEnvName,
+        previous_state: account, next_state: "disconnected", actor_user_id: actorUserId,
+        action_type: "institution_disconnected", source: "settings_integrations", request_id: `${requestId}:${account.plaid_account_id}`,
+      })), { onConflict: "business_id,plaid_account_id,request_id" });
+      if (auditError) throw auditError;
+    }
 
     return res.json({
       ok: true,
@@ -487,12 +546,14 @@ router.post("/disconnect-item", requireAuth, primaryOwner, providerDisconnect, a
   }
 });
 
-router.post("/disconnect", requireAuth, primaryOwner, providerDisconnect, async (req, res) => {
+router.post("/disconnect", requireAuth, plaidMutationRateLimit, primaryOwner, providerDisconnect, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const plaid = getPlaidClient();
 
   try {
+    const actorUserId = req.auth?.userId || req.user?.id || req.user?.user_id || null;
+    const requestId = String(req.get("x-idempotency-key") || req.get("x-request-id") || crypto.randomUUID());
     const { data: items, error: itemsErr } = await supabase
       .from("plaid_items")
       .select("plaid_item_id,plaid_access_token,id")
@@ -569,6 +630,11 @@ router.post("/disconnect", requireAuth, primaryOwner, providerDisconnect, async 
     }
 
     const nowIso = new Date().toISOString();
+    const { data: accountSnapshots, error: accountSnapshotsError } = await supabase
+      .from("plaid_accounts")
+      .select("plaid_account_id,plaid_item_id,plaid_env,is_active,connection_state,connection_state_version,disconnected_at")
+      .eq("business_id", businessId).eq("plaid_env", plaidEnvName);
+    if (accountSnapshotsError) throw accountSnapshotsError;
     await supabase
       .from("plaid_items")
       .update({
@@ -585,11 +651,23 @@ router.post("/disconnect", requireAuth, primaryOwner, providerDisconnect, async 
       .from("plaid_accounts")
       .update({
         is_active: false,
+        connection_state: "disconnected",
         disconnected_at: nowIso,
+        disconnected_by: actorUserId,
+        disconnect_metadata: { source: "all_institutions_disconnect", request_id: requestId },
         updated_at: nowIso,
       })
       .eq("business_id", businessId)
       .eq("plaid_env", plaidEnvName);
+    if (accountSnapshots?.length) {
+      const { error: auditError } = await supabase.from("plaid_account_connection_audit").upsert(accountSnapshots.map((account) => ({
+        business_id: businessId, plaid_account_id: account.plaid_account_id, plaid_item_id: account.plaid_item_id,
+        plaid_env: account.plaid_env || plaidEnvName,
+        previous_state: account, next_state: "disconnected", actor_user_id: actorUserId,
+        action_type: "all_institutions_disconnected", source: "settings_integrations", request_id: `${requestId}:${account.plaid_account_id}`,
+      })), { onConflict: "business_id,plaid_account_id,request_id" });
+      if (auditError) throw auditError;
+    }
 
     console.info("[plaid][disconnect]", {
       business_id: businessId,

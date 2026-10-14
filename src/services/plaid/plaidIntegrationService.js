@@ -5,6 +5,10 @@ import { encryptPlaidAccessToken, resolveStoredPlaidAccessToken } from "./plaidT
 import { buildPhysicalAccountIdentity } from "./plaidCanonicalIdentity.js";
 import { plaidClientUserId } from "./plaidLinkStateService.js";
 import { deriveRecoverySyncHealth, getReplacementRecoveryStatus } from "./plaidReplacementRecoveryService.js";
+import {
+  projectPlaidAccountConnectionState,
+  summarizePlaidInstitutionConnection,
+} from "./plaidAccountConnectionState.js";
 
 const devLog = (tag, payload) => {
   if (process.env.NODE_ENV !== "production") {
@@ -140,7 +144,23 @@ async function resolvePhysicalAccount({ businessId, plaidItemId, institution, ac
   const nowIso = new Date().toISOString();
   const plaidAccountId = account?.account_id || null;
 
-  let candidate = null;
+  const { data: exactAccount, error: exactAccountError } = await supabase
+    .from("plaid_accounts")
+    .select("physical_account_id")
+    .eq("business_id", businessId)
+    .eq("plaid_env", identity.plaid_env)
+    .eq("plaid_account_id", plaidAccountId)
+    .maybeSingle();
+  if (exactAccountError) throw exactAccountError;
+  if (exactAccount?.physical_account_id) {
+    return {
+      physical_account_id: exactAccount.physical_account_id,
+      relink_status: "linked_existing_provider_identity",
+      relink_confidence: "high",
+      relink_candidate_ids: [],
+    };
+  }
+
   let candidateIds = [];
   if (identity.strong) {
     const { data, error } = await supabase
@@ -155,45 +175,13 @@ async function resolvePhysicalAccount({ businessId, plaidItemId, institution, ac
       .neq("status", "merged");
     if (error) throw error;
     candidateIds = (data || []).map((row) => row.id).filter(Boolean);
-    if ((data || []).length === 1) candidate = data[0];
   }
 
-  if (candidate?.id) {
-    const prevItems = new Set(candidate.previous_plaid_item_ids || []);
-    const prevAccounts = new Set(candidate.previous_plaid_account_ids || []);
-    if (candidate.current_plaid_item_id && candidate.current_plaid_item_id !== plaidItemId) {
-      prevItems.add(candidate.current_plaid_item_id);
-    }
-    if (candidate.current_plaid_account_id && candidate.current_plaid_account_id !== plaidAccountId) {
-      prevAccounts.add(candidate.current_plaid_account_id);
-    }
-    const { error } = await supabase
-      .from("plaid_physical_accounts")
-      .update({
-        institution_name: identity.institution_name,
-        normalized_account_name: identity.normalized_account_name,
-        current_plaid_item_id: plaidItemId,
-        current_plaid_account_id: plaidAccountId,
-        previous_plaid_item_ids: Array.from(prevItems),
-        previous_plaid_account_ids: Array.from(prevAccounts),
-        confidence: "high",
-        status: "active",
-        needs_confirmation: false,
-        last_seen_at: nowIso,
-        updated_at: nowIso,
-      })
-      .eq("business_id", businessId)
-      .eq("id", candidate.id);
-    if (error) throw error;
-    return {
-      physical_account_id: candidate.id,
-      relink_status: "linked_existing",
-      relink_confidence: "high",
-      relink_candidate_ids: [],
-    };
-  }
-
-  const needsConfirmation = identity.strong && candidateIds.length > 1;
+  // A matching mask/type is useful evidence, but it is not durable identity.
+  // Only the same provider account id (handled above) may reconnect silently.
+  // Any fingerprint match fails closed for explicit lineage confirmation so a
+  // different account cannot inherit history, mappings, or posting authority.
+  const needsConfirmation = identity.strong && candidateIds.length > 0;
   const insertPayload = {
     business_id: businessId,
     plaid_env: identity.plaid_env,
@@ -212,7 +200,7 @@ async function resolvePhysicalAccount({ businessId, plaidItemId, institution, ac
     needs_confirmation: needsConfirmation,
     duplicate_candidate_ids: candidateIds,
     metadata: {
-      identity_protection: needsConfirmation ? "ambiguous_relink_requires_confirmation" : "new_physical_account",
+      identity_protection: needsConfirmation ? "provider_identity_changed_requires_confirmation" : "new_physical_account",
     },
     last_seen_at: nowIso,
     updated_at: nowIso,
@@ -274,8 +262,12 @@ export async function fetchAndUpsertAccounts({ businessId, plaidItemId, accessTo
       current_balance: acc.balances?.current || null,
       available_balance: acc.balances?.available || null,
       limit_balance: acc.balances?.limit || null,
-      is_active: true,
-      disconnected_at: null,
+      is_active: physical.relink_status !== "probable_duplicate_requires_confirmation",
+      connection_state: physical.relink_status === "probable_duplicate_requires_confirmation"
+        ? "attention_required"
+        : "connected",
+      disconnected_at: physical.relink_status === "probable_duplicate_requires_confirmation" ? nowIso : null,
+      reconnected_at: existingConnected[acc.account_id] ? nowIso : null,
       updated_at: nowIso,
       last_sync_at: nowIso,
       connected_at: existingConnected[acc.account_id] || nowIso,
@@ -391,13 +383,13 @@ export async function exchangePublicToken({ businessId, userId, publicToken, met
 export async function getPlaidStatus({ businessId }) {
   const [itemResult, disconnectedResult, accountResult, successfulRunResult, mappingResult, businessResult] = await Promise.all([
     supabase.from("plaid_items")
-      .select("plaid_item_id,institution_name,institution_id,status,last_sync_at,last_success_at,error_code,updated_at,is_active,sync_in_progress,replacement_recovery_status")
-      .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("is_active", true),
+      .select("plaid_item_id,institution_name,institution_id,status,last_sync_at,last_success_at,error_code,updated_at,is_active,disconnected_at,sync_in_progress,replacement_recovery_status")
+      .eq("business_id", businessId).eq("plaid_env", plaidEnvName),
     supabase.from("plaid_items").select("plaid_item_id", { count: "exact", head: true })
       .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("is_active", false),
     supabase.from("plaid_accounts")
-      .select("plaid_account_id,plaid_item_id,name,official_name,mask,type,subtype,is_active,current_balance,available_balance,connected_at,last_sync_at")
-      .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("is_active", true),
+      .select("plaid_account_id,plaid_item_id,name,official_name,mask,type,subtype,is_active,current_balance,available_balance,connected_at,last_sync_at,disconnected_at,connection_state,connection_state_version,reconnected_at,sync_gap_started_at,sync_gap_last_event_at,sync_gap_event_count")
+      .eq("business_id", businessId).eq("plaid_env", plaidEnvName),
     supabase.from("bank_sync_runs").select("plaid_item_id,finished_at,started_at,status,added_count,modified_count,removed_count,failure_code")
       .eq("business_id", businessId)
       .order("finished_at", { ascending: false, nullsLast: true }),
@@ -466,7 +458,13 @@ export async function getPlaidStatus({ businessId }) {
 
   const institutions = visibleItems.map((it) => {
     const acctList = (accounts || []).filter((a) => a.plaid_item_id === it.plaid_item_id);
-    const status = it.status === "error" ? "error" : "connected";
+    const projectedAccounts = acctList.map((a) => ({
+      ...a,
+      connection_state: projectPlaidAccountConnectionState({ account: a, item: it }),
+      mapped_to_qbo: mappedSet.has(a.plaid_account_id),
+    }));
+    const institutionConnection = summarizePlaidInstitutionConnection(projectedAccounts);
+    const status = institutionConnection.state;
     const recovery = recoveryByItem.get(it.plaid_item_id) || null;
     const syncHealth = recovery?.sync_health || deriveRecoverySyncHealth({
       item: it,
@@ -480,12 +478,13 @@ export async function getPlaidStatus({ businessId }) {
       institution_name: it.institution_name,
       institution_id: it.institution_id,
       status,
+      connection_summary: institutionConnection,
+      disconnected_at: it.disconnected_at || null,
       last_sync_at: lastSuccessfulByItem.get(it.plaid_item_id) || it.last_sync_at || null,
       recovery,
       sync_health: syncHealth,
-      accounts: acctList.map((a) => ({
+      accounts: projectedAccounts.map((a) => ({
         ...a,
-        mapped_to_qbo: mappedSet.has(a.plaid_account_id),
         sync_health: syncHealth,
       })),
     };
@@ -509,6 +508,8 @@ export async function getPlaidStatus({ businessId }) {
   }
 
   const accounts_count = accounts?.length || 0;
+  const syncing_accounts_count = institutions.reduce((count, institution) =>
+    count + (institution.accounts || []).filter((account) => account.connection_state === "connected").length, 0);
   const institutions_count = institutions?.length || 0;
   const has_disconnected = (disconnectedCount || 0) > 0;
   devLog("status_built", { businessId, institutions_count, accounts_count });
@@ -517,6 +518,7 @@ export async function getPlaidStatus({ businessId }) {
     ok: true,
     institutions_count,
     accounts_count,
+    syncing_accounts_count,
     institutions,
     has_disconnected,
     disconnected_items_count: disconnectedCount || 0,
@@ -536,7 +538,6 @@ export function normalizeConnectedFinancialAccountsStatus(status = {}) {
     const institutionAccounts = (Array.isArray(institution?.accounts) ? institution.accounts : [])
       .filter((account) => {
         if (!account?.plaid_account_id) return false;
-        if (account.is_active === false) return false;
         if (account.plaid_item_id && account.plaid_item_id !== plaidItemId) return false;
         return true;
       })
@@ -552,6 +553,9 @@ export function normalizeConnectedFinancialAccountsStatus(status = {}) {
         institution_name: institution.institution_name || null,
         institution_id: institution.institution_id || null,
         connection_status: institution.status || "connected",
+        connection_state: account.connection_state || "connected",
+        disconnected_at: account.disconnected_at || institution.disconnected_at || null,
+        connection_state_version: account.connection_state_version || 0,
         mapped_to_qbo: account.mapped_to_qbo === true,
         last_sync_at: account.last_sync_at || institution.last_sync_at || null,
         connected_at: account.connected_at || null,

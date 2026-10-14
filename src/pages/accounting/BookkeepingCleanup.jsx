@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { CalendarDays, CheckCircle2, CircleAlert, Link2, UploadCloud } from "lucide-react";
+import { CalendarDays, CheckCircle2, CircleAlert, GripVertical, Link2, UploadCloud } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
@@ -59,6 +59,12 @@ import {
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 import { classifyBookkeepingLifecycle } from "../../services/bookkeeping/bookkeepingLifecycleClassifier.js";
 import { bulkActionForFeed, isBulkActionEligible, summarizeBulkPost } from "../../services/bookkeeping/bookkeepingBulkActions.js";
+import {
+  getAccountCardOrderKey,
+  moveAccountCard,
+  orderAccountCards,
+} from "../../services/bookkeeping/accountCardOrderPreference.js";
+import { sortPlaidAccountsByConnectionState } from "../../services/plaid/plaidAccountConnectionState.js";
 const __motionUsageForLint = motion;
 
 async function mapWithConcurrency(items, limit, worker, onSettled = null) {
@@ -707,7 +713,20 @@ function buildFuzzyDuplicateChallenge(result, transaction) {
   };
 }
 
-function AccountCard({ account, selected, onClick, autoPostStatus = null }) {
+function AccountCard({
+  account,
+  selected,
+  onClick,
+  autoPostStatus = null,
+  dragging = false,
+  dragTarget = false,
+  onDragStart,
+  onDragEnter,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onConnectionAction,
+}) {
   const firstImported = formatShortDate(account.firstImportedTransactionDate);
   const latestImported = formatShortDate(account.latestImportedTransactionDate);
   const activeStart = formatShortDate(account.bookkeepingStartDate || account.bookkeeping_start_date);
@@ -720,28 +739,73 @@ function AccountCard({ account, selected, onClick, autoPostStatus = null }) {
   const activeRange =
     autoPostStatus?.scope_copy?.headline ||
     (activeStart ? `Active books start: ${activeStart}` : "Active books start not set");
+  const connectionState = account.connection_state || "connected";
+  const disconnected = connectionState === "disconnected";
+  const attentionRequired = connectionState === "attention_required";
+  const closedHistorical = connectionState === "closed_historical";
+  const connectionLabel = attentionRequired
+    ? "Attention required"
+    : disconnected
+      ? "Disconnected"
+      : closedHistorical
+        ? "Closed · Historical"
+        : "Sync active";
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="relative z-0 flex min-w-[220px] flex-col gap-1 rounded-xl border px-5 py-2 text-left transition hover:border-emerald-400/60 hover:scale-[1.015] hover:z-10 focus-visible:z-10"
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      aria-grabbed={dragging}
+      title="Drag left or right to reorder"
+      className={`relative z-0 flex min-w-[220px] cursor-grab flex-col rounded-xl border text-left transition hover:scale-[1.015] hover:z-10 focus-within:z-10 active:cursor-grabbing ${dragging ? "opacity-50 scale-[0.98]" : ""}`}
       style={{
-        background: PANEL_BG,
-        borderColor: selected ? "rgba(16,185,129,0.6)" : PANEL_BORDER,
+        background: disconnected || closedHistorical ? "rgba(255,255,255,0.022)" : PANEL_BG,
+        borderColor: dragTarget || selected
+          ? "rgba(16,185,129,0.6)"
+          : attentionRequired
+            ? "rgba(251,191,36,0.4)"
+            : PANEL_BORDER,
         boxShadow: selected ? "0 10px 30px rgba(0,0,0,0.35)" : "none",
       }}
     >
-      <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-300">
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={`${account.name}. Select account. Drag left or right to reorder account cards.`}
+        className="flex w-full flex-1 flex-col gap-1 px-5 py-2 text-left focus:outline-none"
+      >
+      <div className="flex w-full items-center justify-between text-[11px] uppercase tracking-wide text-slate-300">
         <span>{account.type}</span>
-        {Number(account.toReview || 0) > 0 ? (
-          <span className="text-emerald-300">{account.toReview} to review</span>
-        ) : null}
+        <span className="flex items-center gap-1.5">
+          {Number(account.toReview || 0) > 0 ? (
+            <span className="text-emerald-300">{account.toReview} to review</span>
+          ) : null}
+          <GripVertical size={14} className="text-slate-500" aria-hidden="true" />
+        </span>
       </div>
       <div className="text-base font-semibold text-slate-50">{account.name}</div>
-      {importRange ? <div className="text-[11px] text-slate-400">{importRange}</div> : null}
-      <div className="text-[11px] text-slate-500">{activeRange}</div>
-    </button>
+      <div className={`text-[11px] font-semibold ${attentionRequired ? "text-amber-300" : disconnected || closedHistorical ? "text-slate-400" : "text-emerald-300"}`}>
+        {connectionLabel}
+      </div>
+      {disconnected && account.disconnected_at ? <div className="text-[11px] text-slate-500">Sync stopped {new Date(account.disconnected_at).toLocaleString()}</div> : null}
+      {latestImported && (disconnected || closedHistorical)
+        ? <div className="text-[11px] text-slate-400">Imported through {latestImported}</div>
+        : importRange ? <div className="text-[11px] text-slate-400">{importRange}</div> : null}
+      {attentionRequired ? <div className="text-[11px] text-slate-400">New transactions may not sync until this connection is repaired.</div> : null}
+      {disconnected ? <div className="text-[11px] text-slate-400">Historical transactions remain available.</div> : null}
+      {!disconnected && !closedHistorical && !attentionRequired ? <div className="text-[11px] text-slate-500">{activeRange}</div> : null}
+      </button>
+      {(disconnected || attentionRequired) ? (
+        <button type="button" onClick={onConnectionAction}
+          className={`mx-5 mb-2 self-start text-[11px] font-semibold ${attentionRequired ? "text-amber-200" : "text-emerald-300"} hover:underline`}>
+          {attentionRequired ? "Repair in Settings" : "Reconnect in Settings"}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -862,6 +926,30 @@ function BookkeepingCleanup() {
   const accountScrollRef = useRef(null);
   const [showAccountScrollLeft, setShowAccountScrollLeft] = useState(false);
   const [showAccountScrollRight, setShowAccountScrollRight] = useState(false);
+  const accountOrderKey = useMemo(
+    () => getAccountCardOrderKey({ businessId, userId }),
+    [businessId, userId]
+  );
+  const [accountCardOrder, setAccountCardOrder] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(getAccountCardOrderKey({ businessId, userId })) || "[]");
+      return Array.isArray(saved) ? saved : [];
+    } catch {
+      return [];
+    }
+  });
+  const [draggedAccountKey, setDraggedAccountKey] = useState(null);
+  const [dragTargetAccountKey, setDragTargetAccountKey] = useState(null);
+  const ignoreAccountClickUntilRef = useRef(0);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(accountOrderKey) || "[]");
+      setAccountCardOrder(Array.isArray(saved) ? saved : []);
+    } catch {
+      setAccountCardOrder([]);
+    }
+  }, [accountOrderKey]);
 
   const { plaidConnected } = useOnboardingStatus({ currentBusiness });
   const hasLiveAccounts = useMemo(
@@ -966,7 +1054,8 @@ function BookkeepingCleanup() {
     accountCacheBusinessIdRef.current = businessId;
     const cachedAccounts = readAccountCardCache(businessId);
     setAccounts(cachedAccounts);
-    setAccountFilter(cachedAccounts.length ? getAcctKey(cachedAccounts[0]) : null);
+    const defaultAccount = cachedAccounts.find((account) => account.connection_state === "connected") || cachedAccounts[0];
+    setAccountFilter(defaultAccount ? getAcctKey(defaultAccount) : null);
   }, [businessId, usingDemo]);
 
   const transactionViewKey = useMemo(
@@ -1386,24 +1475,49 @@ function BookkeepingCleanup() {
   }, []);
 
   const accountCards = useMemo(() => {
+    let cards;
     if (!usingDemo) {
-      return accounts.map((a) => {
+      cards = accounts.map((a) => {
         const key = getAcctKey(a);
         return { ...a, toReview: Number(a.toReview || 0), _key: key };
       });
+    } else {
+      const counts = transactions.reduce((acc, txn) => {
+        const key = getTxnAccountKey(txn);
+        if (matchesBooksTab(txn, "needs_review")) {
+          acc[key] = (acc[key] || 0) + 1;
+        }
+        return acc;
+      }, {});
+      cards = accounts.map((a) => {
+        const key = getAcctKey(a);
+        return { ...a, toReview: counts[key] || a.toReview || 0, _key: key };
+      });
     }
-    const counts = transactions.reduce((acc, txn) => {
-      const key = getTxnAccountKey(txn);
-      if (matchesBooksTab(txn, "needs_review")) {
-        acc[key] = (acc[key] || 0) + 1;
-      }
-      return acc;
-    }, {});
-    return accounts.map((a) => {
-      const key = getAcctKey(a);
-      return { ...a, toReview: counts[key] || a.toReview || 0, _key: key };
-    });
-  }, [accounts, transactions, usingDemo]);
+    return sortPlaidAccountsByConnectionState(orderAccountCards(cards, accountCardOrder));
+  }, [accountCardOrder, accounts, transactions, usingDemo]);
+
+  const finishAccountCardDrag = useCallback(() => {
+    ignoreAccountClickUntilRef.current = Date.now() + 250;
+    setDraggedAccountKey(null);
+    setDragTargetAccountKey(null);
+  }, []);
+
+  const dropAccountCard = useCallback((targetKey) => {
+    if (!draggedAccountKey || !targetKey) return;
+    const nextOrder = moveAccountCard(accountCards, draggedAccountKey, targetKey);
+    setAccountCardOrder(nextOrder);
+    try {
+      localStorage.setItem(accountOrderKey, JSON.stringify(nextOrder));
+    } catch {
+      // Reordering remains available for this session when browser storage is unavailable.
+    }
+    finishAccountCardDrag();
+  }, [accountCards, accountOrderKey, draggedAccountKey, finishAccountCardDrag]);
+  const selectedAccount = useMemo(
+    () => accountCards.find((account) => String(getAcctKey(account)) === String(accountFilter)) || null,
+    [accountCards, accountFilter]
+  );
   const selectedTransactions = useMemo(
     () => transactions.filter((t) => selectedIds.has(t.id)),
     [transactions, selectedIds]
@@ -3066,7 +3180,8 @@ function BookkeepingCleanup() {
       writeAccountCardCache(businessId, loadedAccounts);
       setLastSyncAt(res?.meta?.last_sync_at || null);
       if (!accountFilter && loadedAccounts.length) {
-        const key = getAcctKey(loadedAccounts[0]);
+        const defaultAccount = loadedAccounts.find((account) => account.connection_state === "connected") || loadedAccounts[0];
+        const key = getAcctKey(defaultAccount);
         if (key) setAccountFilter(key);
       }
     } catch (e) {
@@ -3075,6 +3190,15 @@ function BookkeepingCleanup() {
       setLoadingAccounts(false);
     }
   }, [accountFilter, businessId, usingDemo]);
+
+  useEffect(() => {
+    const handlePlaidAccountStateUpdate = (event) => {
+      if (event?.detail?.businessId && String(event.detail.businessId) !== String(businessId)) return;
+      reloadAccounts();
+    };
+    window.addEventListener("bizzy:plaid-account-state-updated", handlePlaidAccountStateUpdate);
+    return () => window.removeEventListener("bizzy:plaid-account-state-updated", handlePlaidAccountStateUpdate);
+  }, [businessId, reloadAccounts]);
 
   const reloadCoa = useCallback(async () => {
     if (usingDemo || !businessId) return;
@@ -3527,10 +3651,38 @@ function BookkeepingCleanup() {
               selected={accountFilter === getAcctKey(acct)}
               autoPostStatus={autoPostStatus}
               onClick={() => {
+                if (Date.now() < ignoreAccountClickUntilRef.current) return;
                 const key = getAcctKey(acct);
                 setAccountFilter(key);
                 setPage(1);
                 setSelectedIds(new Set());
+              }}
+              dragging={draggedAccountKey === String(getAcctKey(acct))}
+              dragTarget={dragTargetAccountKey === String(getAcctKey(acct))}
+              onDragStart={(event) => {
+                const key = String(getAcctKey(acct));
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", key);
+                setDraggedAccountKey(key);
+                setDragTargetAccountKey(key);
+              }}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                if (draggedAccountKey) setDragTargetAccountKey(String(getAcctKey(acct)));
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                dropAccountCard(String(getAcctKey(acct)));
+              }}
+              onDragEnd={finishAccountCardDrag}
+              onConnectionAction={(event) => {
+                event.stopPropagation();
+                const key = encodeURIComponent(String(getAcctKey(acct)));
+                navigate(`/dashboard/settings?tab=integrations&integration=plaid&account=${key}`);
               }}
             />
           ))}
@@ -3824,7 +3976,11 @@ function BookkeepingCleanup() {
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">✓</div>
                 <p className="text-sm font-medium text-slate-100">No items to review for this account.</p>
                 <p className="max-w-md text-xs text-slate-400">
-                  Try another account or refresh to check for newly synced transactions.
+                  {selectedAccount?.connection_state === "disconnected"
+                    ? "This account is disconnected. Historical transactions remain available; reconnect it in Settings to resume new transaction syncing."
+                    : selectedAccount?.connection_state === "closed_historical"
+                      ? "This is a closed historical account. Its imported transactions remain available."
+                      : "Try another account or refresh to check for newly synced transactions."}
                 </p>
               </div>
             )

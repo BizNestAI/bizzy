@@ -6,6 +6,7 @@ import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.
 import { getBookkeepingStartDate } from "../../../services/bookkeeping/bookkeepingScope.js";
 import { countBookkeepingTransactions } from "../../../services/bookkeeping/bookkeepingTransactionFeedService.js";
 import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../../_shared/tenantAuth.js";
+import { projectPlaidAccountConnectionState } from "../../../services/plaid/plaidAccountConnectionState.js";
 
 const router = Router();
 
@@ -18,14 +19,23 @@ router.get("/accounts", requireAuth, async (req, res) => {
     const { data: accounts, error } = await supabase
       .from("plaid_accounts")
       .select(
-        "plaid_account_id,name,official_name,mask,type,subtype,current_balance,available_balance,limit_balance,iso_currency_code,unofficial_currency_code,is_active,connected_at,created_at,updated_at"
+        "plaid_account_id,plaid_item_id,plaid_env,name,official_name,mask,type,subtype,current_balance,available_balance,limit_balance,iso_currency_code,unofficial_currency_code,is_active,connection_state,connection_state_version,disconnected_at,reconnected_at,connected_at,last_sync_at,created_at,updated_at"
       )
       .eq("business_id", businessId)
-      .eq("is_active", true)
       .order("connected_at", { ascending: true, nullsLast: true })
       .order("created_at", { ascending: true, nullsLast: true })
       .order("name", { ascending: true, nullsLast: true });
     if (error) throw error;
+
+    const itemIds = [...new Set((accounts || []).map((account) => account.plaid_item_id).filter(Boolean))];
+    const { data: items, error: itemsError } = itemIds.length
+      ? await supabase.from("plaid_items")
+        .select("plaid_item_id,status,is_active,disconnected_at,error_code,last_success_at")
+        .eq("business_id", businessId)
+        .in("plaid_item_id", itemIds)
+      : { data: [], error: null };
+    if (itemsError) throw itemsError;
+    const itemById = new Map((items || []).map((item) => [String(item.plaid_item_id), item]));
 
     const { data: healthRow } = await supabase
       .from("bookkeeping_health")
@@ -97,9 +107,15 @@ router.get("/accounts", requireAuth, async (req, res) => {
         firstImportedTransactionDate: stats.first_imported_transaction_date || null,
         latestImportedTransactionDate: stats.latest_imported_transaction_date || null,
         bookkeepingStartDate,
+        connection_state: projectPlaidAccountConnectionState({
+          account: a,
+          item: itemById.get(String(a.plaid_item_id)) || {},
+        }),
+        connection_state_version: a.connection_state_version || 0,
+        disconnected_at: a.disconnected_at || itemById.get(String(a.plaid_item_id))?.disconnected_at || null,
         connected_at: a.connected_at || null,
         created_at: a.created_at || null,
-        last_synced_at: null,
+        last_synced_at: a.last_sync_at || itemById.get(String(a.plaid_item_id))?.last_success_at || null,
       };
     });
 

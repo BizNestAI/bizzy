@@ -682,6 +682,24 @@ export async function disconnectPlaidItem(businessId, plaidItemId) {
   });
 }
 
+export async function disconnectPlaidAccount(businessId, plaidAccountId, expectedVersion = null) {
+  const requestId = globalThis.crypto?.randomUUID?.() || `plaid-account-disconnect-${Date.now()}`;
+  return safeFetch(apiUrl(`/api/integrations/plaid/accounts/${encodeURIComponent(plaidAccountId)}/disconnect`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json", "x-idempotency-key": requestId }),
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
+}
+
+export async function reconnectPlaidAccount(businessId, plaidAccountId, expectedVersion = null) {
+  const requestId = globalThis.crypto?.randomUUID?.() || `plaid-account-reconnect-${Date.now()}`;
+  return safeFetch(apiUrl(`/api/integrations/plaid/accounts/${encodeURIComponent(plaidAccountId)}/reconnect`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json", "x-idempotency-key": requestId }),
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
+}
+
 export async function getMappingStatus(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/mapping-status"), {
     method: "GET",

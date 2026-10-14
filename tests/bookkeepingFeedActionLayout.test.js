@@ -14,6 +14,14 @@ test("Books Review handled actions reserve enough width and keep labels on one l
   assert.match(source, /postingActionLabel/);
 });
 
+test("Handled posting timestamps reserve width and never truncate AM or PM", () => {
+  assert.match(source, /QBO_COL_WIDTH = 152/);
+  assert.match(source, /QBO_MIN_COL_WIDTH = 152/);
+  assert.match(source, /title=\{\[qboSchedule\.label, qboSchedule\.detail\]/);
+  assert.match(source, /<span className="whitespace-nowrap">\{qboSchedule\.label\}<\/span>/);
+  assert.doesNotMatch(source, /<span className="truncate">\{qboSchedule\.label\}<\/span>/);
+});
+
 test("customer Books Review does not expose Admin Monthly Review navigation", () => {
   const linkIndex = source.indexOf("Open Monthly Review Posting Review");
   const accessGuardIndex = source.lastIndexOf("adminBookkeepingAccess ? (", linkIndex);

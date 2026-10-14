@@ -39,7 +39,8 @@ import {
   exchangePlaidPublicToken,
   triggerPlaidSync,
   disconnectPlaid,
-  disconnectPlaidItem,
+  disconnectPlaidAccount,
+  reconnectPlaidAccount,
   getAccountMappings,
   updateAccountMapping,
   getQboPaymentAccounts,
@@ -54,7 +55,7 @@ const ROW_BG = "rgba(255,255,255,0.032)";
 const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 const INTEGRATION_ACTION_BUTTON_CLASS =
   "inline-flex h-11 w-full items-center justify-center whitespace-nowrap rounded-xl px-4 text-sm font-semibold sm:w-[232px]";
-const PLAID_STATUS_CACHE_VERSION = 2;
+const PLAID_STATUS_CACHE_VERSION = 3;
 const REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27";
 
 const CREDITS_CAP = 300;
@@ -969,7 +970,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const [recoveryReview, setRecoveryReview] = useState(null);
   const [expandedRecoveryHistory, setExpandedRecoveryHistory] = useState({});
   const [holdReleaseConfirmation, setHoldReleaseConfirmation] = useState(null);
-  const [disconnectingItem, setDisconnectingItem] = useState(null);
+  const [changingAccountConnection, setChangingAccountConnection] = useState(null);
+  const [accountConnectionMessages, setAccountConnectionMessages] = useState({});
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
   const [confirmDisconnectByAccount, setConfirmDisconnectByAccount] = useState({});
@@ -985,9 +987,22 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const [mappingSaving, setMappingSaving] = useState({});
   const [mappingOverrides, setMappingOverrides] = useState({});
   const [mappingMessages, setMappingMessages] = useState({});
-  const isConnected = counts.accounts > 0;
-  const isDisconnected = !isConnected && hasDisconnected;
+  const syncingAccountsCount = useMemo(() => institutions.reduce((count, institution) =>
+    count + (institution.accounts || []).filter((account) => account.connection_state === "connected").length, 0), [institutions]);
+  const isConnected = syncingAccountsCount > 0;
+  const isDisconnected = !isConnected && (counts.accounts > 0 || hasDisconnected);
   const isEmpty = !isConnected && !hasDisconnected;
+
+  useEffect(() => {
+    if (!institutions.length || typeof window === "undefined") return;
+    const accountId = new URLSearchParams(window.location.search).get("account");
+    if (!accountId) return;
+    window.requestAnimationFrame(() => {
+      const row = Array.from(document.querySelectorAll("[data-plaid-account-id]"))
+        .find((element) => element.dataset.plaidAccountId === accountId);
+      row?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [institutions]);
 
   useEffect(() => {
     const cached = readPlaidStatusCache(businessId);
@@ -1062,7 +1077,9 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
 
   const refreshMappings = useCallback(async () => {
     if (!businessId || readOnly) return;
-    if (!isConnected) {
+    // Mapping is a QuickBooks posting concern and remains visible/manageable
+    // when Plaid ingestion is paused for every historical account.
+    if (!counts.accounts) {
       setMappingRows([]);
       setQboPaymentAccounts([]);
       setMappingError("");
@@ -1084,7 +1101,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
     } finally {
       setMappingLoading(false);
     }
-  }, [businessId, isConnected, readOnly]);
+  }, [businessId, counts.accounts, readOnly]);
 
   useEffect(() => {
     refreshMappings();
@@ -1281,26 +1298,33 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
     }));
   }, []);
 
-  const handleDisconnectItem = useCallback(async (plaidItemId) => {
-    if (!businessId || readOnly || !plaidItemId) return;
-    setDisconnectingItem(plaidItemId);
+  const handleAccountConnectionChange = useCallback(async (account, nextState) => {
+    const plaidAccountId = account?.plaid_account_id;
+    if (!businessId || readOnly || !plaidAccountId || changingAccountConnection) return;
+    setChangingAccountConnection(plaidAccountId);
+    setAccountConnectionMessages((current) => ({ ...current, [plaidAccountId]: null }));
     try {
-      await disconnectPlaidItem(businessId, plaidItemId);
-      try {
-        window.localStorage.setItem("bizzy:plaid_connected", "false");
-        window.dispatchEvent(new Event("bizzy:onboarding-flags-updated"));
-      } catch {
-        /* ignore */
-      }
-      setConfirmDisconnectByAccount({});
+      const action = nextState === "connected" ? reconnectPlaidAccount : disconnectPlaidAccount;
+      await action(businessId, plaidAccountId, Number(account.connection_state_version || 0));
+      setConfirmDisconnectByAccount((current) => ({ ...current, [plaidAccountId]: false }));
+      clearPlaidStatusCache(businessId);
       await fetchStatus({ showLoading: false });
-      await refreshMappings();
-    } catch (err) {
-      console.warn("[plaid][disconnect-item] failed", err);
+      window.dispatchEvent(new CustomEvent("bizzy:plaid-account-state-updated", {
+        detail: { businessId, plaidAccountId, connectionState: nextState },
+      }));
+      setAccountConnectionMessages((current) => ({
+        ...current,
+        [plaidAccountId]: nextState === "connected" ? "Transaction sync resumed." : "Transaction sync stopped. Historical data remains available.",
+      }));
+    } catch (error) {
+      setAccountConnectionMessages((current) => ({
+        ...current,
+        [plaidAccountId]: error?.message || "Connection state could not be updated.",
+      }));
     } finally {
-      setDisconnectingItem(null);
+      setChangingAccountConnection(null);
     }
-  }, [businessId, fetchStatus, readOnly, refreshMappings]);
+  }, [businessId, changingAccountConnection, fetchStatus, readOnly]);
 
   const latestSyncAt = useMemo(() => {
     const timestamps = institutions
@@ -1556,14 +1580,18 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                   <span className="text-sm font-semibold text-white/90">
                     {inst.institution_name || "Institution"}
                   </span>
-                  {inst.status === "connected" ? (
-                    <StatusPill state="connected" />
-                  ) : (
-                    <StatusBadge
-                      tone="warning"
-                      label={inst.status || "Unknown"}
-                    />
-                  )}
+                  <StatusBadge
+                    tone={inst.status === "connected" ? "ok" : "warning"}
+                    label={inst.status === "connected"
+                      ? `Connected · ${inst.syncing_accounts_count || 0} of ${inst.accounts_count || 0} syncing`
+                      : inst.status === "partially_connected"
+                        ? `Partially connected · ${inst.syncing_accounts_count || 0} of ${inst.accounts_count || 0} syncing`
+                        : inst.status === "attention_required"
+                          ? "Attention required"
+                          : inst.status === "disconnected"
+                            ? "Disconnected"
+                            : "Unknown"}
+                  />
                 </div>
                 {inst.last_sync_at ? (
                   <span className="text-[11px] text-white/50">
@@ -1860,6 +1888,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                         : "No QuickBooks Bank accounts found. Create one to map this Plaid account."
                       : null;
                   const mappingMessage = mappingMessages?.[acct.plaid_account_id] || null;
+                  const connectionMessage = accountConnectionMessages?.[acct.plaid_account_id] || null;
+                  const connectionState = acct.connection_state || (acct.is_active ? "connected" : "disconnected");
                   const optionIds = new Set(qboOptions.map((o) => String(o.id)));
                   const selectedValueRaw = overrideValue
                     ? overrideValue
@@ -1883,6 +1913,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                   return (
                     <div
                       key={acct.plaid_account_id}
+                      data-plaid-account-id={acct.plaid_account_id}
                       className="flex items-center justify-between gap-3 border-t px-0 py-2 first:border-t-0"
                       style={{ borderColor: SOFT_BORDER }}
                     >
@@ -1907,8 +1938,14 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                             <StatusBadge tone="warning" label="Suggested review" />
                           ) : null}
                           <StatusBadge
-                            tone={acct.is_active ? "ok" : "warning"}
-                            label={acct.is_active ? "Active" : "Inactive"}
+                            tone={connectionState === "connected" ? "ok" : "warning"}
+                            label={connectionState === "connected"
+                              ? "Connected"
+                              : connectionState === "attention_required"
+                                ? "Attention required"
+                                : connectionState === "closed_historical"
+                                  ? "Closed"
+                                  : "Disconnected"}
                           />
                         </div>
                         {postingCategory !== "NotUsed" ? (
@@ -1947,16 +1984,35 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                             {mappingMessage}
                           </div>
                         ) : null}
+                        {connectionMessage ? (
+                          <div className="max-w-[18rem] text-right text-[10px] leading-snug text-white/65">
+                            {connectionMessage}
+                          </div>
+                        ) : null}
+                        {connectionState === "disconnected" && Number(acct.sync_gap_event_count || 0) > 0 ? (
+                          <div className="max-w-[18rem] text-right text-[10px] leading-snug text-amber-100/80">
+                            {acct.sync_gap_event_count} provider event{Number(acct.sync_gap_event_count) === 1 ? "" : "s"} occurred while sync was stopped. Reconnect resumes from the current institution cursor; use repair if historical recovery is needed.
+                          </div>
+                        ) : null}
                         {acct.plaid_item_id && acct.plaid_item_id !== "unknown" ? (
-                          confirmDisconnectByAccount[acct.plaid_account_id] ? (
+                          connectionState === "disconnected" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleAccountConnectionChange(acct, "connected")}
+                              disabled={readOnly || changingAccountConnection === acct.plaid_account_id}
+                              className="px-2 py-1 text-[11px] rounded-md border border-emerald-400/40 text-emerald-200 hover:border-emerald-300/70 transition disabled:opacity-50"
+                            >
+                              {changingAccountConnection === acct.plaid_account_id ? "Reconnecting…" : "Reconnect"}
+                            </button>
+                          ) : confirmDisconnectByAccount[acct.plaid_account_id] ? (
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
-                                onClick={() => handleDisconnectItem(acct.plaid_item_id)}
-                                disabled={readOnly || disconnectingItem === acct.plaid_item_id}
+                                onClick={() => handleAccountConnectionChange(acct, "disconnected")}
+                                disabled={readOnly || changingAccountConnection === acct.plaid_account_id}
                                 className="px-2 py-1 text-[11px] rounded-md border border-rose-400/40 text-rose-200 hover:border-rose-300/70 hover:text-rose-100 transition disabled:opacity-50"
                               >
-                                {disconnectingItem === acct.plaid_item_id ? "Disconnecting…" : "Confirm"}
+                                {changingAccountConnection === acct.plaid_account_id ? "Disconnecting…" : "Confirm"}
                               </button>
                               <button
                                 type="button"

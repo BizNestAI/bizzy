@@ -21,6 +21,7 @@ import {
   normalizePlaidPostedDate,
 } from "../bookkeeping/accountingDatePolicy.js";
 import crypto from "crypto";
+import { filterPlaidSyncEventsForEligibleAccounts } from "./plaidAccountConnectionState.js";
 
 function normalizeDate(d) {
   return normalizePlaidPostedDate(d);
@@ -225,6 +226,20 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       },
     });
 
+    const { data: itemAccounts, error: itemAccountsError } = await supabase
+      .from("plaid_accounts")
+      .select("plaid_account_id,is_active,connection_state,disconnected_at,physical_account_id,sync_gap_started_at,sync_gap_event_count")
+      .eq("business_id", businessId)
+      .eq("plaid_env", item.plaid_env || plaidEnvName)
+      .eq("plaid_item_id", item.plaid_item_id);
+    if (itemAccountsError) throw itemAccountsError;
+    const disconnectedAccountIds = new Set((itemAccounts || [])
+      .filter((account) => account.is_active === false
+        || account.connection_state === "disconnected"
+        || account.connection_state === "closed_historical"
+        || Boolean(account.disconnected_at))
+      .map((account) => account.plaid_account_id));
+
     let mutationRestarts = 0;
     while (hasMore) {
       try {
@@ -257,6 +272,47 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         }
         throw err;
       }
+    }
+
+    const removedTransactionIds = removed.map((event) => event?.transaction_id).filter(Boolean);
+    const removedAccountByTransactionId = new Map();
+    if (removedTransactionIds.length) {
+      const { data: removedRows, error: removedRowsError } = await supabase.from("bank_transactions")
+        .select("plaid_transaction_id,plaid_account_id")
+        .eq("business_id", businessId)
+        .in("plaid_transaction_id", removedTransactionIds);
+      if (removedRowsError) throw removedRowsError;
+      for (const row of removedRows || []) {
+        removedAccountByTransactionId.set(row.plaid_transaction_id, row.plaid_account_id);
+      }
+    }
+    const addedResult = filterPlaidSyncEventsForEligibleAccounts(added, disconnectedAccountIds);
+    const modifiedResult = filterPlaidSyncEventsForEligibleAccounts(modified, disconnectedAccountIds);
+    const removedResult = filterPlaidSyncEventsForEligibleAccounts(
+      removed,
+      disconnectedAccountIds,
+      (event) => removedAccountByTransactionId.get(event?.transaction_id) || null
+    );
+    const skippedByAccount = new Map();
+    for (const result of [addedResult, modifiedResult, removedResult]) {
+      for (const [accountId, count] of result.skippedByAccount) {
+        skippedByAccount.set(accountId, (skippedByAccount.get(accountId) || 0) + count);
+      }
+    }
+    const eligibleAdded = addedResult.eligible;
+    const eligibleModified = modifiedResult.eligible;
+    const eligibleRemoved = removedResult.eligible;
+    added.splice(0, added.length, ...eligibleAdded);
+    modified.splice(0, modified.length, ...eligibleModified);
+    removed.splice(0, removed.length, ...eligibleRemoved);
+    for (const [plaidAccountId, skippedCount] of skippedByAccount) {
+      const existing = (itemAccounts || []).find((account) => account.plaid_account_id === plaidAccountId);
+      await supabase.from("plaid_accounts").update({
+        sync_gap_started_at: existing?.sync_gap_started_at || nowIso(),
+        sync_gap_last_event_at: nowIso(),
+        sync_gap_event_count: Number(existing?.sync_gap_event_count || 0) + skippedCount,
+        updated_at: nowIso(),
+      }).eq("business_id", businessId).eq("plaid_account_id", plaidAccountId);
     }
 
     const now = new Date().toISOString();
