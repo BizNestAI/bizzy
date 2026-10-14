@@ -43,7 +43,7 @@ create or replace function public.confirm_pending_transaction_settled(
   p_actor_label text, p_statement_date date, p_statement_amount numeric,
   p_reason text, p_idempotency_key text, p_decision_version integer default 1
 ) returns jsonb language plpgsql security definer set search_path=public as $$
-declare v_bank public.bank_transactions%rowtype; v_cat public.transaction_categorizations%rowtype; v_now timestamptz:=now(); v_existing jsonb;
+declare v_bank public.bank_transactions%rowtype; v_cat public.transaction_categorizations%rowtype; v_now timestamptz:=now(); v_existing jsonb; v_before jsonb; v_replacement jsonb; v_candidates jsonb; v_provenance text;
 begin
   select * into v_bank from public.bank_transactions where business_id=p_business_id and id=p_transaction_id for update;
   if not found then raise exception 'transaction_not_found'; end if;
@@ -51,25 +51,41 @@ begin
   if v_bank.pending is not true and v_bank.pending_resolution_state <> 'promoted_to_settled' then raise exception 'transaction_not_pending'; end if;
   if v_cat.qbo_txn_id is not null or v_cat.posted_at is not null or v_cat.reconciled_at is not null or v_cat.status in ('posted','matched','matched_existing_qbo') then raise exception 'transaction_already_accounted'; end if;
   if v_cat.posting_status='posting' or coalesce((v_cat.meta->>'posting_in_progress')::boolean,false) then raise exception 'posting_in_progress'; end if;
-  if p_actor_user_id is null or p_statement_date is null or p_statement_amount is null or nullif(trim(p_reason),'') is null then raise exception 'settlement_attestation_incomplete'; end if;
+  if p_actor_user_id is null then raise exception 'operator_authorization_required'; end if;
+  if p_statement_date is null then raise exception 'invalid_statement_date'; end if;
+  if p_statement_amount is null or p_statement_amount=0 then raise exception 'invalid_statement_amount'; end if;
   if round(abs(p_statement_amount)::numeric,2) <> round(abs(v_bank.amount)::numeric,2) then raise exception 'statement_amount_mismatch'; end if;
   if exists (select 1 from public.bank_transactions r where r.business_id=p_business_id and r.is_archived=false and r.pending is not true and r.pending_transaction_id=v_bank.plaid_transaction_id and r.id<>v_bank.id) then raise exception 'posted_replacement_exists'; end if;
   select jsonb_build_object('state',resulting_state,'created_at',created_at) into v_existing from public.pending_transaction_resolution_events where business_id=p_business_id and idempotency_key=p_idempotency_key;
   if v_existing is not null then return v_existing || jsonb_build_object('idempotent',true); end if;
+  v_before:=jsonb_build_object('pending',v_bank.pending,'pending_resolution_state',v_bank.pending_resolution_state,'accounting_review_required',v_bank.accounting_review_required,'accounting_review_reason',v_bank.accounting_review_reason);
+  v_provenance:=case when coalesce((v_bank.raw->>'recovery_imported')::boolean,false) or v_bank.raw->>'plaid_recovery_batch_id' is not null then 'replacement_card_recovery' else coalesce(v_bank.raw->>'canonical_source','normal_sync') end;
+  select to_jsonb(r) into v_replacement from public.bank_transactions r where r.business_id=p_business_id and r.is_archived=false and r.pending is not true and r.pending_transaction_id=v_bank.plaid_transaction_id and r.id<>v_bank.id limit 1;
+  v_candidates:=coalesce(v_cat.meta->'qbo_duplicate_candidates','[]'::jsonb);
   update public.bank_transactions set pending=false, pending_resolution_state='promoted_to_settled', pending_resolved_at=v_now,
     pending_resolved_by=p_actor_user_id, pending_resolution_payload=jsonb_build_object(
       'original_pending',true,'original_plaid_transaction_id',v_bank.plaid_transaction_id,'original_pending_transaction_id',v_bank.pending_transaction_id,
-      'statement_confirmed_date',p_statement_date,'statement_confirmed_amount',p_statement_amount,'reason',p_reason,
-      'decision_version',p_decision_version,'confirmed_at',v_now,'confirmed_by',p_actor_user_id
+      'statement_confirmed_date',p_statement_date,'statement_confirmed_amount',p_statement_amount,'operator_note',nullif(trim(p_reason),''),
+      'decision_version',p_decision_version,'confirmed_at',v_now,'confirmed_by',p_actor_user_id,'confirmed_by_email',p_actor_label,
+      'request_id',p_idempotency_key,'provider_provenance',v_provenance,'provider_last_update',coalesce(v_bank.last_seen_at,v_bank.updated_at),
+      'posted_replacement_search',jsonb_build_object('found',v_replacement is not null,'result',v_replacement),
+      'qbo_candidate_search',jsonb_build_object('found',jsonb_array_length(v_candidates)>0,'result',v_candidates)
     ), accounting_review_required=true, accounting_review_reason='operator_confirmed_settlement'
     where business_id=p_business_id and id=p_transaction_id;
   insert into public.transaction_categorizations (business_id,transaction_id,status,review_status,posting_status,meta,post_after,updated_at)
-    values (p_business_id,p_transaction_id,'needs_review','needs_review','not_scheduled',jsonb_build_object('pending_resolution_state','promoted_to_settled','operator_settlement_confirmation',jsonb_build_object('actor_user_id',p_actor_user_id,'actor_label',p_actor_label,'statement_date',p_statement_date,'statement_amount',p_statement_amount,'reason',p_reason,'decision_version',p_decision_version,'confirmed_at',v_now)),null,v_now)
+    values (p_business_id,p_transaction_id,'needs_review','needs_review','not_scheduled',jsonb_build_object('pending_resolution_state','promoted_to_settled','operator_settlement_confirmation',jsonb_build_object('actor_user_id',p_actor_user_id,'actor_email',p_actor_label,'statement_date',p_statement_date,'statement_amount',p_statement_amount,'operator_note',nullif(trim(p_reason),''),'request_id',p_idempotency_key,'decision_version',p_decision_version,'confirmed_at',v_now)),null,v_now)
     on conflict (business_id,transaction_id) do update set status='needs_review',review_status='needs_review',posting_status='not_scheduled',post_after=null,
       meta=coalesce(public.transaction_categorizations.meta,'{}'::jsonb)||excluded.meta,updated_at=v_now;
   insert into public.pending_transaction_resolution_events (business_id,transaction_id,action,prior_state,resulting_state,actor_user_id,actor_label,reason,evidence,idempotency_key)
     values (p_business_id,p_transaction_id,'confirm_settled_from_statement',coalesce(v_bank.pending_resolution_state,'stale_pending_check_required'),'promoted_to_settled',p_actor_user_id,p_actor_label,p_reason,
-      jsonb_build_object('statement_date',p_statement_date,'statement_amount',p_statement_amount,'provider_write',false,'qbo_write',false,'decision_version',p_decision_version),p_idempotency_key);
+      jsonb_build_object('actor_user_id',p_actor_user_id,'actor_email',p_actor_label,'decision_timestamp',v_now,'action_type','confirm_settled_from_statement',
+        'statement_date',p_statement_date,'statement_amount',p_statement_amount,'operator_note',nullif(trim(p_reason),''),
+        'before_state',v_before,'after_state',jsonb_build_object('pending',false,'pending_resolution_state','promoted_to_settled','accounting_review_required',true,'accounting_review_reason','operator_confirmed_settlement','categorization_status','needs_review','posting_status','not_scheduled'),
+        'provider_provenance',v_provenance,'provider_last_update',coalesce(v_bank.last_seen_at,v_bank.updated_at),
+        'posted_replacement_search',jsonb_build_object('found',v_replacement is not null,'result',v_replacement),
+        'qbo_candidate_search',jsonb_build_object('found',jsonb_array_length(v_candidates)>0,'result',v_candidates),
+        'business_id',p_business_id,'transaction_id',p_transaction_id,'request_id',p_idempotency_key,'idempotency_key',p_idempotency_key,
+        'provider_write',false,'qbo_write',false,'decision_version',p_decision_version),p_idempotency_key);
   return jsonb_build_object('idempotent',false,'state','promoted_to_settled','transaction_id',p_transaction_id);
 end $$;
 

@@ -13,6 +13,7 @@ DECLARE
   bank_row public.bank_transactions%ROWTYPE;
   event_key text;
   inflow_decision jsonb;
+  is_credit_card_inflow boolean;
 BEGIN
   IF p_actor_type NOT IN ('user','admin','system','automation') THEN RAISE EXCEPTION 'invalid_approval_actor_type' USING ERRCODE='22023'; END IF;
   IF p_actor_type IN ('user','admin') AND p_actor_id IS NULL THEN RAISE EXCEPTION 'missing_approval_actor_id' USING ERRCODE='22023'; END IF;
@@ -33,15 +34,26 @@ BEGIN
     END IF;
 
     inflow_decision := approval#>'{meta,credit_card_inflow_resolution}';
+    SELECT (
+      (upper(coalesce(bank_row.direction,''))='INFLOW' OR coalesce(bank_row.amount,0)>0)
+      AND EXISTS (
+        SELECT 1 FROM public.plaid_qbo_account_mappings pam
+        WHERE pam.business_id=p_business_id
+          AND pam.plaid_account_id=bank_row.plaid_account_id
+          AND regexp_replace(lower(coalesce(pam.qbo_account_type,'')),'[^a-z]','','g')='creditcard'
+      )
+    ) INTO is_credit_card_inflow;
     IF bank_row.accounting_review_required IS TRUE THEN
       IF bank_row.accounting_review_reason <> 'operator_confirmed_settlement'
          OR bank_row.pending IS TRUE
          OR bank_row.pending_resolution_state <> 'promoted_to_settled'
          OR bank_row.pending_resolution_payload->>'confirmed_at' IS NULL
-         OR coalesce(inflow_decision->>'resolution_type','') NOT IN ('merchant_refund','credit_card_statement_credit')
-         OR inflow_decision->>'destination_qbo_account_id' IS NULL
-         OR inflow_decision->>'decided_by' IS NULL
-         OR inflow_decision->>'decided_at' IS NULL THEN
+         OR (is_credit_card_inflow AND (
+           coalesce(inflow_decision->>'resolution_type','') NOT IN ('merchant_refund','credit_card_statement_credit')
+           OR inflow_decision->>'destination_qbo_account_id' IS NULL
+           OR inflow_decision->>'decided_by' IS NULL
+           OR inflow_decision->>'decided_at' IS NULL
+         )) THEN
         RAISE EXCEPTION 'credit_card_inflow_type_required' USING ERRCODE='22023';
       END IF;
       UPDATE public.bank_transactions SET

@@ -793,8 +793,8 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/pen
     let result;
     if (action === "refresh-status") result = await refreshPendingStatus({ ...scope, actor, idempotencyKey });
     else if (action === "use-posted-replacement") result = await linkPendingReplacement({ ...scope, actor, idempotencyKey, replacementTransactionId: req.body?.replacement_transaction_id });
-    else if (action === "exclude-authorization") result = await excludePendingAuthorization({ ...scope, actor, idempotencyKey, reason: req.body?.reason });
-    else if (action === "confirm-settled") result = await confirmPendingSettled({ ...scope, actor, idempotencyKey, statementDate: req.body?.statement_date, statementAmount: req.body?.statement_amount, reason: req.body?.reason });
+    else if (action === "exclude-authorization") result = await excludePendingAuthorization({ ...scope, actor, idempotencyKey, reason: req.body?.note, attested: req.body?.attested === true });
+    else if (action === "confirm-settled") result = await confirmPendingSettled({ ...scope, actor, idempotencyKey, statementDate: req.body?.statement_date, statementAmount: req.body?.statement_amount, reason: req.body?.note });
     else if (action === "keep-pending") result = { state: "stale_pending_check_required", mutated: false };
     else return res.status(400).json({ ok: false, error: "invalid_pending_resolution_action" });
     return res.json({ ok: true, action, result });

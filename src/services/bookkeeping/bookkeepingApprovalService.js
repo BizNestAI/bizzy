@@ -31,6 +31,7 @@ import {
 import {
   buildSpecializedInflowDecision,
   canCompleteSettledAccountingReview,
+  isSpecializedCreditCardInflow,
   CREDIT_CARD_INFLOW_TYPE_REQUIRED_MESSAGE,
   hasFinalSpecializedTypeAuthority,
   normalizeSpecializedInflowResolution,
@@ -373,6 +374,8 @@ export async function approveBookkeepingTransactions({
   const accountingReviewRows = (bankTxns || []).filter((row) => row.accounting_review_required === true);
   const reviewIds = accountingReviewRows.filter((row) => {
     if (row.accounting_review_reason !== "operator_confirmed_settlement") return false;
+    const isCreditCardInflow = isSpecializedCreditCardInflow(row, sourceTypeByPlaidAccount.get(String(row.plaid_account_id)));
+    if (!isCreditCardInflow) return false;
     const item = items.find((candidate) => String(txnIdFromItem(candidate)) === String(row.id));
     const decision = buildSpecializedInflowDecision({
       resolution: item?.credit_card_inflow_resolution || item?.inflow_type,

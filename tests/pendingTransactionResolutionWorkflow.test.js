@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { derivePendingLifecycle, pendingAgeDays, summarizePendingLifecycles } from "../src/services/bookkeeping/pendingTransactionLifecycle.js";
+import { isSpecializedCreditCardInflow } from "../src/services/bookkeeping/specializedTypeAuthority.js";
+import { buildPendingSettlementRpcInput, validatePendingExclusionAttestation, validateStatementConfirmation } from "../src/services/bookkeeping/pendingResolutionContract.js";
 
 const migration = fs.readFileSync(new URL("../supabase/migrations/20261013090000_pending_transaction_resolution.sql", import.meta.url), "utf8");
 const routes = fs.readFileSync(new URL("../src/api/admin/monthlyReview.routes.js", import.meta.url), "utf8");
@@ -35,6 +37,50 @@ test("settlement confirmation is audited, idempotent, and performs no QBO write"
   assert.match(migration, /'provider_write',false,'qbo_write',false/);
   assert.match(migration, /posting_status='not_scheduled'/);
   assert.match(migration, /pending_resolution_payload=jsonb_build_object[\s\S]*'original_pending',true/);
+  assert.doesNotMatch(migration, /nullif\(trim\(p_reason\),'\'\'\) is null/);
+  for (const field of ["actor_user_id", "actor_email", "decision_timestamp", "statement_date", "statement_amount", "before_state", "after_state", "provider_provenance", "provider_last_update", "posted_replacement_search", "qbo_candidate_search", "business_id", "transaction_id", "request_id", "idempotency_key"]) {
+    assert.match(migration, new RegExp(`'${field}'`));
+  }
+});
+
+test("operator note is optional and persisted when supplied", () => {
+  assert.match(migration, /'operator_note',nullif\(trim\(p_reason\),''\)/);
+  assert.match(ui, /Operator note \(optional\)/);
+  assert.doesNotMatch(ui, /Operator reason/);
+});
+
+test("confirm settled accepts no note and sends an optional note when provided", () => {
+  const base = { businessId: "business", transactionId: "transaction", actor: { id: "operator", email: "operator@example.com" }, statementDate: "2026-08-27", statementAmount: 6.99, idempotencyKey: "request" };
+  assert.equal(buildPendingSettlementRpcInput(base).p_reason, null);
+  assert.equal(buildPendingSettlementRpcInput({ ...base, note: "Statement page 4" }).p_reason, "Statement page 4");
+});
+
+test("statement confirmation validation gives friendly date and amount errors", () => {
+  const actor = { id: "operator" };
+  assert.throws(() => validateStatementConfirmation({ actor, statementDate: "2026-02-31", statementAmount: 1 }), /valid statement-confirmed date/i);
+  assert.throws(() => validateStatementConfirmation({ actor, statementDate: "2026-08-27", statementAmount: 0 }), /valid nonzero statement amount/i);
+  assert.deepEqual(validateStatementConfirmation({ actor, statementDate: "2026-08-27", statementAmount: "6.99" }), { statementDate: "2026-08-27", statementAmount: 6.99 });
+});
+
+test("exclusion requires attestation but never free text", () => {
+  assert.throws(() => validatePendingExclusionAttestation({ actor: { id: "operator" }, attested: false }), /verified this authorization did not settle/i);
+  assert.doesNotThrow(() => validatePendingExclusionAttestation({ actor: { id: "operator" }, attested: true }));
+});
+
+test("friendly input gates require statement facts and exclusion attestation, not free text", () => {
+  assert.match(ui, /Enter a valid statement-confirmed date\./);
+  assert.match(ui, /Enter a valid nonzero statement amount\./);
+  assert.match(ui, /I verified this authorization did not settle\./);
+  assert.match(ui, /attested: form\.exclusionAttested/);
+  assert.doesNotMatch(ui, /!form\.reason\.trim\(\)/);
+  assert.match(routes, /attested: req\.body\?\.attested === true/);
+  assert.doesNotMatch(ui, /settlement_attestation_incomplete|invalid_statement_amount|pending_exclusion_attestation_required/);
+});
+
+test("ordinary outflows can clear statement review while positive card inflows retain type authority", () => {
+  const chaseOutflows = [-10.81, -24, -8.66, -7.57].map((amount) => ({ direction: "OUTFLOW", amount }));
+  for (const row of chaseOutflows) assert.equal(isSpecializedCreditCardInflow(row, "Credit Card"), false);
+  assert.equal(isSpecializedCreditCardInflow({ direction: "INFLOW", amount: 75.76 }, "Credit Card"), true);
 });
 
 test("late posted replacements reuse identity and reopen excluded or materially changed rows", () => {

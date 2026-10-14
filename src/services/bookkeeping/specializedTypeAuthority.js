@@ -11,6 +11,11 @@ export function normalizeSpecializedInflowResolution(value) {
   return ["merchant_refund", "credit_card_statement_credit", "match_credit_card_payment", "credit_card_credit_other"].includes(resolution) ? resolution : null;
 }
 
+export function isSpecializedCreditCardInflow(bankTransaction = {}, sourceAccountType = "") {
+  const isInflow = String(bankTransaction.direction || "").toUpperCase() === "INFLOW" || Number(bankTransaction.amount || 0) > 0;
+  return isInflow && normalized(sourceAccountType).replace(/[^a-z]/g, "") === "creditcard";
+}
+
 export function buildSpecializedInflowDecision({ resolution, accountId, accountName = null, actor = null, source = "books_review", decidedAt = new Date().toISOString(), statementAuthority = null } = {}) {
   const normalizedResolution = normalizeSpecializedInflowResolution(resolution);
   if (!FINAL_SPECIALIZED_RESOLUTIONS.has(normalizedResolution) || !accountId || !actor) return null;

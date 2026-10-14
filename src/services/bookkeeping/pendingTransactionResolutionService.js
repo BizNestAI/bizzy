@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { supabase } from "../supabaseAdmin.js";
 import { runPlaidSyncForItemForBusiness } from "../plaid/plaidSyncService.js";
 import { derivePendingLifecycle, pendingAgeDays, PENDING_STALE_DAYS_DEFAULT } from "./pendingTransactionLifecycle.js";
+import { buildPendingSettlementRpcInput, validatePendingExclusionAttestation } from "./pendingResolutionContract.js";
 export { derivePendingLifecycle, pendingAgeDays, PENDING_STALE_DAYS_DEFAULT } from "./pendingTransactionLifecycle.js";
 
 function fail(code, message, status = 409) {
@@ -38,6 +39,8 @@ export async function getPendingResolutionContext({ businessId, transactionId, s
   const provenance = bank.raw?.recovery_imported === true || bank.raw?.plaid_recovery_batch_id
     ? "replacement_card_recovery" : (bank.raw?.canonical_source || "normal_sync");
   const candidates = Array.isArray(cat?.meta?.qbo_duplicate_candidates) ? cat.meta.qbo_duplicate_candidates : [];
+  const lifecycle = derivePendingLifecycle(bank, { replacement, staleDays });
+  const exclusionEligible = bank.pending === true && !replacement && !cat?.qbo_txn_id && !cat?.posted_at && !cat?.reconciled_at && cat?.posting_status !== "posting";
   return {
     transaction: {
       ...bank,
@@ -51,7 +54,7 @@ export async function getPendingResolutionContext({ businessId, transactionId, s
       suggested_gl: cat?.suggested_qbo_account_name || null,
       suggested_gl_non_final: true,
     },
-    lifecycle: derivePendingLifecycle(bank, { replacement, staleDays }),
+    lifecycle,
     stale_threshold_days: staleDays,
     replacement,
     replacement_found: Boolean(replacement),
@@ -61,6 +64,8 @@ export async function getPendingResolutionContext({ businessId, transactionId, s
     has_posting_intent: Boolean(cat?.meta?.post_intent_id || cat?.posting_status === "posting"),
     has_qbo_receipt: Boolean(cat?.qbo_txn_id || cat?.posted_at),
     has_match: Boolean(cat?.reconciled_at || cat?.status === "matched_existing_qbo"),
+    exclusion_eligible: exclusionEligible,
+    exclusion_disabled_reason: exclusionEligible ? null : "This authorization has posting, matching, or replacement evidence and cannot be excluded.",
   };
 }
 
@@ -83,12 +88,8 @@ export async function refreshPendingStatus({ businessId, transactionId, actor, i
 }
 
 export async function confirmPendingSettled({ businessId, transactionId, actor, statementDate, statementAmount, reason, idempotencyKey, db = supabase }) {
-  const { data, error } = await db.rpc("confirm_pending_transaction_settled", {
-    p_business_id: businessId, p_transaction_id: transactionId, p_actor_user_id: actor?.id || null,
-    p_actor_label: actor?.email || actor?.label || null, p_statement_date: statementDate,
-    p_statement_amount: statementAmount, p_reason: reason, p_idempotency_key: idempotencyKey,
-    p_decision_version: 1,
-  });
+  const input = buildPendingSettlementRpcInput({ businessId, transactionId, actor, statementDate, statementAmount, note: reason, idempotencyKey });
+  const { data, error } = await db.rpc("confirm_pending_transaction_settled", input);
   if (error) throw fail(error.message, "Could not confirm settlement; no changes were made.");
   return data;
 }
@@ -102,15 +103,17 @@ export async function linkPendingReplacement({ businessId, transactionId, replac
   return data;
 }
 
-export async function excludePendingAuthorization({ businessId, transactionId, actor, reason, idempotencyKey, db = supabase }) {
+export async function excludePendingAuthorization({ businessId, transactionId, actor, reason, attested, idempotencyKey, db = supabase }) {
+  validatePendingExclusionAttestation({ actor, attested });
   const context = await getPendingResolutionContext({ businessId, transactionId, db });
   if (context.transaction.pending !== true) throw fail("transaction_not_pending", "Only a pending authorization can use this action.");
+  if (!context.exclusion_eligible) throw fail("pending_exclusion_not_eligible", context.exclusion_disabled_reason);
   const { data, error } = await db.rpc("exclude_bookkeeping_transaction", {
     p_business_id: businessId, p_transaction_id: transactionId, p_actor: actor?.id || actor?.email || "internal_admin",
-    p_reason: reason || "Pending authorization expired or did not settle.", p_source: "monthly_review_pending_resolution", p_correlation_id: idempotencyKey,
+    p_reason: String(reason || "").trim() || "Operator attested that the authorization did not settle.", p_source: "monthly_review_pending_resolution", p_correlation_id: idempotencyKey,
   });
-  if (error) throw error;
+  if (error) throw fail(error.message, "Could not exclude this authorization; no changes were made.");
   await db.from("bank_transactions").update({ pending_resolution_state: "excluded_pending_authorization", pending_resolved_at: new Date().toISOString(), pending_resolved_by: actor?.id || null }).eq("business_id", businessId).eq("id", transactionId);
-  await recordEvent({ db, businessId, transactionId, action: "exclude_expired_authorization", priorState: context.lifecycle, resultingState: "excluded_pending_authorization", actor, reason, evidence: { provider_write: false, qbo_write: false }, idempotencyKey });
+  await recordEvent({ db, businessId, transactionId, action: "exclude_expired_authorization", priorState: context.lifecycle, resultingState: "excluded_pending_authorization", actor, reason, evidence: { attestation: "I verified this authorization did not settle.", provider_write: false, qbo_write: false }, idempotencyKey });
   return data;
 }
