@@ -192,7 +192,11 @@ export default function BizzyChatBar({
     const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
     if (isOnboardingMode || !businessId) { setReportingStatus(null); return () => { active = false; }; }
     getReportingConfigurationStatus(businessId).then((status) => active && setReportingStatus(status)).catch(() => active && setReportingStatus({ ready: false, reason_code: "evidence_temporarily_unavailable" }));
-    return () => { active = false; };
+    const handleReportingUpdate = (event) => {
+      if (event?.detail?.businessId === businessId && event?.detail?.status) setReportingStatus(event.detail.status);
+    };
+    window.addEventListener("bizzy:financial-reporting-updated", handleReportingUpdate);
+    return () => { active = false; window.removeEventListener("bizzy:financial-reporting-updated", handleReportingUpdate); };
   }, [currentBusiness?.id, isOnboardingMode]);
 
   const quickPromptAvailability = useMemo(() => {

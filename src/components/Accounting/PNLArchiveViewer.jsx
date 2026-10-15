@@ -48,7 +48,7 @@ export default function PNLArchiveViewer() {
   async function fetchReports() {
     if (!currentBusiness?.id) return;
     setLoading(true);
-    if (adminView.active) {
+    if (!usingDemo || adminView.active) {
       try {
         const res = await apiFetch("/api/accounting/pnl/archive");
         if (!res.ok) {
@@ -58,7 +58,7 @@ export default function PNLArchiveViewer() {
         const data = await res.json();
         setReports(Array.isArray(data?.reports) ? data.reports : []);
       } catch (error) {
-        console.warn("[PNLArchiveViewer] Admin View archive fetch failed:", error?.message || error);
+        console.warn("[PNLArchiveViewer] archive fetch failed:", error?.message || error);
         setReports([]);
       } finally {
         setLoading(false);

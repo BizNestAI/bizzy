@@ -347,6 +347,7 @@ export default function MonthlyReviewConsole() {
   const [activeLock, setActiveLock] = useState(null);
   const [historyDrawer, setHistoryDrawer] = useState({ open: false, transaction: null, rows: [], loading: false });
   const [confirmFinalizeOpen, setConfirmFinalizeOpen] = useState(false);
+  const publishRequestIdRef = useRef(null);
 
   const displayBusinesses = useMemo(() => businesses.map((business) => buildDisplayBusiness(business)), [businesses]);
   const selectedBusiness = useMemo(
@@ -2176,10 +2177,11 @@ export default function MonthlyReviewConsole() {
       const body = action === "use_existing"
         ? { month, qbo_vendor_id: row.candidate_qbo_vendor_id || row.qbo_vendor_id }
         : { month, transaction_id: row.transaction_id || null };
-      await safeFetch(path, { method: "POST", body });
-      await loadDetail();
-      await loadSourceLedger();
-      await loadBusinesses();
+      const result = await safeFetch(path, { method: "POST", body });
+      setDetail((current) => patchResolvedCanonicalVendor(current, row, action, result));
+      // The mutation response is authoritative. Reconcile affected transaction state in the
+      // background instead of holding this row behind three broad workspace reloads.
+      void loadSourceLedger();
     } catch (e) {
       setError(e?.body?.message || e?.message || "Could not resolve canonical vendor decision.");
     } finally {
@@ -2266,12 +2268,14 @@ export default function MonthlyReviewConsole() {
     setFinalizing(true);
     setError("");
     try {
-      await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/finalize`, {
+      const result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/finalize`, {
         method: "POST",
         body: { notes: finalizeNotes },
       });
-      await loadDetail();
-      await loadBusinesses();
+      setDetail((current) => current ? { ...current, run: result?.run || current.run, stamp: result?.stamp || current.stamp } : current);
+      setBusinesses((current) => current.map((business) => business.id === selectedBusinessId
+        ? { ...business, review_status: "finalized", finalized_at: result?.run?.finalized_at || new Date().toISOString() }
+        : business));
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("bizzy:financial-review-stamp-updated"));
       }
@@ -2285,16 +2289,37 @@ export default function MonthlyReviewConsole() {
 
   const publishMonthlyReport = async () => {
     if (!detail?.run?.id) return;
+    if (detail?.pnl_report?.status === "published_outdated" && typeof window !== "undefined" && !window.confirm("This replaces the archived P&L with a report generated from the current QuickBooks snapshot. Continue?")) return;
     setBusyAction("publish-report");
     setError("");
     try {
-      await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/pull-pnl`, {
+      if (!publishRequestIdRef.current) publishRequestIdRef.current = globalThis.crypto?.randomUUID?.() || `${Date.now()}-0000-4000-8000-000000000000`;
+      const result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/pull-pnl`, {
         method: "POST",
+        body: { request_id: publishRequestIdRef.current },
       });
-      await loadDetail();
-      await loadBusinesses();
+      setDetail((current) => current ? { ...current, pnl_report: result?.report_state || current.pnl_report } : current);
+      publishRequestIdRef.current = null;
     } catch (e) {
       setError(e?.body?.message || e?.message || "Could not publish the monthly report.");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const viewPublishedMonthlyReport = async () => {
+    if (!selectedBusinessId) return;
+    setBusyAction("view-report");
+    setError("");
+    const reportTab = typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
+    try {
+      const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/pnl-report/view?month=${encodeURIComponent(month)}`);
+      if (!result?.signed_url) throw new Error("Published report URL was unavailable.");
+      if (reportTab && !reportTab.closed) reportTab.location.assign(result.signed_url);
+      else window.open(result.signed_url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      if (reportTab && !reportTab.closed) reportTab.close();
+      setError(e?.body?.message || e?.message || "Could not open the published monthly report.");
     } finally {
       setBusyAction("");
     }
@@ -2622,15 +2647,30 @@ export default function MonthlyReviewConsole() {
                       {busyAction === "customer-view" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
                       Open Bookkeeping Access
                     </button>
-                    <button
-                      type="button"
-                      onClick={publishMonthlyReport}
-                      disabled={busyAction === "publish-report" || !detail?.run?.id}
-                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-950/35 px-4 py-2 text-sm font-semibold text-cyan-50 shadow-sm transition hover:border-cyan-300/32 hover:bg-cyan-900/42 disabled:cursor-not-allowed disabled:opacity-45"
-                    >
-                      {busyAction === "publish-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                      Publish Final P&amp;L Report PDF
-                    </button>
+                    {detail?.pnl_report?.status === "published_current" ? (
+                      <button
+                        type="button"
+                        onClick={viewPublishedMonthlyReport}
+                        disabled={busyAction === "view-report"}
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-950/35 px-4 py-2 text-sm font-semibold text-cyan-50 shadow-sm transition hover:border-cyan-300/32 hover:bg-cyan-900/42 disabled:opacity-45"
+                      >
+                        {busyAction === "view-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                        View Published P&amp;L
+                      </button>
+                    ) : (
+                      <div className="flex flex-col items-end gap-1">
+                        <button
+                          type="button"
+                          onClick={publishMonthlyReport}
+                          disabled={busyAction === "publish-report" || detail?.pnl_report?.status === "publishing" || !detail?.run?.id}
+                          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-950/35 px-4 py-2 text-sm font-semibold text-cyan-50 shadow-sm transition hover:border-cyan-300/32 hover:bg-cyan-900/42 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {busyAction === "publish-report" || detail?.pnl_report?.status === "publishing" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                          {detail?.pnl_report?.status === "published_outdated" ? "Publish Updated P&L Report" : detail?.pnl_report?.status === "publication_failed" ? "Retry P&L Publication" : "Publish Final P&L Report PDF"}
+                        </button>
+                        {detail?.pnl_report?.status === "published_outdated" ? <span className="text-[11px] font-medium text-amber-200/80">Published report is out of date</span> : null}
+                      </div>
+                    )}
                     {detail?.stamp ? (
                       <button
                         type="button"
@@ -3927,6 +3967,54 @@ function CanonicalCoaReviewPanel({ data, accounts = [], busyAction = "", onResol
   );
 }
 
+function patchResolvedCanonicalVendor(detail, row, action, result = {}) {
+  const vendorData = detail?.canonical_vendors;
+  if (!vendorData || !row?.canonical_vendor_id) return detail;
+  const vendorId = String(row.canonical_vendor_id);
+  const withoutVendor = (rows) => (Array.isArray(rows) ? rows.filter((item) => String(item?.canonical_vendor_id) !== vendorId) : []);
+  const mappedExisting = action === "use_existing";
+  const mapping = result?.mapping || {};
+  const resolved = {
+    ...row,
+    status: mappedExisting ? "mapped_existing" : "created_by_bizzi",
+    qbo_vendor_id: mapping.qbo_vendor_id || result?.qbo_entity_id || row.candidate_qbo_vendor_id || row.qbo_vendor_id || null,
+    qbo_display_name: mapping.qbo_display_name || result?.vendor_name || row.candidate_qbo_vendor_name || row.qbo_display_name || row.display_name,
+    activity_at: new Date().toISOString(),
+    mapped_at: mappedExisting ? new Date().toISOString() : row.mapped_at || null,
+    created_at: mappedExisting ? row.created_at || null : new Date().toISOString(),
+    review_reason: null,
+    exception_type: null,
+  };
+  const previousAttention = Array.isArray(vendorData.needs_attention)
+    ? vendorData.needs_attention.length
+    : Array.isArray(vendorData.needs_review) ? vendorData.needs_review.length : 0;
+  const nextAttention = Math.max(0, previousAttention - 1);
+  const created = withoutVendor(vendorData.created_this_month);
+  const mapped = withoutVendor(vendorData.mapped_existing);
+  if (mappedExisting) mapped.unshift(resolved);
+  else created.unshift(resolved);
+  return {
+    ...detail,
+    canonical_vendors: {
+      ...vendorData,
+      rows: (Array.isArray(vendorData.rows) ? vendorData.rows : []).map((item) => String(item?.canonical_vendor_id) === vendorId ? resolved : item),
+      needs_attention: withoutVendor(vendorData.needs_attention),
+      needs_review: withoutVendor(vendorData.needs_review),
+      created_this_month: created,
+      mapped_existing: mapped,
+      summary: {
+        ...(vendorData.summary || {}),
+        needs_attention_count: nextAttention,
+        needs_review_count: nextAttention,
+        created_this_month_count: created.length,
+        created_by_bizzi_count: mappedExisting ? Number(vendorData.summary?.created_by_bizzi_count || 0) : Number(vendorData.summary?.created_by_bizzi_count || 0) + 1,
+        mapped_existing_this_month_count: mapped.length,
+        mapped_existing_count: mappedExisting ? Number(vendorData.summary?.mapped_existing_count || 0) + 1 : Number(vendorData.summary?.mapped_existing_count || 0),
+      },
+    },
+  };
+}
+
 function CanonicalVendorReviewPanel({ data, busyAction = "", onResolve }) {
   const summary = data?.summary || {};
   const attention = Array.isArray(data?.needs_attention) ? data.needs_attention : Array.isArray(data?.needs_review) ? data.needs_review : [];
@@ -4679,14 +4767,19 @@ function ReconciliationTracePanel({ ledger, loading }) {
 function FinalizeConfirmModal({ open, month, businessName, finalizing, onCancel, onConfirm }) {
   if (!open) return null;
   return (
-    <div className="bizzy-modal-main-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-      <div className="w-full max-w-lg rounded-2xl border border-white/12 bg-[#0d0f12] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
+    <div
+      data-monthly-review-finalize-dialog
+      className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex min-h-[100dvh] items-center justify-center overflow-y-auto px-4 py-8"
+      role="presentation"
+    >
+      <div role="dialog" aria-modal="true" aria-labelledby="monthly-review-finalize-title" className="relative w-full max-w-lg overflow-hidden rounded-2xl border border-white/[0.13] bg-[rgba(13,16,17,0.96)] p-5 shadow-[0_32px_100px_rgba(0,0,0,0.72),0_0_0_1px_rgba(74,222,128,0.035)] backdrop-blur-xl sm:p-6">
+        <div className="pointer-events-none absolute inset-x-12 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/45 to-transparent" aria-hidden="true" />
         <div className="flex items-start gap-3">
           <div className="mt-1 rounded-full border border-emerald-300/20 bg-emerald-300/[0.08] p-2 text-emerald-100">
             <ClipboardCheck className="h-4 w-4" />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-white">Approve monthly books?</h3>
+            <h3 id="monthly-review-finalize-title" className="text-lg font-semibold text-white">Approve monthly books?</h3>
             <p className="mt-2 text-sm text-white/58">
               This will mark {businessName || "this customer"} as reviewed for {formatMonth(month)} and show the customer-facing Financials stamp.
             </p>

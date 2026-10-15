@@ -1,11 +1,23 @@
-export function buildFinalizationGuard(sourceLedger = {}) {
+export function buildFinalizationGuard(sourceLedger = {}, canonicalFeedState = {}) {
   const groups = Array.isArray(sourceLedger.account_groups) ? sourceLedger.account_groups : [];
+  const statusByTransactionId = canonicalFeedState.status_by_transaction_id || {};
   const blockers = [];
+  const hasCanonicalFeedProjection = Object.keys(statusByTransactionId).length > 0 || Array.isArray(canonicalFeedState.needs_review_rows);
   for (const group of groups) {
     for (const txn of group.transactions || []) {
+      const canonicalStatus = statusByTransactionId[String(txn.id)] || null;
+      if (["posted", "matched", "excluded"].includes(canonicalStatus)) continue;
+      if (canonicalStatus === "pending") {
+        blockers.push({ type: "pending_transactions", transaction_id: txn.id, item_key: blockerItemKey("transaction", txn.id), label: txn.payee || txn.description || txn.id, message: "Transaction is still pending." });
+        continue;
+      }
+      if (canonicalStatus === "needs_review") continue;
       const syncKey = txn.qbo_lifecycle_status?.key || txn.qbo_sync_status?.key || "needs_review";
       const label = `${txn.payee || txn.description || txn.id} ${txn.date ? `(${txn.date})` : ""}`.trim();
       const itemKey = blockerItemKey("transaction", txn.id);
+      if (!hasCanonicalFeedProjection && txn.books_review_tab === "needs_review") {
+        blockers.push({ type: "needs_review_transactions", transaction_id: txn.id, item_key: itemKey, label, message: "Transaction still Needs Review." });
+      }
       if (!txn.effective_account_id && !txn.effective_account_name) {
         blockers.push({ type: "missing_gl_account", transaction_id: txn.id, item_key: itemKey, label, message: "Missing GL account." });
       }
@@ -40,16 +52,15 @@ export function buildAccountingCloseFinalizationGuard({
   operatorResponses = {},
   canonicalCoa = {},
   reconciliationEvidence = {},
+  canonicalFeedState = {},
 } = {}) {
-  const sourceGuard = buildFinalizationGuard(sourceLedger);
+  const sourceGuard = buildFinalizationGuard(sourceLedger, canonicalFeedState);
   const blockers = [...(sourceGuard.blockers || [])];
-  const sourceTransactions = (sourceLedger.account_groups || []).flatMap((group) => group.transactions || []);
-  for (const txn of sourceTransactions) {
-    if (txn.books_review_tab !== "needs_review") continue;
+  for (const txn of canonicalFeedState.needs_review_rows || []) {
     blockers.push({
       type: "needs_review_transactions",
-      transaction_id: txn.id,
-      item_key: blockerItemKey("transaction", txn.id),
+      transaction_id: txn.id || txn.transaction_id,
+      item_key: blockerItemKey("transaction", txn.id || txn.transaction_id),
       label: txn.payee || txn.description || txn.id,
       message: "Transaction still Needs Review.",
     });
@@ -106,7 +117,43 @@ export function buildAccountingCloseFinalizationGuard({
       ],
       removed_module_section_requirements: ["forecasting", "tax_liability", "job_costing", "reconciliations"],
       policy: "Monthly Review V2 accounting close guard; module review sections do not gate finalization.",
+      canonical_feed_service: "bookkeepingTransactionFeedService",
     },
+  };
+}
+
+export function buildApprovalReadinessProjection({ businessId, month, timezone, guard = {}, reportState = {} } = {}) {
+  const [year, monthNumber] = String(month || "").slice(0, 7).split("-").map(Number);
+  const periodStart = year && monthNumber ? `${year}-${String(monthNumber).padStart(2, "0")}-01` : null;
+  const periodEnd = year && monthNumber
+    ? new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10)
+    : null;
+  const idsFor = (types) => Array.from(new Set((guard.blockers || [])
+    .filter((row) => types.includes(row.type))
+    .map((row) => row.transaction_id)
+    .filter(Boolean))).slice(0, 100);
+  const bucket = (types, extraCount = 0) => {
+    const transactionIds = idsFor(types);
+    const reasonCount = types.reduce((sum, type) => sum + Number(guard.counts?.[type] || 0), 0);
+    return { count: Math.max(transactionIds.length, reasonCount, Number(extraCount || 0)), transaction_ids: transactionIds };
+  };
+  const blockers = {
+    needs_review: bucket(["needs_review_transactions"]),
+    pending: bucket(["pending_transactions"]),
+    posting_in_progress: bucket(["qbo_queued"]),
+    posting_failed: bucket(["qbo_failed"]),
+    not_posted: bucket(["qbo_not_posted", "missing_gl_account"]),
+    unresolved_matches: bucket(["operator_responses_unresolved", "canonical_coa_needs_review"]),
+    unreconciled_accounts: bucket(["reconciliation_exception"]),
+    report: { status: reportState.status || "not_published" },
+  };
+  return {
+    business_id: businessId,
+    period: { start: periodStart, end: periodEnd, timezone: timezone || "UTC" },
+    ready_for_approval: guard.can_finalize === true && reportState.status === "published_current",
+    blockers,
+    generated_at: new Date().toISOString(),
+    source_version: "monthly_close_readiness_v2",
   };
 }
 

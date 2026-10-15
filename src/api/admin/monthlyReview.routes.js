@@ -22,6 +22,7 @@ import { buildCanonicalPostingPreview } from "../../services/bookkeeping/canonic
 import { classifyQboDuplicateCandidate, canOverrideReviewedCandidate } from "../../services/bookkeeping/qboDuplicateCandidateClassification.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
+import { getMonthlyReportState } from "../../services/accounting/monthlyReportStateService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
 import { enqueueUnresolvedBookkeepingBacklog } from "../../services/bookkeeping/backgroundBookkeepingProcessingService.js";
 import { runBookkeepingSuggestionPass } from "../bookkeeping/routes/bookkeeping.suggest.routes.js";
@@ -110,6 +111,7 @@ import {
 import { summarizePendingLifecycles } from "../../services/bookkeeping/pendingTransactionLifecycle.js";
 import {
   buildAccountingCloseFinalizationGuard,
+  buildApprovalReadinessProjection,
   buildFinalizationGuard,
   buildReconciliationKpis,
   canonicalKeyFromCategorization,
@@ -309,12 +311,15 @@ router.get("/businesses/:businessId", async (req, res) => {
     const operatorResponses = await fetchOperatorResponsesAwaitingReview(businessId, month);
     const canonicalCoa = await buildCanonicalCoaEvidence(businessId, month);
     const canonicalVendors = await buildCanonicalVendorEvidence(businessId, month);
+    const canonicalFeedState = await loadCanonicalCloseFeedState(businessId, month);
     const pnlReport = await fetchMonthlyPnlReport(businessId, month);
+    const reportingTimezone = await fetchReportingTimezone(businessId);
     const finalizationGuard = buildAccountingCloseFinalizationGuard({
       sourceLedger,
       operatorResponses,
       canonicalCoa,
       reconciliationEvidence: summaries.reconciliations,
+      canonicalFeedState,
     });
     const currentEvidence = buildCurrentReviewEvidence(summaries, sourceLedger);
     const currentEvidenceHash = hashEvidence(currentEvidence);
@@ -341,6 +346,7 @@ router.get("/businesses/:businessId", async (req, res) => {
       changed_since_finalized: changedSinceFinalized,
       readiness,
       finalization_guard: finalizationGuard,
+      approval_readiness: buildApprovalReadinessProjection({ businessId, month, timezone: reportingTimezone, guard: finalizationGuard, reportState: pnlReport }),
       canonical_chart_of_accounts: canonicalCoa,
       canonical_vendors: canonicalVendors,
       operator_responses: operatorResponses,
@@ -391,6 +397,29 @@ router.get("/businesses/:businessId/connected-accounts", async (req, res) => {
       error: "monthly_review_connected_accounts_failed",
       message: e?.message || "Could not load connected financial accounts.",
     });
+  }
+});
+
+router.get("/businesses/:businessId/pnl-report/view", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    const month = normalizeMonth(req.query.month);
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    if (!month) return res.status(400).json({ ok: false, error: "invalid_month" });
+    await assertMonthlyReviewPeriodAvailable(businessId, month);
+    const [year, monthNumber] = month.split("-").map(Number);
+    const reportState = await getMonthlyReportState({ db: supabase, businessId, year, month: monthNumber, accountingMethod: "Cash" });
+    if (!reportState.report?.storage_path || !["published_current", "published_outdated"].includes(reportState.status)) {
+      return res.status(404).json({ ok: false, error: "published_report_not_found" });
+    }
+    const { data: signed, error: signedError } = await supabase.storage
+      .from("financial-reports")
+      .createSignedUrl(reportState.report.storage_path, 60 * 10);
+    if (signedError || !signed?.signedUrl) throw signedError || new Error("signed_url_unavailable");
+    return res.json({ ok: true, report_state: reportState.status, signed_url: signed.signedUrl });
+  } catch (e) {
+    console.error("[monthly-review] view pnl failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_view_pnl_failed", "Could not open the published P&L.", e);
   }
 });
 
@@ -1746,6 +1775,7 @@ router.patch("/runs/:runId/sections/:sectionKey", async (req, res) => {
 });
 
 router.post("/runs/:runId/pull-pnl", async (req, res) => {
+  let publicationContext = null;
   try {
     const { runId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
@@ -1757,6 +1787,18 @@ router.post("/runs/:runId/pull-pnl", async (req, res) => {
     }
 
     const now = new Date().toISOString();
+    const publicationRequestId = UUID_RE.test(String(req.body?.request_id || req.headers["x-idempotency-key"] || ""))
+      ? String(req.body?.request_id || req.headers["x-idempotency-key"])
+      : crypto.randomUUID();
+    publicationContext = { businessId: run.business_id, year, month: monthNumber, publicationRequestId };
+    const existingState = await getMonthlyReportState({ db: supabase, businessId: run.business_id, year, month: monthNumber, accountingMethod: "Cash" });
+    if (existingState.status === "published_current") return res.json({ ok: true, idempotent: true, report_state: existingState });
+    if (existingState.report?.publication_request_id === publicationRequestId && existingState.status === "publishing") {
+      return res.status(202).json({ ok: true, idempotent: true, report_state: existingState });
+    }
+    if (existingState.report?.id) {
+      await supabase.from("report_metadata").update({ publication_status: "publishing", publication_request_id: publicationRequestId, publication_failure_code: null }).eq("id", existingState.report.id);
+    }
     const qboSync = await runQboSync({ businessId: run.business_id, year, month: monthNumber });
     const pdf = await ensurePnLPdf({
       business_id: run.business_id,
@@ -1772,10 +1814,17 @@ router.post("/runs/:runId/pull-pnl", async (req, res) => {
         monthly_review_published_by: req.user.id,
         monthly_review_run_id: run.id,
         monthly_review_source: "monthly_review_admin_pull",
+        accounting_method: "Cash",
+        publication_status: "published",
+        publication_request_id: publicationRequestId,
+        publication_failure_code: null,
+        monthly_review_source_snapshot_id: qboSync?.snapshot?.id || null,
+        monthly_review_source_fingerprint: qboSync?.snapshot?.raw_hash || null,
       })
       .eq("business_id", run.business_id)
       .eq("year", year)
       .eq("month", monthNumber)
+      .eq("accounting_method", "Cash")
       .select("*")
       .maybeSingle();
     if (reportErr) throw reportErr;
@@ -1802,8 +1851,16 @@ router.post("/runs/:runId/pull-pnl", async (req, res) => {
     const summaries = await buildSummaries(run.business_id, run.review_month);
     await syncRunStatus(run.id, summaries);
 
-    res.json({ ok: true, report, qbo_sync: qboSync, pdf });
+    const reportState = await getMonthlyReportState({ db: supabase, businessId: run.business_id, year, month: monthNumber, accountingMethod: "Cash" });
+    res.json({ ok: true, report, report_state: reportState, qbo_sync: qboSync, pdf });
   } catch (e) {
+    if (publicationContext) {
+      const { businessId, year, month, publicationRequestId } = publicationContext;
+      await supabase.from("report_metadata").update({
+        publication_status: "failed",
+        publication_failure_code: String(e?.code || e?.message || "publication_failed").slice(0, 160),
+      }).eq("business_id", businessId).eq("year", year).eq("month", month).eq("accounting_method", "Cash").eq("publication_request_id", publicationRequestId);
+    }
     console.error("[monthly-review] pull pnl failed", e?.message || e);
     res.status(500).json({ ok: false, error: "monthly_review_pull_pnl_failed", message: e?.message || "Could not pull the P&L report." });
   }
@@ -1826,35 +1883,38 @@ router.post("/runs/:runId/finalize", async (req, res) => {
     const sourceLedger = await buildMonthlySourceLedger(run.business_id, run.review_month);
     const operatorResponses = await fetchOperatorResponsesAwaitingReview(run.business_id, run.review_month);
     const canonicalCoa = await buildCanonicalCoaEvidence(run.business_id, run.review_month);
+    const canonicalFeedState = await loadCanonicalCloseFeedState(run.business_id, run.review_month);
     const finalizationGuard = buildAccountingCloseFinalizationGuard({
       sourceLedger,
       operatorResponses,
       canonicalCoa,
       reconciliationEvidence: summaries.reconciliations,
+      canonicalFeedState,
     });
+    const [reportYear, reportMonth] = String(run.review_month).slice(0, 7).split("-").map(Number);
+    const [reportState, reportingTimezone] = await Promise.all([
+      getMonthlyReportState({ db: supabase, businessId: run.business_id, year: reportYear, month: reportMonth, accountingMethod: "Cash" }),
+      fetchReportingTimezone(run.business_id),
+    ]);
+    const approvalReadiness = buildApprovalReadinessProjection({ businessId: run.business_id, month: run.review_month, timezone: reportingTimezone, guard: finalizationGuard, reportState });
     if (!finalizationGuard.can_finalize) {
       return res.status(409).json({
         ok: false,
         error: "accounting_close_not_ready_for_finalization",
         message: summarizeAccountingCloseBlockers(finalizationGuard),
         finalization_guard: finalizationGuard,
+        approval_readiness: approvalReadiness,
       });
     }
-    const [reportYear, reportMonth] = String(run.review_month).slice(0, 7).split("-").map(Number);
-    const { data: publishedReport, error: publishedReportErr } = await supabase
-      .from("report_metadata")
-      .select("id,monthly_review_published_at,storage_path")
-      .eq("business_id", run.business_id)
-      .eq("year", reportYear)
-      .eq("month", reportMonth)
-      .not("monthly_review_published_at", "is", null)
-      .maybeSingle();
-    if (publishedReportErr) throw publishedReportErr;
-    if (!publishedReport?.monthly_review_published_at || !publishedReport?.storage_path) {
+    const publishedReport = reportState.report;
+    if (reportState.status !== "published_current") {
       return res.status(409).json({
         ok: false,
-        error: "pnl_not_published_for_finalization",
-        message: "Pull and publish the monthly P&L from QuickBooks before finalizing.",
+        error: reportState.status === "published_outdated" ? "pnl_publication_outdated" : "pnl_not_published_for_finalization",
+        message: reportState.status === "published_outdated"
+          ? "Publish an updated monthly P&L from the current QuickBooks snapshot before approving."
+          : "Pull and publish the monthly P&L from QuickBooks before approving.",
+        report_state: reportState,
       });
     }
     const readiness = computeReadiness(sections, summaries);
@@ -3073,15 +3133,57 @@ function countSourceLedgerPendingTransactions(sourceLedger = {}) {
 async function fetchMonthlyPnlReport(businessId, month) {
   const [year, monthNumber] = String(month).slice(0, 7).split("-").map(Number);
   if (!year || !monthNumber) return null;
+  return getMonthlyReportState({ db: supabase, businessId, year, month: monthNumber, accountingMethod: "Cash" });
+}
+
+async function fetchReportingTimezone(businessId) {
   const { data, error } = await supabase
-    .from("report_metadata")
-    .select("id,year,month,storage_path,monthly_review_published_at,monthly_review_published_by,monthly_review_source,generated_at,revenue,net_profit")
+    .from("business_financial_reporting_config")
+    .select("reporting_timezone")
     .eq("business_id", businessId)
-    .eq("year", year)
-    .eq("month", monthNumber)
     .maybeSingle();
   if (error) throw error;
-  return data || null;
+  return data?.reporting_timezone || "UTC";
+}
+
+async function loadCanonicalCloseFeedState(businessId, month) {
+  const [rangeStart, rangeEnd] = monthBounds(month);
+  const statuses = CANONICAL_BOOKKEEPING_FEED_STATUSES;
+  const statusByTransactionId = {};
+  const rowsByStatus = {};
+  const counts = {};
+  for (const status of statuses) {
+    const collected = [];
+    let page = 1;
+    let totalCount = 0;
+    do {
+      const result = await fetchBookkeepingTransactions({
+        businessId,
+        statusFilter: status,
+        rangeStart,
+        rangeEnd,
+        page,
+        pageSize: 200,
+      });
+      totalCount = Number(result.totalCount || 0);
+      collected.push(...(result.rows || []));
+      page += 1;
+    } while (collected.length < totalCount && page <= 26);
+    if (collected.length < totalCount) throw new Error("canonical_close_feed_scope_exceeded");
+    rowsByStatus[status] = collected;
+    counts[status] = totalCount;
+    collected.forEach((row) => { statusByTransactionId[String(row.id || row.transaction_id)] = status; });
+  }
+  return {
+    business_id: businessId,
+    month,
+    range_start: rangeStart,
+    range_end: rangeEnd,
+    counts,
+    needs_review_rows: rowsByStatus.needs_review || [],
+    status_by_transaction_id: statusByTransactionId,
+    source_version: "canonical_bookkeeping_feed_v1",
+  };
 }
 
 async function ensureRun(businessId, month, userId) {
@@ -4416,6 +4518,7 @@ function summarizeAccountingCloseBlockers(guard = {}) {
   const counts = guard.counts || {};
   const parts = [
     counts.needs_review_transactions ? `${counts.needs_review_transactions} Needs Review transaction${counts.needs_review_transactions === 1 ? "" : "s"}` : null,
+    counts.pending_transactions ? `${counts.pending_transactions} pending transaction${counts.pending_transactions === 1 ? "" : "s"}` : null,
     counts.operator_responses_unresolved ? `${counts.operator_responses_unresolved} Operator Response${counts.operator_responses_unresolved === 1 ? "" : "s"}` : null,
     counts.canonical_coa_needs_review ? `${counts.canonical_coa_needs_review} canonical account approval${counts.canonical_coa_needs_review === 1 ? "" : "s"}` : null,
     counts.qbo_failed ? `${counts.qbo_failed} failed QBO posting${counts.qbo_failed === 1 ? "" : "s"}` : null,

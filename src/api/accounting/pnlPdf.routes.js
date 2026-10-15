@@ -1,6 +1,8 @@
+/* global process */
 import express from "express";
 import { ensurePnLPdf } from "./pnlPdfService.js";
 import { supabase } from "../../services/supabaseAdmin.js";
+import { projectMonthlyReportState } from "../../services/accounting/monthlyReportStateService.js";
 
 const router = express.Router();
 
@@ -34,8 +36,20 @@ router.get("/archive", async (req, res) => {
       return res.status(500).json({ ok: false, error: "report_metadata_read_failed" });
     }
 
+    const rows = Array.isArray(data) ? data : [];
+    const { data: snapshots, error: snapshotsError } = await supabase
+      .from("monthly_review_qbo_pnl_snapshots")
+      .select("id,business_id,review_year,review_month,accounting_method,raw_hash,snapshot_version,pulled_at,status,is_current")
+      .eq("business_id", businessId)
+      .eq("is_current", true);
+    if (snapshotsError) throw snapshotsError;
+    const snapshotsByPeriod = new Map((snapshots || []).map((snapshot) => [
+      `${snapshot.review_year}-${snapshot.review_month}-${snapshot.accounting_method || "Cash"}`,
+      snapshot,
+    ]));
+
     const reports = await Promise.all(
-      (Array.isArray(data) ? data : []).map(async (row) => {
+      rows.map(async (row) => {
         let signed_url = null;
         if (row?.storage_path) {
           const { data: signed, error: signedErr } = await supabase.storage
@@ -43,7 +57,11 @@ router.get("/archive", async (req, res) => {
             .createSignedUrl(row.storage_path, 60 * 10);
           if (!signedErr) signed_url = signed?.signedUrl || null;
         }
-        return { ...row, signed_url };
+        const reportState = projectMonthlyReportState({
+          report: row,
+          currentSnapshot: snapshotsByPeriod.get(`${row.year}-${row.month}-${row.accounting_method || "Cash"}`) || null,
+        });
+        return { ...row, report_state: reportState.status, source_current: reportState.source_current, signed_url };
       })
     );
 
