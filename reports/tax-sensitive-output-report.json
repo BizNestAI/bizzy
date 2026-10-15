@@ -1,7 +1,7 @@
 {
   "status": "skipped",
   "runtimeExecuted": false,
-  "generatedAt": "2026-09-29T19:20:35.909Z",
+  "generatedAt": "2026-10-15T15:08:25.187Z",
   "reason": "TAX_OUTPUT_SAFETY_ENABLED is not true.",
   "missingEnvironment": [
     "TEST_SUPABASE_URL",
@@ -85,7 +85,7 @@
       },
       {
         "file": "src/services/tax/taxClassificationWorker.service.js",
-        "line": 410,
+        "line": 422,
         "category": "error_details_rendering",
         "severity": "medium",
         "message": "Tax code references error details; runtime scanner verifies exposure.",

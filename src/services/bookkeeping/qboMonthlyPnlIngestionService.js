@@ -423,6 +423,9 @@ export function normalizeQboPnlSnapshotPayload({
   const reconciliation = reconcileNormalizedPnl({ summary, accounts, transactions, detailReportName });
   accounts = applyDetailCompletenessToAccounts(accounts, reconciliation);
   const metadata = {
+    financial_content: {
+      currency_code: summary.currency_code || "USD",
+    },
     source: {
       summary_report: SUMMARY_REPORT,
       detail_report: detailReportName,
@@ -598,6 +601,7 @@ export function parseProfitAndLossSummary(report, {
     reconciliation: buildSummaryReconciliation(totals),
     section_state: sectionState,
     accounting_method: reportBasis,
+    currency_code: String(header?.Currency || header?.currency || "USD").toUpperCase(),
     source_start_date: sourceStartDate,
     source_end_date: sourceEndDate,
     review_year: Number(reviewYear),

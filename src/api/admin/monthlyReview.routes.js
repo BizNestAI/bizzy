@@ -1801,7 +1801,7 @@ router.post("/runs/:runId/pull-pnl", async (req, res) => {
     const qboSync = await runQboSync({ businessId: run.business_id, year, month: monthNumber });
     const { data: publicationSnapshot, error: publicationSnapshotError } = await supabase
       .from("monthly_review_qbo_pnl_snapshots")
-      .select("id,raw_hash")
+      .select("id,raw_hash,metadata")
       .eq("business_id", run.business_id)
       .eq("id", qboSync?.snapshot?.id || "00000000-0000-0000-0000-000000000000")
       .maybeSingle();
@@ -1825,7 +1825,7 @@ router.post("/runs/:runId/pull-pnl", async (req, res) => {
         publication_request_id: publicationRequestId,
         publication_failure_code: null,
         monthly_review_source_snapshot_id: publicationSnapshot?.id || null,
-        monthly_review_source_fingerprint: publicationSnapshot?.raw_hash || null,
+        monthly_review_source_fingerprint: publicationSnapshot?.metadata?.financial_content?.fingerprint || null,
       })
       .eq("business_id", run.business_id)
       .eq("year", year)

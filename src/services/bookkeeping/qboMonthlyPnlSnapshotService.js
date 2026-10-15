@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
+import { buildMonthlyPnlContentFingerprint } from "../accounting/monthlyPnlContentFingerprint.js";
 
 const SNAPSHOTS_TABLE = "monthly_review_qbo_pnl_snapshots";
 const ACCOUNTS_TABLE = "monthly_review_qbo_pnl_accounts";
@@ -172,6 +173,23 @@ export async function createOrReplaceMonthlyPnlSnapshot({
     accounts: normalizedAccounts,
     transactions: normalizedTransactions,
   });
+  const financialContent = buildMonthlyPnlContentFingerprint({
+    snapshot: {
+      business_id: businessId,
+      qbo_realm_id: qboRealmId,
+      accounting_method: accountingMethod,
+      source_start_date: sourceStartDate || range.sourceStartDate,
+      source_end_date: sourceEndDate || range.sourceEndDate,
+      currency_code: metadata?.financial_content?.currency_code || "USD",
+      revenue,
+      cogs,
+      expenses,
+      net_profit: netProfit,
+      metadata,
+    },
+    accounts: normalizedAccounts,
+    transactions: normalizedTransactions,
+  });
 
   const nextVersion = await getNextSnapshotVersion({ db, businessId, reviewYear, reviewMonth });
   const snapshotPayload = {
@@ -192,7 +210,14 @@ export async function createOrReplaceMonthlyPnlSnapshot({
     net_profit: numeric(netProfit),
     raw_hash: computedRawHash,
     status: "building",
-    metadata: plainObject(metadata),
+    metadata: {
+      ...plainObject(metadata),
+      ...(financialContent ? { financial_content: {
+        version: financialContent.version,
+        fingerprint: financialContent.fingerprint,
+        currency_code: financialContent.content.identity.currency_code,
+      } } : {}),
+    },
   };
 
   const snapshot = await insertSingle(db.from(SNAPSHOTS_TABLE).insert(snapshotPayload).select("*"));

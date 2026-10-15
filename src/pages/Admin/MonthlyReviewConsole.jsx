@@ -443,6 +443,7 @@ export default function MonthlyReviewConsole() {
       setAssignmentNotes(data?.run?.assignment_notes || "");
       setReminderMessage(`Please review ${data?.business?.business_name || "this customer"} for ${formatMonth(month)}.`);
       setReminderDueAt("");
+      return data;
     } catch (e) {
       setError(e?.message || "Could not load monthly review detail.");
     } finally {
@@ -2290,6 +2291,17 @@ export default function MonthlyReviewConsole() {
       const requestId = e?.body?.request_id;
       const message = e?.body?.message || e?.message || "Could not finalize monthly review.";
       setError(requestId ? `${message} Request ID: ${requestId}` : message);
+      if (e?.code === "NETWORK_ERROR" || (!e?.body && /network error|failed to fetch/i.test(String(e?.message || "")))) {
+        try {
+          const hydrated = await loadDetail();
+          if (hydrated?.stamp || hydrated?.run?.status === "finalized") {
+            finalizeRequestIdRef.current = null;
+            setConfirmFinalizeOpen(false);
+          }
+        } catch {
+          // Preserve the same idempotency key until status can be hydrated safely.
+        }
+      }
     } finally {
       finalizeSubmittingRef.current = false;
       setFinalizing(false);

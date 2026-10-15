@@ -2,7 +2,7 @@
 
 Status: **skipped**
 Runtime executed: **no**
-Generated at: 2026-09-29T19:20:35.909Z
+Generated at: 2026-10-15T15:08:25.187Z
 Target: test
 
 ## Static Companion Scan
@@ -20,7 +20,7 @@ Findings: 11
 | src/services/tax/state/stateTaxEngine.js | 54 | medium | error_details_rendering | configSet = { stateCode: state, configs: {}, missing: [{ code: err.code, details: err.details }], warnings: [], supportLevel: TAX_RULE_SUPPO |
 | src/services/tax/stateTaxRule.repository.js | 94 | medium | error_details_rendering | missing.push({ ruleType, code: err.code \|\| "unsupported_state_tax_rule", details: err.details }); |
 | src/services/tax/taxClassificationFallbackRepair.service.js | 290 | medium | error_details_rendering | details: sanitizeRepairMessage(err?.details), |
-| src/services/tax/taxClassificationWorker.service.js | 410 | medium | error_details_rendering | error.details = details; |
+| src/services/tax/taxClassificationWorker.service.js | 422 | medium | error_details_rendering | error.details = details; |
 | src/services/tax/taxRuleConfig.repository.js | 95 | medium | error_details_rendering | missing.push({ ruleType, code: err.code \|\| "tax_rule_config_missing", details: err.details }); |
 | src/components/Tax/Setup/TaxSetupWorkflow.jsx | 482 | medium | error_details_rendering | const details = err?.details \|\| {}; |
 

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { projectMonthlyReportState } from "../src/services/accounting/monthlyReportStateService.js";
 import { buildAccountingCloseFinalizationGuard, buildApprovalReadinessProjection } from "../src/api/admin/monthlyReviewCloseGuard.js";
 
-const snapshot = { id: "snapshot-current", raw_hash: "hash-current" };
+const snapshot = { id: "snapshot-current", raw_hash: "hash-current", metadata: { financial_content: { fingerprint: "qbo-pnl-financial-content-v1:current" } } };
 const published = {
   id: "report-1",
   storage_path: "business/2026-09-pnl.pdf",
@@ -17,8 +17,9 @@ test("monthly report state only calls a publication current when durable source 
   assert.equal(projectMonthlyReportState({ report: { ...published, publication_status: "publishing" }, currentSnapshot: snapshot }).status, "publishing");
   assert.equal(projectMonthlyReportState({ report: { ...published, publication_status: "failed" }, currentSnapshot: snapshot }).status, "publication_failed");
   assert.equal(projectMonthlyReportState({ report: published, currentSnapshot: snapshot }).status, "published_legacy_unverified");
-  assert.equal(projectMonthlyReportState({ report: { ...published, monthly_review_source_snapshot_id: "snapshot-old", monthly_review_source_fingerprint: "hash-old" }, currentSnapshot: snapshot }).status, "published_outdated");
-  assert.equal(projectMonthlyReportState({ report: { ...published, monthly_review_source_snapshot_id: snapshot.id, monthly_review_source_fingerprint: snapshot.raw_hash }, currentSnapshot: snapshot }).status, "published_current");
+  const oldSource = { id: "snapshot-old" };
+  assert.equal(projectMonthlyReportState({ report: { ...published, monthly_review_source_snapshot_id: "snapshot-old", monthly_review_source_fingerprint: "qbo-pnl-financial-content-v1:old" }, sourceSnapshot: oldSource, currentSnapshot: snapshot }).status, "published_outdated");
+  assert.equal(projectMonthlyReportState({ report: { ...published, monthly_review_source_snapshot_id: "snapshot-old", monthly_review_source_fingerprint: "qbo-pnl-financial-content-v1:current" }, sourceSnapshot: oldSource, currentSnapshot: snapshot }).status, "published_current");
 });
 
 test("approval guard uses canonical feed membership and does not relabel matched or excluded rows", () => {
@@ -55,7 +56,7 @@ test("MRP publication and approval use shared server state, stable request ident
   assert.match(ui, /View Published P&amp;L/);
   assert.match(routes, /loadCanonicalCloseFeedState/);
   assert.match(routes, /reportState\.status !== "published_current"/);
-  assert.match(archive, /projectMonthlyReportState/);
+  assert.match(archive, /getMonthlyReportState/);
   assert.match(archiveUi, /"x-business-id": currentBusiness\.id/);
   assert.match(archiveUi, /Legacy report · freshness not yet verified/);
   assert.match(routes, /reconcile-pnl-source/);
