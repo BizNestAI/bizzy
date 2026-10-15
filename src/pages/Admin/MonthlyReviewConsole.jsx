@@ -347,6 +347,8 @@ export default function MonthlyReviewConsole() {
   const [activeLock, setActiveLock] = useState(null);
   const [historyDrawer, setHistoryDrawer] = useState({ open: false, transaction: null, rows: [], loading: false });
   const [confirmFinalizeOpen, setConfirmFinalizeOpen] = useState(false);
+  const finalizeSubmittingRef = useRef(false);
+  const finalizeRequestIdRef = useRef(null);
   const publishRequestIdRef = useRef(null);
 
   const displayBusinesses = useMemo(() => businesses.map((business) => buildDisplayBusiness(business)), [businesses]);
@@ -2264,13 +2266,16 @@ export default function MonthlyReviewConsole() {
   };
 
   const finalizeReview = async () => {
-    if (!detail?.run?.id || detail?.stamp) return;
+    if (!detail?.run?.id || detail?.stamp || finalizeSubmittingRef.current) return;
+    finalizeSubmittingRef.current = true;
+    if (!finalizeRequestIdRef.current) finalizeRequestIdRef.current = globalThis.crypto?.randomUUID?.() || `${Date.now()}-0000-4000-8000-000000000000`;
     setFinalizing(true);
     setError("");
     try {
       const result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/finalize`, {
         method: "POST",
-        body: { notes: finalizeNotes },
+        headers: { "x-idempotency-key": finalizeRequestIdRef.current },
+        body: { notes: finalizeNotes, request_id: finalizeRequestIdRef.current },
       });
       setDetail((current) => current ? { ...current, run: result?.run || current.run, stamp: result?.stamp || current.stamp } : current);
       setBusinesses((current) => current.map((business) => business.id === selectedBusinessId
@@ -2280,9 +2285,13 @@ export default function MonthlyReviewConsole() {
         window.dispatchEvent(new Event("bizzy:financial-review-stamp-updated"));
       }
       setConfirmFinalizeOpen(false);
+      finalizeRequestIdRef.current = null;
     } catch (e) {
-      setError(e?.body?.message || e?.message || "Could not finalize monthly review.");
+      const requestId = e?.body?.request_id;
+      const message = e?.body?.message || e?.message || "Could not finalize monthly review.";
+      setError(requestId ? `${message} Request ID: ${requestId}` : message);
     } finally {
+      finalizeSubmittingRef.current = false;
       setFinalizing(false);
     }
   };

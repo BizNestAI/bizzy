@@ -96,7 +96,6 @@ import {
   getMonthlyQboPnlSnapshot,
   refreshMonthlyQboPnlSnapshot,
 } from "../../services/bookkeeping/qboMonthlyPnlIngestionService.js";
-import { refreshMonthlyQboFinancialSnapshot } from "../../services/accounting/healthMonthlySnapshotService.js";
 import { ensureForecastV1Run } from "../../services/accounting/forecastV1Service.js";
 import { getConnectedFinancialAccountsForBusiness } from "../../services/plaid/plaidIntegrationService.js";
 import { fetchAdminViewPersistedAccountMappings } from "../bookkeeping/routes/bookkeeping.accountMappings.routes.js";
@@ -1909,6 +1908,9 @@ router.post("/runs/:runId/reconcile-pnl-source", async (req, res) => {
 });
 
 router.post("/runs/:runId/finalize", async (req, res) => {
+  const requestId = UUID_RE.test(String(req.body?.request_id || req.headers["x-idempotency-key"] || ""))
+    ? String(req.body?.request_id || req.headers["x-idempotency-key"])
+    : crypto.randomUUID();
   try {
     const { runId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
@@ -1966,18 +1968,13 @@ router.post("/runs/:runId/finalize", async (req, res) => {
     const evidenceHash = hashEvidence(currentEvidence);
     await persistSectionEvidenceSnapshots(run.id, summaries);
 
-    const finalSnapshot = await refreshMonthlyQboFinancialSnapshot({
-      businessId: run.business_id,
-      year: reportYear,
-      month: reportMonth,
-      source: "monthly_admin_review_close",
-    });
-    const approvedSnapshotId = finalSnapshot?.snapshot?.id || null;
+    const approvedSnapshotId = publishedReport?.monthly_review_source_snapshot_id || null;
     if (!approvedSnapshotId) {
       return res.status(409).json({
         ok: false,
         error: "monthly_review_final_snapshot_missing",
         message: "Could not verify the final Cash QuickBooks snapshot for this close.",
+        request_id: requestId,
       });
     }
 
@@ -1998,6 +1995,7 @@ router.post("/runs/:runId/finalize", async (req, res) => {
         pending_transaction_count_at_close: pendingTransactionCount,
         published_report_id: publishedReport.id,
         source_snapshot_id: approvedSnapshotId,
+        request_id: requestId,
       },
       p_evidence_snapshot: currentEvidence,
       p_evidence_hash: evidenceHash,
@@ -2015,10 +2013,15 @@ router.post("/runs/:runId/finalize", async (req, res) => {
       console.warn("[monthly-review] post-close forecast ensure skipped", err?.message || err);
     });
 
-    res.json({ ok: true, run: updatedRun, stamp, accounting_period_close: closeAuthority, close_result: closeResult });
+    res.json({ ok: true, request_id: requestId, run: updatedRun, stamp, accounting_period_close: closeAuthority, close_result: closeResult });
   } catch (e) {
-    console.error("[monthly-review] finalize failed", e?.message || e);
-    res.status(500).json({ ok: false, error: "monthly_review_finalize_failed", message: e?.message || "Could not finalize review." });
+    console.error("[monthly-review] finalize failed", { request_id: requestId, code: e?.code || null, message: e?.message || String(e) });
+    res.status(500).json({
+      ok: false,
+      error: "monthly_books_approval_failed",
+      message: "Bizzi could not approve this month. No approval was recorded. Try again or review the request with support.",
+      request_id: requestId,
+    });
   }
 });
 
