@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -136,7 +137,8 @@ test("Monthly Review View Customer App mints handoff for selected business and o
   assert.match(monthlyReviewSource, /buildMonthlyReviewReturnUrl\(\{ month, businessId: selectedBusinessId \}\)/);
   assert.match(monthlyReviewSource, /ADMIN_VIEW_RETURN_MESSAGE/);
   assert.match(monthlyReviewSource, /window\.addEventListener\("message", onAdminViewReturn\)/);
-  assert.match(monthlyReviewSource, /window\.location\.reload\(\)/);
+  assert.match(monthlyReviewSource, /loadBookkeepingFeedCounts\(\)/);
+  assert.match(monthlyReviewSource, /loadPostingReview\(\)/);
 });
 
 test("Monthly Review return URL preserves selected business and month without privileged tokens", () => {
@@ -149,9 +151,10 @@ test("Monthly Review return URL preserves selected business and month without pr
 
 test("Admin View client redeems handoff into sessionStorage and omits raw token logging", async () => {
   const storage = new Map();
-  const previousWindow = global.window;
-  global.window = {
+  const previousWindow = globalThis.window;
+  globalThis.window = {
     location: { hostname: "localhost" },
+    __VITE: { VITE_SUPABASE_URL: "https://example.supabase.co", VITE_SUPABASE_ANON_KEY: "test-anon-key" },
     sessionStorage: {
       getItem: (key) => storage.get(key) || null,
       setItem: (key, value) => storage.set(key, String(value)),
@@ -190,8 +193,8 @@ test("Admin View client redeems handoff into sessionStorage and omits raw token 
   assert.equal(getStoredAdminViewSessionToken(), "active-token");
   assert.equal(storage.get(ADMIN_VIEW_SESSION_STORAGE_KEY), "active-token");
   assert.match(storage.get(ADMIN_VIEW_CONTEXT_STORAGE_KEY), /"businessId":"business-a"/);
-  assert.equal(global.window.localStorage, undefined);
-  global.window = previousWindow;
+  assert.equal(globalThis.window.localStorage, undefined);
+  globalThis.window = previousWindow;
 });
 
 test("read-only unavailable errors do not terminate Admin View session", async () => {

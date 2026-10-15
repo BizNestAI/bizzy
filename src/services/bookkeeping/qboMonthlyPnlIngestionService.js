@@ -38,7 +38,7 @@ export async function refreshMonthlyQboPnlSnapshot({
   businessId,
   year,
   month,
-  accountingMethod = "Cash",
+  accountingMethod,
   db = defaultSupabase,
   fetchReport = fetchQboReport,
   fetchAccounts = fetchQboChartOfAccounts,
@@ -47,6 +47,7 @@ export async function refreshMonthlyQboPnlSnapshot({
   promoteSnapshot = promoteMonthlyPnlSnapshotCurrent,
 } = {}) {
   if (!businessId) throw new QboMonthlyPnlIngestionError("missing_business_id", 400);
+  if (!accountingMethod) throw new QboMonthlyPnlIngestionError("missing_accounting_method", 400);
   const reviewYear = Number(year);
   const reviewMonth = Number(month);
   const { sourceStartDate, sourceEndDate } = getMonthlySourceRange(reviewYear, reviewMonth);
@@ -56,6 +57,7 @@ export async function refreshMonthlyQboPnlSnapshot({
     businessId,
     reviewYear,
     reviewMonth,
+    accountingMethod,
     includeAccounts: false,
     includeTransactions: false,
     db,
@@ -214,6 +216,7 @@ export async function getMonthlyQboPnlSnapshot({
     businessId,
     reviewYear: Number(year),
     reviewMonth: Number(month),
+    accountingMethod: "Cash",
     includeAccounts,
     includeTransactions,
     db,
@@ -233,6 +236,7 @@ export async function fetchMonthlyQboPnlAccountTransactions({
     businessId,
     reviewYear: Number(year),
     reviewMonth: Number(month),
+    accountingMethod: "Cash",
     includeAccounts: false,
     includeTransactions: false,
     db,

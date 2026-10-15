@@ -1,3 +1,4 @@
+/* global process */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -33,11 +34,11 @@ test("Books Review Admin View shows persisted GL category instead of source acco
   const labelBlock = feed.slice(feed.indexOf("const readOnlyGlLabel ="), feed.indexOf("const canRejectCcPayment"));
   assert.match(labelBlock, /txn\.glAccountName[\s\S]*txn\.final_qbo_account_name[\s\S]*txn\.suggested_qbo_account_name[\s\S]*"Uncategorized"/);
   assert.doesNotMatch(labelBlock, /txn\.currentAccount/);
-  assert.match(feed, /\{readOnlyGlLabel\}/);
+  assert.match(feed, /selectedAccountValue \? readOnlyGlLabel : "Account unavailable"/);
 
   assert.match(cleanup, /const userId = adminView\.active \? "admin_view" : localStorage\.getItem\("user_id"\)/);
   assert.match(cleanup, /const canRunAI = adminView\.active \? false/);
-  assert.match(cleanup, /readOnly=\{adminView\.active \|\| !canRunAI\}/);
+  assert.match(cleanup, /readOnly=\{\(adminView\.active && !adminView\.bookkeepingAccess\) \|\| \(!adminView\.active && !canRunAI\)\}/);
 });
 
 test("Admin View chat is disabled before subscription or GPT requests while history reads stay business scoped", () => {
@@ -53,14 +54,14 @@ test("Admin View chat is disabled before subscription or GPT requests while hist
   assert.match(chatContext, /chatReadOnly: adminView\.active && adminView\.readOnly/);
 
   assert.match(promptChips, /disabled = false/);
-  assert.match(promptChips, /if \(disabled\) return/);
-  assert.match(promptChips, /data-admin-view-chat-disabled/);
+  assert.match(promptChips, /const itemDisabled = disabled \|\| itemAvailability\?\.available === false/);
+  assert.match(promptChips, /disabled=\{itemDisabled\}/);
   assert.match(chatBar, /if \(chatReadOnly\) return/);
   assert.match(chatBar, /!\s*chatReadOnly \? \(/);
-  assert.match(chatBar, /disabled=\{chatReadOnly\}/);
+  assert.match(chatBar, /disabled=\{chatReadOnly \|\| Number\(quota\?\.remaining\) === 0\}/);
   assert.match(canvasBar, /if \(chatReadOnly\) return/);
   assert.match(canvasBar, /!\s*chatReadOnly \? \(/);
-  assert.match(canvasBar, /disabled=\{chatReadOnly\}/);
+  assert.match(canvasBar, /disabled=\{chatReadOnly \|\| Number\(quota\?\.remaining\) === 0\}/);
   assert.match(chatsRoutes, /req\.tenantContext\?\.businessId/);
   assert.match(chatsRoutes, /if \(req\.tenantContext\?\.mode === 'admin_view'\)/);
   assert.match(chatThreads, /if \(readOnly\) return/);
@@ -127,7 +128,7 @@ test("Forecasts, Financials, Jobs, Tax, Docs, and Settings expose persisted read
   assert.match(jobs, /qbStatusLoading/);
   assert.match(jobs, /Live QuickBooks refresh is unavailable in read-only Admin View/);
   assert.match(jobs, /if \(!readOnly && !usingDemo && qbStatus === "connected"/);
-  assert.match(jobs, /<JobCostingPage businessId=\{businessId\} usingDemo=\{usingDemo\} readOnly=\{readOnly\}/);
+  assert.match(jobs, /<JobCostingPage[\s\S]*businessId=\{businessId\}[\s\S]*usingDemo=\{usingDemo\}[\s\S]*readOnly=\{readOnly\}/);
 
   assert.match(taxUtils, /req\?\.tenantContext\?\.mode === "admin_view"/);
   assert.match(tax, /const businessId = adminView\.active \? adminView\.businessId/);
@@ -136,13 +137,14 @@ test("Forecasts, Financials, Jobs, Tax, Docs, and Settings expose persisted read
 
   assert.match(docsRoutes, /const adminView = req\.tenantContext\?\.mode === 'admin_view'/);
   assert.match(docsRoutes, /if \(!adminView && !isUuid\(userIdRaw\)\)/);
-  assert.match(docs, /const effectiveBusinessId = adminView\.active \? adminView\.businessId/);
-  assert.match(docs, /No persisted business documents are available for this Admin View session/);
+  assert.match(docs, /const effectiveBusinessId = adminView\.active\s+\? adminView\.businessId/s);
+  assert.match(docs, /listAccountingDocuments\(\{ business_id: effectiveBusinessId/);
+  assert.match(docs, /\{!readOnly \? \(/);
 
   assert.match(settings, /const userId = adminView\.active \? "admin_view"/);
   assert.match(settings, /const businessId = adminView\.active \? adminView\.businessId/);
   assert.match(settings, /disabled=\{readOnly \|\| savingBusiness\}/);
-  assert.match(settings, /<PlaidIntegrationCard businessId=\{businessId\} readOnly=\{readOnly\}/);
+  assert.match(settings, /<PlaidIntegrationCard businessId=\{businessId\} readOnly=\{ownerAdministrationDisabled\}/);
   assert.match(settings, /if \(!businessId \|\| readOnly\) return/);
   assert.match(settings, /disabled=\{readOnly \|\| mappingLoading \|\| saving\}/);
   assert.match(billingCard, /Billing changes are unavailable in read-only Admin View/);

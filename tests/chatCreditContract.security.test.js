@@ -15,7 +15,7 @@ test('all main chat aliases use one quota-protected handler', () => {
 test('reservation precedes context, embeddings and model invocation', () => {
   const source = read('src/api/gpt/brain/generateBizzyResponse.js');
   const reserve = source.indexOf('reservedCredit = await reserveChatCredit');
-  const context = source.indexOf('orchestration = await buildChatContext', reserve);
+  const context = source.indexOf('await buildChatContext', reserve);
   const generation = source.indexOf('const result = await generateBizzyResponse', reserve);
   assert.ok(reserve > 0 && reserve < context && context < generation);
   assert.doesNotMatch(source, /currentCount\s*>=\s*300/);
@@ -63,4 +63,3 @@ test('unsupported direct AI proxies are disabled for launch', () => {
   assert.doesNotMatch(followups, /responses\.create|chat\.completions\.create/);
   assert.match(chats, /auto_title_direct_route_disabled/);
 });
-

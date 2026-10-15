@@ -1,153 +1,73 @@
-// File: /src/components/Bizzy/AskBizzyQuickPrompts.jsx
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { getBusinessQuickPrompts } from "../../config/businessQuickPrompts.js";
 
-// Curated defaults (feel free to expand)
-const CURATED = {
-  accounting: [
-    { text: 'How did I perform this month?', tooltip: 'Quick breakdown of this month’s P&L trends.' },
-    { text: 'Where is most of my profit coming from?', tooltip: 'Highlights top revenue sources.' },
-    { text: 'What’s my top expense?', tooltip: 'Identifies largest cost category.' },
-    { text: 'How has my cash flow changed since last month?', tooltip: 'Month-over-month cash flow comparison.' },
-    { text: 'Do I have any clients behind on payment?', tooltip: 'Checks overdue invoices or AR aging.' },
-  ],
-  marketing: [
-    { text: 'Which marketing channel brought in the most leads this month?', tooltip: 'Best-performing lead source.' },
-    { text: 'How did my last email campaign perform?', tooltip: 'Open rate, click-through, conversions.' },
-    { text: 'What content got the most engagement last week?', tooltip: 'Top-performing posts by metrics.' },
-    { text: 'How many new followers did we gain?', tooltip: 'Follower growth insights.' },
-  ],
-  tax: [
-    { text: 'Am I on track for estimated tax payments?', tooltip: 'Estimated taxes vs current liability.' },
-    { text: 'What deductions am I missing?', tooltip: 'AI scan for unclaimed deductions.' },
-    { text: 'How much should I save for taxes this month?', tooltip: 'Suggested tax reserve amount.' },
-  ],
-  investments: [
-    { text: 'How is my investment account performing?', tooltip: 'Month-to-date and YTD returns.' },
-    { text: 'What’s my current asset allocation?', tooltip: 'Breakdown of portfolio balance.' },
-    { text: 'Is my retirement plan on track?', tooltip: 'Projected retirement growth vs goal.' },
-  ],
-  calendar: [
-    { text: 'What’s on my agenda tomorrow?', tooltip: 'Pulls tomorrow’s events.' },
-    { text: 'What needs my attention in my books?', tooltip: 'Reviews available bookkeeping context for issues that need attention.' },
-    { text: 'Draft a follow-up for an overdue invoice', tooltip: 'Prepares draft wording without sending it.' },
-  ],
-  general: [
-    { text: 'What are my top priorities this week?', tooltip: 'AI-generated priority checklist.' },
-    { text: 'What’s changed in my business since last month?', tooltip: 'High-level summary of changes.' },
-    { text: 'What are my top 3 risks right now?', tooltip: 'AI risk assessment based on data.' },
-    { text: 'How can I improve my cash flow?', tooltip: 'Suggestions for cash flow management.' },
-    { text: 'What’s my current burn rate?', tooltip: 'Monthly cash burn analysis.' },
-  ],
-};
+function textOf(item) { return typeof item === "string" ? item : item?.text; }
 
-function slug(s) {
-  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 48);
-}
-function stableKey(module, idx, text) {
-  return `${module}-${idx}-${slug(text)}`;
-}
-
-/**
- * AskBizzyQuickPrompts (stateless)
- *
- * Props:
- *  - module:        'general' | 'accounting' | 'marketing' | 'tax' | 'investments' | 'calendar'
- *  - prompts?:      Array<{text: string, tooltip?: string}>  // ranked prompts if provided
- *  - onPromptClick: (text: string) => void                   // parent will send the message
- *  - max?:          number (default 4)
- *  - scrollable?:   boolean (default true)
- *  - className?:    string
- *  - chipClassName?:string
- */
 export default function AskBizzyQuickPrompts({
-  module = 'general',
-  prompts,
-  onPromptClick,
-  max = 4,
-  scrollable = true,
-  className = '',
-  chipClassName = '',
-  accentColor = null,
-  disabled = false,
-  disabledReason = "Chat is unavailable in read-only Admin View.",
+  module = "general", prompts, onPromptClick, max, className = "", chipClassName = "",
+  accentColor = null, disabled = false, disabledReason = "Chat is unavailable in read-only Admin View.",
+  availability = {}, settingsHref = "/dashboard/settings?tab=Integrations&focus=financial-reporting",
 }) {
-  const moduleKey = String(module).toLowerCase();
-  const curated = CURATED[moduleKey] || CURATED.general;
-  const list = Array.isArray(prompts) && prompts.length ? prompts : curated;
-  const visible = list.slice(0, max);
-  const isChatHomeRow = className.includes("bizzy-chathome");
-
-  // best-effort usage logging; non-blocking
-  // Usage logging disabled until prompt_usage table is available
-  const logUsage = async () => {};
-
-  const handleClick = async (text) => {
-    if (disabled) return;
-    if (!text) return;
-    logUsage(text);
-    onPromptClick?.(text);
-  };
-
+  const list = (Array.isArray(prompts) && prompts.length ? prompts : getBusinessQuickPrompts(module));
+  const visible = Number.isFinite(max) ? list.slice(0, max) : list;
+  const rowRef = useRef(null);
+  const descriptionId = `bizzy-prompt-description-${useId().replace(/:/g, "")}`;
+  const [overflow, setOverflow] = useState({ previous: false, next: false });
   const [hoverIdx, setHoverIdx] = useState(null);
 
+  const syncOverflow = useCallback(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    setOverflow({ previous: row.scrollLeft > 2, next: row.scrollLeft + row.clientWidth < row.scrollWidth - 2 });
+  }, []);
+
+  useEffect(() => {
+    syncOverflow();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(syncOverflow) : null;
+    if (rowRef.current) observer?.observe(rowRef.current);
+    window.addEventListener("resize", syncOverflow);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", syncOverflow); };
+  }, [syncOverflow, visible.length]);
+
+  const scroll = (direction) => rowRef.current?.scrollBy({ left: direction * Math.max(220, rowRef.current.clientWidth * 0.7), behavior: "smooth" });
+  const isChatHomeRow = className.includes("bizzy-chathome");
+
   return (
-    <div className={`w-full px-2 py-0 ${className}`}>
-      {visible.length > 0 && (
-        <div
-          className={[
-            'flex gap-2 pb-1 items-center',
-            scrollable ? 'overflow-x-auto no-scrollbar snap-x snap-mandatory' : '',
-            isChatHomeRow ? 'bizzy-chathome-chiprow' : '',
-          ].join(' ')}
-          data-bizzy-chip-row={isChatHomeRow ? true : undefined}
-          style={{ paddingBottom: 6 }}
-        >
-          {visible.map((item, idx) => {
-            const text = typeof item === 'string' ? item : item.text;
-            const tooltip = typeof item === 'string' ? undefined : item.tooltip;
-            const isActive = hoverIdx === idx;
-            const highlightHex = accentColor || '#f5f6f7';
-            const baseShadow = '0 10px 24px rgba(0,0,0,0.28)';
-            return (
-              <button
-                key={stableKey(moduleKey, idx, text)}
-                type="button"
-                title={tooltip}
-                disabled={disabled}
-                aria-disabled={disabled ? "true" : undefined}
-                onClick={() => handleClick(text)}
-                onMouseEnter={() => setHoverIdx(idx)}
-                onMouseLeave={() => setHoverIdx((prev) => (prev === idx ? null : prev))}
-                className={[
-                  'bizzy-quickprompt',
-                  'bizzy-chip',
-                  'inline-flex items-center rounded-full border',
-                  'px-3 py-1 text-sm',
-                  'transition-all duration-300 ease-out',
-                  'snap-start whitespace-nowrap select-none',
-                  disabled ? 'opacity-45 cursor-not-allowed' : '',
-              chipClassName,
-            ].join(' ')}
-            data-bizzy-chip
-            data-admin-view-chat-disabled={disabled ? "true" : undefined}
-            style={{
-              color: isActive ? highlightHex : 'rgba(255,255,255,0.9)',
-              borderColor: isActive ? 'var(--accent-line)' : 'var(--surface-border)',
-              background: isActive ? 'var(--surface-graphite-2)' : 'var(--surface-graphite)',
-              boxShadow: baseShadow,
-              animation: undefined,
-              animationDelay: undefined,
-              "--qp-glow-a": "0 0 0 0 var(--surface-glow-green)",
-              "--qp-glow-b": "0 0 16px var(--surface-glow-green)",
-            }}
-              >
-                {text}
-                {disabled && idx === 0 ? <span className="sr-only"> {disabledReason}</span> : null}
-              </button>
-            );
-          })}
-        </div>
-      )}
+    <div className={`relative w-full px-2 py-0 ${className}`}>
+      <span id={descriptionId} className="sr-only">Choose a verified business question. Disabled questions explain the required setup.</span>
+      {overflow.previous ? <button type="button" onClick={() => scroll(-1)} aria-label="Previous quick prompts" className="absolute left-0 top-1/2 z-20 -translate-y-1/2 rounded-full border border-white/15 bg-black/85 p-1 text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300"><ChevronLeft size={16} /></button> : null}
+      {overflow.next ? <button type="button" onClick={() => scroll(1)} aria-label="Next quick prompts" className="absolute right-0 top-1/2 z-20 -translate-y-1/2 rounded-full border border-white/15 bg-black/85 p-1 text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300"><ChevronRight size={16} /></button> : null}
+      {overflow.previous ? <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-black to-transparent" /> : null}
+      {overflow.next ? <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-black to-transparent" /> : null}
+      <div ref={rowRef} tabIndex={0} role="region" aria-label="Business quick prompts" aria-describedby={descriptionId}
+        onScroll={syncOverflow}
+        onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); scroll(-1); } if (event.key === "ArrowRight") { event.preventDefault(); scroll(1); } }}
+        className={`flex gap-2 overflow-x-auto no-scrollbar snap-x snap-mandatory pb-1 items-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 ${isChatHomeRow ? "bizzy-chathome-chiprow" : ""}`}
+        data-bizzy-chip-row={isChatHomeRow ? true : undefined}>
+        {visible.map((item, idx) => {
+          const text = textOf(item);
+          const intent = typeof item === "object" ? item.intent : null;
+          const itemAvailability = intent ? availability[intent] : null;
+          const itemDisabled = disabled || itemAvailability?.available === false;
+          const reason = disabled ? disabledReason : itemAvailability?.message || "Finish Financial reporting setup in Settings to use this question.";
+          const reasonId = `${descriptionId}-${idx}`;
+          const active = hoverIdx === idx;
+          return <div key={`${intent || module}-${text}`} className="flex shrink-0 items-center gap-1">
+            <button type="button" disabled={itemDisabled} aria-disabled={itemDisabled || undefined} aria-describedby={`${descriptionId} ${itemDisabled ? reasonId : ""}`.trim()}
+              onClick={() => !itemDisabled && onPromptClick?.(typeof item === "string" ? { text } : item)}
+              onMouseEnter={() => setHoverIdx(idx)} onMouseLeave={() => setHoverIdx(null)}
+              className={`bizzy-quickprompt bizzy-chip inline-flex snap-start whitespace-nowrap rounded-full border px-3 py-1 text-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300 ${itemDisabled ? "cursor-not-allowed opacity-45" : ""} ${chipClassName}`}
+              style={{ color: active ? (accentColor || "#f5f6f7") : "rgba(255,255,255,0.9)", borderColor: active ? "var(--accent-line)" : "var(--surface-border)", background: active ? "var(--surface-graphite-2)" : "var(--surface-graphite)" }}>
+              {text}
+            </button>
+            {itemDisabled ? <span id={reasonId} className="sr-only">{reason} {itemAvailability?.canConfigure ? `Open ${settingsHref}.` : ""}</span> : null}
+          </div>;
+        })}
+      </div>
+      {visible.some((item) => availability[typeof item === "object" ? item.intent : ""]?.available === false && availability[typeof item === "object" ? item.intent : ""]?.canConfigure) ? (
+        <a href={settingsHref} className="mt-1 inline-flex text-xs font-semibold text-emerald-300 underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Finish Financial reporting setup in Settings</a>
+      ) : null}
     </div>
   );
 }

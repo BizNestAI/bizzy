@@ -1,3 +1,4 @@
+/* global process */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -64,10 +65,10 @@ test('onboarding bank and pre-onboarding UI contain exactly the final three prom
 
 test('post-onboarding business prompts and onboarding-state transition remain intact', () => {
   assert.deepEqual(NORMAL_PROMPTS, [
-    'What are my top priorities this week?',
-    'What’s changed in my business since last month?',
-    'What are my top 3 risks right now?',
-    'What should I focus on today?',
+    'How did my business perform this month?',
+    'Which income categories brought in the most revenue?',
+    'Which expense categories cost me the most?',
+    'What changed most compared with last month?',
   ]);
   const hook = read('src/hooks/useOnboardingStatus.js');
   const bar = read('src/components/Bizzy/BizzyChatBar.jsx');

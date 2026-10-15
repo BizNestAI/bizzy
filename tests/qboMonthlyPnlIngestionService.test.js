@@ -862,6 +862,7 @@ test("incomplete account detail is explicit metadata and does not block QBO-auth
   const db = makeDb();
 
   const result = await refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -890,6 +891,7 @@ test("incomplete account detail is explicit metadata and does not block QBO-auth
 test("realistic August 2026 QBO P&L summary ingests with incomplete detail semantics", async () => {
   const db = makeDb();
   const result = await refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -1011,6 +1013,7 @@ test("August QBO P&L refresh persists authoritative account drill-down rows by P
   };
 
   const result = await refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -1132,6 +1135,7 @@ test("real QuickBooks transaction report columns persist Services invoices and S
   };
 
   const result = await refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -1364,6 +1368,7 @@ test("zero-row ProfitAndLossDetail for non-zero accounts falls back to P&L-filte
   };
 
   const result = await refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -1397,6 +1402,7 @@ test("material summary/account reconciliation mismatch fails before snapshot per
   const db = makeDb();
 
   await assert.rejects(() => refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -1433,6 +1439,7 @@ test("material summary/account reconciliation mismatch fails before snapshot per
 test("failed promotion leaves previous current snapshot intact", async () => {
   const db = makeDb();
   const previous = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -1444,6 +1451,7 @@ test("failed promotion leaves previous current snapshot intact", async () => {
   });
 
   await assert.rejects(() => refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -1458,7 +1466,7 @@ test("failed promotion leaves previous current snapshot intact", async () => {
     },
   }), /qbo_pnl_snapshot_refresh_failed/);
 
-  const latest = await getLatestMonthlyPnlSnapshot({ businessId: BUSINESS_ID, reviewYear: 2026, reviewMonth: 8, db });
+  const latest = await getLatestMonthlyPnlSnapshot({ businessId: BUSINESS_ID, reviewYear: 2026, reviewMonth: 8, accountingMethod: "Cash", db });
   assert.equal(latest.id, previous.snapshot.id);
   assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.filter((row) => row.is_current).length, 1);
   assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.find((row) => row.id !== previous.snapshot.id).status, "failed");
@@ -1472,6 +1480,7 @@ test("refresh builds a QBO-authoritative snapshot, preserves QBO-only rows, and 
     ],
   });
   const previous = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -1483,6 +1492,7 @@ test("refresh builds a QBO-authoritative snapshot, preserves QBO-only rows, and 
   });
   const reportsCalled = [];
   const result = await refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -1548,6 +1558,7 @@ test("refresh builds a QBO-authoritative snapshot, preserves QBO-only rows, and 
 test("persisted QBO P&L account detail reads by QBO account id or snapshot account row id without provider calls", async () => {
   const db = makeDb();
   const created = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -1589,6 +1600,7 @@ test("persisted QBO P&L account detail reads by QBO account id or snapshot accou
 test("failed refresh before persistence leaves previous current snapshot intact", async () => {
   const db = makeDb();
   const previous = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -1600,6 +1612,7 @@ test("failed refresh before persistence leaves previous current snapshot intact"
   });
 
   await assert.rejects(() => refreshMonthlyQboPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -1622,7 +1635,7 @@ test("failed refresh before persistence leaves previous current snapshot intact"
       : { report: pnlDetailFixture(), reportName },
   }), /qbo_account_identity_ambiguous/);
 
-  const latest = await getLatestMonthlyPnlSnapshot({ businessId: BUSINESS_ID, reviewYear: 2026, reviewMonth: 8, db });
+  const latest = await getLatestMonthlyPnlSnapshot({ businessId: BUSINESS_ID, reviewYear: 2026, reviewMonth: 8, accountingMethod: "Cash", db });
   assert.equal(latest.id, previous.snapshot.id);
   assert.equal(latest.is_current, true);
   assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.length, 1);

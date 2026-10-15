@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -200,6 +201,7 @@ test("staged snapshots can move from building to validated without becoming curr
   const db = makeDb();
 
   const result = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -216,10 +218,24 @@ test("staged snapshots can move from building to validated without becoming curr
   assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].is_current, false);
 });
 
+test("simultaneous current Cash and Accrual snapshots remain basis-isolated", async () => {
+  const db = makeDb();
+  const common = { businessId: BUSINESS_ID, reviewYear: 2026, reviewMonth: 8, accounts: [sampleAccount()], transactions: [], linkTransactions: false, db };
+  const cash = await createOrReplaceMonthlyPnlSnapshot({ ...common, accountingMethod: "Cash" });
+  const accrual = await createOrReplaceMonthlyPnlSnapshot({ ...common, accountingMethod: "Accrual" });
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.filter((row) => row.is_current).length, 2);
+  const selectedCash = await getLatestMonthlyPnlSnapshot({ businessId: BUSINESS_ID, reviewYear: 2026, reviewMonth: 8, accountingMethod: "Cash", db });
+  const selectedAccrual = await getLatestMonthlyPnlSnapshot({ businessId: BUSINESS_ID, reviewYear: 2026, reviewMonth: 8, accountingMethod: "Accrual", db });
+  assert.equal(selectedCash.id, cash.snapshot.id);
+  assert.equal(selectedAccrual.id, accrual.snapshot.id);
+  await assert.rejects(getLatestMonthlyPnlSnapshot({ businessId: BUSINESS_ID, reviewYear: 2026, reviewMonth: 8, db }), /missing_accounting_method/);
+});
+
 test("validated staged snapshot promotes atomically and supersedes previous current only during promotion", async () => {
   const db = makeDb();
 
   const previous = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -228,6 +244,7 @@ test("validated staged snapshot promotes atomically and supersedes previous curr
     db,
   });
   const staged = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -279,6 +296,7 @@ test("snapshot status update failures are reported distinctly from insert failur
   };
 
   await assert.rejects(() => createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -299,6 +317,7 @@ test("snapshot creation persists current snapshot, account rows, transaction row
   const db = makeDb();
 
   const result = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -330,6 +349,7 @@ test("replacement preserves historical snapshots and marks exactly one current m
   const db = makeDb();
 
   const first = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -338,6 +358,7 @@ test("replacement preserves historical snapshots and marks exactly one current m
     db,
   });
   const second = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -349,6 +370,7 @@ test("replacement preserves historical snapshots and marks exactly one current m
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
+    accountingMethod: "Cash",
     includeTransactions: true,
     db,
   });
@@ -378,6 +400,7 @@ test("QBO-only, missing, ambiguous, and exact Bizzi transaction linkage are busi
   });
 
   const result = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -414,6 +437,7 @@ test("ambiguous or missing linkage cannot fabricate a Bizzi transaction match", 
     ],
   });
   await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -439,6 +463,7 @@ test("linkage requires both exact QBO id and exact QBO transaction type", async 
   });
 
   const result = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -462,6 +487,7 @@ test("linkage requires both exact QBO id and exact QBO transaction type", async 
 test("missing QBO transaction type remains non-authoritative for future mutation eligibility", async () => {
   const db = makeDb();
   await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -484,6 +510,7 @@ test("missing QBO transaction type remains non-authoritative for future mutation
 test("invalidation clears current snapshot identity without deleting historical detail", async () => {
   const db = makeDb();
   const result = await createOrReplaceMonthlyPnlSnapshot({
+    accountingMethod: "Cash",
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
@@ -505,6 +532,7 @@ test("invalidation clears current snapshot identity without deleting historical 
     businessId: BUSINESS_ID,
     reviewYear: 2026,
     reviewMonth: 8,
+    accountingMethod: "Cash",
     db,
   });
 

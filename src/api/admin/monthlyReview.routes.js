@@ -460,6 +460,7 @@ router.post("/businesses/:businessId/qbo-pnl/refresh", async (req, res) => {
       businessId,
       year,
       month,
+      accountingMethod: "Cash",
     });
     const snapshot = await getMonthlyQboPnlSnapshot({
       businessId,

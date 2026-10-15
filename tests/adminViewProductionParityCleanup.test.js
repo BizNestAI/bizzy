@@ -1,3 +1,4 @@
+/* global process */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -92,13 +93,15 @@ test("Job Costing Admin View skips GET-side generation and disables change-order
 test("Tax Admin View overview is persisted-only and never recalculates on refresh/as-of mismatch", () => {
   const taxRoutes = read("src/api/tax/taxCalculation.routes.js");
   const overviewStart = taxRoutes.indexOf('router.get("/overview"');
-  const refreshGuard = taxRoutes.indexOf("if (isAdminView && refresh)", overviewStart);
-  const refreshCalc = taxRoutes.indexOf("runCanonicalTaxCalculation({", overviewStart);
-  const asOfGuard = taxRoutes.indexOf("if (isAdminView) {", taxRoutes.indexOf("requestedAsOfDate", overviewStart));
+  const overviewEnd = taxRoutes.indexOf("export default router", overviewStart);
+  const overview = taxRoutes.slice(overviewStart, overviewEnd);
+  const adminGuard = overview.indexOf("if (isAdminView)");
+  const persistedRead = overview.indexOf("getLatestTaxRun");
 
-  assert.ok(refreshGuard > overviewStart, "Admin View refresh guard should exist");
-  assert.ok(refreshCalc > refreshGuard, "Admin View refresh must return before calculation");
-  assert.ok(asOfGuard > overviewStart, "Admin View as-of mismatch guard should exist");
+  assert.ok(persistedRead > 0, "overview should read the latest persisted run");
+  assert.ok(adminGuard > persistedRead, "Admin View should return an unavailable DTO when no persisted run exists");
+  assert.doesNotMatch(overview, /runCanonicalTaxCalculation\(/);
+  assert.match(overview, /data_status = "stale"/);
   assert.match(taxRoutes, /adminViewTaxUnavailableDto/);
   assert.match(taxRoutes, /admin_view_read_only_data_unavailable: true/);
 });
@@ -110,8 +113,8 @@ test("Docs, Settings, and Chat Admin View controls are visibly read-only", () =>
   const chatBar = read("src/components/Bizzy/BizzyChatBar.jsx");
   const canvasBar = read("src/components/Bizzy/ChatCanvasBar.jsx");
 
-  assert.match(docs, /!\s*readOnly \? \(/);
-  assert.match(docs, /No persisted business documents are available for this Admin View session/);
+  assert.match(docs, /listAccountingDocuments\(\{ business_id: effectiveBusinessId/);
+  assert.match(docs, /!readOnly \? \(/);
   assert.match(sidebar, /disableActiveBounce=\{adminView\.active\}/);
   assert.match(sidebar, /if \(!disableActiveBounce && activePath\.startsWith/);
   assert.match(navRail, /disableActiveBounce=\{adminView\.active\}/);

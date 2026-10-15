@@ -36,6 +36,13 @@ import {
   reserveChatCredit,
 } from './chatCreditAuthority.js';
 import { HISTORY_AUTHORITY_INSTRUCTION, labelOlderConversationDigest, sortConversationMessages } from '../../../utils/conversationMessageOrder.js';
+import {
+  buildBusinessQuickPromptEvidence,
+  buildCanonicalEvidenceInstruction,
+  resolveBusinessQuickPromptRequest,
+  unavailableQuickPromptResponse,
+} from '../businessQuickPromptExecution.js';
+import { ALL_INTENTS } from '../registry/intentRegistry.js';
 
 // 👉 NEW: demo-mode helpers
 import { isDemoMode, loadDemoData } from '../../../services/demo/loadDemoData.js';
@@ -53,6 +60,7 @@ console.info('[bizzy-openai] configuration', {
 const PAID_CHAT_LIMIT = 300;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_CHAT_MESSAGE_CHARS = Number(process.env.BIZZY_CHAT_MAX_MESSAGE_CHARS || 20_000);
+const ALLOWED_CLIENT_INTENTS = new Set(['general', ...ALL_INTENTS]);
 
 function getCurrentUsageMonth() {
   return new Date().toISOString().slice(0, 7);
@@ -500,7 +508,7 @@ export async function generateBizzyResponse({
         profit_margin: row.profit_margin,
       })).reverse();
     }
-    const needKPIs = !Array.isArray(bundle.kpis) || bundle.kpis.length === 0;
+    const needKPIs = !bundle.canonicalEvidence && (!Array.isArray(bundle.kpis) || bundle.kpis.length === 0);
 
     const supportPromises = [];
     if (!effectiveDemoMode && businessId && needKPIs) {
@@ -712,6 +720,7 @@ export async function generateBizzyResponse({
       ...(onboardingToneBlock ? [{ role: 'system', content: onboardingToneBlock }] : []),
       ...(onboardingGuide ? [{ role: 'system', content: onboardingGuide }] : []),
       ...personaAndStyle,
+      ...(bundle.canonicalEvidence ? [{ role: 'system', content: buildCanonicalEvidenceInstruction(bundle.canonicalEvidence) }] : []),
       ...(chatHistoryFormatted.length ? [{
         role: 'system',
         content: HISTORY_AUTHORITY_INSTRUCTION,
@@ -847,6 +856,7 @@ export async function generateBizzyResponse({
             message_role_position: 1,
             structured_references: persistedStructuredReferences,
             request_id: requestId,
+            evidence_package_id: bundle.canonicalEvidencePackageId || null,
           },
         ])
         .select('id,thread_id,role');
@@ -958,7 +968,7 @@ export async function generateBizzyResponseHandler(req, res) {
   try {
     const { message, type } = req.body ?? {};
     const user_id = req.auth?.userId || req.user?.id || null;
-    const normalizedType = type || req.body?.intent || req.bizzy?.intent || null;
+    let normalizedType = type || req.body?.intent || req.bizzy?.intent || null;
 
     const bundle    = req.bizzy?.contextBundle || {};
     const clientCtx = req.body?.context || req.body?.parsedInput || {};
@@ -979,6 +989,15 @@ export async function generateBizzyResponseHandler(req, res) {
     }
     if (!UUID_RE.test(stableRequestId)) {
       return res.status(400).json({ ok: false, error: 'invalid_request_id', responseText: 'A valid request ID is required.' });
+    }
+    const quickPromptResolution = resolveBusinessQuickPromptRequest({ intent: normalizedType, message });
+    if (quickPromptResolution.status === 'mismatch') {
+      return res.status(400).json({ ok: false, error: 'quick_prompt_intent_text_mismatch', responseText: 'That quick prompt is no longer valid. Choose one of the current suggestions.' });
+    }
+    const canonicalQuickPrompt = quickPromptResolution.prompt;
+    if (canonicalQuickPrompt) normalizedType = canonicalQuickPrompt.intent;
+    else if (normalizedType && !ALLOWED_CLIENT_INTENTS.has(normalizedType)) {
+      return res.status(400).json({ ok: false, error: 'unsupported_intent', responseText: 'That request type is not supported.' });
     }
     const dataMode = normalizeDataMode(
       req.body?.data_mode ||
@@ -1017,6 +1036,18 @@ export async function generateBizzyResponseHandler(req, res) {
     }
     if (reservedCredit?.outcome !== 'reserved') throw new Error('chat_credit_reservation_failed');
 
+    let canonicalEvidence = null;
+    if (canonicalQuickPrompt) {
+      canonicalEvidence = await buildBusinessQuickPromptEvidence({ db: supabase, businessId: business_id, intent: canonicalQuickPrompt.intent, requestId: stableRequestId });
+      if (canonicalEvidence.unavailable) {
+        const released = await releaseChatCredit(supabase, { businessId: business_id, requestId: stableRequestId, failureClassification: canonicalEvidence.reasonCode });
+        const unavailable = unavailableQuickPromptResponse(canonicalEvidence.reasonCode, canonicalEvidence.provenance);
+        const quota = quotaMeta(released, req.entitlement?.status || null);
+        return res.status(409).json({ ...unavailable, quota, meta: { ...unavailable.meta, quota, request_id: stableRequestId, retryable: false } });
+      }
+      parsedInput = { ...parsedInput, canonicalEvidence: canonicalEvidence.projection, canonicalEvidencePackageId: canonicalEvidence.packageRow.id, canonicalProvenance: canonicalEvidence.provenance };
+    }
+
     let threadIdToUse = incomingThreadId;
     let fallbackTitleUsed = null;
 
@@ -1047,7 +1078,12 @@ export async function generateBizzyResponseHandler(req, res) {
         businessId: business_id,
         threadId: threadIdToUse,
       });
-      orchestration = await buildChatContext({
+      orchestration = canonicalQuickPrompt ? {
+        intent: canonicalQuickPrompt.intent,
+        period: canonicalEvidence.packageRow.period,
+        loader_status: { canonical_evidence: 'available' },
+        structured_references: null,
+      } : await buildChatContext({
         businessId: business_id,
         message,
         forcedIntent: normalizedType,
@@ -1119,6 +1155,7 @@ export async function generateBizzyResponseHandler(req, res) {
       ...(publicResult.meta || {}),
       intent: resolvedType || publicResult.meta?.intent || 'general',
       thread_id: threadIdToUse || publicResult.meta?.thread_id || null,
+      ...(canonicalEvidence ? { registry_version: canonicalQuickPrompt.registryVersion, provenance: canonicalEvidence.provenance } : {}),
     };
 
     if (publicResult?.meta?.operational_error || publicResult?.meta?.error) {

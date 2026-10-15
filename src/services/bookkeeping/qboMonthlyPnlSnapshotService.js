@@ -68,12 +68,13 @@ export async function getLatestMonthlyPnlSnapshot({
   businessId,
   reviewYear,
   reviewMonth,
-  accountingMethod = null,
+  accountingMethod,
   db = defaultSupabase,
   includeAccounts = false,
   includeTransactions = false,
 } = {}) {
   assertSnapshotIdentity({ businessId, reviewYear, reviewMonth });
+  if (!accountingMethod) throw new QboMonthlyPnlSnapshotError("missing_accounting_method", 400);
 
   let query = db
     .from(SNAPSHOTS_TABLE)
@@ -82,7 +83,7 @@ export async function getLatestMonthlyPnlSnapshot({
     .eq("review_year", Number(reviewYear))
     .eq("review_month", Number(reviewMonth))
     .eq("is_current", true);
-  if (accountingMethod) query = query.eq("accounting_method", accountingMethod);
+  query = query.eq("accounting_method", accountingMethod);
   const snapshot = await selectSingleSnapshot(
     query
       .order("snapshot_version", { ascending: false })
@@ -124,7 +125,7 @@ export async function createOrReplaceMonthlyPnlSnapshot({
   reviewMonth,
   qboRealmId = null,
   qboEnvironment = null,
-  accountingMethod = "Cash",
+  accountingMethod,
   sourceStartDate = null,
   sourceEndDate = null,
   pulledAt = new Date().toISOString(),
@@ -143,6 +144,7 @@ export async function createOrReplaceMonthlyPnlSnapshot({
   db = defaultSupabase,
 } = {}) {
   assertSnapshotIdentity({ businessId, reviewYear, reviewMonth });
+  if (!accountingMethod) throw new QboMonthlyPnlSnapshotError("missing_accounting_method", 400);
   const range = getMonthlySourceRange(reviewYear, reviewMonth);
   const normalizedAccounts = accounts.map((account, index) => normalizeAccountRow(account, index));
   const normalizedTransactions = transactions.map((transaction, index) => normalizeTransactionRow(transaction, index));
@@ -180,7 +182,7 @@ export async function createOrReplaceMonthlyPnlSnapshot({
     is_current: false,
     qbo_realm_id: nullableText(qboRealmId),
     qbo_environment: nullableText(qboEnvironment),
-    accounting_method: nullableText(accountingMethod) || "Cash",
+    accounting_method: nullableText(accountingMethod),
     source_start_date: sourceStartDate || range.sourceStartDate,
     source_end_date: sourceEndDate || range.sourceEndDate,
     pulled_at: pulledAt,
@@ -454,13 +456,14 @@ async function getNextSnapshotVersion({ db, businessId, reviewYear, reviewMonth 
   return Math.max(0, Number(latest?.snapshot_version || 0)) + 1;
 }
 
-async function supersedeCurrentSnapshots({ db, businessId, reviewYear, reviewMonth }) {
+async function supersedeCurrentSnapshots({ db, businessId, reviewYear, reviewMonth, accountingMethod }) {
   const { error } = await db
     .from(SNAPSHOTS_TABLE)
     .update({ is_current: false, status: "superseded", updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .eq("review_year", Number(reviewYear))
     .eq("review_month", Number(reviewMonth))
+    .eq("accounting_method", accountingMethod)
     .eq("is_current", true);
   if (error) throw new QboMonthlyPnlSnapshotError("snapshot_supersede_failed", 500, { cause: error.message });
 }
@@ -507,7 +510,7 @@ async function promoteMonthlyPnlSnapshotCurrentForTest({ db, businessId, reviewY
   if (candidate.is_current === true || !["building", "validated"].includes(candidate.status)) {
     throw new QboMonthlyPnlSnapshotError("snapshot_candidate_not_promotable", 409, { status: candidate.status });
   }
-  await supersedeCurrentSnapshots({ db, businessId, reviewYear, reviewMonth });
+  await supersedeCurrentSnapshots({ db, businessId, reviewYear, reviewMonth, accountingMethod: candidate.accounting_method });
   return promoteSnapshotCurrent({ db, businessId, snapshotId, status });
 }
 

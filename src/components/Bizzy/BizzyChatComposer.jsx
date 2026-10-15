@@ -24,6 +24,7 @@ export default function BizzyChatComposer({
   quickPromptAccentColor = null,
   quickPromptStyle,
   onQuickPromptClick,
+  quickPromptAvailability,
 }) {
   const inputRef = useRef(null);
   const promptPanelId = `bizzy-quick-prompts-${useId().replace(/:/g, "")}`;
@@ -50,10 +51,10 @@ export default function BizzyChatComposer({
     onSubmit?.(event);
   };
 
-  const handlePromptClick = async (text) => {
+  const handlePromptClick = async (prompt) => {
     setQuickPromptsOpen(false);
     try {
-      await onQuickPromptClick?.(text);
+      await onQuickPromptClick?.(prompt);
     } finally {
       requestAnimationFrame(() => inputRef.current?.focus?.());
     }
@@ -83,6 +84,7 @@ export default function BizzyChatComposer({
             accentColor={quickPromptAccentColor}
             className={quickPromptClassName}
             chipClassName={quickPromptChipClassName}
+            availability={quickPromptAvailability}
           />
         </div>
       </div>

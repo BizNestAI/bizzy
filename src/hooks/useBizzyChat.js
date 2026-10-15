@@ -151,6 +151,8 @@ export const useBizzyChat = (user_id) => {
           : typeof data.content === 'string'
             ? data.content
             : '';
+      const provenanceText = formatEvidenceProvenance(data?.meta?.provenance || data?.provenance);
+      const presentedText = provenanceText ? `${incomingText}\n\n${provenanceText}` : incomingText;
 
       const assistantIdx = (assistantCountRef.current || 0) + 1;
       const userAskedToSave = userRequestedSaveRef.current;
@@ -184,7 +186,7 @@ export const useBizzyChat = (user_id) => {
         docSuggestion = null;
       }
 
-      const artifacts = normalizeArtifacts(data?.artifacts, incomingText);
+      const artifacts = normalizeArtifacts(data?.artifacts, presentedText);
       const actions = normalizeActions(data?.actions);
 
       assistantCountRef.current = assistantIdx;
@@ -194,13 +196,14 @@ export const useBizzyChat = (user_id) => {
       return {
         id: Date.now() + 1,
         sender: 'assistant',
-        text: incomingText || 'No response generated.',
+        text: presentedText || 'No response generated.',
         // Runtime-only signal: every newly received reply should animate, even
         // when a scripted response returns before thread-open effects settle.
         animateOnArrival: true,
         artifacts,
         actions,
         doc_suggestion: docSuggestion,
+        provenance: data?.meta?.provenance || data?.provenance || null,
       };
     },
     [normalizeActions, normalizeArtifacts]
@@ -381,3 +384,16 @@ export const useBizzyChat = (user_id) => {
     clarify,
   };
 };
+
+function formatEvidenceProvenance(value) {
+  if (!value) return "";
+  const fields = [
+    ["Reporting period", formatPeriod(value.period)], ["Comparison period", formatPeriod(value.comparison_period)],
+    ["Accounting basis", value.accounting_basis], ["Currency", value.currency], ["Evidence refreshed", value.refreshed_at],
+    ["Source", value.sources?.join(", ")], ["Completeness", value.completeness], ["Reference", value.reference],
+  ].filter(([, field]) => field);
+  if (value.metrics && Object.keys(value.metrics).length) fields.splice(fields.length - 1, 0, ["Authoritative metrics", `\`${JSON.stringify(value.metrics)}\``]);
+  const warnings = [...(value.period?.is_partial ? ["Partial reporting period."] : []), ...(value.warnings || [])];
+  return ["#### Verified evidence", ...fields.map(([label, field]) => `- **${label}:** ${field}`), ...warnings.map((warning) => `- **Warning:** ${warning}`)].join("\n");
+}
+function formatPeriod(period) { return period?.start && period?.end ? `${period.start}–${period.end}` : null; }

@@ -46,6 +46,7 @@ import {
   getQboPaymentAccounts,
   ensureQboPaymentAccount,
 } from "../../services/bookkeeping/bookkeepingClient";
+import { configureFinancialReporting, getReportingConfigurationStatus } from "../../services/evidence/reportingConfigurationClient.js";
 
 /** Graphite neutrals (tokens) */
 const NEUTRAL_BORDER = "rgba(255,255,255,0.105)";
@@ -623,6 +624,7 @@ useEffect(() => {
                 icon={PlugZap}
               >
                 <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} disabled={ownerAdministrationDisabled} />
+                <FinancialReportingSetup businessId={businessId} readOnly={ownerAdministrationDisabled} />
                 <PlaidIntegrationCard businessId={businessId} readOnly={ownerAdministrationDisabled} />
                 {!isPrimaryOwner && !adminView.active ? (
                   <p className="mt-3 text-xs" style={{ color: TEXT_MUTED }}>Only the primary business owner can manage integrations.</p>
@@ -712,6 +714,42 @@ useEffect(() => {
       </div>
     </div>
   );
+}
+
+const REPORTING_TIMEZONES = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Phoenix", "America/Anchorage", "Pacific/Honolulu", "UTC"];
+
+function FinancialReportingSetup({ businessId, readOnly }) {
+  const [status, setStatus] = useState(null);
+  const [timezone, setTimezone] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    if (!businessId) return () => { active = false; };
+    getReportingConfigurationStatus(businessId).then((next) => { if (active) { setStatus(next); setTimezone(next.reporting_timezone || ""); } }).catch(() => active && setStatus({ ready: false, status: "temporarily_unavailable" }));
+    return () => { active = false; };
+  }, [businessId]);
+  const activate = async () => {
+    if (!timezone || readOnly || busy) return;
+    setBusy(true); setError("");
+    try {
+      const next = await configureFinancialReporting({ businessId, timezone, requestId: crypto.randomUUID() });
+      setStatus(next); setTimezone(next.reporting_timezone || timezone);
+    } catch { setError("Financial reporting setup could not be completed. Verify QuickBooks and try again."); }
+    finally { setBusy(false); }
+  };
+  const readyText = status?.ready ? `Financial reporting ready · Cash basis · ${status.currency} · ${status.reporting_timezone}` : status?.message || "Choose a reporting timezone, then verify the connected QuickBooks company and currency.";
+  return <div id="financial-reporting" className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-4">
+    <div className="text-sm font-semibold text-white">Financial reporting</div>
+    <p className="mt-1 text-xs text-white/60">{readyText}</p>
+    <label htmlFor="financial-reporting-timezone" className="mt-3 block text-xs font-semibold text-white/75">Reporting timezone</label>
+    <select id="financial-reporting-timezone" value={timezone} disabled={readOnly || busy} onChange={(event) => setTimezone(event.target.value)} className="mt-1 w-full max-w-sm rounded-lg border border-white/10 bg-[#0B0E13] px-3 py-2 text-sm text-white">
+      <option value="">Select an IANA timezone</option>
+      {REPORTING_TIMEZONES.map((name) => <option key={name} value={name}>{name}</option>)}
+    </select>
+    <button type="button" disabled={readOnly || busy || !timezone} onClick={activate} className="mt-3 rounded-lg border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-sm font-semibold text-emerald-100 disabled:opacity-45">{busy ? "Verifying…" : status?.ready ? "Re-verify configuration" : "Verify and activate"}</button>
+    {error ? <p role="alert" className="mt-2 text-xs text-rose-300">{error}</p> : null}
+  </div>;
 }
 
 function ModeToggle({ active, onChange, disabled, labelOn = "On", labelOff = "Off" }) {
