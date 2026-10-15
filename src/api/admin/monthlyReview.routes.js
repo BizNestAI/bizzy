@@ -409,7 +409,7 @@ router.get("/businesses/:businessId/pnl-report/view", async (req, res) => {
     await assertMonthlyReviewPeriodAvailable(businessId, month);
     const [year, monthNumber] = month.split("-").map(Number);
     const reportState = await getMonthlyReportState({ db: supabase, businessId, year, month: monthNumber, accountingMethod: "Cash" });
-    if (!reportState.report?.storage_path || !["published_current", "published_outdated"].includes(reportState.status)) {
+    if (!reportState.report?.storage_path || !["published_current", "published_legacy_unverified", "published_outdated"].includes(reportState.status)) {
       return res.status(404).json({ ok: false, error: "published_report_not_found" });
     }
     const { data: signed, error: signedError } = await supabase.storage
@@ -1800,6 +1800,13 @@ router.post("/runs/:runId/pull-pnl", async (req, res) => {
       await supabase.from("report_metadata").update({ publication_status: "publishing", publication_request_id: publicationRequestId, publication_failure_code: null }).eq("id", existingState.report.id);
     }
     const qboSync = await runQboSync({ businessId: run.business_id, year, month: monthNumber });
+    const { data: publicationSnapshot, error: publicationSnapshotError } = await supabase
+      .from("monthly_review_qbo_pnl_snapshots")
+      .select("id,raw_hash")
+      .eq("business_id", run.business_id)
+      .eq("id", qboSync?.snapshot?.id || "00000000-0000-0000-0000-000000000000")
+      .maybeSingle();
+    if (publicationSnapshotError) throw publicationSnapshotError;
     const pdf = await ensurePnLPdf({
       business_id: run.business_id,
       year,
@@ -1818,8 +1825,8 @@ router.post("/runs/:runId/pull-pnl", async (req, res) => {
         publication_status: "published",
         publication_request_id: publicationRequestId,
         publication_failure_code: null,
-        monthly_review_source_snapshot_id: qboSync?.snapshot?.id || null,
-        monthly_review_source_fingerprint: qboSync?.snapshot?.raw_hash || null,
+        monthly_review_source_snapshot_id: publicationSnapshot?.id || null,
+        monthly_review_source_fingerprint: publicationSnapshot?.raw_hash || null,
       })
       .eq("business_id", run.business_id)
       .eq("year", year)
@@ -1863,6 +1870,41 @@ router.post("/runs/:runId/pull-pnl", async (req, res) => {
     }
     console.error("[monthly-review] pull pnl failed", e?.message || e);
     res.status(500).json({ ok: false, error: "monthly_review_pull_pnl_failed", message: e?.message || "Could not pull the P&L report." });
+  }
+});
+
+router.post("/runs/:runId/reconcile-pnl-source", async (req, res) => {
+  try {
+    const run = await fetchRun(req.params.runId);
+    const [year, month] = String(run.review_month).slice(0, 7).split("-").map(Number);
+    const { data: report, error: reportError } = await supabase.from("report_metadata")
+      .select("id,business_id,year,month,accounting_method,storage_path,monthly_review_published_at,monthly_review_run_id,monthly_review_source,monthly_review_source_snapshot_id,monthly_review_source_fingerprint")
+      .eq("business_id", run.business_id).eq("year", year).eq("month", month).eq("accounting_method", "Cash").maybeSingle();
+    if (reportError) throw reportError;
+    if (!report?.monthly_review_published_at || !report?.storage_path || report.monthly_review_run_id !== run.id || report.monthly_review_source !== "monthly_review_admin_pull" || !report.monthly_review_source_snapshot_id) {
+      return res.status(409).json({ ok: false, error: "report_source_identity_not_reconstructable", message: "The published report's original source cannot be verified safely. Publish an explicit update if a current source-bound report is required." });
+    }
+    const { data: snapshot, error: snapshotError } = await supabase.from("monthly_review_qbo_pnl_snapshots")
+      .select("id,business_id,review_year,review_month,accounting_method,raw_hash")
+      .eq("id", report.monthly_review_source_snapshot_id).eq("business_id", run.business_id).eq("review_year", year).eq("review_month", month).eq("accounting_method", "Cash").maybeSingle();
+    if (snapshotError) throw snapshotError;
+    if (!snapshot?.raw_hash) return res.status(409).json({ ok: false, error: "report_source_identity_not_reconstructable", message: "The published report's original source fingerprint is unavailable." });
+    const slash = report.storage_path.lastIndexOf("/");
+    const directory = slash >= 0 ? report.storage_path.slice(0, slash) : "";
+    const filename = slash >= 0 ? report.storage_path.slice(slash + 1) : report.storage_path;
+    const { data: objects, error: objectError } = await supabase.storage.from("financial-reports").list(directory, { search: filename, limit: 10 });
+    if (objectError) throw objectError;
+    if (!(objects || []).some((object) => object.name === filename)) return res.status(409).json({ ok: false, error: "published_report_object_missing" });
+    if (!report.monthly_review_source_fingerprint) {
+      const { error: updateError } = await supabase.from("report_metadata").update({ monthly_review_source_fingerprint: snapshot.raw_hash }).eq("id", report.id).eq("business_id", run.business_id).is("monthly_review_source_fingerprint", null);
+      if (updateError) throw updateError;
+      await logAuditEvent({ run, actor: req.user, eventType: "pnl_report_source_reconciled", sectionKey: "pnl_source", nextValue: { report_id: report.id, source_snapshot_id: snapshot.id }, notes: "Bound an existing published report to its persisted source snapshot without regenerating the PDF." });
+    }
+    const reportState = await getMonthlyReportState({ db: supabase, businessId: run.business_id, year, month, accountingMethod: "Cash" });
+    return res.json({ ok: true, report_state: reportState });
+  } catch (e) {
+    console.error("[monthly-review] reconcile pnl source failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_reconcile_pnl_source_failed", "Could not verify the published report source.", e);
   }
 });
 
@@ -1910,9 +1952,11 @@ router.post("/runs/:runId/finalize", async (req, res) => {
     if (reportState.status !== "published_current") {
       return res.status(409).json({
         ok: false,
-        error: reportState.status === "published_outdated" ? "pnl_publication_outdated" : "pnl_not_published_for_finalization",
+        error: ["published_outdated", "published_legacy_unverified"].includes(reportState.status) ? "pnl_publication_not_verified_current" : "pnl_not_published_for_finalization",
         message: reportState.status === "published_outdated"
           ? "Publish an updated monthly P&L from the current QuickBooks snapshot before approving."
+          : reportState.status === "published_legacy_unverified"
+            ? "A published P&L exists, but its source freshness is not yet verified. Verify or update it before approving."
           : "Pull and publish the monthly P&L from QuickBooks before approving.",
         report_state: reportState,
       });

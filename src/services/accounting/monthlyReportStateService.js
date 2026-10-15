@@ -2,15 +2,15 @@ export function projectMonthlyReportState({ report = null, currentSnapshot = nul
   if (!report) return { status: "not_published", report: null, source_current: false };
   if (report.publication_status === "publishing") return { status: "publishing", report, source_current: false };
   if (report.publication_status === "failed") return { status: "publication_failed", report, source_current: false };
+  if (report.publication_status === "superseded" && report.monthly_review_published_at && report.storage_path) return { status: "superseded", report, source_current: false };
   if (!report.monthly_review_published_at || !report.storage_path) return { status: "not_published", report, source_current: false };
-  const sourceCurrent = Boolean(
-    report.monthly_review_source_snapshot_id &&
-    currentSnapshot?.id &&
-    String(report.monthly_review_source_snapshot_id) === String(currentSnapshot.id) &&
-    report.monthly_review_source_fingerprint &&
-    currentSnapshot.raw_hash &&
-    report.monthly_review_source_fingerprint === currentSnapshot.raw_hash
-  );
+  const hasPersistedIdentity = Boolean(report.monthly_review_source_snapshot_id && report.monthly_review_source_fingerprint);
+  const hasCurrentIdentity = Boolean(currentSnapshot?.id && currentSnapshot?.raw_hash);
+  if (!hasPersistedIdentity || !hasCurrentIdentity) {
+    return { status: "published_legacy_unverified", report, source_current: false };
+  }
+  const sourceCurrent = String(report.monthly_review_source_snapshot_id) === String(currentSnapshot.id) &&
+    report.monthly_review_source_fingerprint === currentSnapshot.raw_hash;
   return { status: sourceCurrent ? "published_current" : "published_outdated", report, source_current: sourceCurrent };
 }
 

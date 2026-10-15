@@ -36,7 +36,9 @@ router.get("/archive", async (req, res) => {
       return res.status(500).json({ ok: false, error: "report_metadata_read_failed" });
     }
 
-    const rows = Array.isArray(data) ? data : [];
+    const rows = (Array.isArray(data) ? data : []).filter((row) =>
+      row?.storage_path && !["publishing", "failed", "not_published"].includes(String(row?.publication_status || ""))
+    );
     const { data: snapshots, error: snapshotsError } = await supabase
       .from("monthly_review_qbo_pnl_snapshots")
       .select("id,business_id,review_year,review_month,accounting_method,raw_hash,snapshot_version,pulled_at,status,is_current")

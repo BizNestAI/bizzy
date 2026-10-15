@@ -70,7 +70,8 @@ test("Reports Admin View reads report_metadata through verified backend archive 
   assert.match(routes, /req\?\.tenantContext\?\.businessId/);
   assert.match(routes, /\.from\("report_metadata"\)[\s\S]*\.eq\("business_id", businessId\)/);
   assert.match(viewer, /if \(adminView\.active\)/);
-  assert.match(viewer, /apiFetch\("\/api\/accounting\/pnl\/archive"\)/);
+  assert.match(viewer, /apiFetch\("\/api\/accounting\/pnl\/archive", \{/);
+  assert.match(viewer, /"x-business-id": currentBusiness\.id/);
 });
 
 test("Job Costing Admin View skips GET-side generation and disables change-order actions", () => {

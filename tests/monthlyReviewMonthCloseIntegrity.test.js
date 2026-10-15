@@ -16,7 +16,8 @@ test("monthly report state only calls a publication current when durable source 
   assert.equal(projectMonthlyReportState({ report: null, currentSnapshot: snapshot }).status, "not_published");
   assert.equal(projectMonthlyReportState({ report: { ...published, publication_status: "publishing" }, currentSnapshot: snapshot }).status, "publishing");
   assert.equal(projectMonthlyReportState({ report: { ...published, publication_status: "failed" }, currentSnapshot: snapshot }).status, "publication_failed");
-  assert.equal(projectMonthlyReportState({ report: published, currentSnapshot: snapshot }).status, "published_outdated");
+  assert.equal(projectMonthlyReportState({ report: published, currentSnapshot: snapshot }).status, "published_legacy_unverified");
+  assert.equal(projectMonthlyReportState({ report: { ...published, monthly_review_source_snapshot_id: "snapshot-old", monthly_review_source_fingerprint: "hash-old" }, currentSnapshot: snapshot }).status, "published_outdated");
   assert.equal(projectMonthlyReportState({ report: { ...published, monthly_review_source_snapshot_id: snapshot.id, monthly_review_source_fingerprint: snapshot.raw_hash }, currentSnapshot: snapshot }).status, "published_current");
 });
 
@@ -48,10 +49,14 @@ test("MRP publication and approval use shared server state, stable request ident
   const ui = fs.readFileSync(new URL("../src/pages/Admin/MonthlyReviewConsole.jsx", import.meta.url), "utf8");
   const routes = fs.readFileSync(new URL("../src/api/admin/monthlyReview.routes.js", import.meta.url), "utf8");
   const archive = fs.readFileSync(new URL("../src/api/accounting/pnlPdf.routes.js", import.meta.url), "utf8");
+  const archiveUi = fs.readFileSync(new URL("../src/components/Accounting/PNLArchiveViewer.jsx", import.meta.url), "utf8");
   assert.match(ui, /publishRequestIdRef/);
   assert.match(ui, /published_current/);
   assert.match(ui, /View Published P&amp;L/);
   assert.match(routes, /loadCanonicalCloseFeedState/);
   assert.match(routes, /reportState\.status !== "published_current"/);
   assert.match(archive, /projectMonthlyReportState/);
+  assert.match(archiveUi, /"x-business-id": currentBusiness\.id/);
+  assert.match(archiveUi, /Legacy report · freshness not yet verified/);
+  assert.match(routes, /reconcile-pnl-source/);
 });

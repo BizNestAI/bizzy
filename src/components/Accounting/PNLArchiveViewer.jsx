@@ -20,6 +20,20 @@ const MONTHS = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+function formatReportPublishedAt(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function archiveReportStateLabel(status) {
+  if (status === "published_current") return "Current published report";
+  if (status === "published_outdated") return "Published report · newer source available";
+  if (status === "published_legacy_unverified") return "Legacy report · freshness not yet verified";
+  if (status === "superseded") return "Superseded published report";
+  return "Published report";
+}
+
 export default function PNLArchiveViewer() {
   const user = useUser();
   const { currentBusiness } = useCurrentBusiness();
@@ -50,7 +64,9 @@ export default function PNLArchiveViewer() {
     setLoading(true);
     if (!usingDemo || adminView.active) {
       try {
-        const res = await apiFetch("/api/accounting/pnl/archive");
+        const res = await apiFetch("/api/accounting/pnl/archive", {
+          headers: { "x-business-id": currentBusiness.id },
+        });
         if (!res.ok) {
           setReports([]);
           return;
@@ -193,11 +209,10 @@ export default function PNLArchiveViewer() {
     });
 
     try {
-      let signedUrl = null;
+      let signedUrl = report.signed_url || report.signedUrl || null;
       let source = "bizzi";
 
       if (readOnly) {
-        signedUrl = report.signed_url || report.signedUrl || null;
         if (!signedUrl) {
           alert("This archived report is unavailable in read-only Admin View.");
           return;
@@ -358,6 +373,13 @@ export default function PNLArchiveViewer() {
                   <div className="min-w-0">
                     <p className="text-base font-semibold leading-tight text-white">
                       {monthName} {report.year}
+                    </p>
+                    <p className="mt-1 text-xs text-white/50">Cash basis</p>
+                    {report.monthly_review_published_at ? (
+                      <p className="mt-1 text-xs text-white/55">Published {formatReportPublishedAt(report.monthly_review_published_at)}</p>
+                    ) : null}
+                    <p className={`mt-1 text-[11px] font-medium ${report.report_state === "published_outdated" ? "text-amber-200/80" : "text-emerald-100/65"}`}>
+                      {archiveReportStateLabel(report.report_state)}
                     </p>
                   </div>
                   <div className="shrink-0">

@@ -2289,7 +2289,7 @@ export default function MonthlyReviewConsole() {
 
   const publishMonthlyReport = async () => {
     if (!detail?.run?.id) return;
-    if (detail?.pnl_report?.status === "published_outdated" && typeof window !== "undefined" && !window.confirm("This replaces the archived P&L with a report generated from the current QuickBooks snapshot. Continue?")) return;
+    if (["published_outdated", "published_legacy_unverified"].includes(detail?.pnl_report?.status) && typeof window !== "undefined" && !window.confirm("Generate an updated report from the current QuickBooks snapshot? Viewing the existing report does not require this update.")) return;
     setBusyAction("publish-report");
     setError("");
     try {
@@ -2320,6 +2320,20 @@ export default function MonthlyReviewConsole() {
     } catch (e) {
       if (reportTab && !reportTab.closed) reportTab.close();
       setError(e?.body?.message || e?.message || "Could not open the published monthly report.");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const verifyPublishedMonthlyReport = async () => {
+    if (!detail?.run?.id) return;
+    setBusyAction("verify-report");
+    setError("");
+    try {
+      const result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/reconcile-pnl-source`, { method: "POST" });
+      setDetail((current) => current ? { ...current, pnl_report: result?.report_state || current.pnl_report } : current);
+    } catch (e) {
+      setError(e?.body?.message || e?.message || "The published report source could not be verified safely. Publish an explicit update only if approval requires a current report.");
     } finally {
       setBusyAction("");
     }
@@ -2647,29 +2661,36 @@ export default function MonthlyReviewConsole() {
                       {busyAction === "customer-view" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
                       Open Bookkeeping Access
                     </button>
-                    {detail?.pnl_report?.status === "published_current" ? (
-                      <button
-                        type="button"
-                        onClick={viewPublishedMonthlyReport}
-                        disabled={busyAction === "view-report"}
-                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-950/35 px-4 py-2 text-sm font-semibold text-cyan-50 shadow-sm transition hover:border-cyan-300/32 hover:bg-cyan-900/42 disabled:opacity-45"
-                      >
-                        {busyAction === "view-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-                        View Published P&amp;L
-                      </button>
-                    ) : (
+                    {["published_current", "published_legacy_unverified", "published_outdated"].includes(detail?.pnl_report?.status) ? (
                       <div className="flex flex-col items-end gap-1">
                         <button
                           type="button"
-                          onClick={publishMonthlyReport}
-                          disabled={busyAction === "publish-report" || detail?.pnl_report?.status === "publishing" || !detail?.run?.id}
+                          onClick={viewPublishedMonthlyReport}
+                          disabled={busyAction === "view-report"}
                           className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-950/35 px-4 py-2 text-sm font-semibold text-cyan-50 shadow-sm transition hover:border-cyan-300/32 hover:bg-cyan-900/42 disabled:cursor-not-allowed disabled:opacity-45"
                         >
-                          {busyAction === "publish-report" || detail?.pnl_report?.status === "publishing" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                          {detail?.pnl_report?.status === "published_outdated" ? "Publish Updated P&L Report" : detail?.pnl_report?.status === "publication_failed" ? "Retry P&L Publication" : "Publish Final P&L Report PDF"}
+                          {busyAction === "view-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                          View Published P&amp;L
                         </button>
-                        {detail?.pnl_report?.status === "published_outdated" ? <span className="text-[11px] font-medium text-amber-200/80">Published report is out of date</span> : null}
+                        {detail?.pnl_report?.report?.monthly_review_published_at ? <span className="text-[11px] text-white/45">Published {formatShortDate(detail.pnl_report.report.monthly_review_published_at)} at {formatShortTime(detail.pnl_report.report.monthly_review_published_at)}</span> : null}
+                        {detail?.pnl_report?.status !== "published_current" ? (
+                          <button type="button" onClick={detail?.pnl_report?.status === "published_legacy_unverified" ? verifyPublishedMonthlyReport : publishMonthlyReport} disabled={["publish-report", "verify-report"].includes(busyAction)} className="text-[11px] font-semibold text-cyan-100/75 underline-offset-2 hover:underline disabled:opacity-45">
+                            {["publish-report", "verify-report"].includes(busyAction) ? "Checking…" : detail?.pnl_report?.status === "published_outdated" ? "Publish Updated P&L Report" : "Verify report source"}
+                          </button>
+                        ) : null}
+                        {detail?.pnl_report?.status === "published_outdated" ? <span className="text-[11px] font-medium text-amber-200/80">Underlying report source changed after publication</span> : null}
+                        {detail?.pnl_report?.status === "published_legacy_unverified" ? <span className="text-[11px] font-medium text-white/45">Published report · source freshness not yet verified</span> : null}
                       </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={publishMonthlyReport}
+                        disabled={busyAction === "publish-report" || detail?.pnl_report?.status === "publishing" || !detail?.run?.id}
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-950/35 px-4 py-2 text-sm font-semibold text-cyan-50 shadow-sm transition hover:border-cyan-300/32 hover:bg-cyan-900/42 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {busyAction === "publish-report" || detail?.pnl_report?.status === "publishing" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                        {detail?.pnl_report?.status === "publication_failed" ? "Retry P&L Publication" : "Publish Final P&L Report PDF"}
+                      </button>
                     )}
                     {detail?.stamp ? (
                       <button
