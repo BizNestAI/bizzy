@@ -1283,7 +1283,7 @@ function MessageStream({
               <div className="chat-row" key={key}>
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <div className="row-wrap row-wrap--user">
-                    <div>
+                    <div className="bizzy-user-message-stack">
                       <UserMessageBubble>{m.text}</UserMessageBubble>
                       {m.deliveryStatus === 'failed' ? (
                         <div className="mt-1 text-right text-xs text-rose-300" role="status">

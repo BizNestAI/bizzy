@@ -9,6 +9,7 @@ import { useAuth } from '../../context/AuthContext';
 import { createDoc } from '../../services/bizzyDocs/docsService';
 import MarkdownRenderer from './MarkdownRenderer';
 import ChatMessage from './ChatMessage';
+import UserMessageBubble from './UserMessageBubble';
 import { ACCENT_HEX } from '../../config/accent';
 
 /* ---------- constants / helpers ---------- */
@@ -480,9 +481,11 @@ const BizzyChatHistory = ({ inline = false }) => {
                 const isLast = index === filteredMessages.length - 1;
                 if (suppressNextUserBubble && isLast) return null;
                 return (
-                  <ChatMessage key={key} side="user">
-                    {msg.text}
-                  </ChatMessage>
+                  <div className="flex w-full justify-end" key={key}>
+                    <div className="bizzy-user-message-stack">
+                      <UserMessageBubble>{msg.text}</UserMessageBubble>
+                    </div>
+                  </div>
                 );
               }
 

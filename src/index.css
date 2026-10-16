@@ -134,7 +134,7 @@
   box-sizing: border-box;
   display: block;
   width: fit-content;
-  max-width: 70%;
+  max-width: min(680px, 70%);
   align-self: flex-end;
   padding: 10px 17px;
   border: 1px solid var(--chat-user-border);
@@ -151,6 +151,14 @@
   word-break: normal;
   box-shadow: none;
   transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.bizzy-user-message-stack{
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
 .bizzy-user-message:hover{
