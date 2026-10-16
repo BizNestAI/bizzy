@@ -731,12 +731,13 @@ useEffect(() => {
 
 function reportingSetupErrorMessage(error) {
   const code = String(error?.body?.code || error?.body?.error || error?.code || error?.message || "").toLowerCase();
-  if (code.includes("needs_reconnect") || code.includes("not_connected")) return "Reconnect QuickBooks, then try enabling financial reporting again.";
+  if (code.includes("needs_reconnect") || code.includes("not_connected")) return "Reconnect QuickBooks, then try saving the reporting timezone again.";
   if (code.includes("rate_limited")) return "QuickBooks is receiving too many requests right now. Wait a moment, then try again.";
+  if (code.includes("unsupported_reporting_currency")) return "Bizzi financial reporting currently supports USD QuickBooks companies.";
   if (code.includes("currency")) return "Bizzi could not verify the QuickBooks home currency. Check the company settings, then try again.";
   if (code.includes("timezone")) return "Choose a valid reporting timezone and try again.";
   if (code.includes("invalidated") || code.includes("realm")) return "This configuration was invalidated after the QuickBooks company changed. Verify the connected company and try again.";
-  if (code.includes("qbo") || code.includes("quickbooks")) return "QuickBooks needs attention before financial reporting can be enabled. Try again, or reconnect QuickBooks if the issue continues.";
+  if (code.includes("qbo") || code.includes("quickbooks")) return "QuickBooks needs attention before the timezone can be saved. Try again, or reconnect QuickBooks if the issue continues.";
   return "Financial reporting could not be verified right now. Your timezone selection is saved on this screen; try again shortly.";
 }
 
@@ -763,7 +764,7 @@ function FinancialReportingSetup({ businessId, businessState, companyName, quick
       if (!active) return;
       setStatus(next);
       // A stored/confirmed server value always wins; profile state is suggestion-only.
-      setTimezone(next.reporting_timezone || suggestion || "");
+      setTimezone(next.reporting_timezone || suggestion || "America/New_York");
     }).catch(() => active && setStatus({ ready: false, status: "temporarily_unavailable" }));
     return () => { active = false; };
   }, [businessId, suggestion]);
@@ -773,7 +774,7 @@ function FinancialReportingSetup({ businessId, businessState, companyName, quick
     setSuccess("");
     requestIdRef.current = null;
   };
-  const activate = async () => {
+  const saveTimezone = async () => {
     if (!timezone || readOnly || busyRef.current) return;
     busyRef.current = true;
     setBusy(true); setError(""); setSuccess("");
@@ -781,7 +782,7 @@ function FinancialReportingSetup({ businessId, businessState, companyName, quick
     try {
       const next = await configureFinancialReporting({ businessId, timezone, requestId: requestIdRef.current });
       setStatus(next); setTimezone(next.reporting_timezone || timezone); setEditing(false);
-      setSuccess("Financial reporting is ready. Your financial questions are now available.");
+      setSuccess("Reporting timezone saved.");
       requestIdRef.current = null;
       window.dispatchEvent(new CustomEvent("bizzy:financial-reporting-updated", { detail: { businessId, status: next } }));
     } catch (nextError) { setError(reportingSetupErrorMessage(nextError)); }
@@ -791,19 +792,19 @@ function FinancialReportingSetup({ businessId, businessState, companyName, quick
   const confirmedOption = getReportingTimezoneOption(status?.reporting_timezone);
   const suggestionExplanation = suggestion && timezone === suggestion && stateName
     ? `Based on your ${stateName} business address. This controls monthly and year-to-date reporting periods.`
-    : "Choose the timezone your business uses for financial reporting. This controls monthly and year-to-date reporting periods.";
+    : `Choose the timezone your business uses for financial reporting. America/New_York is used when the business location is not specific enough.`;
   if (!status) return <div id="financial-reporting" className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-4">
     <div className="text-sm font-semibold text-white">Financial reporting</div>
     <p role="status" className="mt-2 flex items-center gap-2 text-xs text-white/55"><Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />Loading reporting status…</p>
   </div>;
   return <div id="financial-reporting" className="mt-3 rounded-xl border border-white/10 bg-white/[0.025] p-4">
     <div className="text-sm font-semibold text-white">Financial reporting</div>
-    {status?.ready && !editing ? <>
-      <p className="mt-1 text-xs text-white/65">Financial reporting ready · Cash basis · {status.currency} · {confirmedOption?.label || status.reporting_timezone}</p>
-      <button type="button" disabled={readOnly} onClick={() => { setTimezone(status.reporting_timezone || ""); setEditing(true); setError(""); setSuccess(""); }} className="mt-3 rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-white/85 hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50 disabled:opacity-45">Edit reporting timezone</button>
-    </> : <>
-      <p className="mt-1 text-xs text-white/60">{quickBooksConnected ? "QuickBooks connected" : "QuickBooks connection required"}{status?.currency ? ` · Currency verified: ${status.currency}` : ""} · Cash-basis financial insights</p>
+    {!editing ? <>
+      <p className="mt-1 text-xs text-white/65">{status?.ready ? "Financial reporting ready" : quickBooksConnected ? "Financial reporting initializes automatically when needed" : "QuickBooks connection required"} · Cash basis{status?.currency ? ` · ${status.currency}` : ""}{status?.reporting_timezone ? ` · ${confirmedOption?.label || status.reporting_timezone}` : ""}</p>
       {companyName ? <p className="mt-1 text-xs text-white/45">Company: {companyName}</p> : null}
+      {status?.message && !status?.ready ? <p className="mt-2 text-xs text-white/50">{status.message}</p> : null}
+      <button type="button" disabled={readOnly || !quickBooksConnected} onClick={() => { setTimezone(status.reporting_timezone || suggestion || "America/New_York"); setEditing(true); setError(""); setSuccess(""); }} className="mt-3 rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-white/85 hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50 disabled:opacity-45">Edit reporting timezone</button>
+    </> : <>
       <div className="mt-3 max-w-sm">
         <span id="financial-reporting-timezone-label" className="block text-xs font-semibold text-white/75">Reporting timezone</span>
         <Listbox value={timezone} onChange={changeTimezone} disabled={readOnly || busy}>
@@ -820,7 +821,7 @@ function FinancialReportingSetup({ businessId, businessState, companyName, quick
         <p id="financial-reporting-timezone-description" className="mt-2 text-xs leading-5 text-white/50">{suggestionExplanation}</p>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button type="button" disabled={readOnly || busy || !timezone} onClick={activate} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-sm font-semibold text-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50 disabled:opacity-45">{busy ? <><Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />Verifying financial reporting…</> : status?.ready ? "Confirm timezone change" : "Confirm and enable financial insights"}</button>
+        <button type="button" disabled={readOnly || busy || !timezone} onClick={saveTimezone} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-sm font-semibold text-emerald-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50 disabled:opacity-45">{busy ? <><Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />Saving timezone…</> : "Save timezone"}</button>
         {editing ? <button type="button" disabled={busy} onClick={() => { setTimezone(status.reporting_timezone || ""); setEditing(false); setError(""); }} className="min-h-10 rounded-lg px-3 py-2 text-sm font-semibold text-white/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30 disabled:opacity-45">Cancel</button> : null}
       </div>
     </>}

@@ -1,6 +1,7 @@
 // File: /src/api/auth/quickbooksAuth.js
 
 import express from "express";
+import { randomUUID } from "node:crypto";
 import { supabase } from "../../services/supabaseAdmin.js";
 import fetch from "node-fetch";
 import {
@@ -29,6 +30,7 @@ import {
 } from "../../services/quickbooks/qboOAuthStateService.js";
 import { decryptQuickBooksTokenRow, encryptQuickBooksTokenPayload } from "../../services/quickbooksTokenService.js";
 import { redactQboSecrets, safeQboClientError } from "../../services/quickbooks/qboSecurity.js";
+import { initializeReportingAfterQboConnection } from "../../services/evidence/reportingConfigurationApiService.js";
 import {
   ENTITLEMENT_CAPABILITIES,
   requireBusinessRole,
@@ -509,6 +511,11 @@ router.get("/callback", async (req, res) => {
       connected_legal_name: companyInfo?.LegalName || null,
       connected_at: new Date().toISOString(),
       qbo_env: qboEnvName || null,
+    });
+
+    setImmediate(() => {
+      initializeReportingAfterQboConnection({ db: supabase, businessId: business_id, requestId: randomUUID(), actorUserId: user_id })
+        .catch(() => null);
     });
 
     const forceBackfill = oauthState.metadata?.forceBackfill === true;

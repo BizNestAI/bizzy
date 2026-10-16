@@ -9,8 +9,6 @@ import { getQuickPromptsForModule } from "../../services/prompts/quickPromptServ
 import { ONBOARDING_PROMPTS } from "../../config/chatQuickPrompts";
 import { identifyOnboardingPrompt } from "../../config/onboardingPromptBank";
 import { ACCENT_HEX } from "../../config/accent";
-import { getReportingConfigurationStatus } from "../../services/evidence/reportingConfigurationClient.js";
-import { useBusiness } from "../../context/BusinessContext.jsx";
 
 /* -------------------------------------------------- */
 const accentHexMap = {
@@ -66,7 +64,6 @@ export default function BizzyChatBar({
   flushColumnPadding = false,
 }) {
   const location = useLocation();
-  const { currentBusiness } = useBusiness();
   const pathname = location?.pathname || "";
   const currentModule = getModuleFromPath(pathname);
   const isChatHome = pathname.startsWith("/dashboard/bizzi/chat") || pathname.startsWith("/chat");
@@ -87,7 +84,6 @@ export default function BizzyChatBar({
 
   const [input, setInput] = useState("");
   const [quickPrompts, setQuickPrompts] = useState([]);
-  const [reportingStatus, setReportingStatus] = useState(null);
 
   const allowedByRoute = routeAllowsBar(pathname);
   const shouldRender = forceVisible || allowedByRoute;
@@ -186,34 +182,6 @@ export default function BizzyChatBar({
     else setTimeout(() => alive && setQuickPrompts([]), 0);
     return () => { alive = false; };
   }, [currentModule, allowedByRoute, forceVisible, isOnboardingMode]);
-
-  useEffect(() => {
-    let active = true;
-    const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
-    if (isOnboardingMode || !businessId) { setReportingStatus(null); return () => { active = false; }; }
-    getReportingConfigurationStatus(businessId).then((status) => active && setReportingStatus(status)).catch(() => active && setReportingStatus({ ready: false, reason_code: "evidence_temporarily_unavailable" }));
-    const handleReportingUpdate = (event) => {
-      if (event?.detail?.businessId === businessId && event?.detail?.status) setReportingStatus(event.detail.status);
-    };
-    window.addEventListener("bizzy:financial-reporting-updated", handleReportingUpdate);
-    return () => { active = false; window.removeEventListener("bizzy:financial-reporting-updated", handleReportingUpdate); };
-  }, [currentBusiness?.id, isOnboardingMode]);
-
-  const quickPromptAvailability = useMemo(() => {
-    if (isOnboardingMode) return {};
-    const ready = reportingStatus?.ready === true;
-    const reason = reportingStatus?.message || "Finish Financial reporting setup in Settings to use this question.";
-    const financial = { available: ready, message: reason, canConfigure: !chatReadOnly };
-    return {
-      financial_month_performance: financial,
-      financial_income_categories: financial,
-      financial_expense_categories: financial,
-      financial_period_changes: financial,
-      tax_ytd_book_profit: financial,
-      tax_transactions_needing_review: { available: true },
-      tax_professional_readiness: { available: true },
-    };
-  }, [chatReadOnly, isOnboardingMode, reportingStatus]);
 
   // Container positioning
   let containerClass = "w-full";
@@ -315,7 +283,6 @@ export default function BizzyChatBar({
               quickPromptClassName={promptContainerClass}
               quickPromptChipClassName={promptChipClass}
               quickPromptStyle={{ "--qp-accent": accentHex, "--qp-frame": quickPromptFrame }}
-              quickPromptAvailability={quickPromptAvailability}
               onQuickPromptClick={handlePromptClick}
             />
           </div>

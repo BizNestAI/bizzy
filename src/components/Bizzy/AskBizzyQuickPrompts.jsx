@@ -7,7 +7,7 @@ function textOf(item) { return typeof item === "string" ? item : item?.text; }
 export default function AskBizzyQuickPrompts({
   module = "general", prompts, onPromptClick, max, className = "", chipClassName = "",
   accentColor = null, disabled = false, disabledReason = "Chat is unavailable in read-only Admin View.",
-  availability = {}, settingsHref = "/dashboard/settings?tab=Integrations&focus=financial-reporting",
+  availability = {},
 }) {
   const list = (Array.isArray(prompts) && prompts.length ? prompts : getBusinessQuickPrompts(module));
   const visible = Number.isFinite(max) ? list.slice(0, max) : list;
@@ -50,7 +50,7 @@ export default function AskBizzyQuickPrompts({
           const intent = typeof item === "object" ? item.intent : null;
           const itemAvailability = intent ? availability[intent] : null;
           const itemDisabled = disabled || itemAvailability?.available === false;
-          const reason = disabled ? disabledReason : itemAvailability?.message || "Finish Financial reporting setup in Settings to use this question.";
+          const reason = disabled ? disabledReason : itemAvailability?.message || "This question is temporarily unavailable.";
           const reasonId = `${descriptionId}-${idx}`;
           const active = hoverIdx === idx;
           return <div key={`${intent || module}-${text}`} className="flex shrink-0 items-center gap-1">
@@ -61,13 +61,10 @@ export default function AskBizzyQuickPrompts({
               style={{ color: active ? (accentColor || "#f5f6f7") : "rgba(255,255,255,0.9)", borderColor: active ? "var(--accent-line)" : "var(--surface-border)", background: active ? "var(--surface-graphite-2)" : "var(--surface-graphite)" }}>
               {text}
             </button>
-            {itemDisabled ? <span id={reasonId} className="sr-only">{reason} {itemAvailability?.canConfigure ? `Open ${settingsHref}.` : ""}</span> : null}
+            {itemDisabled ? <span id={reasonId} className="sr-only">{reason}</span> : null}
           </div>;
         })}
       </div>
-      {visible.some((item) => availability[typeof item === "object" ? item.intent : ""]?.available === false && availability[typeof item === "object" ? item.intent : ""]?.canConfigure) ? (
-        <a href={settingsHref} className="mt-1 inline-flex text-xs font-semibold text-emerald-300 underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300">Finish Financial reporting setup in Settings</a>
-      ) : null}
     </div>
   );
 }

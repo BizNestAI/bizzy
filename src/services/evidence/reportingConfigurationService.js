@@ -9,6 +9,7 @@ export function reportingConfigurationStatus(row, activeRealmId = null) {
   if (row?.status === "invalidated" || (row?.qbo_realm_id && activeRealmId && row.qbo_realm_id !== activeRealmId)) return "invalidated";
   if (!row?.qbo_realm_id || !row?.realm_verified_at || !row?.provider_schema_version) return "qbo_identity_required";
   if (!row?.home_currency || !row?.currency_verified_at) return "currency_verification_required";
+  if (row.home_currency !== "USD") return "unsupported_currency";
   if (!row?.reporting_timezone || !row?.timezone_confirmed_at) return "timezone_confirmation_required";
   return row?.status === "verified" && row?.verified_at ? "verified" : "timezone_confirmation_required";
 }

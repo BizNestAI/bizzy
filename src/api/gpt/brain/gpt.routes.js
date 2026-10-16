@@ -5,7 +5,7 @@ import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } 
 import { createRateLimiter } from '../../_shared/rateLimit.js';
 import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from '../../_shared/entitlementAuth.js';
 import { supabase } from '../../../services/supabaseAdmin.js';
-import { getSanitizedReportingStatus, verifyAndActivateReportingConfiguration } from '../../../services/evidence/reportingConfigurationApiService.js';
+import { ensureFinancialReportingConfiguration, getSanitizedReportingStatus } from '../../../services/evidence/reportingConfigurationApiService.js';
 
 // Direct handler that creates/continues threads and returns meta.thread_id
 import { generateBizzyResponseHandler, getBizzyChatAccessHandler } from './generateBizzyResponse.js';
@@ -34,7 +34,7 @@ router.post('/reporting-configuration', ...privateBusinessRoute, requireBusiness
   try {
     const requestId = String(req.body?.request_id || req.header('x-idempotency-key') || '').trim();
     if (!UUID_RE.test(requestId)) return res.status(400).json({ ok: false, error: 'invalid_request_id' });
-    const status = await verifyAndActivateReportingConfiguration({ db: supabase, businessId: req.business.id, timezone: String(req.body?.reporting_timezone || '').trim(), requestId, actorUserId: req.auth?.userId || null });
+    const status = await ensureFinancialReportingConfiguration({ db: supabase, businessId: req.business.id, timezoneOverride: String(req.body?.reporting_timezone || '').trim(), requestId, actorUserId: req.auth?.userId || null, verificationSource: 'authorized_timezone_override' });
     return res.json(status);
   } catch (error) {
     console.warn('[financial-reporting.setup]', {

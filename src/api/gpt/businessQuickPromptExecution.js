@@ -63,9 +63,10 @@ export function buildCanonicalEvidenceInstruction(projection) {
 
 export function unavailableQuickPromptResponse(reasonCode, provenance) {
   const messages = {
-    financial_reporting_not_configured: "Finish Financial reporting setup in Settings to use this question.",
-    reporting_timezone_required: "Choose a reporting timezone in Financial reporting settings.",
-    qbo_verification_required: "Verify the QuickBooks connection in Financial reporting settings.",
+    financial_reporting_not_configured: "Bizzi could not prepare financial reporting yet. Try again shortly.",
+    reporting_timezone_required: "Bizzi could not establish the reporting timezone. Review the optional timezone preference in Settings.",
+    qbo_verification_required: "Reconnect QuickBooks so Bizzi can verify the connected company.",
+    unsupported_reporting_currency: "Bizzi financial reporting currently supports USD QuickBooks companies.",
     cash_pnl_unavailable: "A verified Cash-basis Profit and Loss is not available for this period.",
     cash_pnl_incomplete: "The Cash-basis Profit and Loss is incomplete for this period.",
     evidence_reconciliation_failed: "The financial evidence did not reconcile, so Bizzi will not answer from it.",

@@ -37,11 +37,13 @@ import {
 } from './chatCreditAuthority.js';
 import { HISTORY_AUTHORITY_INSTRUCTION, labelOlderConversationDigest, sortConversationMessages } from '../../../utils/conversationMessageOrder.js';
 import {
+  FINANCIAL_QUICK_PROMPT_INTENTS,
   buildBusinessQuickPromptEvidence,
   buildCanonicalEvidenceInstruction,
   resolveBusinessQuickPromptRequest,
   unavailableQuickPromptResponse,
 } from '../businessQuickPromptExecution.js';
+import { ensureFinancialReportingConfiguration } from '../../../services/evidence/reportingConfigurationApiService.js';
 import { ALL_INTENTS } from '../registry/intentRegistry.js';
 
 // 👉 NEW: demo-mode helpers
@@ -1007,8 +1009,39 @@ export async function generateBizzyResponseHandler(req, res) {
       parsedInput?.dataMode
     );
 
+    if (canonicalQuickPrompt && FINANCIAL_QUICK_PROMPT_INTENTS.has(canonicalQuickPrompt.intent)) {
+      try {
+        await ensureFinancialReportingConfiguration({
+          db: supabase,
+          businessId: business_id,
+          requestId: stableRequestId,
+          actorUserId: user_id,
+          verificationSource: 'automatic_quick_prompt',
+        });
+      } catch (configurationError) {
+        const code = configurationError?.code || 'reporting_configuration_unavailable';
+        const messages = {
+          quickbooks_not_connected: 'Connect QuickBooks to use financial questions.',
+          quickbooks_needs_reconnect: 'Reconnect QuickBooks to use financial questions.',
+          unsupported_reporting_currency: 'Bizzi financial reporting currently supports USD QuickBooks companies.',
+          currency_verification_required: 'Bizzi could not verify the QuickBooks home currency. Check the company settings, then try again.',
+          quickbooks_rate_limited: 'QuickBooks is receiving too many requests right now. Wait a moment, then try again.',
+          reporting_verification_temporarily_unavailable: 'QuickBooks is temporarily unavailable. Try again shortly.',
+        };
+        return res.status(configurationError?.status || 503).json({
+          ok: false,
+          available: false,
+          error: code,
+          responseText: messages[code] || 'Financial reporting could not be prepared right now. Try again shortly.',
+          suggestedActions: [],
+          followUpPrompt: '',
+          meta: { request_id: stableRequestId, retryable: !['quickbooks_not_connected', 'quickbooks_needs_reconnect', 'unsupported_reporting_currency'].includes(code) },
+        });
+      }
+    }
+
     // The route entitlement middleware has already rejected every non-active/non-trialing
-    // status and Admin View. Reserve before context compilation, embeddings, or AI work.
+    // status and Admin View. Financial configuration is established before credit reservation.
     reservedCredit = await reserveChatCredit(supabase, {
       businessId: business_id,
       requestId: stableRequestId,
