@@ -81,12 +81,6 @@ export default function ChatCanvasBar({
             className="mb-2"
           />
         ) : null}
-        {quota?.credit_limit ? (
-          <div className="mb-1 px-2 text-right text-[11px] text-white/55" data-testid="chat-quota-status">
-            {quota.consumed_count} of {quota.credit_limit} questions used
-            {quota.reset_at ? ` · resets ${new Date(quota.reset_at).toLocaleDateString()}` : ''}
-          </div>
-        ) : null}
         <BizzyChatComposer
           input={input}
           setInput={setInput}

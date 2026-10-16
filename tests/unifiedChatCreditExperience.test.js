@@ -58,6 +58,20 @@ test('Billing loads shared authoritative status and never renders an unloaded ze
   assert.doesNotMatch(settings, /usageCount\s*\|\|\s*0/);
 });
 
+test('usage summary is rendered only in Settings, not above chat bars', () => {
+  const settings = read('src/pages/Settings/SettingsHome.jsx');
+  const persistentBar = read('src/components/Bizzy/BizzyChatBar.jsx');
+  const canvasBar = read('src/components/Bizzy/ChatCanvasBar.jsx');
+  const context = read('src/context/BizzyChatContext.jsx');
+  assert.match(settings, /quota\.consumed_count/);
+  for (const source of [persistentBar, canvasBar]) {
+    assert.doesNotMatch(source, /chat-quota-status|questions used|quota\.consumed_count/);
+    assert.match(source, /Number\(quota\?\.remaining\) === 0/);
+  }
+  assert.doesNotMatch(context, /of \$\{limit\} questions used/);
+  assert.match(context, /Monthly limit reached/);
+});
+
 test('database authority serializes the 299-to-300 boundary and uses UTC months', () => {
   const migration = read('supabase/migrations/20261101093000_business_chat_credit_authority.sql');
   assert.match(migration, /PRIMARY KEY \(business_id, period_start\)/);

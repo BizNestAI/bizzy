@@ -151,14 +151,7 @@ export const BizzyChatProvider = ({ children }) => {
     } else if (Number(access?.remaining || 0) <= 0) {
       setChatGateNotice({ blocked: true, title: 'Monthly limit reached', message: 'You have used all 300 questions. Your credits reset next month.' });
     } else {
-      const used = Number(access?.consumed_count || 0);
-      const limit = Number(access?.credit_limit || 300);
-      const reset = access?.reset_at ? new Date(access.reset_at).toLocaleDateString() : null;
-      setChatGateNotice(used >= 250 ? {
-        blocked: false,
-        title: `${used} of ${limit} questions used`,
-        message: `${Math.max(0, Number(access?.remaining || 0))} questions remaining${reset ? ` until ${reset}` : ''}.`,
-      } : null);
+      setChatGateNotice(null);
     }
 
     return access;
