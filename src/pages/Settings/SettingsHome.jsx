@@ -731,10 +731,12 @@ useEffect(() => {
 
 function reportingSetupErrorMessage(error) {
   const code = String(error?.body?.code || error?.body?.error || error?.code || error?.message || "").toLowerCase();
-  if (code.includes("qbo") || code.includes("quickbooks")) return "QuickBooks needs attention before financial reporting can be enabled. Reconnect it, then try again.";
+  if (code.includes("needs_reconnect") || code.includes("not_connected")) return "Reconnect QuickBooks, then try enabling financial reporting again.";
+  if (code.includes("rate_limited")) return "QuickBooks is receiving too many requests right now. Wait a moment, then try again.";
   if (code.includes("currency")) return "Bizzi could not verify the QuickBooks home currency. Check the company settings, then try again.";
   if (code.includes("timezone")) return "Choose a valid reporting timezone and try again.";
   if (code.includes("invalidated") || code.includes("realm")) return "This configuration was invalidated after the QuickBooks company changed. Verify the connected company and try again.";
+  if (code.includes("qbo") || code.includes("quickbooks")) return "QuickBooks needs attention before financial reporting can be enabled. Try again, or reconnect QuickBooks if the issue continues.";
   return "Financial reporting could not be verified right now. Your timezone selection is saved on this screen; try again shortly.";
 }
 

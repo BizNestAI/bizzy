@@ -12,7 +12,7 @@ export function buildMonthlyPnlContentFingerprint({ snapshot, accounts = [] } = 
       accounting_method: String(snapshot.accounting_method || "Cash"),
       source_start_date: dateOnly(snapshot.source_start_date),
       source_end_date: dateOnly(snapshot.source_end_date),
-      currency_code: String(snapshot.currency_code || snapshot.metadata?.financial_content?.currency_code || "USD").toUpperCase(),
+      currency_code: verifiedCurrencyCode(snapshot.currency_code || snapshot.metadata?.financial_content?.currency_code),
     },
     totals: {
       revenue: money(snapshot.revenue),
@@ -31,6 +31,11 @@ export function buildMonthlyPnlContentFingerprint({ snapshot, accounts = [] } = 
   };
   const digest = createHash("sha256").update(JSON.stringify(content)).digest("hex");
   return { version: MONTHLY_PNL_CONTENT_FINGERPRINT_VERSION, fingerprint: `${MONTHLY_PNL_CONTENT_FINGERPRINT_VERSION}:${digest}`, content };
+}
+
+function verifiedCurrencyCode(value) {
+  const currency = String(value || "").trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : null;
 }
 
 function canonicalRows(rows) {

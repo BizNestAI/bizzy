@@ -268,7 +268,16 @@ test("ProfitAndLoss summary parsing uses QBO KPIs and selected-month report date
   assert.equal(parsed.expenses, 42.5);
   assert.equal(parsed.net_profit, 3074.95);
   assert.equal(parsed.accounting_method, "Cash");
+  assert.equal(parsed.currency_code, null);
   assert.equal(parsed.account_rows.length, 3);
+
+  const cad = parseProfitAndLossSummary(pnlSummaryFixture({ Header: { Currency: "cad" } }), {
+    reviewYear: 2026,
+    reviewMonth: 8,
+    sourceStartDate: "2026-08-01",
+    sourceEndDate: "2026-08-31",
+  });
+  assert.equal(cad.currency_code, "CAD");
 });
 
 test("ProfitAndLoss summary supports zero COGS and Other Income/Other Expense without recomputing Net Profit", () => {

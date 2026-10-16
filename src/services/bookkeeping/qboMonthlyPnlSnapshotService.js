@@ -180,7 +180,7 @@ export async function createOrReplaceMonthlyPnlSnapshot({
       accounting_method: accountingMethod,
       source_start_date: sourceStartDate || range.sourceStartDate,
       source_end_date: sourceEndDate || range.sourceEndDate,
-      currency_code: metadata?.financial_content?.currency_code || "USD",
+      currency_code: metadata?.financial_content?.currency_code || null,
       revenue,
       cogs,
       expenses,

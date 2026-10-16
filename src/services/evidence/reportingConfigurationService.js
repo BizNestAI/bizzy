@@ -1,5 +1,5 @@
 const ACTIONS = new Set(["verify_qbo_identity", "verify_currency", "confirm_timezone", "activate", "invalidate"]);
-const PROVIDER_SOURCES = new Set(["qbo_company_info", "qbo_report_header"]);
+const PROVIDER_SOURCES = new Set(["qbo_company_info", "qbo_preferences", "qbo_report_header"]);
 
 export class ReportingConfigurationError extends Error {
   constructor(code, status = 400, details = {}) { super(code); this.code = code; this.status = status; this.details = details; }

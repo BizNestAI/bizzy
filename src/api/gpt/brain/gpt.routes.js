@@ -37,6 +37,15 @@ router.post('/reporting-configuration', ...privateBusinessRoute, requireBusiness
     const status = await verifyAndActivateReportingConfiguration({ db: supabase, businessId: req.business.id, timezone: String(req.body?.reporting_timezone || '').trim(), requestId, actorUserId: req.auth?.userId || null });
     return res.json(status);
   } catch (error) {
+    console.warn('[financial-reporting.setup]', {
+      request_id: String(req.body?.request_id || req.header('x-idempotency-key') || '').trim() || null,
+      business_id: req.business?.id || null,
+      code: error?.code || 'reporting_configuration_unavailable',
+      provider_resource: error?.details?.provider_resource || null,
+      provider_status: error?.details?.provider_status || null,
+      provider_fault_code: error?.details?.provider_fault_code || null,
+      failure_class: error?.details?.failure_class || null,
+    });
     return res.status(error?.status || 503).json({ ok: false, error: error?.code || 'reporting_configuration_unavailable', message: 'Financial reporting setup could not be completed.' });
   }
 });

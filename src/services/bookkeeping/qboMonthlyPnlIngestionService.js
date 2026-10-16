@@ -424,7 +424,7 @@ export function normalizeQboPnlSnapshotPayload({
   accounts = applyDetailCompletenessToAccounts(accounts, reconciliation);
   const metadata = {
     financial_content: {
-      currency_code: summary.currency_code || "USD",
+      currency_code: summary.currency_code,
     },
     source: {
       summary_report: SUMMARY_REPORT,
@@ -601,7 +601,7 @@ export function parseProfitAndLossSummary(report, {
     reconciliation: buildSummaryReconciliation(totals),
     section_state: sectionState,
     accounting_method: reportBasis,
-    currency_code: String(header?.Currency || header?.currency || "USD").toUpperCase(),
+    currency_code: normalizeReportCurrency(header?.Currency || header?.currency),
     source_start_date: sourceStartDate,
     source_end_date: sourceEndDate,
     review_year: Number(reviewYear),
@@ -609,6 +609,11 @@ export function parseProfitAndLossSummary(report, {
     account_rows: accountRows,
     raw_header: header,
   };
+}
+
+function normalizeReportCurrency(value) {
+  const currency = String(value || "").trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : null;
 }
 
 export function normalizeDetailTransactions(report, {
