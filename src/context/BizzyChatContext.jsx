@@ -44,12 +44,63 @@ export const BizzyChatProvider = ({ children }) => {
   const [businessId, setBusinessId] = useState(null);
   const [threadId, setThreadId] = useState(null);
   const [chatGateNotice, setChatGateNotice] = useState(null);
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quotaError, setQuotaError] = useState(null);
+  const quotaRequestRef = useRef(0);
 
   useEffect(() => {
     if (adminView.active && adminView.businessId) setBusinessId(adminView.businessId);
     else if (currentBusiness?.id) setBusinessId(currentBusiness.id);
     else setBusinessId(localStorage.getItem('currentBusinessId') || null);
   }, [adminView.active, adminView.businessId, currentBusiness?.id]);
+
+  const refreshQuota = useCallback(async ({ businessId: requestedBusinessId } = {}) => {
+    if (adminView.active) return null;
+    const resolvedBusinessId =
+      requestedBusinessId ||
+      businessId ||
+      currentBusiness?.id ||
+      localStorage.getItem('currentBusinessId') ||
+      localStorage.getItem('business_id') ||
+      '';
+    if (!resolvedBusinessId) {
+      updateQuota(null);
+      setQuotaError('business_required');
+      return null;
+    }
+
+    const requestNumber = quotaRequestRef.current + 1;
+    quotaRequestRef.current = requestNumber;
+    setQuotaLoading(true);
+    setQuotaError(null);
+    const url = new URL(apiUrl('/api/gpt/chat-access'));
+    url.searchParams.set('business_id', resolvedBusinessId);
+    try {
+      const access = await safeFetch(url.toString(), {
+        headers: { 'x-business-id': resolvedBusinessId },
+      });
+      if (quotaRequestRef.current === requestNumber) updateQuota(access);
+      return access;
+    } catch (err) {
+      if (quotaRequestRef.current === requestNumber) {
+        updateQuota(null);
+        setQuotaError(err?.body?.error || err?.message || 'chat_access_failed');
+      }
+      throw err;
+    } finally {
+      if (quotaRequestRef.current === requestNumber) setQuotaLoading(false);
+    }
+  }, [adminView.active, businessId, currentBusiness?.id, updateQuota]);
+
+  useEffect(() => {
+    updateQuota(null);
+    setQuotaError(null);
+    if (!businessId || adminView.active) {
+      setQuotaLoading(false);
+      return;
+    }
+    refreshQuota({ businessId }).catch(() => {});
+  }, [adminView.active, businessId, refreshQuota, updateQuota]);
 
   const checkChatAccess = useCallback(async () => {
     if (adminView.active) {
@@ -78,15 +129,9 @@ export const BizzyChatProvider = ({ children }) => {
       return { allowed: false, ...notice };
     }
 
-    const url = new URL(apiUrl('/api/gpt/chat-access'));
-    url.searchParams.set('business_id', resolvedBusinessId);
-
     let access = null;
     try {
-      access = await safeFetch(url.toString(), {
-        headers: { 'x-business-id': resolvedBusinessId },
-      });
-      updateQuota(access);
+      access = await refreshQuota({ businessId: resolvedBusinessId });
     } catch (err) {
       const notice = {
         blocked: true,
@@ -117,7 +162,7 @@ export const BizzyChatProvider = ({ children }) => {
     }
 
     return access;
-  }, [adminView.active, businessId, currentBusiness?.id, updateQuota]);
+  }, [adminView.active, businessId, currentBusiness?.id, refreshQuota]);
 
   const dismissChatGateNotice = useCallback(() => {
     setChatGateNotice(null);
@@ -373,6 +418,8 @@ export const BizzyChatProvider = ({ children }) => {
       isFetchingThread,
       usageCount,
       quota,
+      quotaLoading,
+      quotaError,
       error,
       followUpPrompt,
       suggestedActions,
@@ -390,6 +437,8 @@ export const BizzyChatProvider = ({ children }) => {
       chooseIntent,
       openThread,
       checkChatAccess,
+      refreshQuota,
+      updateQuota,
       dismissChatGateNotice,
 
       // overlay history controls
@@ -425,12 +474,12 @@ export const BizzyChatProvider = ({ children }) => {
     [
       adminView.active,
       adminView.readOnly,
-      messages, isLoading, isGenerating, isFetchingThread, usageCount, quota, error,
+      messages, isLoading, isGenerating, isFetchingThread, usageCount, quota, quotaLoading, quotaError, error,
       followUpPrompt, suggestedActions, clarify, chatGateNotice,
       threadId, threadsRefreshKey,
       isChatOpen, isChatMinimized,
       isCanvasOpen, canvasModule,
-      checkChatAccess, dismissChatGateNotice,
+      checkChatAccess, refreshQuota, updateQuota, dismissChatGateNotice,
     ]
   );
 

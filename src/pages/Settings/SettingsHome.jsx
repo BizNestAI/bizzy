@@ -66,7 +66,6 @@ const INTEGRATION_ACTION_BUTTON_CLASS =
 const PLAID_STATUS_CACHE_VERSION = 3;
 const REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27";
 
-const CREDITS_CAP = 300;
 const EMPTY_BUSINESS_FORM = {
   business_name: "",
   industry: "",
@@ -134,7 +133,7 @@ export default function SettingsHome() {
   const { currentBusiness, setCurrentBusiness } = useBusiness();
   const adminView = useAdminView();
   const readOnly = adminView.active && adminView.readOnly;
-  const { usageCount = 0 } = useBizzyChatContext() || {};
+  const { quota, quotaLoading, quotaError, refreshQuota } = useBizzyChatContext() || {};
   const navigate = useNavigate();
   const userId = adminView.active ? "admin_view" : (user?.id || localStorage.getItem("user_id"));
   const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem("currentBusinessId"));
@@ -162,6 +161,10 @@ export default function SettingsHome() {
     return "Profile";
   }, [searchParams]);
   const shouldLoadBilling = activeTab === "Billing" && Boolean(businessId);
+  useEffect(() => {
+    if (!shouldLoadBilling || typeof refreshQuota !== "function" || adminView.active) return;
+    refreshQuota({ businessId }).catch(() => {});
+  }, [adminView.active, businessId, refreshQuota, shouldLoadBilling]);
   const { status: billingStatus, loading: loadingBilling } = useBillingStatus(
     shouldLoadBilling ? businessId : null,
     shouldLoadBilling ? userId : null,
@@ -692,15 +695,31 @@ useEffect(() => {
                         </p>
                       </div>
                       <span className="text-sm font-semibold text-white/85">
-                        {Math.min(usageCount || 0, CREDITS_CAP)}/{CREDITS_CAP}
+                        {quotaLoading && !quota ? "Loading…" : quotaError || !quota
+                          ? "Unavailable"
+                          : `${Number(quota.consumed_count)}/${Number(quota.credit_limit)}`}
                       </span>
                     </div>
                     <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-white/5">
                       <div
                         className="h-full rounded-full bg-emerald-400/70 transition-all"
-                        style={{ width: `${Math.min(((usageCount || 0) / CREDITS_CAP) * 100, 100)}%` }}
+                        style={{ width: quota
+                          ? `${Math.min((Number(quota.consumed_count) / Math.max(1, Number(quota.credit_limit))) * 100, 100)}%`
+                          : "0%" }}
                       />
                     </div>
+                    {quota ? (
+                      <p className="mt-2 text-xs" style={{ color: TEXT_MUTED }}>
+                        {Number(quota.remaining)} available · resets {new Date(quota.reset_at).toLocaleDateString(undefined, { timeZone: "UTC" })}
+                      </p>
+                    ) : quotaError ? (
+                      <div className="mt-2 flex items-center gap-2 text-xs" style={{ color: TEXT_MUTED }}>
+                        <span>Credit usage is temporarily unavailable.</span>
+                        <button type="button" className="text-emerald-300 hover:text-emerald-200" onClick={() => refreshQuota?.({ businessId })}>
+                          Retry
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="mt-4">

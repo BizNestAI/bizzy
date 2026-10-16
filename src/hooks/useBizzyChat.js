@@ -56,7 +56,11 @@ export const useBizzyChat = (user_id) => {
 
   /* ────────────────────────────── Usage tracking ───────────────────────────── */
   const updateQuota = useCallback((next) => {
-    if (next && typeof next === 'object') setQuota(next);
+    if (next == null) {
+      setQuota(null);
+      return;
+    }
+    if (typeof next === 'object') setQuota(next);
   }, []);
 
   const getActiveDataMode = () => {

@@ -5,6 +5,7 @@ import { Brain as PhBrain } from "@phosphor-icons/react";
 import { motion, AnimatePresence } from 'framer-motion';
 import useOutsideClick from '../../hooks/useOutsideClick';
 import { useAuth } from '../../context/AuthContext';
+import { useBizzyChatContext } from '../../context/BizzyChatContext';
 import MarkdownRenderer from './MarkdownRenderer';
 import { apiUrl, safeFetch } from '../../utils/safeFetch.js';
 
@@ -49,6 +50,7 @@ const AskBizzyInsightButton = ({
   const [loading, setLoading] = useState(false);
   const panelRef = useRef(null);
   const { user } = useAuth();
+  const { updateQuota } = useBizzyChatContext() || {};
 
   useOutsideClick(panelRef, () => setOpen(false));
 
@@ -105,7 +107,15 @@ const AskBizzyInsightButton = ({
         ...(context || {}),
       },
       opts: { depth: 'brief' },
+      request_id: globalThis.crypto?.randomUUID?.(),
     };
+    if (!payload.request_id) {
+      payload.request_id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+        const value = Math.floor(Math.random() * 16);
+        return (char === 'x' ? value : (value & 0x3) | 0x8).toString(16);
+      });
+    }
+    const headers = { 'x-idempotency-key': payload.request_id };
 
     const primary = apiUrl('/api/gpt/generate');
     const alias = apiUrl('/api/gpt/generate-response');
@@ -113,13 +123,15 @@ const AskBizzyInsightButton = ({
     try {
       let data;
       try {
-        data = await safeFetch(primary, { method: 'POST', body: payload });
+        data = await safeFetch(primary, { method: 'POST', headers, body: payload });
       } catch (primaryErr) {
         if (primaryErr?.status !== 404) throw primaryErr;
-        data = await safeFetch(alias, { method: 'POST', body: payload });
+        data = await safeFetch(alias, { method: 'POST', headers, body: payload });
       }
+      updateQuota?.(data?.quota || data?.meta?.quota);
       setResponse(data.responseText || data.reply || 'No insight available.');
     } catch (err) {
+      updateQuota?.(err?.body?.quota || err?.body?.meta?.quota);
       console.error('[AskBizzyInsight] error:', err);
       setResponse('Something went wrong. Try again later.');
     } finally {

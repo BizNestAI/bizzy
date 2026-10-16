@@ -1065,7 +1065,15 @@ export async function generateBizzyResponseHandler(req, res) {
       return res.status(409).json({ ok: false, error: 'request_released', responseText: 'Retry this question to create a new request.', quota: reservedQuota });
     }
     if (reservedCredit?.outcome === 'exhausted') {
-      return res.status(429).json({ ok: false, error: 'monthly_chat_limit_reached', responseText: "You've reached the 300-question monthly limit.", quota: reservedQuota });
+      const resetDate = reservedQuota?.reset_at
+        ? new Date(reservedQuota.reset_at).toLocaleDateString('en-US', { timeZone: 'UTC' })
+        : 'the start of next month';
+      return res.status(429).json({
+        ok: false,
+        error: 'monthly_chat_limit_reached',
+        responseText: `You've reached the ${reservedQuota?.credit_limit || PAID_CHAT_LIMIT}-question monthly limit. Your allowance resets ${resetDate} (UTC).`,
+        quota: reservedQuota,
+      });
     }
     if (reservedCredit?.outcome !== 'reserved') throw new Error('chat_credit_reservation_failed');
 
@@ -1092,13 +1100,19 @@ export async function generateBizzyResponseHandler(req, res) {
         .eq('business_id', business_id)
         .maybeSingle();
       if (threadError || !thread) {
+        const released = await releaseChatCredit(supabase, {
+          businessId: business_id,
+          requestId: stableRequestId,
+          failureClassification: 'thread_not_found',
+        });
         return res.status(404).json({
           ok: false,
           error: 'thread_not_found',
           responseText: 'That conversation was not found.',
           suggestedActions: [],
           followUpPrompt: '',
-          meta: { thread_id: incomingThreadId || null },
+          quota: quotaMeta(released, req.entitlement?.status || null),
+          meta: { thread_id: incomingThreadId || null, retryable: false },
         });
       }
     }
@@ -1204,6 +1218,22 @@ export async function generateBizzyResponseHandler(req, res) {
         error: publicResult?.meta?.error || 'chat_generation_failed',
         quota,
         meta: { ...(publicResult.meta || {}), quota, retryable: true },
+      });
+    }
+
+    if (typeof publicResult?.responseText !== 'string' || !publicResult.responseText.trim()) {
+      const released = await releaseChatCredit(supabase, {
+        businessId: business_id,
+        requestId: stableRequestId,
+        failureClassification: 'unusable_response',
+      });
+      const quota = quotaMeta(released, req.entitlement?.status || null);
+      return res.status(503).json({
+        ok: false,
+        error: 'unusable_response',
+        responseText: 'Bizzi could not produce a usable answer. Please try again.',
+        quota,
+        meta: { request_id: stableRequestId, quota, operational_error: true, retryable: true },
       });
     }
 
