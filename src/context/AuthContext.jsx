@@ -1,12 +1,13 @@
-import React, { createContext, useState, useEffect, useMemo, useContext } from "react";
+import React, { createContext, useState, useEffect, useMemo, useContext, useRef } from "react";
 import { supabase } from "../services/supabaseClient.js";
-import { clearStoredAuthAndBusinessState, clearStoredBusinessState } from "../services/authSessionCleanup.js";
+import { clearStoredAuthAndBusinessState, clearStoredBusinessState, markStoredSessionIdentity } from "../services/authSessionCleanup.js";
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const activeUserRef = useRef(null);
 
   useEffect(() => {
     let mounted = true;
@@ -36,9 +37,15 @@ export const AuthProvider = ({ children }) => {
           }
         }
         const { data } = await supabase.auth.getSession();
-        if (!data?.session) {
+        const nextUserId = data?.session?.user?.id || null;
+        const storedUserId = typeof window !== "undefined"
+          ? window.localStorage?.getItem("bizzy:session-user") || null
+          : null;
+        if (!data?.session || (storedUserId && storedUserId !== nextUserId)) {
           clearStoredAuthAndBusinessState();
         }
+        markStoredSessionIdentity(nextUserId);
+        activeUserRef.current = nextUserId;
         if (mounted) {
           setSession(data.session);
           setLoading(false);
@@ -52,6 +59,15 @@ export const AuthProvider = ({ children }) => {
     loadSession();
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      const nextUserId = nextSession?.user?.id || null;
+      const previousUserId = activeUserRef.current;
+      const principalChanged = previousUserId !== nextUserId;
+      if (principalChanged) {
+        clearStoredAuthAndBusinessState();
+        markStoredSessionIdentity(nextUserId);
+        activeUserRef.current = nextUserId;
+        window.dispatchEvent(new CustomEvent("bizzy:auth-principal-changed", { detail: { userId: nextUserId } }));
+      }
       setSession((prevSession) => {
         const sameUser =
           prevSession?.user?.id &&

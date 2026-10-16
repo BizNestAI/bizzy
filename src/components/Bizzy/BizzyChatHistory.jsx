@@ -143,6 +143,9 @@ const useStableKeys = () => {
   };
 };
 
+const scopedSeedKey = ({ kind, userId, businessId, threadId = 'latest' }) =>
+  `bizzy:${kind}:${userId || 'anonymous'}:${businessId || 'unscoped'}:${threadId}`;
+
 /* ======================================================== */
 const BizzyChatHistory = ({ inline = false }) => {
   const {
@@ -157,6 +160,8 @@ const BizzyChatHistory = ({ inline = false }) => {
      clearUserBubbleSuppression,
      suppressedUserTextRef,
      threadId,
+     businessId,
+     userId,
      isCanvasOpen,
    } = useBizzyChatContext();
 
@@ -165,25 +170,27 @@ const BizzyChatHistory = ({ inline = false }) => {
 
   /* ---------- seed suppression (persist + hide) ---------- */
   const norm = (s = '') => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const seedScope = `${userId || 'anonymous'}:${businessId || 'unscoped'}`;
+  const seedKey = (kind) => scopedSeedKey({ kind, userId, businessId, threadId: threadId || 'latest' });
 
   const storedSeed = useMemo(() => {
     if (!threadId) return '';
-    try { return localStorage.getItem(`bizzy:seed:${threadId}`) || ''; } catch { return ''; }
-  }, [threadId]);
+    try { return localStorage.getItem(seedKey('seed')) || ''; } catch { return ''; }
+  }, [seedScope, threadId, userId, businessId]);
 
   const hiddenSeedFlag = useMemo(() => {
     if (!threadId) return false;
-    try { return localStorage.getItem(`bizzy:hiddenSeed:${threadId}`) === '1'; } catch { return false; }
-  }, [threadId]);
+    try { return localStorage.getItem(seedKey('hiddenSeed')) === '1'; } catch { return false; }
+  }, [seedScope, threadId, userId, businessId]);
 
   const seededTextGlobal = useMemo(() => {
     const inlineSeed = (suppressedUserTextRef?.current || '');
     const persisted =
-      (threadId && localStorage.getItem(`bizzy:seed:${threadId}`)) ||
-      localStorage.getItem('bizzy:lastSeedPrompt') || '';
+      (threadId && localStorage.getItem(seedKey('seed'))) ||
+      localStorage.getItem(seedKey('lastSeedPrompt')) || '';
     const seed = inlineSeed || persisted || '';
     return norm(seed);
-  }, [suppressedUserTextRef, threadId]);
+  }, [suppressedUserTextRef, seedScope, threadId, userId, businessId]);
 
   useEffect(() => {
     if (!threadId) return;
@@ -192,13 +199,13 @@ const BizzyChatHistory = ({ inline = false }) => {
       try {
         const seedRaw = suppressedUserTextRef?.current || storedSeed || '';
         if (seedRaw) {
-          localStorage.setItem(`bizzy:seed:${threadId}`, seedRaw);
-          localStorage.setItem('bizzy:lastSeedPrompt', seedRaw);
+          localStorage.setItem(seedKey('seed'), seedRaw);
+          localStorage.setItem(seedKey('lastSeedPrompt'), seedRaw);
         }
-        localStorage.setItem(`bizzy:hiddenSeed:${threadId}`, '1');
-      } catch {}
+        localStorage.setItem(seedKey('hiddenSeed'), '1');
+      } catch { /* storage is best-effort */ }
     }
-  }, [messages, seededTextGlobal, threadId, suppressedUserTextRef, storedSeed]);
+  }, [messages, seededTextGlobal, seedScope, threadId, suppressedUserTextRef, storedSeed, userId, businessId]);
 
   const filteredMessages = useMemo(() => {
     const seedNorm = seededTextGlobal;

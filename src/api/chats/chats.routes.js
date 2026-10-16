@@ -12,9 +12,6 @@ function readTenant(req) {
     req.auth?.userId ||
     req.user?.id ||
     req.tenantContext?.staffUserId ||
-    req.header('x-user-id') ||
-    req.query.user_id ||
-    req.body?.user_id ||
     null;
 
   const business_id =
@@ -22,9 +19,6 @@ function readTenant(req) {
     req.business?.id ||
     req.auth?.businessId ||
     req.user?.business_id ||
-    req.header('x-business-id') ||
-    req.query.business_id ||
-    req.body?.business_id ||
     null;
 
   return { user_id, business_id };
@@ -138,20 +132,20 @@ router.patch('/:id', tenantGuard, async (req, res) => {
     const { business_id } = req.tenant;
     const id = req.params.id;
 
-    const { data: t, error: tErr } = await supabase
+    const { error: tErr } = await supabase
       .from('gpt_threads')
       .select('id,business_id')
       .eq('id', id)
+      .eq('business_id', business_id)
       .single();
     if (tErr) return res.status(404).json({ error: 'not_found' });
-    if (t.business_id !== business_id) return res.status(403).json({ error: 'forbidden' });
 
     const patch = { updated_at: new Date().toISOString() };
     if ('title'    in req.body) patch.title    = String(req.body.title || '').trim() || 'Untitled';
     if ('pinned'   in req.body) patch.pinned   = !!req.body.pinned;
     if ('archived' in req.body) patch.archived = !!req.body.archived;
 
-    const { error } = await supabase.from('gpt_threads').update(patch).eq('id', id);
+    const { error } = await supabase.from('gpt_threads').update(patch).eq('id', id).eq('business_id', business_id);
     if (error) throw error;
     res.json({ ok: true });
   } catch (e) {
@@ -169,14 +163,15 @@ router.get('/:id', tenantGuard, async (req, res) => {
       .from('gpt_threads')
       .select('*')
       .eq('id', id)
+      .eq('business_id', business_id)
       .single();
     if (tErr) return res.status(404).json({ error: 'not_found' });
-    if (thread.business_id !== business_id) return res.status(403).json({ error: 'forbidden' });
 
     const { data: msgs, error: mErr } = await supabase
       .from('gpt_messages')
       .select('id,role,content,created_at,message_role_position,message_sequence')
       .eq('thread_id', id)
+      .eq('business_id', business_id)
       .order('created_at', { ascending: true })
       .order('message_role_position', { ascending: true })
       .order('message_sequence', { ascending: true })
@@ -197,17 +192,18 @@ router.get('/:id/messages', tenantGuard, async (req, res) => {
     const after  = req.query.after  ? new Date(req.query.after)  : null;
     const limit  = Math.min(Number(req.query.limit || 50), 200);
 
-    const { data: thread, error: tErr } = await supabase
+    const { error: tErr } = await supabase
       .from('gpt_threads')
       .select('id,business_id')
       .eq('id', id)
+      .eq('business_id', business_id)
       .single();
     if (tErr) return res.status(404).json({ error: 'not_found' });
-    if (thread.business_id !== business_id) return res.status(403).json({ error: 'forbidden' });
 
     let q = supabase.from('gpt_messages')
       .select('id,role,content,created_at,message_role_position,message_sequence')
-      .eq('thread_id', id);
+      .eq('thread_id', id)
+      .eq('business_id', business_id);
 
     if (before) q = q.lt('created_at', before.toISOString());
     if (after)  q = q.gt('created_at', after.toISOString());

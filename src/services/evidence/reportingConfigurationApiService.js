@@ -1,6 +1,6 @@
 import fetch from "node-fetch";
 import { createHash, randomUUID } from "node:crypto";
-import { qbApiBase } from "../../utils/qboEnv.js";
+import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
 import { withQuickBooksAuth } from "../quickbooksTokenService.js";
 import { mutateReportingConfiguration, reportingConfigurationStatus } from "./reportingConfigurationService.js";
 import { getSuggestedReportingTimezone } from "./reportingTimezoneSuggestions.js";
@@ -21,12 +21,18 @@ export async function ensureFinancialReportingConfiguration({
   if (!businessId) throw new ReportingSetupError("authorized_business_required", 403);
   const [configResult, tokenResult, profileResult] = await Promise.all([
     db.from("business_financial_reporting_config").select("status,qbo_realm_id,provider_schema_version,reporting_timezone,home_currency,realm_verified_at,currency_verified_at,timezone_confirmed_at,verified_at,updated_at").eq("business_id", businessId).maybeSingle(),
-    db.from("quickbooks_tokens").select("realm_id,status,is_active,last_connected_at,connected_at,created_at").eq("business_id", businessId).eq("status", "active").eq("is_active", true).order("last_connected_at", { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
+    db.from("quickbooks_tokens").select("realm_id,company_id,qbo_env,status,is_active,last_connected_at,connected_at,created_at").eq("business_id", businessId).eq("qbo_env", qboEnvName).eq("status", "active").eq("is_active", true).order("last_connected_at", { ascending: false, nullsFirst: false }).limit(1).maybeSingle(),
     db.from("business_profiles").select("state").eq("id", businessId).maybeSingle(),
   ]);
   if (configResult.error || tokenResult.error || profileResult.error) throw new ReportingSetupError("reporting_configuration_unavailable", 503);
   const activeRealmId = String(tokenResult.data?.realm_id || "").trim();
   if (!activeRealmId) throw new ReportingSetupError("quickbooks_not_connected", 409);
+  const persistedCompanyId = String(tokenResult.data?.company_id || "").trim();
+  if (persistedCompanyId && persistedCompanyId !== activeRealmId) {
+    const details = identityMismatchDetails({ expected: activeRealmId, observed: persistedCompanyId, source: "persisted_qbo_connection" });
+    console.warn("[financial reporting] QBO connection identity mismatch", details);
+    throw new ReportingSetupError("qbo_company_identity_mismatch", 409, details);
+  }
   const existing = configResult.data;
   const requestedTimezone = timezoneOverride ? assertServerIanaTimezone(timezoneOverride) : null;
   if (!requestedTimezone && existing?.status === "verified" && existing?.verified_at && existing?.qbo_realm_id === activeRealmId && existing?.home_currency === "USD" && existing?.reporting_timezone) {
@@ -39,7 +45,11 @@ export async function ensureFinancialReportingConfiguration({
   } else {
     provider = await verifyProvider({ businessId });
   }
-  if (provider?.realmId !== activeRealmId) throw new ReportingSetupError("qbo_company_identity_mismatch", 409);
+  if (provider?.realmId !== activeRealmId) {
+    const details = identityMismatchDetails({ expected: activeRealmId, observed: provider?.realmId, source: "provider_context" });
+    console.warn("[financial reporting] QBO provider identity mismatch", details);
+    throw new ReportingSetupError("qbo_company_identity_mismatch", 409, details);
+  }
   if (!/^[A-Z]{3}$/.test(provider?.currency || "")) throw new ReportingSetupError("currency_verification_required", 409);
 
   const inferredTimezone = getSuggestedReportingTimezone(profileResult.data?.state);
@@ -117,13 +127,21 @@ export async function verifyQboProviderIdentity({ businessId, fetchImpl = fetch,
   }
 }
 
-export async function fetchQboReportingIdentity({ realmId, accessToken, fetchImpl = fetch }) {
+export async function fetchQboReportingIdentity({ realmId, accessToken, fetchImpl = fetch, logger = console }) {
   if (!realmId) throw new ReportingSetupError("qbo_verification_required", 409);
   const companyPayload = await fetchQboMetadataResource({ realmId, accessToken, resource: "companyinfo", path: `companyinfo/${realmId}`, fetchImpl });
   const companyInfo = companyPayload?.CompanyInfo;
   if (!companyInfo) throw new ReportingSetupError("qbo_company_info_missing", 409, { provider_resource: "companyinfo", failure_class: "metadata_missing" });
+  // CompanyInfo.Id is the resource/entity identifier returned by QBO. The
+  // authenticated OAuth realm remains the company identity and is enforced by
+  // the realm-scoped request plus the business-scoped token/config checks.
   if (companyInfo.Id != null && String(companyInfo.Id) !== String(realmId)) {
-    throw new ReportingSetupError("qbo_company_identity_mismatch", 409, { provider_resource: "companyinfo", failure_class: "identity_mismatch" });
+    logger.info?.("[financial reporting] QBO CompanyInfo entity differs from OAuth realm", {
+      provider_resource: "companyinfo",
+      failure_class: "entity_id_differs_from_realm",
+      realm_fingerprint: identityFingerprint(realmId),
+      entity_fingerprint: identityFingerprint(companyInfo.Id),
+    });
   }
 
   const preferencesPayload = await fetchQboMetadataResource({ realmId, accessToken, resource: "preferences", path: "preferences", fetchImpl });
@@ -172,6 +190,20 @@ async function fetchQboMetadataResource({ realmId, accessToken, resource, path, 
 
 function qboFaultCode(payload) {
   return String(payload?.Fault?.Error?.[0]?.code || payload?.Fault?.type || "").slice(0, 80) || null;
+}
+
+function identityFingerprint(value) {
+  const normalized = String(value || "").trim();
+  return normalized ? createHash("sha256").update(normalized).digest("hex").slice(0, 12) : null;
+}
+
+function identityMismatchDetails({ expected, observed, source }) {
+  return {
+    provider_resource: source,
+    failure_class: "identity_mismatch",
+    expected_realm_fingerprint: identityFingerprint(expected),
+    observed_identity_fingerprint: identityFingerprint(observed),
+  };
 }
 
 class QboMetadataRequestError extends Error {

@@ -1,5 +1,5 @@
 // File: /src/hooks/useBizzyChat.js
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { getDemoMode, shouldUseDemoData } from '../services/demo/demoClient.js';
 import { apiUrl, safeFetch } from '../utils/safeFetch.js';
 
@@ -53,6 +53,22 @@ export const useBizzyChat = (user_id) => {
   const userRequestedSaveRef = useRef(false);
   const userRequestedNavigationRef = useRef(false);
   const lastUserMessageRef = useRef('');
+  const requestScopeRef = useRef(0);
+  const activeRequestsRef = useRef(new Set());
+
+  useEffect(() => {
+    requestScopeRef.current += 1;
+    for (const controller of activeRequestsRef.current) controller.abort();
+    activeRequestsRef.current.clear();
+    setMessages([]);
+    setIsLoading(false);
+    setIsGenerating(false);
+    setSuggestedActions([]);
+    setFollowUpPrompt(null);
+    setClarify(null);
+    setQuota(null);
+    setError(null);
+  }, [user_id]);
 
   /* ────────────────────────────── Usage tracking ───────────────────────────── */
   const updateQuota = useCallback((next) => {
@@ -80,7 +96,7 @@ export const useBizzyChat = (user_id) => {
    * Hydrate the chat with a given set of messages (e.g., when opening a thread).
    * @param {Array<{id:string|number, sender:'user'|'assistant', text:string, created_at?:string}>} msgs
    */
-  const hydrate = (msgs) => {
+  const hydrate = useCallback((msgs) => {
     const next = Array.isArray(msgs) ? msgs : [];
     setMessages(next);
     assistantCountRef.current = next.filter((m) => m?.sender === 'assistant').length;
@@ -93,7 +109,7 @@ export const useBizzyChat = (user_id) => {
     setFollowUpPrompt(null);
     setError(null);
     lastInputRef.current = '';
-  };
+  }, []);
 
   const triggerSuggestedActions = useCallback((actions = []) => {
     if (typeof window === 'undefined' || !Array.isArray(actions)) return;
@@ -231,6 +247,10 @@ export const useBizzyChat = (user_id) => {
     if (!userInput?.trim() || isLoading) return;
 
     const trimmedInput = userInput.trim();
+    const requestScope = requestScopeRef.current;
+    const controller = new AbortController();
+    activeRequestsRef.current.add(controller);
+    const scopeIsCurrent = () => requestScopeRef.current === requestScope && !controller.signal.aborted;
     lastUserMessageRef.current = trimmedInput;
     const userRequestedSave = detectSaveIntent(trimmedInput);
     const userRequestedNavigation = detectNavigationIntent(trimmedInput);
@@ -296,10 +316,10 @@ export const useBizzyChat = (user_id) => {
 
       const callChat = async () => {
         try {
-          return await safeFetch(primary, { method: 'POST', headers, body: payload });
+          return await safeFetch(primary, { method: 'POST', headers, body: payload, signal: controller.signal });
         } catch (primaryErr) {
           if (primaryErr?.status !== 404) throw primaryErr;
-          return safeFetch(alias, { method: 'POST', headers, body: payload });
+          return safeFetch(alias, { method: 'POST', headers, body: payload, signal: controller.signal });
         }
       };
       let data;
@@ -312,6 +332,7 @@ export const useBizzyChat = (user_id) => {
         }
       }
 
+      if (!scopeIsCurrent()) return;
       updateQuota(data?.quota || data?.meta?.quota);
       setMessages((prev) => prev.map((item) => item.request_id === requestId ? { ...item, deliveryStatus: 'sent' } : item));
       try { sessionStorage.removeItem(pendingStorageKey); } catch { /* storage is best-effort */ }
@@ -341,6 +362,7 @@ export const useBizzyChat = (user_id) => {
       }
 
     } catch (err) {
+      if (!scopeIsCurrent()) return;
       console.error('🔥 Bizzy chat error:', err);
       updateQuota(err?.body?.quota || err?.body?.meta?.quota);
       if (err?.status) {
@@ -351,10 +373,13 @@ export const useBizzyChat = (user_id) => {
         : item));
       setError(err.message || 'Something went wrong. Please try again.');
     } finally {
-      userRequestedSaveRef.current = false;
-      userRequestedNavigationRef.current = false;
-      setIsLoading(false);
-      setIsGenerating(false);
+      activeRequestsRef.current.delete(controller);
+      if (scopeIsCurrent()) {
+        userRequestedSaveRef.current = false;
+        userRequestedNavigationRef.current = false;
+        setIsLoading(false);
+        setIsGenerating(false);
+      }
     }
   };
 

@@ -47,16 +47,25 @@ function sanitizeRole(r) {
  * conversational window without dragging in unrelated memory/doc tables.
  */
 async function readRecentChat({ user_id, business_id, threadId = null, limit = 6, _supabase = supabase }) {
+  if (!user_id || !business_id) throw new Error('authorized_chat_scope_required');
   try {
     let q = _supabase
       .from('gpt_messages')
       .select('role,content,created_at,message_role_position,message_sequence');
 
     if (threadId) {
-      q = q.eq('thread_id', threadId);
+      const { data: thread, error: threadError } = await _supabase
+        .from('gpt_threads')
+        .select('id,business_id,user_id')
+        .eq('id', threadId)
+        .eq('business_id', business_id)
+        .eq('user_id', user_id)
+        .maybeSingle();
+      if (threadError || !thread) throw new Error('thread_not_found');
+      q = q.eq('thread_id', threadId).eq('business_id', business_id).eq('user_id', user_id);
     } else {
       q = q.eq('user_id', user_id);
-      if (business_id) q = q.eq('business_id', business_id);
+      q = q.eq('business_id', business_id);
     }
 
     const { data, error } = await q
@@ -75,7 +84,8 @@ async function readRecentChat({ user_id, business_id, threadId = null, limit = 6
         content: String(m.content || '').slice(0, MAX_STRING),
       }))
       .filter((m) => !!m.content);
-  } catch {
+  } catch (error) {
+    if (error?.message === 'thread_not_found' || error?.message === 'authorized_chat_scope_required') throw error;
     // Fail-soft: no recent chat
     return [];
   }
@@ -89,6 +99,7 @@ export async function buildContext({
   bundle = {},
   _supabase = supabase,
 }) {
+  if (!user_id || !business_id) throw new Error('authorized_chat_scope_required');
   const out = { user_id, business_id, intent };
 
   // Prefer thread-scoped context if available from hint or bundle
@@ -124,7 +135,9 @@ export async function buildContext({
   }
 
   // Merge caller-provided bundle without losing our safe base
-  const merged = { ...out, ...(bundle || {}) };
+  // Caller hints may add non-authoritative context, but they cannot replace the
+  // authenticated identity or the server-loaded conversation window.
+  const merged = { ...(bundle || {}), ...out };
   return prune(merged);
 }
 

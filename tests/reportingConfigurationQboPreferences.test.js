@@ -17,12 +17,12 @@ const jsonResponse = (status, payload) => ({
   async text() { return JSON.stringify(payload); },
 });
 
-function metadataFetch({ currency = "USD", preferenceShape = "ref", failure = null } = {}) {
+function metadataFetch({ currency = "USD", preferenceShape = "ref", failure = null, companyInfoId = "realm-1" } = {}) {
   const calls = [];
   const fetchImpl = async (url) => {
     calls.push(String(url));
     if (String(url).includes("/companyinfo/")) {
-      return jsonResponse(200, { CompanyInfo: { Id: "realm-1", CompanyName: "Example Co" } });
+      return jsonResponse(200, { CompanyInfo: { Id: companyInfoId, CompanyName: "Example Co" } });
     }
     if (failure) return jsonResponse(failure.status, failure.payload || { Fault: { Error: [{ code: failure.code }] } });
     const HomeCurrency = preferenceShape === "string" ? currency : preferenceShape === "missing" ? undefined : { value: currency };
@@ -39,6 +39,24 @@ test("authoritative QBO Preferences verifies USD without reading currency from C
   assert.match(calls[0], /companyinfo\/realm-1/);
   assert.match(calls[1], /\/preferences\?/);
   assert.ok(calls.every((url) => url.includes("minorversion=75")));
+});
+
+test("CompanyInfo entity IDs may differ from the authenticated OAuth realm", async () => {
+  const diagnostics = [];
+  const { fetchImpl } = metadataFetch({ companyInfoId: "company-info-entity-1" });
+  const result = await fetchQboReportingIdentity({
+    realmId: "realm-1",
+    accessToken: "secret",
+    fetchImpl,
+    logger: { info(message, details) { diagnostics.push([message, details]); } },
+  });
+  assert.equal(result.realmId, "realm-1");
+  assert.equal(result.currency, "USD");
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0][1].failure_class, "entity_id_differs_from_realm");
+  assert.equal(diagnostics[0][1].realm_fingerprint.length, 12);
+  assert.equal(diagnostics[0][1].entity_fingerprint.length, 12);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /company-info-entity-1|realm-1/);
 });
 
 test("authoritative QBO Preferences preserves a non-USD home currency", async () => {
@@ -152,10 +170,10 @@ test("legacy monthly normalization does not invent a verified USD currency", () 
   assert.doesNotMatch(fingerprint, /financial_content\?\.currency_code \|\| "USD"/);
 });
 
-function automaticConfigurationDb({ config = null, realmId = "realm-1", state = "NC" } = {}) {
+function automaticConfigurationDb({ config = null, realmId = "realm-1", companyId = realmId, state = "NC" } = {}) {
   const store = { config };
   const rpcCalls = [];
-  const rows = { quickbooks_tokens: { realm_id: realmId, status: "active", is_active: true }, business_profiles: { state } };
+  const rows = { quickbooks_tokens: { realm_id: realmId, company_id: companyId, qbo_env: "production", status: "active", is_active: true }, business_profiles: { state } };
   const db = {
     from(table) {
       const query = {
@@ -264,6 +282,23 @@ test("automatic initialization rejects provider identity from another tenant rea
     }),
     (error) => error.code === "qbo_company_identity_mismatch",
   );
+  assert.equal(rpcCalls.length, 0);
+});
+
+test("automatic initialization rejects a persisted QBO company identity mismatch before provider access", async () => {
+  const { db, rpcCalls } = automaticConfigurationDb({ realmId: "tenant-realm", companyId: "other-company" });
+  let providerCalls = 0;
+  await assert.rejects(
+    ensureFinancialReportingConfiguration({
+      db, businessId: "business-a", requestId: "77777777-7777-4777-8777-777777777777",
+      verifyProvider: async () => { providerCalls += 1; },
+    }),
+    (error) => error.code === "qbo_company_identity_mismatch"
+      && error.details.failure_class === "identity_mismatch"
+      && error.details.expected_realm_fingerprint.length === 12
+      && error.details.observed_identity_fingerprint.length === 12,
+  );
+  assert.equal(providerCalls, 0);
   assert.equal(rpcCalls.length, 0);
 });
 

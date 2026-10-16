@@ -20,7 +20,9 @@ export default function useChatThreads(businessId) {
 
   // keep a live ref of threads for cursor fallback
   const threadsRef = useRef([]);
+  const offsetRef = useRef(0);
   useEffect(() => { threadsRef.current = threads; }, [threads]);
+  useEffect(() => { offsetRef.current = offset; }, [offset]);
 
   // hasMore stops once we hit either the server total or our soft cap
   const effectiveTotal = Math.min(total || Infinity, SOFT_CAP);
@@ -55,7 +57,7 @@ export default function useChatThreads(businessId) {
     // Determine next offset and limit
     const nextOffset = typeof customOffset === 'number'
       ? customOffset
-      : (reset ? 0 : offset);
+      : (reset ? 0 : offsetRef.current);
 
     // Remaining capacity based on soft cap
     const remainingCap = SOFT_CAP - nextOffset;
@@ -113,7 +115,7 @@ export default function useChatThreads(businessId) {
     } finally {
       setLoading(false);
     }
-  }, [businessId, q, offset]);
+  }, [businessId, q]);
 
   // Initial load / when business or search query changes
   const refresh = useCallback(() => {
@@ -125,8 +127,16 @@ export default function useChatThreads(businessId) {
   }, [fetchList]);
 
   useEffect(() => {
+    if (abortRef.current) abortRef.current.abort();
+    setThreads([]);
+    setTotal(0);
+    setOffset(0);
+    setError('');
     refresh();
-    return () => debounceRef.current && clearTimeout(debounceRef.current);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (abortRef.current) abortRef.current.abort();
+    };
   }, [businessId, q, refresh]);
 
   // Load next page (10) while respecting soft cap & API total

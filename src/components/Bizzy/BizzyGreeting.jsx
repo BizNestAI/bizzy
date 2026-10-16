@@ -7,6 +7,8 @@ import { useBizzyChatContext } from '../../context/BizzyChatContext';
 import bizzyHero from '../../assets/bizzy-hero.png';
 
 const ACCENT_DEFAULT = '#34d399';
+const scopedSeedKey = ({ kind, userId, businessId, threadId = 'latest' }) =>
+  `bizzy:${kind}:${userId || 'anonymous'}:${businessId || 'unscoped'}:${threadId}`;
 
 const KIND_META = {
   generic:   { label: 'Bizzi' },
@@ -77,17 +79,18 @@ export default function BizzyGreeting({ businessId, userId, accent = ACCENT_DEFA
   const textRef = useRef(null);
   const [doneTyping, setDoneTyping] = useState(false);
   const [measuredHeight, setMeasuredHeight] = useState(null);
+  const seedKey = (kind, activeThreadId = threadId || 'latest') => scopedSeedKey({ kind, userId, businessId, threadId: activeThreadId });
 
   // Once/day typing
   useEffect(() => {
-    const key = 'bizzy:greeting:lastTyped';
+    const key = `bizzy:greeting:lastTyped:${userId || 'anonymous'}:${businessId || 'unscoped'}`;
     const today = new Date().toISOString().slice(0, 10);
     const last = localStorage.getItem(key);
     if (last !== today) {
       setShouldType(true);
       localStorage.setItem(key, today);
     }
-  }, []);
+  }, [businessId, userId]);
 
   // Fetch greeting
   useEffect(() => {
@@ -194,13 +197,13 @@ export default function BizzyGreeting({ businessId, userId, accent = ACCENT_DEFA
 
       // Persist per-thread if we already have one, plus a global fallback
       if (seed) {
-        localStorage.setItem('bizzy:lastSeedPrompt', seed);
+        localStorage.setItem(seedKey('lastSeedPrompt'), seed);
         if (threadId) {
-          localStorage.setItem(`bizzy:seed:${threadId}`, seed);
-          localStorage.setItem(`bizzy:hiddenSeed:${threadId}`, '1');
+          localStorage.setItem(seedKey('seed', threadId), seed);
+          localStorage.setItem(seedKey('hiddenSeed', threadId), '1');
         }
       }
-    } catch {}
+    } catch { /* storage is best-effort */ }
 
     startQuickPrompt({
       source: 'headline',

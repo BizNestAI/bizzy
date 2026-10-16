@@ -295,6 +295,20 @@ export const BizzyChatProvider = ({ children }) => {
   // ---------------- Load a thread ----------------
   const latestOpenRef = useRef({ ctr: 0, abort: null });
 
+  useEffect(() => {
+    if (latestOpenRef.current.abort) {
+      try { latestOpenRef.current.abort.abort(); } catch { /* already closed */ }
+    }
+    latestOpenRef.current = { ctr: (latestOpenRef.current.ctr || 0) + 1, abort: null };
+    setThreadId(null);
+    hydrate([]);
+    updateQuota(null);
+    setChatGateNotice(null);
+    setSuppressNextUserBubble(false);
+    suppressedUserTextRef.current = null;
+    setIsFetchingThread(false);
+  }, [user?.id, businessId, hydrate, updateQuota]);
+
   const openThread = async (id) => {
     if (!id) return;
     setThreadId(id);
@@ -304,7 +318,7 @@ export const BizzyChatProvider = ({ children }) => {
 
     // cancel previous load if still in flight
     if (latestOpenRef.current.abort) {
-      try { latestOpenRef.current.abort.abort(); } catch {}
+      try { latestOpenRef.current.abort.abort(); } catch { /* already closed */ }
     }
     const ctr = (latestOpenRef.current.ctr || 0) + 1;
     const ac = new AbortController();
@@ -422,6 +436,8 @@ export const BizzyChatProvider = ({ children }) => {
 
       // thread
       threadId,
+      businessId,
+      userId: user?.id || null,
       threadsRefreshKey,
       refreshThreads,
 
@@ -469,7 +485,7 @@ export const BizzyChatProvider = ({ children }) => {
       adminView.readOnly,
       messages, isLoading, isGenerating, isFetchingThread, usageCount, quota, quotaLoading, quotaError, error,
       followUpPrompt, suggestedActions, clarify, chatGateNotice,
-      threadId, threadsRefreshKey,
+      threadId, businessId, user?.id, threadsRefreshKey,
       isChatOpen, isChatMinimized,
       isCanvasOpen, canvasModule,
       checkChatAccess, refreshQuota, updateQuota, dismissChatGateNotice,
