@@ -40,15 +40,61 @@ function cursorDigest(value) {
 }
 
 export function classifyPlaidSyncFailure(error) {
-  const causeCode = String(error?.cause?.code || error?.code || "").toUpperCase();
+  const causeCode = String(
+    error?.response?.data?.error_code
+      || error?.data?.error_code
+      || error?.error_code
+      || error?.cause?.code
+      || error?.supabase?.code
+      || error?.code
+      || ""
+  ).toUpperCase();
+  if (["ITEM_LOGIN_REQUIRED", "INVALID_CREDENTIALS", "INVALID_MFA", "USER_SETUP_REQUIRED"].includes(causeCode)) {
+    return "provider_reauthentication_required";
+  }
   if (error?.name === "TypeError" && /fetch failed/i.test(error?.message || "")) {
     if (["ENOTFOUND", "EAI_AGAIN"].includes(causeCode)) return "provider_dns_failure";
     if (["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(causeCode)) return "provider_connection_timeout";
     if (["ECONNRESET", "UND_ERR_SOCKET"].includes(causeCode)) return "provider_connection_reset";
     return "provider_network_failure";
   }
-  if (/PLAID|TRANSACTIONS_/i.test(causeCode)) return "provider_api_failure";
+  if (/^(PGRST|23|42|P0)/.test(causeCode) || error?.supabase) return "database_persistence_failure";
+  if (/PLAID|TRANSACTIONS_|ITEM_/i.test(causeCode)) return "provider_api_failure";
   return "transaction_sync_failed";
+}
+
+function safeDiagnosticCode(error) {
+  const code = error?.response?.data?.error_code
+    || error?.data?.error_code
+    || error?.error_code
+    || error?.supabase?.code
+    || error?.cause?.code
+    || error?.code
+    || null;
+  const normalized = String(code || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 80);
+  return normalized || null;
+}
+
+export async function ensurePlaidTransactionCategorizations({ db = supabase, businessId, transactionIds }) {
+  const ids = Array.from(new Set((transactionIds || []).filter(Boolean)));
+  if (!ids.length) return { expected_count: 0, categorization_count: 0, inserted_count: 0 };
+  const { data, error } = await db.rpc("ensure_plaid_transaction_categorizations", {
+    p_business_id: businessId,
+    p_transaction_ids: ids,
+  });
+  if (error) {
+    const wrapped = new Error("plaid_categorization_persistence_failed");
+    wrapped.code = "plaid_categorization_persistence_failed";
+    wrapped.supabase = error;
+    throw wrapped;
+  }
+  const result = Array.isArray(data) ? data[0] : data;
+  if (Number(result?.categorization_count || 0) !== ids.length) {
+    const mismatch = new Error("plaid_categorization_persistence_incomplete");
+    mismatch.code = "plaid_categorization_persistence_incomplete";
+    throw mismatch;
+  }
+  return result;
 }
 
 function normalizeMemo(value) {
@@ -208,6 +254,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
     throw runStartError;
   }
 
+  let failureStage = "provider_fetch";
   try {
     const originalCursor = item.cursor || null;
     let cursor = originalCursor;
@@ -415,6 +462,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
 
     let resolvedTxnIds = [];
 
+    failureStage = "transaction_persistence";
     if (rows.length || removed.length) {
       const exactPlaidIds = Array.from(
         new Set(
@@ -872,79 +920,10 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       resolvedTxnIds = Array.from(new Set(resolvedTxnIds));
     }
 
-    if (resolvedTxnIds.length) {
-      const { data: bankResolved, error: bankResolveErr } = await supabase
-        .from("bank_transactions")
-        .select("id,accounting_review_required,accounting_review_reason,accounting_review_payload")
-        .eq("business_id", businessId)
-        .in("id", resolvedTxnIds);
-      if (bankResolveErr) throw bankResolveErr;
-      const txnIds = (bankResolved || []).map((r) => r.id).filter(Boolean);
-      const reviewByTxnId = new Map(
-        (bankResolved || [])
-          .filter((row) => row?.accounting_review_required === true)
-          .map((row) => [row.id, row])
-      );
-      if (txnIds.length) {
-        const { error: catReviveErr } = await supabase
-          .from("transaction_categorizations")
-          .update({ is_archived: false, archived_at: null, updated_at: now })
-          .eq("business_id", businessId)
-          .in("transaction_id", txnIds);
-        if (catReviveErr) throw catReviveErr;
+    failureStage = "categorization_persistence";
+    await ensurePlaidTransactionCategorizations({ db: supabase, businessId, transactionIds: resolvedTxnIds });
 
-        const { data: existingCats, error: catErr } = await supabase
-          .from("transaction_categorizations")
-          .select("transaction_id")
-          .eq("business_id", businessId)
-          .in("transaction_id", txnIds);
-        if (catErr) throw catErr;
-        const existingSet = new Set((existingCats || []).map((c) => c.transaction_id));
-        const missingIds = txnIds.filter((id) => !existingSet.has(id));
-        if (missingIds.length) {
-          const defaults = missingIds.map((id) => ({
-            business_id: businessId,
-            transaction_id: id,
-            status: "needs_review",
-            post_after: null,
-            post_error: reviewByTxnId.has(id) ? reviewByTxnId.get(id)?.accounting_review_reason || "plaid_accounting_review_required" : null,
-            accounting_review_required: reviewByTxnId.has(id),
-            accounting_review_reason: reviewByTxnId.get(id)?.accounting_review_reason || null,
-            meta: reviewByTxnId.has(id)
-              ? {
-                  post_block_reason: reviewByTxnId.get(id)?.accounting_review_reason || "plaid_accounting_review_required",
-                  plaid_duplicate_review_required: true,
-                  plaid_duplicate_review_payload: reviewByTxnId.get(id)?.accounting_review_payload || null,
-                }
-              : {},
-          }));
-          const { error: catUpsertErr } = await supabase
-            .from("transaction_categorizations")
-            .upsert(defaults, { onConflict: "business_id,transaction_id" });
-          if (catUpsertErr) throw catUpsertErr;
-          if (process.env.NODE_ENV !== "production") {
-            console.info("[plaid][sync] categ rows created", { count: defaults.length });
-          }
-        }
-        const reviewTxnIds = Array.from(reviewByTxnId.keys());
-        if (reviewTxnIds.length) {
-          const { error: reviewCatErr } = await supabase
-            .from("transaction_categorizations")
-            .update({
-              status: "needs_review",
-              post_after: null,
-              post_error: "plaid_accounting_review_required",
-              accounting_review_required: true,
-              accounting_review_reason: "plaid_relink_duplicate_review_required",
-              updated_at: now,
-            })
-            .eq("business_id", businessId)
-            .in("transaction_id", reviewTxnIds);
-          if (reviewCatErr) throw reviewCatErr;
-        }
-      }
-    }
-
+    failureStage = "cursor_commit";
     let lastSyncAt = now;
     const { error: updateErr } = await supabase
       .from("plaid_items")
@@ -1089,7 +1068,8 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         failure_code: failureCode,
         error_message: "Plaid synchronization failed before completion.",
         meta: {
-          failure_stage: "incremental_sync",
+          failure_stage: failureStage,
+          source_error_code: safeDiagnosticCode(error),
           automatic_retry_scheduled: true,
           cursor_input_present: Boolean(item.cursor),
           cursor_input_sha256: cursorDigest(item.cursor),

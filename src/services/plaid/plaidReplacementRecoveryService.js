@@ -7,6 +7,7 @@ import {
   findProbableRelinkDuplicateCandidates,
   isPlaidMutationDuringPaginationError,
 } from "./plaidCanonicalIdentity.js";
+import { isPlaidReauthenticationRequired } from "./plaidAccountConnectionState.js";
 import { normalizePlaidAuthorizedDate, normalizePlaidPostedDate } from "../bookkeeping/accountingDatePolicy.js";
 import {
   executePostingEligibilityRecheck,
@@ -87,13 +88,15 @@ export function deriveRecoverySyncHealth({ item = {}, latestRun = null, latestSu
     && (!lastSuccessfulSyncAt || Date.parse(latestRun.finished_at || latestRun.started_at || 0) > Date.parse(lastSuccessfulSyncAt));
   const disconnected = item.is_active === false || item.status === "disconnected";
   const updating = !disconnected && (item.sync_in_progress === true || latestRun?.status === "running");
+  const reauthenticationRequired = !disconnected && isPlaidReauthenticationRequired(item);
   const active = !disconnected && !updating && ["connected", "active"].includes(item.status) && !latestFailed;
   return {
-    status: disconnected ? "disconnected" : updating ? "updating" : active ? "active" : "attention_required",
-    reason: active || updating ? null : latestFailed ? "The most recent transaction sync did not complete. Automatic retry remains enabled."
+    status: disconnected ? "disconnected" : updating ? "updating" : reauthenticationRequired ? "reauthentication_required" : active ? "active" : "temporarily_unavailable",
+    reason: active || updating ? null : reauthenticationRequired ? "Plaid requires you to reconnect this institution before synchronization can continue."
+      : latestFailed ? "Sync is temporarily unavailable. Bizzi will retry automatically."
       : disconnected ? "The Plaid connection is disconnected."
-        : "The Plaid connection requires attention before automatic synchronization can continue.",
-    automatic_retry_scheduled: latestFailed && !disconnected && ["connected", "active"].includes(item.status),
+        : "Sync is temporarily unavailable. Bizzi will retry automatically.",
+    automatic_retry_scheduled: latestFailed && !disconnected && !reauthenticationRequired && ["connected", "active"].includes(item.status),
     last_successful_sync_at: lastSuccessfulSyncAt,
     transactions_imported_through: importedThrough,
     latest_run: latestRun ? {

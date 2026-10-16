@@ -1029,7 +1029,8 @@ function SyncHealthSummary({ health }) {
   const active = health.status === "active";
   const updating = health.status === "updating";
   const disconnected = health.status === "disconnected";
-  const label = active ? "Transaction sync: Active" : updating ? "Transaction sync: Updating" : disconnected ? "Disconnected" : "Attention required";
+  const reauthenticationRequired = health.status === "reauthentication_required";
+  const label = active ? "Transaction sync: Active" : updating ? "Transaction sync: Updating" : disconnected ? "Disconnected" : reauthenticationRequired ? "Reconnect required" : "Sync temporarily unavailable — retrying automatically";
   return (
     <div className="mt-3 rounded-lg border border-white/8 bg-black/10 p-2 text-[11px]" data-transaction-sync-health>
       <div className={active ? "font-semibold text-emerald-200" : "font-semibold text-amber-200"}>
@@ -1719,13 +1720,13 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                 Disconnect stops new transactions from syncing. Your historical transactions and categorizations stay saved.
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <GhostButton
+                {inst.sync_health?.status === "reauthentication_required" ? <GhostButton
                   onClick={() => repairPlaidItem(inst.plaid_item_id, inst.institution_name)}
                   disabled={readOnly || repairingItem === inst.plaid_item_id}
                   className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-semibold"
                 >
-                  {repairingItem === inst.plaid_item_id ? "Opening repair…" : `Repair ${inst.institution_name || "connection"}`}
-                </GhostButton>
+                  {repairingItem === inst.plaid_item_id ? "Opening reconnect…" : `Reconnect ${inst.institution_name || "connection"}`}
+                </GhostButton> : null}
                 {repairResult?.[inst.plaid_item_id]?.status === "lineage_confirmation_required" ? (
                   <span className="text-[11px] text-amber-200">New account identity found. Ingestion is paused pending authorized lineage confirmation.</span>
                 ) : repairResult?.[inst.plaid_item_id]?.status === "awaiting_account_selection" ? (

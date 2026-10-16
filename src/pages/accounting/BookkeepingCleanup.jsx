@@ -742,9 +742,12 @@ function AccountCard({
   const connectionState = account.connection_state || "connected";
   const disconnected = connectionState === "disconnected";
   const attentionRequired = connectionState === "attention_required";
+  const syncTemporarilyUnavailable = account.sync_availability === "temporarily_unavailable";
   const closedHistorical = connectionState === "closed_historical";
   const connectionLabel = attentionRequired
-    ? "Attention required"
+    ? "Reconnect required"
+    : syncTemporarilyUnavailable
+      ? "Sync temporarily unavailable — retrying automatically"
     : disconnected
       ? "Disconnected"
       : closedHistorical
@@ -766,7 +769,7 @@ function AccountCard({
         background: disconnected || closedHistorical ? "rgba(255,255,255,0.022)" : PANEL_BG,
         borderColor: dragTarget || selected
           ? "rgba(16,185,129,0.6)"
-          : attentionRequired
+          : attentionRequired || syncTemporarilyUnavailable
             ? "rgba(251,191,36,0.4)"
             : PANEL_BORDER,
         boxShadow: selected ? "0 10px 30px rgba(0,0,0,0.35)" : "none",
@@ -788,21 +791,21 @@ function AccountCard({
         </span>
       </div>
       <div className="text-base font-semibold text-slate-50">{account.name}</div>
-      <div className={`text-[11px] font-semibold ${attentionRequired ? "text-amber-300" : disconnected || closedHistorical ? "text-slate-400" : "text-emerald-300"}`}>
+      <div className={`text-[11px] font-semibold ${attentionRequired || syncTemporarilyUnavailable ? "text-amber-300" : disconnected || closedHistorical ? "text-slate-400" : "text-emerald-300"}`}>
         {connectionLabel}
       </div>
       {disconnected && account.disconnected_at ? <div className="text-[11px] text-slate-500">Sync stopped {new Date(account.disconnected_at).toLocaleString()}</div> : null}
       {latestImported && (disconnected || closedHistorical)
         ? <div className="text-[11px] text-slate-400">Imported through {latestImported}</div>
         : importRange ? <div className="text-[11px] text-slate-400">{importRange}</div> : null}
-      {attentionRequired ? <div className="text-[11px] text-slate-400">New transactions may not sync until this connection is repaired.</div> : null}
+      {attentionRequired ? <div className="text-[11px] text-slate-400">Plaid requires this institution to be reconnected before new transactions can sync.</div> : null}
       {disconnected ? <div className="text-[11px] text-slate-400">Historical transactions remain available.</div> : null}
       {!disconnected && !closedHistorical && !attentionRequired ? <div className="text-[11px] text-slate-500">{activeRange}</div> : null}
       </button>
       {(disconnected || attentionRequired) ? (
         <button type="button" onClick={onConnectionAction}
           className={`mx-5 mb-2 self-start text-[11px] font-semibold ${attentionRequired ? "text-amber-200" : "text-emerald-300"} hover:underline`}>
-          {attentionRequired ? "Repair in Settings" : "Reconnect in Settings"}
+          Reconnect in Settings
         </button>
       ) : null}
     </div>

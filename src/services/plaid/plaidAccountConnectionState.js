@@ -5,7 +5,28 @@ export const PLAID_ACCOUNT_CONNECTION_STATES = Object.freeze({
   CLOSED_HISTORICAL: "closed_historical",
 });
 
-const REPAIR_ITEM_STATUSES = new Set(["error", "reauth_required"]);
+const REPAIR_ITEM_STATUSES = new Set(["reauth_required"]);
+const REAUTH_ERROR_CODES = new Set([
+  "ITEM_LOGIN_REQUIRED",
+  "INVALID_CREDENTIALS",
+  "INVALID_MFA",
+  "USER_SETUP_REQUIRED",
+  "provider_reauthentication_required",
+]);
+
+export function isPlaidReauthenticationRequired(item = {}) {
+  const status = String(item.status || "").toLowerCase();
+  const errorCode = String(item.error_code || "");
+  return status === "reauth_required"
+    || REAUTH_ERROR_CODES.has(errorCode)
+    || REAUTH_ERROR_CODES.has(errorCode.toUpperCase());
+}
+
+export function projectPlaidSyncAvailability(item = {}) {
+  if (isPlaidReauthenticationRequired(item)) return "reauthentication_required";
+  if (item.error_code) return "temporarily_unavailable";
+  return "active";
+}
 
 export function projectPlaidAccountConnectionState({ account = {}, item = {} } = {}) {
   const explicit = String(account.connection_state || "").toLowerCase();
@@ -25,7 +46,7 @@ export function projectPlaidAccountConnectionState({ account = {}, item = {} } =
   }
   if (explicit === PLAID_ACCOUNT_CONNECTION_STATES.ATTENTION_REQUIRED
       || REPAIR_ITEM_STATUSES.has(itemStatus)
-      || Boolean(item.error_code)) {
+      || isPlaidReauthenticationRequired(item)) {
     return PLAID_ACCOUNT_CONNECTION_STATES.ATTENTION_REQUIRED;
   }
   if (accountDisconnected) {

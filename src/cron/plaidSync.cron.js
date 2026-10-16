@@ -1,6 +1,6 @@
 /* global process */
 import { supabase } from "../services/supabaseAdmin.js";
-import { isPlaidItemEligibleForScheduledSync, runPlaidSyncForBusiness } from "../services/plaid/plaidSyncService.js";
+import { isPlaidItemEligibleForScheduledSync, runPlaidSyncForItemForBusiness } from "../services/plaid/plaidSyncService.js";
 import { runReconciliationOnceForBusiness } from "./reconciliation.cron.js";
 import { filterEntitledBusinessIds } from "../services/billing/entitledBusinesses.js";
 
@@ -75,7 +75,7 @@ async function tick() {
     if (!shouldSyncNow(tz, item.last_sync_at)) continue;
     processed += 1;
     try {
-      const res = await runPlaidSyncForBusiness(item.business_id, { force: false });
+      const res = await runPlaidSyncForItemForBusiness(item.business_id, item.plaid_item_id, { force: false });
       runReconciliationOnceForBusiness(item.business_id, {
         force: true,
         preferQboBalance: false,

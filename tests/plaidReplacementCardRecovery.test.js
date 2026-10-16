@@ -176,7 +176,8 @@ test("replacement repair remains update-mode, staged, held, and explicitly relea
   assert.match(integration, /plaid_replacement_account_candidates/);
   assert.match(routes, /items\/:plaidItemId\/update-link-token/);
   assert.match(routes, /items\/:plaidItemId\/repair-complete/);
-  assert.match(settings, /`Repair \$\{inst\.institution_name \|\| "connection"\}`/);
+  assert.match(settings, /inst\.sync_health\?\.status === "reauthentication_required"/);
+  assert.match(settings, /`Reconnect \$\{inst\.institution_name \|\| "connection"\}`/);
   assert.match(recovery, /collectCompletePlaidSyncPreview/);
   assert.match(recovery, /staged_next_cursor/);
   assert.match(recovery, /posting_hold:\s*true/);
@@ -371,7 +372,7 @@ test("sync health distinguishes a newer failed run from an active incremental co
     item: { is_active: true, status: "connected", last_success_at: "2026-10-08T10:00:00Z" },
     latestRun: { status: "failed", started_at: "2026-10-08T11:00:00Z", finished_at: "2026-10-08T11:01:00Z", failure_code: "private" },
   });
-  assert.equal(failed.status, "attention_required");
+  assert.equal(failed.status, "temporarily_unavailable");
   assert.equal(failed.latest_run.failure_code, "transaction_sync_failed");
 });
 

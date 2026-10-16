@@ -6,7 +6,7 @@ import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.
 import { getBookkeepingStartDate } from "../../../services/bookkeeping/bookkeepingScope.js";
 import { countBookkeepingTransactions } from "../../../services/bookkeeping/bookkeepingTransactionFeedService.js";
 import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../../_shared/tenantAuth.js";
-import { projectPlaidAccountConnectionState } from "../../../services/plaid/plaidAccountConnectionState.js";
+import { projectPlaidAccountConnectionState, projectPlaidSyncAvailability } from "../../../services/plaid/plaidAccountConnectionState.js";
 
 const router = Router();
 
@@ -111,6 +111,7 @@ router.get("/accounts", requireAuth, async (req, res) => {
           account: a,
           item: itemById.get(String(a.plaid_item_id)) || {},
         }),
+        sync_availability: projectPlaidSyncAvailability(itemById.get(String(a.plaid_item_id)) || {}),
         connection_state_version: a.connection_state_version || 0,
         disconnected_at: a.disconnected_at || itemById.get(String(a.plaid_item_id))?.disconnected_at || null,
         connected_at: a.connected_at || null,
