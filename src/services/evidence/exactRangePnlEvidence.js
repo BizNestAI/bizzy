@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { FINANCIAL_EVIDENCE_FORMULA_VERSION, calculateCategoryRankings, calculatePerformance, calculatePeriodChanges } from "./financialEvidenceFormulas.js";
 import { resolveCanonicalEvidencePeriods } from "./financialEvidencePeriods.js";
+import { extractAuthoritativeQboReportBasis, QboReportBasisError } from "../bookkeeping/qboReportBasis.js";
 
 export const EVIDENCE_SCHEMA_VERSION = "qbo-pnl-exact-range-v1";
 export const PACKAGE_SCHEMA_VERSION = "business-evidence-package-v1";
@@ -27,8 +28,13 @@ export function validateProviderReportIdentity({ envelope, expected, allowedRepo
   const report = envelope?.report;
   const header = report?.Header || report?.ReportHeader;
   if (!header) throw new EvidenceUnavailableError("qbo_report_header_missing");
-  const basis = headerOption(header, "reportbasis");
-  if (!basis) throw new EvidenceUnavailableError("qbo_report_basis_unproven");
+  let basis;
+  try {
+    basis = extractAuthoritativeQboReportBasis(report);
+  } catch (error) {
+    if (error instanceof QboReportBasisError) throw new EvidenceUnavailableError(error.code, error.details);
+    throw error;
+  }
   if (String(basis).toLowerCase() !== "cash") throw new EvidenceUnavailableError("qbo_report_basis_mismatch", { returned_basis: basis });
   const actualReport = String(envelope.reportName || header.ReportName || "").replace(/\s/g, "").toLowerCase();
   if (!allowedReportNames.map((name) => name.toLowerCase()).includes(actualReport)) throw new EvidenceUnavailableError("qbo_report_type_mismatch");

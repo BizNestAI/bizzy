@@ -27,6 +27,7 @@ const TXN_ID = "00000000-0000-4000-8000-000000000101";
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
 function pnlSummaryFixture(overrides = {}) {
+  const { Header: headerOverrides = {}, ...reportOverrides } = overrides;
   const sales = Number(overrides.sales ?? 3217.45);
   const cogs = Number(overrides.cogs ?? 100);
   const expenses = Number(overrides.expenses ?? 42.5);
@@ -68,15 +69,16 @@ function pnlSummaryFixture(overrides = {}) {
   return {
     Header: {
       ReportName: "ProfitAndLoss",
+      ReportBasis: "Cash",
       StartPeriod: "2026-08-01",
       EndPeriod: "2026-08-31",
-      Option: [{ Name: "ReportBasis", Value: "Cash" }],
-      ...(overrides.Header || {}),
+      Option: [{ Name: "AccountingStandard", Value: "GAAP" }],
+      ...headerOverrides,
     },
     Rows: {
       Row: rows,
     },
-    ...overrides,
+    ...reportOverrides,
   };
 }
 
@@ -278,6 +280,29 @@ test("ProfitAndLoss summary parsing uses QBO KPIs and selected-month report date
     sourceEndDate: "2026-08-31",
   });
   assert.equal(cad.currency_code, "CAD");
+});
+
+test("monthly summary requires authoritative provider Cash basis and never substitutes the request basis", () => {
+  const args = {
+    reviewYear: 2026,
+    reviewMonth: 8,
+    sourceStartDate: "2026-08-01",
+    sourceEndDate: "2026-08-31",
+    accountingMethod: "Cash",
+  };
+  const missing = pnlSummaryFixture();
+  delete missing.Header.ReportBasis;
+  assert.throws(() => parseProfitAndLossSummary(missing, args), /qbo_report_basis_unproven/);
+
+  const accrual = pnlSummaryFixture({ Header: { ReportBasis: "Accrual" } });
+  assert.throws(() => parseProfitAndLossSummary(accrual, args), /qbo_report_basis_mismatch/);
+
+  const fallback = pnlSummaryFixture({ Header: { ReportBasis: undefined, Option: [{ Name: "ReportBasis", Value: "Cash" }] } });
+  delete fallback.Header.ReportBasis;
+  assert.equal(parseProfitAndLossSummary(fallback, args).accounting_method, "Cash");
+
+  const conflicting = pnlSummaryFixture({ Header: { Option: [{ Name: "ReportBasis", Value: "Accrual" }] } });
+  assert.throws(() => parseProfitAndLossSummary(conflicting, args), /qbo_report_basis_conflicting/);
 });
 
 test("ProfitAndLoss summary supports zero COGS and Other Income/Other Expense without recomputing Net Profit", () => {

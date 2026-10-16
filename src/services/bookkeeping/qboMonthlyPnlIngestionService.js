@@ -4,6 +4,7 @@ import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { getQBOClient as defaultGetQBOClient } from "../../utils/qboClient.js";
 import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
 import { getBackendBuildInfo } from "../../utils/buildInfo.js";
+import { extractAuthoritativeQboReportBasis, QboReportBasisError } from "./qboReportBasis.js";
 import {
   getLatestQuickBooksTokenRow,
   getQuickBooksAccessToken,
@@ -475,12 +476,22 @@ export function parseProfitAndLossSummary(report, {
   reviewMonth,
   sourceStartDate,
   sourceEndDate,
-  accountingMethod = "Cash",
 } = {}) {
   const header = report?.Header || report?.ReportHeader || {};
   const actualStart = header?.StartPeriod || sourceStartDate;
   const actualEnd = header?.EndPeriod || sourceEndDate;
-  const reportBasis = findHeaderOption(header, "reportbasis") || accountingMethod;
+  let reportBasis;
+  try {
+    reportBasis = extractAuthoritativeQboReportBasis(report);
+  } catch (error) {
+    if (error instanceof QboReportBasisError) {
+      throw new QboMonthlyPnlIngestionError(error.code, 409, error.details);
+    }
+    throw error;
+  }
+  if (reportBasis !== "Cash") {
+    throw new QboMonthlyPnlIngestionError("qbo_report_basis_mismatch", 409, { returned_basis: reportBasis });
+  }
   const reportName = header?.ReportName || header?.ReportTitle || report?.ReportName || "";
   const rootRows = report?.Rows?.Row;
   if (!Array.isArray(rootRows) || !/profit\s*and\s*loss/i.test(String(reportName || "ProfitAndLoss"))) {
@@ -1360,11 +1371,6 @@ function sumAccountRows(rows, type) {
 function roundMoney(value) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? Math.round(number * 100) / 100 : 0;
-}
-
-function findHeaderOption(header, name) {
-  const wanted = normalizeLabel(name);
-  return (header?.Option || []).find((item) => normalizeLabel(item?.Name) === wanted)?.Value || null;
 }
 
 function firstDateValue(colData = []) {

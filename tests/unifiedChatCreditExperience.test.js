@@ -17,6 +17,19 @@ test('every supported chat route shares the business credit lifecycle', () => {
   assert.match(handler, /duplicate_consumed/);
 });
 
+test('financial evidence failures release reservations while successful answers consume once', () => {
+  const handler = read('src/api/gpt/brain/generateBizzyResponse.js');
+  const evidence = handler.indexOf('canonicalEvidence = await buildBusinessQuickPromptEvidence');
+  const unavailable = handler.indexOf('if (canonicalEvidence.unavailable)', evidence);
+  const release = handler.indexOf('releaseChatCredit', unavailable);
+  const unavailableReturn = handler.indexOf('return res.status(409)', release);
+  const generation = handler.indexOf('const result = await generateBizzyResponse', unavailableReturn);
+  const consume = handler.indexOf('consumeChatCredit', generation);
+  assert.ok(evidence > 0 && evidence < unavailable && unavailable < release && release < unavailableReturn);
+  assert.ok(unavailableReturn < generation && generation < consume);
+  assert.match(handler.slice(unavailable, unavailableReturn), /failureClassification: canonicalEvidence\.reasonCode/);
+});
+
 test('normal chat and legacy insight entry points submit stable idempotency keys', () => {
   const hook = read('src/hooks/useBizzyChat.js');
   const insight = read('src/components/Bizzy/AskBizzyInsightButton.jsx');

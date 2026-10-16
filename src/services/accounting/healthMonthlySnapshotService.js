@@ -53,13 +53,21 @@ export async function refreshMonthlyQboFinancialSnapshot({
     endDate: sourceEndDate,
     accountingMethod,
   });
-  const parsed = parseProfitAndLossSummary(summaryResponse.report, {
-    reviewYear,
-    reviewMonth,
-    sourceStartDate,
-    sourceEndDate,
-    accountingMethod,
-  });
+  let parsed;
+  try {
+    parsed = parseProfitAndLossSummary(summaryResponse.report, {
+      reviewYear,
+      reviewMonth,
+      sourceStartDate,
+      sourceEndDate,
+      accountingMethod,
+    });
+  } catch (error) {
+    if (error instanceof QboMonthlyPnlIngestionError && error.error === "qbo_report_basis_mismatch") {
+      throw new HealthMonthlySnapshotError("health_cash_basis_required", 400, error.details);
+    }
+    throw error;
+  }
   assertHealthCashBasis(parsed.accounting_method || accountingMethod);
   validateParsedHealthSummary(parsed);
   const accounts = parsed.account_rows.map((row, index) => ({

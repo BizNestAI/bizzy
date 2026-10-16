@@ -8,7 +8,7 @@ function envelope(overrides = {}) {
   return {
     reportName: "ProfitAndLoss",
     realmId: "realm-1",
-    report: { Header: { ReportName: "ProfitAndLoss", StartPeriod: "2026-10-01", EndPeriod: "2026-10-14", Currency: "USD", Option: [{ Name: "ReportBasis", Value: "Cash" }] } },
+    report: { Header: { ReportName: "ProfitAndLoss", ReportBasis: "Cash", StartPeriod: "2026-10-01", EndPeriod: "2026-10-14", Currency: "USD", Option: [{ Name: "AccountingStandard", Value: "GAAP" }] } },
     ...overrides,
   };
 }
@@ -16,10 +16,14 @@ function envelope(overrides = {}) {
 test("exact QBO identity requires proven Cash basis, realm, dates, and currency", () => {
   const expected = { realm_id: "realm-1", start: "2026-10-01", end: "2026-10-14", currency: "USD" };
   assert.deepEqual(validateProviderReportIdentity({ envelope: envelope(), expected }), { accounting_basis: "Cash", currency: "USD", start: expected.start, end: expected.end });
-  const missingBasis = envelope(); delete missingBasis.report.Header.Option;
+  const missingBasis = envelope(); delete missingBasis.report.Header.ReportBasis;
   assert.throws(() => validateProviderReportIdentity({ envelope: missingBasis, expected }), (error) => error instanceof EvidenceUnavailableError && error.code === "qbo_report_basis_unproven");
-  const accrual = envelope(); accrual.report.Header.Option[0].Value = "Accrual";
+  const accrual = envelope(); accrual.report.Header.ReportBasis = "Accrual";
   assert.throws(() => validateProviderReportIdentity({ envelope: accrual, expected }), /qbo_report_basis_mismatch/);
+  const fallback = envelope(); delete fallback.report.Header.ReportBasis; fallback.report.Header.Option.push({ Name: "ReportBasis", Value: "Cash" });
+  assert.equal(validateProviderReportIdentity({ envelope: fallback, expected }).accounting_basis, "Cash");
+  const conflicting = envelope(); conflicting.report.Header.Option.push({ Name: "ReportBasis", Value: "Accrual" });
+  assert.throws(() => validateProviderReportIdentity({ envelope: conflicting, expected }), /qbo_report_basis_conflicting/);
   assert.throws(() => validateProviderReportIdentity({ envelope: envelope({ realmId: "other" }), expected }), /qbo_report_realm_mismatch/);
   assert.throws(() => validateProviderReportIdentity({ envelope: envelope({ report: { Header: { ...envelope().report.Header, EndPeriod: "2026-10-31" } } }), expected }), /qbo_report_period_mismatch/);
   assert.throws(() => validateProviderReportIdentity({ envelope: envelope({ report: { Header: { ...envelope().report.Header, Currency: "CAD" } } }), expected }), /qbo_report_currency_mismatch/);
@@ -115,6 +119,18 @@ test("mocked exact-range acquisition propagates currency and verifies both repor
   });
   assert.equal(result.currency, "USD"); assert.equal(result.metrics.net_profit, "53.00"); assert.equal(result.accounting_basis, "Cash");
   assert.equal(seen[0].accountingMethod, "Cash");
+});
+
+test("exact-range acquisition rejects summary/detail basis disagreement", async () => {
+  const summary = envelope();
+  const detail = envelope({ reportName: "ProfitAndLossDetail", report: { Header: { ...envelope().report.Header, ReportName: "ProfitAndLossDetail", ReportBasis: "Accrual" } } });
+  await assert.rejects(acquireExactRangePnlEvidence({
+    db: {}, businessId: "biz", period: { start: "2026-10-01", end: "2026-10-14" },
+    configuration: { business_id: "biz", qbo_realm_id: "realm-1", reporting_timezone: "UTC", home_currency: "USD", provider_schema_version: "75" },
+    cacheLoader: async () => null, fetchReport: async () => summary, fetchDetail: async () => detail,
+    fetchAccounts: async () => [], normalizePayload: () => { throw new Error("normalization_must_not_run"); },
+    persist: async () => { throw new Error("persistence_must_not_run"); },
+  }), /qbo_report_basis_mismatch/);
 });
 
 test("identical content gets a fresh immutable observation while request retries remain idempotent", async () => {
