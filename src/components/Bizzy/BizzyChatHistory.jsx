@@ -7,7 +7,7 @@ import { useLocation } from 'react-router-dom';
 import { Minimize2, Maximize2, X, MoreHorizontal } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { createDoc } from '../../services/bizzyDocs/docsService';
-import MarkdownRenderer from './MarkdownRenderer';
+import AssistantMessageContent from './AssistantMessageContent';
 import ChatMessage from './ChatMessage';
 import UserMessageBubble from './UserMessageBubble';
 import { ACCENT_HEX } from '../../config/accent';
@@ -101,7 +101,7 @@ function nextTypewriterIndex(text, index) {
 }
 
 const TypewriterText = ({ text = '', onDone, containerRef, autoScroll }) => {
-  const [shown, setShown] = useState('');
+  const [shownLength, setShownLength] = useState(0);
   const lastScrollTsRef = useRef(0);
   const autoRef = useRef(autoScroll);
   const onDoneRef = useRef(onDone);
@@ -109,12 +109,12 @@ const TypewriterText = ({ text = '', onDone, containerRef, autoScroll }) => {
   useEffect(() => { onDoneRef.current = onDone; }, [onDone]);
 
   useEffect(() => {
-    if (!text) { setShown(''); return; }
+    if (!text) { setShownLength(0); return; }
     let i = 0;
     let raf;
     const step = () => {
       i = nextTypewriterIndex(text, i);
-      setShown(text.slice(0, i));
+      setShownLength(i);
       if (autoRef.current && containerRef?.current) {
         const now = performance.now();
         if (now - lastScrollTsRef.current > 50) {
@@ -130,7 +130,7 @@ const TypewriterText = ({ text = '', onDone, containerRef, autoScroll }) => {
     return () => cancelAnimationFrame(raf);
   }, [text, containerRef]);
 
-  return <MarkdownRenderer>{shown}</MarkdownRenderer>;
+  return <AssistantMessageContent text={text} complete={false} revealCharacters={shownLength} />;
 };
 
 /* ---------- stable key map (does NOT depend on text length) ---------- */
@@ -515,7 +515,7 @@ const BizzyChatHistory = ({ inline = false }) => {
                         }}
                       />
                     ) : (
-                      <MarkdownRenderer>{msg.text}</MarkdownRenderer>
+                      <AssistantMessageContent text={msg.text} complete />
                     )}
 
                     {suggest && (

@@ -33,10 +33,16 @@ test('fresh replies override the new-thread premark that previously made onboard
 
 test('typewriter uses frame-paced character bursts with punctuation pauses and reduced-motion support', () => {
   const canvas = read('src/components/Bizzy/ChatCanvas.jsx');
+  const history = read('src/components/Bizzy/BizzyChatHistory.jsx');
+  const renderer = read('src/components/Bizzy/AssistantMessageContent.js');
 
   assert.match(canvas, /requestAnimationFrame\(loop\)/);
   assert.match(canvas, /revealCost\(textRef\.current\[iRef\.current\]\)/);
   assert.match(canvas, /PUNCTUATION_COST/);
   assert.match(canvas, /prefers-reduced-motion: reduce/);
+  assert.match(canvas, /revealCharacters=\{shownLength\}/);
+  assert.match(history, /revealCharacters=\{shownLength\}/);
+  assert.match(renderer, /remarkProgressiveReveal/);
+  assert.doesNotMatch(canvas, /hideDanglingMarkdownMarkers/);
   assert.doesNotMatch(canvas, /function chunkWords/);
 });

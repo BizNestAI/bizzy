@@ -50,27 +50,6 @@ function getMsgTime(m) {
   return 0;
 }
 
-function hideDanglingMarkdownMarkers(str = "") {
-  if (!str) return "";
-
-  const hideLastUnpairedDoubleMarker = (input, marker) => {
-    const positions = [];
-    for (let i = 0; i < input.length - 1; i += 1) {
-      if (input[i] === "\\" || input.slice(i, i + marker.length) !== marker) continue;
-      positions.push(i);
-      i += marker.length - 1;
-    }
-    if (positions.length % 2 === 0) return input;
-    const last = positions[positions.length - 1];
-    return input.slice(0, last) + input.slice(last + marker.length);
-  };
-
-  let safe = str;
-  safe = hideLastUnpairedDoubleMarker(safe, "**");
-  safe = hideLastUnpairedDoubleMarker(safe, "__");
-  return safe;
-}
-
 function measureTopOffsetForSelector(selector) {
   if (!selector || typeof document === "undefined") return 0;
   const el = document.querySelector(selector);
@@ -127,10 +106,11 @@ function revealCost(char = "") {
 
 function Typewriter({ id, text = "", speed = 110, onDone, onProgress }) {
   const [typingDone, setTypingDone] = useState(false);
-  const [shown, setShown] = useState("");
+  const [shownLength, setShownLength] = useState(0);
   const iRef = useRef(0);
   const rafRef = useRef(null);
   const lastTsRef = useRef(0);
+  const renderedLengthRef = useRef(0);
   const textRef = useRef(text);
   textRef.current = text;
   const onDoneRef = useRef(onDone);
@@ -148,13 +128,14 @@ function Typewriter({ id, text = "", speed = 110, onDone, onProgress }) {
   useEffect(() => {
     cancelAnimationFrame(rafRef.current || 0);
     iRef.current = 0;
-    setShown("");
+    setShownLength(0);
     lastTsRef.current = 0;
+    renderedLengthRef.current = 0;
     budgetRef.current = 0;
     finishedRef.current = false;
 
     const finish = () => {
-      setShown(textRef.current);
+      setShownLength(textRef.current.length);
       if (finishedRef.current) return;
       finishedRef.current = true;
       onProgressRef.current?.(1);
@@ -182,8 +163,11 @@ function Typewriter({ id, text = "", speed = 110, onDone, onProgress }) {
         budgetRef.current -= cost;
         iRef.current += 1;
       }
-      const nextText = textRef.current.slice(0, iRef.current);
-      setShown(nextText);
+      const renderStep = Math.max(1, Math.ceil(totalLength / 120));
+      if (iRef.current === totalLength || iRef.current - renderedLengthRef.current >= renderStep) {
+        renderedLengthRef.current = iRef.current;
+        setShownLength(iRef.current);
+      }
       onProgressRef.current?.(totalLength ? iRef.current / totalLength : 1);
       if (iRef.current < totalLength) {
         rafRef.current = requestAnimationFrame(loop);
@@ -198,7 +182,7 @@ function Typewriter({ id, text = "", speed = 110, onDone, onProgress }) {
 
   return (
     <div className="bizzy-tw" data-typing={typingDone ? "false" : "true"}>
-      <AssistantMessageContent text={typingDone ? text : hideDanglingMarkdownMarkers(shown)} complete={typingDone} />
+      <AssistantMessageContent text={text} complete={typingDone} revealCharacters={shownLength} />
     </div>
   );
 }

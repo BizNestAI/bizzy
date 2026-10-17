@@ -14,8 +14,8 @@ const ADOBE_TABLE = `I found **6 Adobe transactions** in the available history:
 
 The recurring charge is about **$7.50–$7.57/month**.`;
 
-function render(message, complete = true) {
-  return renderToStaticMarkup(React.createElement(AssistantMessageContent, { message, complete }));
+function render(message, complete = true, revealCharacters = Infinity) {
+  return renderToStaticMarkup(React.createElement(AssistantMessageContent, { message, complete, revealCharacters }));
 }
 
 test("fresh responseText and hydrated content produce equivalent Adobe table DOM", () => {
@@ -42,14 +42,33 @@ test("canonical assistant renderer supports prose, emphasis, lists, code, and sa
   assert.match(dom, /<ol>/);
 });
 
-test("incomplete Markdown renders conservatively until completion", () => {
-  const partial = "| Date | Amount |\n|---|---:\n| Aug **";
-  const partialDom = render({ text: partial }, false);
+test("an incomplete animation frame keeps formatting for revealed content", () => {
+  const partialDom = render({ text: ADOBE_TABLE }, false, 20);
   assert.doesNotMatch(partialDom, /<table>/);
+  assert.match(partialDom, /<strong>6 Adobe tran<\/strong>/);
+  assert.doesNotMatch(partialDom, /\*\*/);
   assert.match(partialDom, /data-markdown-complete="false"/);
   const completeDom = render({ text: ADOBE_TABLE }, true);
   assert.match(completeDom, /data-markdown-complete="true"/);
   assert.match(completeDom, /<table>/);
+});
+
+test("progressive rendering reveals formatted text without Markdown delimiters", () => {
+  const markdown = `## Summary\n\n**$921.55 net loss** with *partial-period context*, ***nested emphasis***, \`Cash\`, and [QuickBooks](https://quickbooks.intuit.com).\n\n- Revenue\n- Expenses`;
+  for (const boundary of [1, 2, 3, 8, 17, 29, 42, 60, 90, markdown.length - 1]) {
+    const dom = render({ text: markdown }, false, boundary);
+    assert.doesNotMatch(dom, /\*\*|(?<!\*)\*(?!\*)|`|\]\(|^#{1,6}\s/m);
+    assert.match(dom, /data-markdown-complete="false"/);
+  }
+  const boldFrame = render({ text: markdown }, false, 23);
+  assert.match(boldFrame, /<strong>\$921\.55 net loss<\/strong>/);
+  const completed = render({ text: markdown }, true);
+  const fullyRevealed = render({ text: markdown }, false, markdown.length);
+  assert.match(completed, /<h2>Summary<\/h2>/);
+  assert.match(completed, /<ul>/);
+  assert.match(completed, /<em><strong>nested emphasis<\/strong><\/em>|<strong><em>nested emphasis<\/em><\/strong>/);
+  assert.match(fullyRevealed, /<strong>\$921\.55 net loss<\/strong>/);
+  assert.match(fullyRevealed, /rel="noopener noreferrer"/);
 });
 
 test("tables expose a bounded horizontal-scroll container for narrow screens", () => {
