@@ -25,6 +25,23 @@ do $$ begin
   exception when check_violation then null; end;
 end $$;
 
+do $$ begin
+  begin
+    insert into public.qbo_pnl_exact_range_evidence(
+      ingestion_request_id,business_id,qbo_realm_id,report_type,accounting_basis,source_start_date,source_end_date,
+      reporting_timezone,currency,provider_schema_version,evidence_schema_version,source_fingerprint,
+      provider_generated_at,observed_at,generated_at,refreshed_at,
+      completeness_status,reconciliation_status,reconciliation_difference,formula_version
+    ) values(
+      '41000000-0000-4000-8000-000000000099','20000000-0000-4000-8000-000000000001','realm','ProfitAndLoss','Cash',
+      '2026-10-01','2026-10-14','UTC','USD','75','v1',repeat('f',64),
+      '2026-10-14T12:00:00.200Z','2026-10-14T12:00:00.100Z','2026-10-14T12:00:00.300Z','2026-10-14T12:00:00.400Z',
+      'complete','reconciled',0,'v1'
+    );
+    raise exception 'provider timestamp after observation accepted';
+  exception when check_violation then null; end;
+end $$;
+
 insert into public.qbo_pnl_exact_range_evidence(
   id,ingestion_request_id,business_id,qbo_realm_id,report_type,accounting_basis,source_start_date,source_end_date,
   reporting_timezone,currency,provider_schema_version,evidence_schema_version,source_fingerprint,observed_at,generated_at,refreshed_at,

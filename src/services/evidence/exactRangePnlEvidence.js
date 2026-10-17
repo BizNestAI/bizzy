@@ -50,6 +50,7 @@ export async function acquireExactRangePnlEvidence({
   db, businessId, period, configuration, fetchReport = null, fetchAccounts = null, normalizePayload = null,
   fetchDetail = null,
   cacheLoader = findUsableExactRangePnlEvidence, now = new Date(), maxAgeMs = DEFAULT_EVIDENCE_MAX_AGE_MS,
+  clock = () => new Date(),
   ingestionRequestId = randomUUID(),
   persist = persistExactRangePnlEvidence,
 }) {
@@ -75,6 +76,11 @@ export async function acquireExactRangePnlEvidence({
     allowedReportNames: ["profitandlossdetail", "generalledger"],
   });
   const accounts = await fetchAccounts({ businessId });
+  const observedAt = readEvidenceClock(clock, "observed_at");
+  const summaryProviderGeneratedAt = providerTimestamp(summaryEnvelope.report, "summary");
+  const detailProviderGeneratedAt = providerTimestamp(detailEnvelope.report, "detail");
+  assertProviderObservedOrdering(summaryProviderGeneratedAt, observedAt, "summary");
+  assertProviderObservedOrdering(detailProviderGeneratedAt, observedAt, "detail");
   const [year, month] = period.start.split("-").map(Number);
   const normalized = normalizePayload({
     businessId, reviewYear: year, reviewMonth: month, realmId: configuration.qbo_realm_id,
@@ -85,15 +91,17 @@ export async function acquireExactRangePnlEvidence({
   if (!["valid", "valid_with_nonmaterial_rounding"].includes(normalized.reconciliation?.status)) throw new EvidenceUnavailableError("qbo_report_unreconciled");
   const performance = calculatePerformance(normalized.summary);
   const sourceFingerprint = safeHash({ summary: normalized.summary, accounts: normalized.accounts, reconciliation: normalized.reconciliation });
-  const generatedAt = now.toISOString();
+  const generatedAt = readEvidenceClock(clock, "generated_at");
+  const refreshedAt = readEvidenceClock(clock, "refreshed_at");
+  assertLocalEvidenceOrdering({ observedAt, generatedAt, refreshedAt });
   const evidence = {
     id: randomUUID(), ingestion_request_id: ingestionRequestId, business_id: businessId, qbo_realm_id: configuration.qbo_realm_id, report_type: "ProfitAndLoss",
     accounting_basis: "Cash", source_start_date: period.start, source_end_date: period.end,
     reporting_timezone: configuration.reporting_timezone, currency: identity.currency,
     provider_schema_version: configuration.provider_schema_version || "qbo-minor-75",
     evidence_schema_version: EVIDENCE_SCHEMA_VERSION, source_fingerprint: sourceFingerprint,
-    provider_generated_at: providerTimestamp(summaryEnvelope.report), observed_at: generatedAt,
-    generated_at: generatedAt, refreshed_at: generatedAt, completeness_status: "complete",
+    provider_generated_at: summaryProviderGeneratedAt?.toISOString() || null, observed_at: observedAt.toISOString(),
+    generated_at: generatedAt.toISOString(), refreshed_at: refreshedAt.toISOString(), completeness_status: "complete",
     reconciliation_status: "reconciled", reconciliation_difference: performance.reconciliation_difference,
     formula_version: FINANCIAL_EVIDENCE_FORMULA_VERSION, metrics: performance,
     accounts: normalized.accounts.map(projectAccount), source_metadata: { summary_report: "ProfitAndLoss", detail_report: detailEnvelope.reportName },
@@ -193,9 +201,29 @@ function sourceRef(row) { return { type: "qbo_profit_and_loss", evidence_id: row
 function safeHash(value) { return createHash("sha256").update(stable(value)).digest("hex"); }
 function stable(value) { if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`; if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}`; return JSON.stringify(value); }
 function headerOption(header, wanted) { const options = [...(header.Option || []), ...(header.Options || [])]; const hit = options.find((item) => String(item?.Name || item?.name || "").replace(/[_\s-]/g, "").toLowerCase() === wanted); return hit?.Value || hit?.value || null; }
-function providerTimestamp(report) {
+function providerTimestamp(report, providerSource) {
   const value = report?.Header?.Time || report?.ReportHeader?.Time || null;
   if (!value) return null;
   const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+  if (!Number.isFinite(parsed)) throw new EvidenceUnavailableError("qbo_report_provider_timestamp_invalid", { provider_source: providerSource });
+  return new Date(parsed);
+}
+function readEvidenceClock(clock, field) {
+  const value = clock();
+  const parsed = value instanceof Date ? value.getTime() : Date.parse(value);
+  if (!Number.isFinite(parsed)) throw new EvidenceUnavailableError("qbo_evidence_timestamp_lifecycle_invalid", { relationship: `${field}_invalid` });
+  return new Date(parsed);
+}
+function assertProviderObservedOrdering(providerGeneratedAt, observedAt, providerSource) {
+  if (providerGeneratedAt && providerGeneratedAt.getTime() > observedAt.getTime()) {
+    throw new EvidenceUnavailableError("qbo_report_provider_timestamp_after_observation", { provider_source: providerSource });
+  }
+}
+function assertLocalEvidenceOrdering({ observedAt, generatedAt, refreshedAt }) {
+  if (observedAt.getTime() > generatedAt.getTime()) {
+    throw new EvidenceUnavailableError("qbo_evidence_timestamp_lifecycle_invalid", { relationship: "observed_at_after_generated_at" });
+  }
+  if (generatedAt.getTime() > refreshedAt.getTime()) {
+    throw new EvidenceUnavailableError("qbo_evidence_timestamp_lifecycle_invalid", { relationship: "generated_at_after_refreshed_at" });
+  }
 }

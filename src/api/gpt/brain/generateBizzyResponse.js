@@ -45,6 +45,7 @@ import {
 } from '../businessQuickPromptExecution.js';
 import { ensureFinancialReportingConfiguration } from '../../../services/evidence/reportingConfigurationApiService.js';
 import { ALL_INTENTS } from '../registry/intentRegistry.js';
+import { buildSafeHandlerErrorDiagnostic } from './safeHandlerErrorDiagnostic.js';
 
 // 👉 NEW: demo-mode helpers
 import { isDemoMode, loadDemoData } from '../../../services/demo/loadDemoData.js';
@@ -967,6 +968,7 @@ export async function generateBizzyResponseHandler(req, res) {
   let reservedCredit = null;
   let reservedBusinessId = null;
   let stableRequestId = null;
+  let failureStage = 'request_validation';
   try {
     const { message, type } = req.body ?? {};
     const user_id = req.auth?.userId || req.user?.id || null;
@@ -1010,6 +1012,7 @@ export async function generateBizzyResponseHandler(req, res) {
     );
 
     if (canonicalQuickPrompt && FINANCIAL_QUICK_PROMPT_INTENTS.has(canonicalQuickPrompt.intent)) {
+      failureStage = 'reporting_configuration';
       try {
         await ensureFinancialReportingConfiguration({
           db: supabase,
@@ -1042,6 +1045,7 @@ export async function generateBizzyResponseHandler(req, res) {
 
     // The route entitlement middleware has already rejected every non-active/non-trialing
     // status and Admin View. Financial configuration is established before credit reservation.
+    failureStage = 'chat_credit_reservation';
     reservedCredit = await reserveChatCredit(supabase, {
       businessId: business_id,
       requestId: stableRequestId,
@@ -1079,6 +1083,7 @@ export async function generateBizzyResponseHandler(req, res) {
 
     let canonicalEvidence = null;
     if (canonicalQuickPrompt) {
+      failureStage = 'financial_evidence_acquisition';
       canonicalEvidence = await buildBusinessQuickPromptEvidence({ db: supabase, businessId: business_id, intent: canonicalQuickPrompt.intent, requestId: stableRequestId });
       if (canonicalEvidence.unavailable) {
         const released = await releaseChatCredit(supabase, { businessId: business_id, requestId: stableRequestId, failureClassification: canonicalEvidence.reasonCode });
@@ -1093,6 +1098,7 @@ export async function generateBizzyResponseHandler(req, res) {
     let fallbackTitleUsed = null;
 
     if (threadIdToUse && business_id) {
+      failureStage = 'thread_authorization';
       const { data: thread, error: threadError } = await supabase
         .from('gpt_threads')
         .select('id,business_id')
@@ -1119,6 +1125,7 @@ export async function generateBizzyResponseHandler(req, res) {
 
     let orchestration;
     const contextRequestId = randomUUID();
+    failureStage = 'context_compilation';
     try {
       const recentReferences = await loadRecentStructuredReferences({
         db: supabase,
@@ -1163,6 +1170,7 @@ export async function generateBizzyResponseHandler(req, res) {
     const resolvedType = orchestration.intent;
 
     if (!threadIdToUse && business_id) {
+      failureStage = 'thread_creation';
       try {
         const fallbackTitle = (req.body?.message || '').slice(0, 60) || 'New conversation';
         const module = intentToModule(resolvedType || 'general');
@@ -1186,6 +1194,7 @@ export async function generateBizzyResponseHandler(req, res) {
       }
     }
 
+    failureStage = 'ai_response_generation';
     const result = await generateBizzyResponse({
       user_id,
       message,
@@ -1238,6 +1247,7 @@ export async function generateBizzyResponseHandler(req, res) {
     }
 
     // Auto-title (unchanged)
+    failureStage = 'chat_credit_consumption';
     let consumption;
     let consumeError = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1327,7 +1337,7 @@ export async function generateBizzyResponseHandler(req, res) {
       }
     }
     const debug = process.env.NODE_ENV !== 'production' && process.env.BIZZY_SERVER_DEBUG === 'true';
-    console.error('[gpt handler] hard error:', e);
+    console.error('[gpt handler] hard error', buildSafeHandlerErrorDiagnostic(e, { requestId: stableRequestId, failureStage }));
     return res
       .status(500)
       .json({

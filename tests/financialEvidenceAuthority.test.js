@@ -13,6 +13,14 @@ function envelope(overrides = {}) {
   };
 }
 
+function sequenceClock(...timestamps) {
+  let index = 0;
+  return () => {
+    assert.ok(index < timestamps.length, "evidence clock read beyond the expected lifecycle");
+    return new Date(timestamps[index++]);
+  };
+}
+
 test("exact QBO identity requires proven Cash basis, realm, dates, and currency", () => {
   const expected = { realm_id: "realm-1", start: "2026-10-01", end: "2026-10-14", currency: "USD" };
   assert.deepEqual(validateProviderReportIdentity({ envelope: envelope(), expected }), { accounting_basis: "Cash", currency: "USD", start: expected.start, end: expected.end });
@@ -106,8 +114,8 @@ test("cache lookup isolates the complete identity and rejects stale evidence", a
 });
 
 test("mocked exact-range acquisition propagates currency and verifies both report identities", async () => {
-  const report = envelope();
-  const detail = envelope({ reportName: "GeneralLedger", report: { Header: { ...envelope().report.Header, ReportName: "GeneralLedger" } } });
+  const report = envelope({ report: { Header: { ...envelope().report.Header, Time: "2026-10-14T07:59:59-04:00" } } });
+  const detail = envelope({ reportName: "GeneralLedger", report: { Header: { ...envelope().report.Header, ReportName: "GeneralLedger", Time: "2026-10-14T12:00:00.050Z" } } });
   const seen = [];
   const result = await acquireExactRangePnlEvidence({
     db: {}, businessId: "biz", period: { start: "2026-10-01", end: "2026-10-14" },
@@ -116,9 +124,65 @@ test("mocked exact-range acquisition propagates currency and verifies both repor
     fetchReport: async (request) => { seen.push(request); return report; }, fetchDetail: async () => detail, fetchAccounts: async () => [],
     normalizePayload: () => ({ summary: { revenue: "100.00", cogs: "20.00", expenses: "30.00", other_income: "5.00", other_expense: "2.00", net_profit: "53.00", raw_header: {} }, accounts: [], reconciliation: { status: "valid" } }),
     persist: async ({ evidence }) => evidence, now: new Date("2026-10-14T12:00:00Z"),
+    clock: sequenceClock("2026-10-14T12:00:00.100Z", "2026-10-14T12:00:00.200Z", "2026-10-14T12:00:00.300Z"),
   });
   assert.equal(result.currency, "USD"); assert.equal(result.metrics.net_profit, "53.00"); assert.equal(result.accounting_basis, "Cash");
   assert.equal(seen[0].accountingMethod, "Cash");
+  assert.equal(result.provider_generated_at, "2026-10-14T11:59:59.000Z");
+  assert.equal(result.observed_at, "2026-10-14T12:00:00.100Z");
+  assert.equal(result.generated_at, "2026-10-14T12:00:00.200Z");
+  assert.equal(result.refreshed_at, "2026-10-14T12:00:00.300Z");
+});
+
+test("exact-range acquisition rejects provider timestamps later than local observation before persistence", async () => {
+  const summary = envelope({ report: { Header: { ...envelope().report.Header, Time: "2026-10-14T12:00:01Z" } } });
+  const detail = envelope({ reportName: "GeneralLedger", report: { Header: { ...envelope().report.Header, ReportName: "GeneralLedger", Time: "2026-10-14T12:00:00Z" } } });
+  let normalizationCalls = 0;
+  let persistenceCalls = 0;
+  await assert.rejects(acquireExactRangePnlEvidence({
+    db: {}, businessId: "biz", period: { start: "2026-10-01", end: "2026-10-14" },
+    configuration: { business_id: "biz", qbo_realm_id: "realm-1", reporting_timezone: "UTC", home_currency: "USD", provider_schema_version: "75" },
+    cacheLoader: async () => null, fetchReport: async () => summary, fetchDetail: async () => detail, fetchAccounts: async () => [],
+    normalizePayload: () => { normalizationCalls += 1; },
+    persist: async () => { persistenceCalls += 1; },
+    clock: sequenceClock("2026-10-14T12:00:00.999Z"),
+  }), (error) => error instanceof EvidenceUnavailableError
+    && error.code === "qbo_report_provider_timestamp_after_observation"
+    && error.details.provider_source === "summary");
+  assert.equal(normalizationCalls, 0);
+  assert.equal(persistenceCalls, 0);
+});
+
+test("exact-range acquisition rejects non-monotonic local lifecycle timestamps", async () => {
+  const summary = envelope();
+  const detail = envelope({ reportName: "GeneralLedger", report: { Header: { ...envelope().report.Header, ReportName: "GeneralLedger" } } });
+  let persistenceCalls = 0;
+  await assert.rejects(acquireExactRangePnlEvidence({
+    db: {}, businessId: "biz", period: { start: "2026-10-01", end: "2026-10-14" },
+    configuration: { business_id: "biz", qbo_realm_id: "realm-1", reporting_timezone: "UTC", home_currency: "USD", provider_schema_version: "75" },
+    cacheLoader: async () => null, fetchReport: async () => summary, fetchDetail: async () => detail, fetchAccounts: async () => [],
+    normalizePayload: () => ({ summary: { revenue: "100.00", cogs: "20.00", expenses: "30.00", other_income: "5.00", other_expense: "2.00", net_profit: "53.00" }, accounts: [], reconciliation: { status: "valid" } }),
+    persist: async () => { persistenceCalls += 1; },
+    clock: sequenceClock("2026-10-14T12:00:00.300Z", "2026-10-14T12:00:00.200Z", "2026-10-14T12:00:00.400Z"),
+  }), (error) => error instanceof EvidenceUnavailableError
+    && error.code === "qbo_evidence_timestamp_lifecycle_invalid"
+    && error.details.relationship === "observed_at_after_generated_at");
+  assert.equal(persistenceCalls, 0);
+});
+
+test("exact-range acquisition rejects refresh timestamps before generation", async () => {
+  const summary = envelope();
+  const detail = envelope({ reportName: "GeneralLedger", report: { Header: { ...envelope().report.Header, ReportName: "GeneralLedger" } } });
+  await assert.rejects(acquireExactRangePnlEvidence({
+    db: {}, businessId: "biz", period: { start: "2026-10-01", end: "2026-10-14" },
+    configuration: { business_id: "biz", qbo_realm_id: "realm-1", reporting_timezone: "UTC", home_currency: "USD", provider_schema_version: "75" },
+    cacheLoader: async () => null, fetchReport: async () => summary, fetchDetail: async () => detail, fetchAccounts: async () => [],
+    normalizePayload: () => ({ summary: { revenue: "100.00", cogs: "20.00", expenses: "30.00", other_income: "5.00", other_expense: "2.00", net_profit: "53.00" }, accounts: [], reconciliation: { status: "valid" } }),
+    persist: async () => { throw new Error("persistence_must_not_run"); },
+    clock: sequenceClock("2026-10-14T12:00:00.100Z", "2026-10-14T12:00:00.300Z", "2026-10-14T12:00:00.200Z"),
+  }), (error) => error instanceof EvidenceUnavailableError
+    && error.code === "qbo_evidence_timestamp_lifecycle_invalid"
+    && error.details.relationship === "generated_at_after_refreshed_at");
 });
 
 test("exact-range acquisition rejects summary/detail basis disagreement", async () => {
@@ -150,6 +214,11 @@ test("identical content gets a fresh immutable observation while request retries
     fetchDetail: async () => detail, fetchAccounts: async () => [],
     normalizePayload: () => ({ summary: { revenue, cogs: "20.00", expenses: "30.00", other_income: "5.00", other_expense: "2.00", net_profit: String(Number(revenue) - 47) + ".00", raw_header: {} }, accounts: [], reconciliation: { status: "valid" } }),
     persist,
+    clock: sequenceClock(
+      new Date(now.getTime() + 100).toISOString(),
+      new Date(now.getTime() + 200).toISOString(),
+      new Date(now.getTime() + 300).toISOString(),
+    ),
   });
   const first = await acquire("request-1", new Date("2026-10-14T12:00:00Z"));
   const second = await acquire("request-2", new Date("2026-10-14T12:16:00Z"));

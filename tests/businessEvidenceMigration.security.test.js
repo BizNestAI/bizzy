@@ -36,6 +36,7 @@ test("verified config, packages, timestamps, and message tenancy are database-en
   assert.match(sql, /provider_schema_version is not null and btrim\(provider_schema_version\) <> ''/i);
   assert.match(sql, /verification_source is not null and btrim\(verification_source\) <> ''/i);
   assert.match(sql, /generated_at <= refreshed_at and observed_at <= refreshed_at and created_at >= observed_at/i);
+  assert.match(sql, /provider_generated_at is null or provider_generated_at <= observed_at/i);
   assert.match(sql, /business_evidence_packages_complete_financial_identity/i);
   assert.match(sql, /business_evidence_packages_period_change_identity/i);
   assert.match(sql, /foreign key \(business_id,evidence_package_id\)[\s\S]*references public\.business_evidence_packages\(business_id,id\)/i);
