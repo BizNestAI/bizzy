@@ -72,6 +72,7 @@ export function unavailableQuickPromptResponse(reasonCode, provenance) {
     cash_pnl_unavailable: "A verified Cash-basis Profit and Loss is not available for this period.",
     cash_pnl_incomplete: "The Cash-basis Profit and Loss is incomplete for this period.",
     evidence_reconciliation_failed: "The financial evidence did not reconcile, so Bizzi will not answer from it.",
+    reconciliation_query_failed: "Bizzi could not check reconciliation status right now. Try again shortly.",
   };
   return { ok: false, available: false, error: reasonCode, responseText: messages[reasonCode] || "Verified evidence is temporarily unavailable. Try again later.", provenance, suggestedActions: [], followUpPrompt: "", meta: { deterministic_unavailable: true, registry_version: BUSINESS_QUICK_PROMPT_REGISTRY_VERSION } };
 }

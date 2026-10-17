@@ -55,17 +55,44 @@ export async function buildTaxProfessionalReadinessPackage({ db, businessId, tax
   if (!businessId) throw new EvidenceUnavailableError("business_id_required");
   const load = loaders.readiness || loadReadinessSignals;
   const signals = await load({ db, businessId, taxYear });
-  const requiredAvailable = ["needs_review", "pending", "reconciliation", "connections", "posting", "categorization", "pnl", "tax_review"].every((key) => signals[key]?.available === true);
-  const blockerCount = Object.values(signals).reduce((sum, signal) => sum + Number(signal?.blocker_count || 0), 0);
+  const requiredKeys = ["needs_review", "pending", "reconciliation", "connections", "posting", "categorization", "pnl", "tax_review"];
+  const unavailableSources = requiredKeys.filter((key) => signals[key]?.available !== true);
+  const requiredAvailable = unavailableSources.length === 0;
+  const hasBlockers = requiredKeys.some((key) => Number(signals[key]?.blocker_count || 0) > 0);
   const status = !requiredAvailable
     ? "readiness_unavailable"
-    : blockerCount > 0 ? "bookkeeping_attention_required" : "no_known_bookkeeping_blockers";
+    : hasBlockers ? "bookkeeping_attention_required" : "no_known_bookkeeping_blockers";
   const statement = status === "readiness_unavailable"
     ? "Readiness could not be determined because required evidence is unavailable"
     : status === "bookkeeping_attention_required" ? "Bookkeeping items still need attention" : "No known bookkeeping blockers were found";
   const packageRow = basePackage({
     businessId, intent: "tax_professional_readiness", completeness: requiredAvailable ? "complete" : "unavailable",
-    metrics: { status, statement, blocker_count: blockerCount, checklist: signals },
+    metrics: {
+      status,
+      statement,
+      has_blockers: hasBlockers,
+      unavailable_sources: unavailableSources,
+      unavailable_reason: unavailableSources.length === 1
+        ? signals[unavailableSources[0]]?.unavailable_reason || `${unavailableSources[0]}_evidence_unavailable`
+        : unavailableSources.length > 1 ? "readiness_sources_unavailable" : null,
+      // These populations can overlap. Keep them separate instead of presenting
+      // their sum as a distinct transaction count.
+      blocker_populations: {
+        tax_classification_review: Number(signals.tax_review?.blocker_count || 0),
+        bookkeeping_review: Number(signals.needs_review?.blocker_count || 0),
+        pending_or_accounting_review: Number(signals.pending?.blocker_count || 0),
+        posting_errors: Number(signals.posting?.blocker_count || 0),
+        bookkeeping_feed_review_or_pending: Number(signals.categorization?.blocker_count || 0),
+      },
+      readiness_dimensions: {
+        bookkeeping_cleanup_outstanding: ["needs_review", "pending", "posting", "categorization"].some((key) => Number(signals[key]?.blocker_count || 0) > 0),
+        tax_classification_questions_outstanding: Number(signals.tax_review?.blocker_count || 0) > 0,
+        reconciliation: signals.reconciliation?.status || "unavailable",
+        financial_evidence_available: signals.pnl?.available === true && Number(signals.pnl?.blocker_count || 0) === 0,
+        connections_available: signals.connections?.available === true && Number(signals.connections?.blocker_count || 0) === 0,
+      },
+      checklist: signals,
+    },
     warnings: ["This is bookkeeping readiness only—not tax-return readiness, filing readiness, or tax-law compliance."],
   });
   return persist({ db, packageRow });
@@ -240,18 +267,67 @@ async function loadReadinessSignals({ db, businessId, taxYear }) {
   const value = (index) => available(index) ? queries[index].value : null;
   const connection = value(3);
   return {
-    needs_review: signal(available(0), value(0)),
-    pending: signal(available(1), value(1)),
-    reconciliation: { available: available(2) && !!value(2), blocker_count: !value(2) || value(2)?.status !== "ok" ? 1 : 0, latest: value(2) },
-    connections: { available: available(3) && !!connection?.[0]?.realm_id && !!connection?.[1], blocker_count: connection?.[0]?.realm_id && connection?.[1] ? 0 : 1, qbo_last_connection_at: connection?.[0]?.last_connected_at || connection?.[0]?.connected_at || connection?.[0]?.created_at || null, plaid_last_sync_at: connection?.[1]?.last_success_at || connection?.[1]?.last_sync_at || null },
-    posting: signal(available(4), value(4)), categorization: signal(available(5), value(5)),
-    pnl: { available: available(6) && !!value(6), blocker_count: value(6) ? 0 : 1, evidence_id: value(6)?.id || null },
-    tax_review: signal(available(7), value(7)),
+    needs_review: signal(available(0), value(0), "bookkeeping_review_query_failed"),
+    pending: signal(available(1), value(1), "pending_review_query_failed"),
+    reconciliation: buildReconciliationReadinessSignal(queries[2]),
+    connections: {
+      available: available(3) && !!connection?.[0]?.realm_id && !!connection?.[1],
+      blocker_count: connection?.[0]?.realm_id && connection?.[1] ? 0 : 1,
+      unavailable_reason: !available(3) ? "connection_health_query_failed" : (!connection?.[0]?.realm_id || !connection?.[1]) ? "required_connection_evidence_missing" : null,
+      qbo_last_connection_at: connection?.[0]?.last_connected_at || connection?.[0]?.connected_at || connection?.[0]?.created_at || null,
+      plaid_last_sync_at: connection?.[1]?.last_success_at || connection?.[1]?.last_sync_at || null,
+    },
+    posting: signal(available(4), value(4), "posting_error_query_failed"),
+    categorization: signal(available(5), value(5), "bookkeeping_feed_query_failed"),
+    pnl: {
+      available: available(6) && !!value(6),
+      blocker_count: value(6) ? 0 : 1,
+      unavailable_reason: !available(6) ? "financial_evidence_query_failed" : !value(6) ? "verified_cash_pnl_missing" : null,
+      evidence_id: value(6)?.id || null,
+    },
+    tax_review: signal(available(7), value(7), "tax_review_query_failed"),
+  };
+}
+
+export function buildReconciliationReadinessSignal(settledQuery) {
+  if (!settledQuery || settledQuery.status !== "fulfilled") {
+    return {
+      available: false,
+      blocker_count: 0,
+      status: "unavailable",
+      unavailable_reason: "reconciliation_query_failed",
+      latest: null,
+      verified_scope: null,
+    };
+  }
+  const row = settledQuery.value || null;
+  if (!row) {
+    return {
+      available: true,
+      blocker_count: 1,
+      status: "not_completed",
+      unavailable_reason: null,
+      latest: null,
+      verified_scope: null,
+    };
+  }
+  const ok = String(row.status || "").toLowerCase() === "ok";
+  return {
+    available: true,
+    blocker_count: ok ? 0 : 1,
+    status: ok ? "verified_for_recorded_scope" : "issue_present",
+    unavailable_reason: null,
+    latest: row,
+    verified_scope: {
+      period_start: row.period_start || null,
+      period_end: row.period_end || null,
+      accounts: "limited_to_reconciliation_run_scope",
+    },
   };
 }
 
 function basePackage({ businessId, intent, metrics, warnings, completeness = "complete" }) { return { id: randomUUID(), schema_version: PACKAGE_SCHEMA_VERSION, intent, business_id: businessId, period: null, comparison_period: null, accounting_basis: null, currency: null, sources: [], completeness, reconciliation: { status: "unavailable", difference: null }, formula_version: TAX_BOOKKEEPING_FORMULA_VERSION, metrics, warnings }; }
-function signal(available, count) { return { available, blocker_count: available ? Number(count || 0) : 0 }; }
+function signal(available, count, unavailableReason) { return { available, blocker_count: available ? Number(count || 0) : 0, unavailable_reason: available ? null : unavailableReason }; }
 async function countQuery(query) { const { count, error } = await query; if (error) throw error; return Number(count || 0); }
 async function oneQuery(query) { const { data, error } = await query; if (error) throw error; return data || null; }
 function dedupeReferences(rows) { const seen = new Set(); return rows.filter((row) => { const key = `${row.transaction_id}:${row.signal}`; if (!row.transaction_id || seen.has(key)) return false; seen.add(key); return true; }); }

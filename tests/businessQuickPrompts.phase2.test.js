@@ -84,6 +84,27 @@ test("tax-review model projection keeps actionable facts but strips internal tra
   assert.equal(result.projection.metrics.actionable_examples[0].merchant, "Example");
 });
 
+test("blocked-but-complete tax-professional readiness proceeds as usable tenant-bound evidence", async () => {
+  const row = {
+    id: "pkg", schema_version: "business-evidence-package-v1", intent: "tax_professional_readiness", business_id: "biz",
+    period: null, comparison_period: null, accounting_basis: null, currency: null, sources: [], completeness: "complete",
+    reconciliation: { status: "unavailable", difference: null }, formula_version: "tax-bookkeeping-evidence-v2", warnings: ["Bookkeeping readiness only."],
+    metrics: {
+      status: "bookkeeping_attention_required", has_blockers: true, unavailable_sources: [],
+      blocker_populations: { tax_classification_review: 12, bookkeeping_review: 1, pending_or_accounting_review: 2, posting_errors: 0, bookkeeping_feed_review_or_pending: 2 },
+      readiness_dimensions: { reconciliation: "not_completed", financial_evidence_available: true, connections_available: true },
+    },
+  };
+  const result = await buildBusinessQuickPromptEvidence({ db: {}, businessId: "biz", intent: row.intent, builders: { taxReadiness: async () => row } });
+  assert.equal(result.unavailable, false);
+  assert.equal(result.reasonCode, null);
+  assert.equal(result.projection.metrics.readiness_dimensions.reconciliation, "not_completed");
+  await assert.rejects(
+    () => buildBusinessQuickPromptEvidence({ db: {}, businessId: "other", intent: row.intent, builders: { taxReadiness: async () => row } }),
+    /evidence_identity_invalid/,
+  );
+});
+
 test("sanitized status omits realm and setup uses server provider identity plus RPC only", async () => {
   const calls = [];
   const config = { status: "verified", qbo_realm_id: "hidden", provider_schema_version: "75", reporting_timezone: "America/New_York", home_currency: "USD", realm_verified_at: "r", currency_verified_at: "c", timezone_confirmed_at: "t", verified_at: "v", updated_at: "u" };

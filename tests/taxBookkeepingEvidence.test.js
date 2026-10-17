@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTaxProfessionalReadinessPackage, buildTaxTransactionsNeedingReviewPackage, classifyPermittedTaxSignal, loadTaxReview } from "../src/services/evidence/taxBookkeepingEvidence.js";
+import { buildReconciliationReadinessSignal, buildTaxProfessionalReadinessPackage, buildTaxTransactionsNeedingReviewPackage, classifyPermittedTaxSignal, loadTaxReview } from "../src/services/evidence/taxBookkeepingEvidence.js";
 
 const persist = async ({ packageRow }) => packageRow;
 
@@ -121,9 +121,73 @@ test("readiness has three deterministic states and never makes tax compliance cl
   assert.equal(clear.metrics.status, "no_known_bookkeeping_blockers");
   const blocked = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => ({ ...base, needs_review: complete(2) }) } });
   assert.equal(blocked.metrics.status, "bookkeeping_attention_required");
+  assert.equal(blocked.completeness, "complete");
+  assert.equal(blocked.metrics.blocker_populations.bookkeeping_review, 2);
+  assert.equal("blocker_count" in blocked.metrics, false);
   const unavailable = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => ({ ...base, reconciliation: { available: false, blocker_count: 0 } }) } });
   assert.equal(unavailable.metrics.status, "readiness_unavailable");
+  assert.deepEqual(unavailable.metrics.unavailable_sources, ["reconciliation"]);
   assert.doesNotMatch(JSON.stringify([clear, blocked, unavailable]), /ready to file|tax-law compliant|no deductions are missing/i);
+});
+
+test("missing reconciliation run is available blocker evidence rather than an outage", () => {
+  const signal = buildReconciliationReadinessSignal({ status: "fulfilled", value: null });
+  assert.deepEqual(signal, {
+    available: true,
+    blocker_count: 1,
+    status: "not_completed",
+    unavailable_reason: null,
+    latest: null,
+    verified_scope: null,
+  });
+});
+
+test("failed, OK, and non-OK reconciliation queries remain distinct", () => {
+  const failed = buildReconciliationReadinessSignal({ status: "rejected", reason: new Error("database unavailable") });
+  assert.equal(failed.available, false);
+  assert.equal(failed.blocker_count, 0);
+  assert.equal(failed.unavailable_reason, "reconciliation_query_failed");
+
+  const ok = buildReconciliationReadinessSignal({ status: "fulfilled", value: { status: "ok", period_start: "2026-09-01", period_end: "2026-09-30" } });
+  assert.equal(ok.available, true);
+  assert.equal(ok.blocker_count, 0);
+  assert.equal(ok.status, "verified_for_recorded_scope");
+  assert.deepEqual(ok.verified_scope, { period_start: "2026-09-01", period_end: "2026-09-30", accounts: "limited_to_reconciliation_run_scope" });
+
+  const issue = buildReconciliationReadinessSignal({ status: "fulfilled", value: { status: "attention_required", period_start: "2026-09-01", period_end: "2026-09-30" } });
+  assert.equal(issue.available, true);
+  assert.equal(issue.blocker_count, 1);
+  assert.equal(issue.status, "issue_present");
+});
+
+test("Cash evidence plus missing reconciliation produces a complete blocked readiness package", async () => {
+  const complete = (blocker = 0) => ({ available: true, blocker_count: blocker });
+  const signals = Object.fromEntries(["needs_review", "pending", "connections", "posting", "categorization", "pnl", "tax_review"].map((key) => [key, complete()]));
+  signals.pnl = { available: true, blocker_count: 0, evidence_id: "cash-pnl" };
+  signals.reconciliation = buildReconciliationReadinessSignal({ status: "fulfilled", value: null });
+  const result = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => signals } });
+  assert.equal(result.completeness, "complete");
+  assert.equal(result.metrics.status, "bookkeeping_attention_required");
+  assert.equal(result.metrics.readiness_dimensions.reconciliation, "not_completed");
+  assert.equal(result.metrics.readiness_dimensions.financial_evidence_available, true);
+  assert.deepEqual(result.metrics.unavailable_sources, []);
+});
+
+test("readiness keeps overlapping blocker populations separate instead of summing them", async () => {
+  const complete = (blocker = 0) => ({ available: true, blocker_count: blocker });
+  const signals = {
+    needs_review: complete(4), pending: complete(4), reconciliation: { ...complete(1), status: "not_completed" },
+    connections: complete(0), posting: complete(2), categorization: complete(6), pnl: complete(0), tax_review: complete(12),
+  };
+  const result = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => signals } });
+  assert.deepEqual(result.metrics.blocker_populations, {
+    tax_classification_review: 12,
+    bookkeeping_review: 4,
+    pending_or_accounting_review: 4,
+    posting_errors: 2,
+    bookkeeping_feed_review_or_pending: 6,
+  });
+  assert.equal("blocker_count" in result.metrics, false);
 });
 
 function makeReadDb(store) {
