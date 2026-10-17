@@ -55,10 +55,13 @@ export async function buildTaxProfessionalReadinessPackage({ db, businessId, tax
   if (!businessId) throw new EvidenceUnavailableError("business_id_required");
   const load = loaders.readiness || loadReadinessSignals;
   const signals = await load({ db, businessId, taxYear });
-  const requiredKeys = ["needs_review", "pending", "reconciliation", "connections", "posting", "categorization", "pnl", "tax_review"];
+  const requiredKeys = ["needs_review", "pending", "connections", "posting", "pnl", "tax_review"];
   const unavailableSources = requiredKeys.filter((key) => signals[key]?.available !== true);
   const requiredAvailable = unavailableSources.length === 0;
-  const hasBlockers = requiredKeys.some((key) => Number(signals[key]?.blocker_count || 0) > 0);
+  // Pending bank activity is informational until it settles. It must not make
+  // the business look customer-actionable or be added to distinct blockers.
+  const blockerKeys = ["needs_review", "connections", "posting", "pnl", "tax_review"];
+  const hasBlockers = blockerKeys.some((key) => Number(signals[key]?.blocker_count || 0) > 0);
   const status = !requiredAvailable
     ? "readiness_unavailable"
     : hasBlockers ? "bookkeeping_attention_required" : "no_known_bookkeeping_blockers";
@@ -80,18 +83,18 @@ export async function buildTaxProfessionalReadinessPackage({ db, businessId, tax
       blocker_populations: {
         tax_classification_review: Number(signals.tax_review?.blocker_count || 0),
         bookkeeping_review: Number(signals.needs_review?.blocker_count || 0),
-        pending_or_accounting_review: Number(signals.pending?.blocker_count || 0),
-        posting_errors: Number(signals.posting?.blocker_count || 0),
-        bookkeeping_feed_review_or_pending: Number(signals.categorization?.blocker_count || 0),
+        unresolved_qbo_posting_failures: Number(signals.posting?.blocker_count || 0),
+      },
+      informational_populations: {
+        pending_awaiting_settlement: Number(signals.pending?.blocker_count || 0),
       },
       readiness_dimensions: {
-        bookkeeping_cleanup_outstanding: ["needs_review", "pending", "posting", "categorization"].some((key) => Number(signals[key]?.blocker_count || 0) > 0),
+        bookkeeping_cleanup_outstanding: ["needs_review", "posting"].some((key) => Number(signals[key]?.blocker_count || 0) > 0),
         tax_classification_questions_outstanding: Number(signals.tax_review?.blocker_count || 0) > 0,
-        reconciliation: signals.reconciliation?.status || "unavailable",
         financial_evidence_available: signals.pnl?.available === true && Number(signals.pnl?.blocker_count || 0) === 0,
         connections_available: signals.connections?.available === true && Number(signals.connections?.blocker_count || 0) === 0,
       },
-      checklist: signals,
+      checklist: Object.fromEntries(requiredKeys.map((key) => [key, signals[key]])),
     },
     warnings: ["This is bookkeeping readiness only—not tax-return readiness, filing readiness, or tax-law compliance."],
   });
@@ -252,41 +255,84 @@ export function classifyPermittedTaxSignal(row = {}) {
   return "other";
 }
 
-async function loadReadinessSignals({ db, businessId, taxYear }) {
+export async function loadReadinessSignals({ db, businessId, taxYear }) {
   const queries = await Promise.allSettled([
     countQuery(db.from("bizzy_chat_bookkeeping_feed").select("transaction_id", { count: "exact", head: true }).eq("business_id", businessId).eq("primary_feed", "needs_review")),
-    countQuery(db.from("bank_transactions").select("id", { count: "exact", head: true }).eq("business_id", businessId).or("pending.eq.true,accounting_review_required.eq.true,pending_resolution_state.eq.stale_pending_check_required")),
-    oneQuery(db.from("reconciliation_runs").select("status,period_start,period_end,last_checked_at,needs_review_count,pending_count,failed_post_count").eq("business_id", businessId).order("last_checked_at", { ascending: false }).limit(1).maybeSingle()),
+    countQuery(db.from("bizzy_chat_bookkeeping_feed").select("transaction_id", { count: "exact", head: true }).eq("business_id", businessId).eq("primary_feed", "pending")),
     Promise.all([oneQuery(db.from("quickbooks_tokens").select("realm_id,status,is_active,last_connected_at,connected_at,created_at").eq("business_id", businessId).eq("status", "active").eq("is_active", true).order("last_connected_at", { ascending: false, nullsFirst: false }).limit(1).maybeSingle()), oneQuery(db.from("plaid_items").select("status,last_success_at,last_sync_at").eq("business_id", businessId).eq("is_active", true).in("status", ["connected", "active"]).order("updated_at", { ascending: false }).limit(1).maybeSingle())]),
-    countQuery(db.from("transaction_categorizations").select("transaction_id", { count: "exact", head: true }).eq("business_id", businessId).not("post_error", "is", null)),
-    countQuery(db.from("bizzy_chat_bookkeeping_feed").select("transaction_id", { count: "exact", head: true }).eq("business_id", businessId).in("primary_feed", ["needs_review", "pending"])),
+    loadUnresolvedPostingFailures({ db, businessId }),
     oneQuery(db.from("qbo_pnl_exact_range_evidence").select("id,completeness_status,reconciliation_status,refreshed_at").eq("business_id", businessId).eq("accounting_basis", "Cash").eq("completeness_status", "complete").eq("reconciliation_status", "reconciled").order("refreshed_at", { ascending: false }).limit(1).maybeSingle()),
     countQuery(db.from("transaction_tax_classifications").select("transaction_id", { count: "exact", head: true }).eq("business_id", businessId).eq("tax_year", taxYear).eq("classification_status", "needs_review")),
   ]);
   const available = (index) => queries[index].status === "fulfilled";
   const value = (index) => available(index) ? queries[index].value : null;
-  const connection = value(3);
+  const connection = value(2);
   return {
     needs_review: signal(available(0), value(0), "bookkeeping_review_query_failed"),
     pending: signal(available(1), value(1), "pending_review_query_failed"),
-    reconciliation: buildReconciliationReadinessSignal(queries[2]),
     connections: {
-      available: available(3) && !!connection?.[0]?.realm_id && !!connection?.[1],
+      available: available(2) && !!connection?.[0]?.realm_id && !!connection?.[1],
       blocker_count: connection?.[0]?.realm_id && connection?.[1] ? 0 : 1,
-      unavailable_reason: !available(3) ? "connection_health_query_failed" : (!connection?.[0]?.realm_id || !connection?.[1]) ? "required_connection_evidence_missing" : null,
+      unavailable_reason: !available(2) ? "connection_health_query_failed" : (!connection?.[0]?.realm_id || !connection?.[1]) ? "required_connection_evidence_missing" : null,
       qbo_last_connection_at: connection?.[0]?.last_connected_at || connection?.[0]?.connected_at || connection?.[0]?.created_at || null,
       plaid_last_sync_at: connection?.[1]?.last_success_at || connection?.[1]?.last_sync_at || null,
     },
-    posting: signal(available(4), value(4), "posting_error_query_failed"),
-    categorization: signal(available(5), value(5), "bookkeeping_feed_query_failed"),
+    posting: signal(available(3), value(3), "posting_error_query_failed"),
     pnl: {
-      available: available(6) && !!value(6),
-      blocker_count: value(6) ? 0 : 1,
-      unavailable_reason: !available(6) ? "financial_evidence_query_failed" : !value(6) ? "verified_cash_pnl_missing" : null,
-      evidence_id: value(6)?.id || null,
+      available: available(4) && !!value(4),
+      blocker_count: value(4) ? 0 : 1,
+      unavailable_reason: !available(4) ? "financial_evidence_query_failed" : !value(4) ? "verified_cash_pnl_missing" : null,
+      evidence_id: value(4)?.id || null,
     },
-    tax_review: signal(available(7), value(7), "tax_review_query_failed"),
+    tax_review: signal(available(5), value(5), "tax_review_query_failed"),
   };
+}
+
+export async function loadUnresolvedPostingFailures({ db, businessId, pageSize = TAX_PAGE_SIZE }) {
+  const candidates = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db.from("bookkeeping_posting_jobs")
+      .select("transaction_id,state,attempt_count,qbo_txn_id")
+      .eq("business_id", businessId).eq("state", "failed")
+      .gt("attempt_count", 0).is("qbo_txn_id", null)
+      .order("transaction_id", { ascending: true }).range(from, from + pageSize - 1);
+    if (error) throw error;
+    candidates.push(...(data || []));
+    if (!data?.length || data.length < pageSize) break;
+  }
+  const uniqueCandidates = uniqueRowsByTransaction(candidates, "duplicate_posting_failure_job");
+  if (!uniqueCandidates.length) return 0;
+
+  const feedRows = [];
+  const receiptRows = [];
+  for (let index = 0; index < uniqueCandidates.length; index += TRANSACTION_LOOKUP_CHUNK_SIZE) {
+    const ids = uniqueCandidates.slice(index, index + TRANSACTION_LOOKUP_CHUNK_SIZE).map((row) => row.transaction_id);
+    const [feedResult, receiptResult] = await Promise.all([
+      db.from("bizzy_chat_bookkeeping_feed")
+        .select("transaction_id,primary_feed,posting_outcome,qbo_entity_id")
+        .eq("business_id", businessId).in("transaction_id", ids)
+        .order("transaction_id", { ascending: true }),
+      db.from("qbo_posted_transactions")
+        .select("transaction_id,status,qbo_txn_id")
+        .eq("business_id", businessId).in("transaction_id", ids)
+        .eq("status", "posted")
+        .order("transaction_id", { ascending: true }),
+    ]);
+    if (feedResult.error) throw feedResult.error;
+    if (receiptResult.error) throw receiptResult.error;
+    feedRows.push(...(feedResult.data || []));
+    receiptRows.push(...(receiptResult.data || []));
+  }
+  const feedByTransaction = new Map(uniqueRowsByTransaction(feedRows, "duplicate_posting_failure_feed_record")
+    .map((row) => [row.transaction_id, row]));
+  const successfulReceiptIds = new Set(receiptRows.filter((row) => row.qbo_txn_id).map((row) => row.transaction_id));
+  return uniqueCandidates.filter((job) => {
+    const feed = feedByTransaction.get(job.transaction_id);
+    return !successfulReceiptIds.has(job.transaction_id)
+      && feed?.primary_feed === "handled"
+      && feed.posting_outcome === "failed"
+      && !feed.qbo_entity_id;
+  }).length;
 }
 
 export function buildReconciliationReadinessSignal(settledQuery) {

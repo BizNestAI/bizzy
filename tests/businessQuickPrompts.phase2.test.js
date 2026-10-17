@@ -91,14 +91,16 @@ test("blocked-but-complete tax-professional readiness proceeds as usable tenant-
     reconciliation: { status: "unavailable", difference: null }, formula_version: "tax-bookkeeping-evidence-v2", warnings: ["Bookkeeping readiness only."],
     metrics: {
       status: "bookkeeping_attention_required", has_blockers: true, unavailable_sources: [],
-      blocker_populations: { tax_classification_review: 12, bookkeeping_review: 1, pending_or_accounting_review: 2, posting_errors: 0, bookkeeping_feed_review_or_pending: 2 },
-      readiness_dimensions: { reconciliation: "not_completed", financial_evidence_available: true, connections_available: true },
+      blocker_populations: { tax_classification_review: 12, bookkeeping_review: 1, unresolved_qbo_posting_failures: 0 },
+      informational_populations: { pending_awaiting_settlement: 2 },
+      readiness_dimensions: { bookkeeping_cleanup_outstanding: true, tax_classification_questions_outstanding: true, financial_evidence_available: true, connections_available: true },
     },
   };
   const result = await buildBusinessQuickPromptEvidence({ db: {}, businessId: "biz", intent: row.intent, builders: { taxReadiness: async () => row } });
   assert.equal(result.unavailable, false);
   assert.equal(result.reasonCode, null);
-  assert.equal(result.projection.metrics.readiness_dimensions.reconciliation, "not_completed");
+  assert.equal("reconciliation" in result.projection.metrics.readiness_dimensions, false);
+  assert.equal(result.projection.metrics.informational_populations.pending_awaiting_settlement, 2);
   await assert.rejects(
     () => buildBusinessQuickPromptEvidence({ db: {}, businessId: "other", intent: row.intent, builders: { taxReadiness: async () => row } }),
     /evidence_identity_invalid/,

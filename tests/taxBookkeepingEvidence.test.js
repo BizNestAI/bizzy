@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildReconciliationReadinessSignal, buildTaxProfessionalReadinessPackage, buildTaxTransactionsNeedingReviewPackage, classifyPermittedTaxSignal, loadTaxReview } from "../src/services/evidence/taxBookkeepingEvidence.js";
+import { buildReconciliationReadinessSignal, buildTaxProfessionalReadinessPackage, buildTaxTransactionsNeedingReviewPackage, classifyPermittedTaxSignal, loadTaxReview, loadUnresolvedPostingFailures } from "../src/services/evidence/taxBookkeepingEvidence.js";
 
 const persist = async ({ packageRow }) => packageRow;
 
@@ -116,7 +116,7 @@ test("stored tax flags map only to permitted review categories", () => {
 
 test("readiness has three deterministic states and never makes tax compliance claims", async () => {
   const complete = (blocker = 0) => ({ available: true, blocker_count: blocker });
-  const base = Object.fromEntries(["needs_review", "pending", "reconciliation", "connections", "posting", "categorization", "pnl", "tax_review"].map((key) => [key, complete()]));
+  const base = Object.fromEntries(["needs_review", "pending", "connections", "posting", "pnl", "tax_review"].map((key) => [key, complete()]));
   const clear = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => base } });
   assert.equal(clear.metrics.status, "no_known_bookkeeping_blockers");
   const blocked = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => ({ ...base, needs_review: complete(2) }) } });
@@ -124,9 +124,9 @@ test("readiness has three deterministic states and never makes tax compliance cl
   assert.equal(blocked.completeness, "complete");
   assert.equal(blocked.metrics.blocker_populations.bookkeeping_review, 2);
   assert.equal("blocker_count" in blocked.metrics, false);
-  const unavailable = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => ({ ...base, reconciliation: { available: false, blocker_count: 0 } }) } });
+  const unavailable = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => ({ ...base, connections: { available: false, blocker_count: 0 } }) } });
   assert.equal(unavailable.metrics.status, "readiness_unavailable");
-  assert.deepEqual(unavailable.metrics.unavailable_sources, ["reconciliation"]);
+  assert.deepEqual(unavailable.metrics.unavailable_sources, ["connections"]);
   assert.doesNotMatch(JSON.stringify([clear, blocked, unavailable]), /ready to file|tax-law compliant|no deductions are missing/i);
 });
 
@@ -160,15 +160,16 @@ test("failed, OK, and non-OK reconciliation queries remain distinct", () => {
   assert.equal(issue.status, "issue_present");
 });
 
-test("Cash evidence plus missing reconciliation produces a complete blocked readiness package", async () => {
+test("reconciliation state is outside the customer-facing readiness contract", async () => {
   const complete = (blocker = 0) => ({ available: true, blocker_count: blocker });
   const signals = Object.fromEntries(["needs_review", "pending", "connections", "posting", "categorization", "pnl", "tax_review"].map((key) => [key, complete()]));
   signals.pnl = { available: true, blocker_count: 0, evidence_id: "cash-pnl" };
   signals.reconciliation = buildReconciliationReadinessSignal({ status: "fulfilled", value: null });
   const result = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => signals } });
   assert.equal(result.completeness, "complete");
-  assert.equal(result.metrics.status, "bookkeeping_attention_required");
-  assert.equal(result.metrics.readiness_dimensions.reconciliation, "not_completed");
+  assert.equal(result.metrics.status, "no_known_bookkeeping_blockers");
+  assert.equal("reconciliation" in result.metrics.readiness_dimensions, false);
+  assert.equal("reconciliation" in result.metrics.checklist, false);
   assert.equal(result.metrics.readiness_dimensions.financial_evidence_available, true);
   assert.deepEqual(result.metrics.unavailable_sources, []);
 });
@@ -183,11 +184,54 @@ test("readiness keeps overlapping blocker populations separate instead of summin
   assert.deepEqual(result.metrics.blocker_populations, {
     tax_classification_review: 12,
     bookkeeping_review: 4,
-    pending_or_accounting_review: 4,
-    posting_errors: 2,
-    bookkeeping_feed_review_or_pending: 6,
+    unresolved_qbo_posting_failures: 2,
   });
+  assert.deepEqual(result.metrics.informational_populations, { pending_awaiting_settlement: 4 });
   assert.equal("blocker_count" in result.metrics, false);
+});
+
+test("audited readiness snapshot remains dynamically separated without reconciliation claims", async () => {
+  const available = (blocker_count) => ({ available: true, blocker_count });
+  const result = await buildTaxProfessionalReadinessPackage({ db: {}, businessId: "biz", taxYear: 2026, persist, loaders: { readiness: async () => ({
+    tax_review: available(517), needs_review: available(1), pending: available(12), posting: available(0),
+    connections: available(0), pnl: available(0),
+  }) } });
+  assert.deepEqual(result.metrics.blocker_populations, {
+    tax_classification_review: 517,
+    bookkeeping_review: 1,
+    unresolved_qbo_posting_failures: 0,
+  });
+  assert.deepEqual(result.metrics.informational_populations, { pending_awaiting_settlement: 12 });
+  assert.equal(result.metrics.readiness_dimensions.bookkeeping_cleanup_outstanding, true);
+  assert.doesNotMatch(JSON.stringify(result.metrics), /reconciliation/i);
+});
+
+test("posting readiness counts only attempted unresolved failures in the current canonical lifecycle", async () => {
+  const jobs = [
+    { business_id: "biz", transaction_id: "genuine", state: "failed", attempt_count: 1, qbo_txn_id: null },
+    { business_id: "biz", transaction_id: "eligibility-only", state: "cancelled", attempt_count: 0, qbo_txn_id: null },
+    { business_id: "biz", transaction_id: "pending", state: "failed", attempt_count: 1, qbo_txn_id: null },
+    { business_id: "biz", transaction_id: "excluded", state: "failed", attempt_count: 1, qbo_txn_id: null },
+    { business_id: "biz", transaction_id: "matched", state: "failed", attempt_count: 1, qbo_txn_id: null },
+    { business_id: "other", transaction_id: "other-tenant", state: "failed", attempt_count: 2, qbo_txn_id: null },
+  ];
+  const feed = [
+    { business_id: "biz", transaction_id: "genuine", primary_feed: "handled", posting_outcome: "failed", qbo_entity_id: null },
+    { business_id: "biz", transaction_id: "pending", primary_feed: "pending", posting_outcome: "failed", qbo_entity_id: null },
+    { business_id: "biz", transaction_id: "excluded", primary_feed: "excluded", posting_outcome: "failed", qbo_entity_id: null },
+    { business_id: "biz", transaction_id: "matched", primary_feed: "matched", posting_outcome: "failed", qbo_entity_id: null },
+  ];
+  const result = await loadUnresolvedPostingFailures({ db: makeReadDb({ bookkeeping_posting_jobs: jobs, bizzy_chat_bookkeeping_feed: feed, qbo_posted_transactions: [] }), businessId: "biz", pageSize: 2 });
+  assert.equal(result, 1);
+});
+
+test("a successful QBO receipt supersedes an earlier attempted failure", async () => {
+  const store = {
+    bookkeeping_posting_jobs: [{ business_id: "biz", transaction_id: "resolved", state: "failed", attempt_count: 2, qbo_txn_id: null }],
+    bizzy_chat_bookkeeping_feed: [{ business_id: "biz", transaction_id: "resolved", primary_feed: "handled", posting_outcome: "failed", qbo_entity_id: null }],
+    qbo_posted_transactions: [{ business_id: "biz", transaction_id: "resolved", status: "posted", qbo_txn_id: "qbo-1" }],
+  };
+  assert.equal(await loadUnresolvedPostingFailures({ db: makeReadDb(store), businessId: "biz" }), 0);
 });
 
 function makeReadDb(store) {
@@ -195,16 +239,20 @@ function makeReadDb(store) {
   return {
     ranges,
     from(table) {
-      const state = { table, filters: [], ids: null, from: 0, to: Number.MAX_SAFE_INTEGER, count: null };
+      const state = { table, filters: [], greaterThan: [], nulls: [], ids: null, from: 0, to: Number.MAX_SAFE_INTEGER, count: null };
       const query = {
         select(_columns, options = {}) { state.count = options.count || null; return query; },
         eq(column, value) { state.filters.push([column, value]); return query; },
+        gt(column, value) { state.greaterThan.push([column, value]); return query; },
+        is(column, value) { state.nulls.push([column, value]); return query; },
         in(column, values) { state.ids = [column, new Set(values)]; return query; },
         order() { return query; },
         range(from, to) { state.from = from; state.to = to; ranges.push({ table, from, to }); return query; },
         then(resolve, reject) {
           try {
             let rows = [...(store[table] || [])].filter((row) => state.filters.every(([column, value]) => row[column] === value));
+            rows = rows.filter((row) => state.greaterThan.every(([column, value]) => Number(row[column]) > Number(value)));
+            rows = rows.filter((row) => state.nulls.every(([column, value]) => value === null ? row[column] == null : row[column] === value));
             if (state.ids) rows = rows.filter((row) => state.ids[1].has(row[state.ids[0]]));
             rows.sort((left, right) => String(left.transaction_id || left.id).localeCompare(String(right.transaction_id || right.id)));
             const count = rows.length;
