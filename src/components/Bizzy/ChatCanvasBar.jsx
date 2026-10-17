@@ -3,6 +3,7 @@ import BizzyChatComposer from "./BizzyChatComposer";
 import ChatGateNotice from "./ChatGateNotice";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import { ONBOARDING_PROMPTS } from "../../config/chatQuickPrompts";
+import { normalizeChatPromptInput } from "../../utils/chatPromptInput";
 
 export default function ChatCanvasBar({
   isOnboardingMode = false,
@@ -34,13 +35,18 @@ export default function ChatCanvasBar({
     await sendMessage(text, { openCanvas: true, module: currentModule });
   };
 
-  const handlePromptClick = async (text) => {
+  const handlePromptClick = async (promptInput) => {
+    const { text, intent } = normalizeChatPromptInput(promptInput);
     if (chatReadOnly) return;
     if (!text || isLoading) return;
     const access = await checkChatAccess?.();
     if (!access?.allowed) return;
     setInput("");
-    await sendMessage(text, { openCanvas: true, module: currentModule });
+    await sendMessage(text, {
+      intent: intent || "general",
+      openCanvas: true,
+      module: currentModule,
+    });
   };
 
   // Prefill chat input (e.g., follow-up suggestions)

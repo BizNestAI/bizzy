@@ -14,6 +14,7 @@ import { useBizzyChat } from '../hooks/useBizzyChat';
 import { useBusiness } from './BusinessContext';
 import { useAdminView } from './AdminViewContext.jsx';
 import { apiUrl, safeFetch } from '../utils/safeFetch';
+import { normalizeChatPromptInput } from '../utils/chatPromptInput';
 
 const BizzyChatContext = createContext(null);
 export const useBizzyChatContext = () => useContext(BizzyChatContext);
@@ -248,8 +249,9 @@ export const BizzyChatProvider = ({ children }) => {
   };
 
   // ---------------- Send message / intent ----------------
-  const sendMessage = async (text, options = {}) => {
-    if (!text || (typeof text === 'string' && !text.trim())) return;
+  const sendMessage = async (promptInput, options = {}) => {
+    const normalizedInput = normalizeChatPromptInput(promptInput);
+    if (!normalizedInput.text) return;
     if (adminView.active) {
       setChatGateNotice({
         blocked: true,
@@ -259,6 +261,10 @@ export const BizzyChatProvider = ({ children }) => {
       return;
     }
     const { newThread = false, ...messageOptions } = options || {};
+    const resolvedMessageOptions = {
+      ...messageOptions,
+      intent: messageOptions.intent || normalizedInput.intent || undefined,
+    };
 
     // keep legacy overlay wallet open-ish (not minimized) for consistency
     setIsChatOpen(true);
@@ -269,13 +275,13 @@ export const BizzyChatProvider = ({ children }) => {
     }
 
     // If callers ask to open the canvas, do it immediately
-    if (messageOptions.openCanvas) {
-      openCanvas(messageOptions.module);
+    if (resolvedMessageOptions.openCanvas) {
+      openCanvas(resolvedMessageOptions.module);
     }
 
-    return await hookSendMessage(text, {
-      ...messageOptions,
-      business_id: messageOptions.business_id ?? businessId,
+    return await hookSendMessage(normalizedInput.text, {
+      ...resolvedMessageOptions,
+      business_id: resolvedMessageOptions.business_id ?? businessId,
       threadId: newThread ? null : threadId,
       onThreadCreated: async (id) => {
         setThreadId(id);
@@ -381,7 +387,8 @@ export const BizzyChatProvider = ({ children }) => {
     module,
     newThread = false,
   }) => {
-    if (!text) return;
+    const normalizedInput = normalizeChatPromptInput({ text, intent });
+    if (!normalizedInput.text) return;
     if (adminView.active) {
       setChatGateNotice({
         blocked: true,
@@ -394,7 +401,7 @@ export const BizzyChatProvider = ({ children }) => {
     setIsChatOpen(true);
     setIsChatMinimized(false);
     setSuppressNextUserBubble(true);
-    suppressedUserTextRef.current = (text || '').trim();
+    suppressedUserTextRef.current = normalizedInput.text;
 
     // Ensure a clean thread when starting from outside the active conversation.
     if (newThread || !threadId) hydrate([]);
@@ -404,8 +411,8 @@ export const BizzyChatProvider = ({ children }) => {
     }
 
     try {
-      await sendMessage(text, {
-        intent,
+      await sendMessage(normalizedInput, {
+        intent: normalizedInput.intent,
         source,
         ...meta,
         newThread,

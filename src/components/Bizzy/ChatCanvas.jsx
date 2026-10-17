@@ -12,6 +12,7 @@ import { CANVAS_BAR_HEIGHT } from "../../config/chatCanvasLayout";
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
 import ChatCanvasBar from "./ChatCanvasBar";
 import UserMessageBubble from "./UserMessageBubble";
+import { normalizeChatPromptInput } from "../../utils/chatPromptInput";
 
 const WARM_TEXT = "var(--text)";
 const SCROLL_BUTTON_BAR_GAP = 16;
@@ -621,9 +622,9 @@ function MessageStream({
   const lastAnimatedTailKeyRef = useRef(null);
   const arrivalAnimationDoneRef = useRef(new Set());
   const handleFollowupClick = useCallback(
-    async (text) => {
-      const prompt = (text || "").trim();
-      if (!prompt || followupSendRef.current) return;
+    async (promptInput) => {
+      const prompt = normalizeChatPromptInput(promptInput);
+      if (!prompt.text || followupSendRef.current) return;
       followupSendRef.current = true;
       setFollowupSending(true);
       try {

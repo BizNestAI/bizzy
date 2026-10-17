@@ -9,6 +9,7 @@ import { getQuickPromptsForModule } from "../../services/prompts/quickPromptServ
 import { ONBOARDING_PROMPTS } from "../../config/chatQuickPrompts";
 import { identifyOnboardingPrompt } from "../../config/onboardingPromptBank";
 import { ACCENT_HEX } from "../../config/accent";
+import { normalizeChatPromptInput } from "../../utils/chatPromptInput";
 
 /* -------------------------------------------------- */
 const accentHexMap = {
@@ -136,8 +137,7 @@ export default function BizzyChatBar({
 
   /** Quick prompt */
   const handlePromptClick = async (prompt) => {
-    const text = typeof prompt === "string" ? prompt : prompt?.text;
-    const canonicalIntent = typeof prompt === "object" ? prompt?.intent : null;
+    const { text, intent: canonicalIntent } = normalizeChatPromptInput(prompt);
     if (chatReadOnly) return;
     if (!text || isLoading) return;
     let access = null;

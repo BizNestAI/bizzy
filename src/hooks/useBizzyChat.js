@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { getDemoMode, shouldUseDemoData } from '../services/demo/demoClient.js';
 import { apiUrl, safeFetch } from '../utils/safeFetch.js';
+import { normalizeChatPromptInput } from '../utils/chatPromptInput.js';
 
 // Lightweight intent/trigger detectors (frontend safeguards)
 const SAVE_INTENT_RE = /\b(save (this|it)?|save to docs|add to docs|put this in docs|remember this decision|keep this decision|document this)\b/i;
@@ -246,9 +247,11 @@ export const useBizzyChat = (user_id) => {
       onThreadCreated,
     } = {}
   ) => {
-    if (!userInput?.trim() || isLoading) return;
+    const normalizedInput = normalizeChatPromptInput(userInput);
+    if (!normalizedInput.text || isLoading) return;
 
-    const trimmedInput = userInput.trim();
+    const trimmedInput = normalizedInput.text;
+    const resolvedIntent = intent || normalizedInput.intent;
     const requestScope = requestScopeRef.current;
     const controller = new AbortController();
     activeRequestsRef.current.add(controller);
@@ -293,7 +296,7 @@ export const useBizzyChat = (user_id) => {
         business_id: bizId,
         data_mode: dataMode,
         message: trimmedInput,
-        ...(intent ? { intent } : {}),
+        ...(resolvedIntent ? { intent: resolvedIntent } : {}),
         context: {
           ...(context || {}),
           userRequestedNavigation,

@@ -49,7 +49,7 @@ test('quick prompts, first turns, follow-ups and persistent bars converge on sha
   const canvasBar = read('src/components/Bizzy/ChatCanvasBar.jsx');
   const companion = read('src/components/Bizzy/BizzyCompanion.jsx');
   const greeting = read('src/components/Bizzy/BizzyGreeting.jsx');
-  assert.match(context, /const startQuickPrompt = async[\s\S]*await sendMessage\(text/);
+  assert.match(context, /const startQuickPrompt = async[\s\S]*await sendMessage\(normalizedInput/);
   assert.match(context, /threadId: newThread \? null : threadId/);
   for (const source of [persistentBar, canvasBar, companion]) assert.match(source, /sendMessage\(/);
   assert.match(greeting, /startQuickPrompt\(/);
