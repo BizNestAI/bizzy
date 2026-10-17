@@ -171,8 +171,10 @@ export const useBizzyChat = (user_id) => {
           : typeof data.content === 'string'
             ? data.content
             : '';
-      const provenanceText = formatEvidenceProvenance(data?.meta?.provenance || data?.provenance);
-      const presentedText = provenanceText ? `${incomingText}\n\n${provenanceText}` : incomingText;
+      // responseText is the canonical customer-facing representation persisted
+      // in gpt_messages. Evidence provenance remains structured metadata and is
+      // never appended to ordinary chat copy on only the live-response path.
+      const presentedText = incomingText;
 
       const assistantIdx = (assistantCountRef.current || 0) + 1;
       const userAskedToSave = userRequestedSaveRef.current;
@@ -413,16 +415,3 @@ export const useBizzyChat = (user_id) => {
     clarify,
   };
 };
-
-function formatEvidenceProvenance(value) {
-  if (!value) return "";
-  const fields = [
-    ["Reporting period", formatPeriod(value.period)], ["Comparison period", formatPeriod(value.comparison_period)],
-    ["Accounting basis", value.accounting_basis], ["Currency", value.currency], ["Evidence refreshed", value.refreshed_at],
-    ["Source", value.sources?.join(", ")], ["Completeness", value.completeness], ["Reference", value.reference],
-  ].filter(([, field]) => field);
-  if (value.metrics && Object.keys(value.metrics).length) fields.splice(fields.length - 1, 0, ["Authoritative metrics", `\`${JSON.stringify(value.metrics)}\``]);
-  const warnings = [...(value.period?.is_partial ? ["Partial reporting period."] : []), ...(value.warnings || [])];
-  return ["#### Verified evidence", ...fields.map(([label, field]) => `- **${label}:** ${field}`), ...warnings.map((warning) => `- **Warning:** ${warning}`)].join("\n");
-}
-function formatPeriod(period) { return period?.start && period?.end ? `${period.start}–${period.end}` : null; }

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   BUSINESS_QUICK_PROMPT_REGISTRY_VERSION,
   resolveCanonicalBusinessQuickPrompt,
@@ -24,7 +23,7 @@ export function resolveBusinessQuickPromptRequest({ intent, message }) {
   return resolveCanonicalBusinessQuickPrompt({ intent, text: message });
 }
 
-export async function buildBusinessQuickPromptEvidence({ db, businessId, intent, requestId, now = new Date(), builders = {} }) {
+export async function buildBusinessQuickPromptEvidence({ db, businessId, intent, now = new Date(), builders = {} }) {
   const financial = builders.financial || resolveFinancialEvidencePackage;
   const taxReview = builders.taxReview || buildTaxTransactionsNeedingReviewPackage;
   const taxReadiness = builders.taxReadiness || buildTaxProfessionalReadinessPackage;
@@ -40,7 +39,7 @@ export async function buildBusinessQuickPromptEvidence({ db, businessId, intent,
     unavailable,
     reasonCode: unavailable ? packageRow.metrics?.unavailable_reason || "evidence_temporarily_unavailable" : null,
     projection: unavailable ? null : projectEvidence(packageRow),
-    provenance: buildProvenance(packageRow, requestId),
+    provenance: buildProvenance(packageRow),
   };
 }
 
@@ -58,6 +57,9 @@ export function buildCanonicalEvidenceInstruction(projection) {
     "AUTHORITATIVE BUSINESS EVIDENCE:", JSON.stringify(projection),
     "Explain only the supplied verified values. Do not recalculate, replace, extrapolate, rank again, or invent totals, percentages, periods, basis, currency, source identity, completeness, or reconciliation.",
     "If narrative language conflicts with the evidence, the evidence values control. Never describe revenue contribution as profit contribution.",
+    "Write only a clean customer-facing answer. Do not print raw evidence JSON, evidence or package IDs, schema or formula versions, provider timestamps, completeness metadata, reconciliation metadata, or an internal verification appendix.",
+    "When useful, identify the source briefly in natural language, for example: QuickBooks · Cash basis · October 1–16.",
+    "Clearly disclose a partial reporting period and every supplied material warning in customer-friendly language.",
   ].join("\n");
 }
 
@@ -79,11 +81,17 @@ function projectEvidence(row) {
   if (row.completeness !== "complete") return null;
   return { intent: row.intent, metrics: row.metrics, warnings: row.warnings, sources: row.sources, schema_version: row.schema_version, formula_version: row.formula_version };
 }
-function buildProvenance(row, requestId) {
+function buildProvenance(row) {
   const sources = (row.sources || []).map((source) => source.type === "qbo_profit_and_loss" ? "QuickBooks Profit and Loss" : String(source.name || source.type || "Bookkeeping workflow"));
-  return { period: row.period, comparison_period: row.comparison_period, accounting_basis: row.accounting_basis, currency: row.currency, refreshed_at: latestRefresh(row.sources), sources, completeness: row.completeness, reconciliation: row.reconciliation, metrics: row.metrics || {}, warnings: row.warnings || [], reference: `ev-${createHash("sha256").update(`${row.id}:${requestId}`).digest("hex").slice(0, 12)}` };
+  return {
+    period: row.period,
+    comparison_period: row.comparison_period,
+    accounting_basis: row.accounting_basis,
+    currency: row.currency,
+    sources,
+    warnings: row.warnings || [],
+  };
 }
-function latestRefresh(sources = []) { return sources.map((source) => source.refreshed_at || source.generated_at).filter(Boolean).sort().at(-1) || null; }
 function yearInUtc(date) { return date.getUTCFullYear(); }
 
 export class BusinessQuickPromptError extends Error {

@@ -55,7 +55,14 @@ test("financial execution accepts only tenant-bound Cash reconciled Phase 1 pack
   const result = await buildBusinessQuickPromptEvidence({ db: {}, businessId: "biz", intent: row.intent, requestId: "req", builders: { financial: async () => row } });
   assert.equal(result.projection.accounting_basis, "Cash");
   assert.deepEqual(result.provenance.sources, ["QuickBooks Profit and Loss"]);
-  assert.match(buildCanonicalEvidenceInstruction(result.projection), /Do not recalculate, replace, extrapolate, rank again, or invent/);
+  assert.deepEqual(Object.keys(result.provenance).sort(), ["accounting_basis", "comparison_period", "currency", "period", "sources", "warnings"]);
+  assert.equal(result.provenance.metrics, undefined);
+  assert.equal(result.provenance.reference, undefined);
+  assert.equal(result.provenance.refreshed_at, undefined);
+  const instruction = buildCanonicalEvidenceInstruction(result.projection);
+  assert.match(instruction, /Do not recalculate, replace, extrapolate, rank again, or invent/);
+  assert.match(instruction, /Do not print raw evidence JSON, evidence or package IDs/);
+  assert.match(instruction, /Clearly disclose a partial reporting period/);
   await assert.rejects(() => buildBusinessQuickPromptEvidence({ db: {}, businessId: "other", intent: row.intent, requestId: "req", builders: { financial: async () => row } }), /evidence_identity_invalid/);
   await assert.rejects(() => buildBusinessQuickPromptEvidence({ db: {}, businessId: "biz", intent: row.intent, requestId: "req", builders: { financial: async () => ({ ...row, accounting_basis: "Accrual" }) } }), /cash_basis_required/);
 });
@@ -84,4 +91,16 @@ test("UI and server contracts preserve onboarding and enforce accessible overflo
   assert.match(handler, /evidence_package_id: bundle\.canonicalEvidencePackageId/);
   assert.match(settings, /readOnly=\{ownerAdministrationDisabled\}/);
   assert.doesNotMatch(row + bar, /supabaseAdmin|quickbooksTokenService|openai|node-fetch/i);
+});
+
+test("live and reloaded financial replies share the persisted customer-facing representation", () => {
+  const hook = read("src/hooks/useBizzyChat.js");
+  const handler = read("src/api/gpt/brain/generateBizzyResponse.js");
+  const history = read("src/context/BizzyChatContext.jsx");
+  assert.match(hook, /const presentedText = incomingText/);
+  assert.doesNotMatch(hook, /Verified evidence|Authoritative metrics|Evidence refreshed|JSON\.stringify\(value\.metrics\)/);
+  assert.match(handler, /content\s*:\s*bizzyReply/);
+  assert.match(handler, /responseText:\s*bizzyReply/);
+  assert.match(handler, /evidence_package_id: bundle\.canonicalEvidencePackageId \|\| null/);
+  assert.match(history, /text: m\.content/);
 });
