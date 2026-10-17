@@ -1,24 +1,50 @@
 import { randomUUID } from "node:crypto";
 import { PACKAGE_SCHEMA_VERSION, EvidenceUnavailableError } from "./exactRangePnlEvidence.js";
 
-export const TAX_BOOKKEEPING_FORMULA_VERSION = "tax-bookkeeping-evidence-v1";
+export const TAX_BOOKKEEPING_FORMULA_VERSION = "tax-bookkeeping-evidence-v2";
 const MAX_REFERENCES = 25;
+const MAX_ACTIONABLE_EXAMPLES = 10;
+const TAX_PAGE_SIZE = 500;
+const TRANSACTION_LOOKUP_CHUNK_SIZE = 100;
 
 export async function buildTaxTransactionsNeedingReviewPackage({ db, businessId, taxYear, loaders = {}, persist = persistPackage }) {
   if (!businessId) throw new EvidenceUnavailableError("business_id_required");
   const loadBookkeeping = loaders.bookkeeping || loadBookkeepingReview;
   const loadTax = loaders.tax || loadTaxReview;
   const [bookkeeping, tax] = await Promise.all([loadBookkeeping({ db, businessId }), loadTax({ db, businessId, taxYear })]);
-  const references = dedupeReferences([...bookkeeping.references, ...tax.references]).slice(0, MAX_REFERENCES);
+  const categoryTotal = sumCategoryCounts(tax.by_category);
+  if (categoryTotal !== tax.count) throw new EvidenceUnavailableError("tax_review_category_reconciliation_failed");
+  const taxIds = new Set(tax.transaction_ids || tax.references?.map((row) => row.transaction_id).filter(Boolean) || []);
+  const bookkeepingIds = new Set(bookkeeping.transaction_ids || bookkeeping.references?.map((row) => row.transaction_id).filter(Boolean) || []);
+  const overlapCount = [...taxIds].filter((id) => bookkeepingIds.has(id)).length;
+  const combinedDistinctCount = taxIds.size === tax.count && bookkeepingIds.size === bookkeeping.count
+    ? new Set([...taxIds, ...bookkeepingIds]).size
+    : tax.count + bookkeeping.count - overlapCount;
+  const references = dedupeReferences([...(tax.references || []), ...(bookkeeping.references || [])]).slice(0, MAX_REFERENCES);
   const packageRow = basePackage({ businessId, intent: "tax_transactions_needing_review", metrics: {
     counts: {
-      needs_review_bookkeeping: bookkeeping.count,
       tax_classifications_needing_review: tax.count,
+      needs_review_bookkeeping: bookkeeping.count,
+      combined_distinct_needing_review: combinedDistinctCount,
+      tax_bookkeeping_overlap: overlapCount,
       unresolved_owner_or_personal: tax.by_category.owner_or_personal || 0,
-      meals_or_travel_substantiation: tax.by_category.meals_or_travel || 0,
+      meals_or_travel_review: tax.by_category.meals_or_travel || 0,
       capital_asset_review: tax.by_category.capital_asset || 0,
       other_tax_classification_blockers: tax.by_category.other || 0,
     },
+    tax_category_breakdown: { ...tax.by_category },
+    reconciliation: {
+      breakdown_scope: "complete_eligible_tax_population",
+      tax_distinct_count: tax.count,
+      tax_category_total: categoryTotal,
+      categories_reconciled: categoryTotal === tax.count,
+      bookkeeping_distinct_count: bookkeeping.count,
+      tax_bookkeeping_overlap: overlapCount,
+      combined_distinct_count: combinedDistinctCount,
+      duplicates_detected: tax.duplicates_detected || 0,
+      excluded_tax_records: tax.excluded || { pending: 0, archived: 0, missing_transaction: 0 },
+    },
+    actionable_examples: (tax.examples || []).slice(0, MAX_ACTIONABLE_EXAMPLES),
     bounded_references: references,
     reference_limit: MAX_REFERENCES,
   }, warnings: ["This identifies recorded bookkeeping and tax-classification review items; it does not identify missing deductions."] });
@@ -46,27 +72,148 @@ export async function buildTaxProfessionalReadinessPackage({ db, businessId, tax
 }
 
 async function loadBookkeepingReview({ db, businessId }) {
-  const { data, error, count } = await db.from("bizzy_chat_bookkeeping_feed")
-    .select("transaction_id,transaction_date,primary_feed,posting_outcome", { count: "exact" })
-    .eq("business_id", businessId).eq("primary_feed", "needs_review")
-    .order("transaction_date", { ascending: false }).limit(MAX_REFERENCES);
-  if (error) throw error;
-  return { count: Number(count ?? data?.length ?? 0), references: (data || []).map((row) => ({ transaction_id: row.transaction_id, date: row.transaction_date, signal: "bookkeeping_needs_review", status: row.posting_outcome || row.primary_feed })) };
+  const rows = [];
+  let expectedCount = null;
+  for (let from = 0; ; from += TAX_PAGE_SIZE) {
+    const { data, error, count } = await db.from("bizzy_chat_bookkeeping_feed")
+      .select("transaction_id,transaction_date,primary_feed,posting_outcome", { count: from === 0 ? "exact" : undefined })
+      .eq("business_id", businessId).eq("primary_feed", "needs_review")
+      .order("transaction_id", { ascending: true }).range(from, from + TAX_PAGE_SIZE - 1);
+    if (error) throw error;
+    if (from === 0 && count != null) expectedCount = Number(count);
+    rows.push(...(data || []));
+    if (!data?.length || data.length < TAX_PAGE_SIZE || (expectedCount != null && rows.length >= expectedCount)) break;
+  }
+  if (expectedCount != null && rows.length !== expectedCount) throw new EvidenceUnavailableError("bookkeeping_review_pagination_incomplete");
+  const uniqueRows = uniqueRowsByTransaction(rows, "duplicate_bookkeeping_review_record");
+  const recentRows = [...uniqueRows].sort((left, right) => String(right.transaction_date || "").localeCompare(String(left.transaction_date || "")));
+  return {
+    count: uniqueRows.length,
+    transaction_ids: uniqueRows.map((row) => row.transaction_id),
+    references: recentRows.slice(0, MAX_REFERENCES).map((row) => ({ transaction_id: row.transaction_id, date: row.transaction_date, signal: "bookkeeping_needs_review", status: row.posting_outcome || row.primary_feed })),
+  };
 }
 
-async function loadTaxReview({ db, businessId, taxYear }) {
-  const { data, error, count } = await db.from("transaction_tax_classifications")
-    .select("transaction_id,tax_category,deductibility_status,classification_status,requires_review,metadata", { count: "exact" })
-    .eq("business_id", businessId).eq("tax_year", taxYear).eq("classification_status", "needs_review")
-    .limit(MAX_REFERENCES);
-  if (error) throw error;
+export async function loadTaxReview({ db, businessId, taxYear, pageSize = TAX_PAGE_SIZE }) {
+  const rows = await loadAllTaxReviewRows({ db, businessId, taxYear, pageSize });
+  const rowsByTransaction = new Map();
+  for (const row of rows) {
+    if (!row.transaction_id) throw new EvidenceUnavailableError("tax_review_transaction_id_missing");
+    if (row.classification_status !== "needs_review" || row.requires_review !== true) throw new EvidenceUnavailableError("inconsistent_tax_review_status");
+    if (rowsByTransaction.has(row.transaction_id)) throw new EvidenceUnavailableError("duplicate_tax_review_classification");
+    rowsByTransaction.set(row.transaction_id, row);
+  }
+  const transactionDetails = await loadTransactionDetails({ db, businessId, transactionIds: [...rowsByTransaction.keys()] });
+  const detailById = new Map(transactionDetails.map((row) => [row.id, row]));
   const by_category = { owner_or_personal: 0, meals_or_travel: 0, capital_asset: 0, other: 0 };
-  const references = (data || []).map((row) => {
+  const eligible = [];
+  const excluded = { pending: 0, archived: 0, missing_transaction: 0 };
+  for (const row of rows) {
+    const transaction = detailById.get(row.transaction_id);
+    if (!transaction) { excluded.missing_transaction += 1; continue; }
+    if (transaction.pending === true) { excluded.pending += 1; continue; }
+    if (transaction.is_archived === true || transaction.archived_at) { excluded.archived += 1; continue; }
     const category = classifyPermittedTaxSignal(row);
     by_category[category] += 1;
-    return { transaction_id: row.transaction_id, signal: category, status: "needs_review" };
-  });
-  return { count: Number(count ?? data?.length ?? 0), by_category, references };
+    eligible.push({ row, transaction, category });
+  }
+  const prioritized = eligible.sort(compareReviewPriority);
+  const examples = prioritized.slice(0, MAX_ACTIONABLE_EXAMPLES).map(toActionableExample);
+  const references = prioritized.slice(0, MAX_REFERENCES).map(({ row, transaction, category }) => ({
+    transaction_id: row.transaction_id,
+    date: row.transaction_date || transaction.date || null,
+    signal: category,
+    status: "needs_review",
+  }));
+  return {
+    count: eligible.length,
+    by_category,
+    references,
+    examples,
+    transaction_ids: eligible.map(({ row }) => row.transaction_id),
+    duplicates_detected: 0,
+    excluded,
+  };
+}
+
+async function loadAllTaxReviewRows({ db, businessId, taxYear, pageSize }) {
+  if (!Number.isInteger(pageSize) || pageSize < 1) throw new EvidenceUnavailableError("tax_review_page_size_invalid");
+  const rows = [];
+  let expectedCount = null;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error, count } = await db.from("transaction_tax_classifications")
+      .select("transaction_id,transaction_date,book_amount,tax_category,deductibility_status,classification_status,requires_review,reason,confidence_score,rule_priority,metadata", { count: from === 0 ? "exact" : undefined })
+      .eq("business_id", businessId).eq("tax_year", taxYear).eq("classification_status", "needs_review")
+      .order("transaction_id", { ascending: true }).range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (from === 0 && count != null) expectedCount = Number(count);
+    rows.push(...(data || []));
+    if (!data?.length || data.length < pageSize || (expectedCount != null && rows.length >= expectedCount)) break;
+  }
+  if (expectedCount != null && rows.length !== expectedCount) throw new EvidenceUnavailableError("tax_review_pagination_incomplete");
+  return rows;
+}
+
+async function loadTransactionDetails({ db, businessId, transactionIds }) {
+  const rows = [];
+  for (let index = 0; index < transactionIds.length; index += TRANSACTION_LOOKUP_CHUNK_SIZE) {
+    const ids = transactionIds.slice(index, index + TRANSACTION_LOOKUP_CHUNK_SIZE);
+    const { data, error } = await db.from("bank_transactions")
+      .select("id,date,name,merchant_name,amount,signed_amount,iso_currency_code,unofficial_currency_code,pending,is_archived,archived_at")
+      .eq("business_id", businessId).in("id", ids);
+    if (error) throw error;
+    rows.push(...(data || []));
+  }
+  return rows;
+}
+
+function compareReviewPriority(left, right) {
+  const signalDifference = reviewSignalPriority(right.row) - reviewSignalPriority(left.row);
+  if (signalDifference) return signalDifference;
+  const confidenceDifference = numericConfidence(left.row.confidence_score) - numericConfidence(right.row.confidence_score);
+  if (confidenceDifference) return confidenceDifference;
+  const amountDifference = absoluteAmount(right) - absoluteAmount(left);
+  if (amountDifference) return amountDifference;
+  const dateDifference = String(right.row.transaction_date || right.transaction.date || "").localeCompare(String(left.row.transaction_date || left.transaction.date || ""));
+  if (dateDifference) return dateDifference;
+  return String(left.row.transaction_id).localeCompare(String(right.row.transaction_id));
+}
+
+function reviewSignalPriority(row) {
+  const metadata = row.metadata || {};
+  if (metadata.substantiation_required || metadata.business_purpose_required || metadata.personal_business_mixed_use) return 3;
+  if (String(row.reason || "").trim()) return 2;
+  return row.requires_review === true ? 1 : 0;
+}
+
+function numericConfidence(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 1; }
+function absoluteAmount({ row, transaction }) { const parsed = Number(row.book_amount ?? transaction.signed_amount ?? transaction.amount); return Number.isFinite(parsed) ? Math.abs(parsed) : 0; }
+
+function toActionableExample({ row, transaction, category }) {
+  const amount = row.book_amount ?? transaction.signed_amount ?? transaction.amount;
+  const parsedAmount = Number(amount);
+  return {
+    transaction_id: row.transaction_id,
+    date: row.transaction_date || transaction.date || null,
+    merchant: transaction.merchant_name || transaction.name || null,
+    amount: Number.isFinite(parsedAmount) ? parsedAmount : null,
+    currency: transaction.iso_currency_code || transaction.unofficial_currency_code || null,
+    review_category: category,
+    review_reason: safeText(row.reason),
+    status: "needs_review",
+  };
+}
+
+function safeText(value) { const text = typeof value === "string" ? value.trim() : ""; return text ? text.slice(0, 240) : null; }
+function sumCategoryCounts(categories = {}) { return ["owner_or_personal", "meals_or_travel", "capital_asset", "other"].reduce((sum, key) => sum + Number(categories[key] || 0), 0); }
+function uniqueRowsByTransaction(rows, duplicateCode) {
+  const byId = new Map();
+  for (const row of rows) {
+    if (!row.transaction_id) throw new EvidenceUnavailableError("review_transaction_id_missing");
+    if (byId.has(row.transaction_id)) throw new EvidenceUnavailableError(duplicateCode);
+    byId.set(row.transaction_id, row);
+  }
+  return [...byId.values()];
 }
 
 export function classifyPermittedTaxSignal(row = {}) {

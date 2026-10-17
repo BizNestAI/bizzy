@@ -79,7 +79,19 @@ export function unavailableQuickPromptResponse(reasonCode, provenance) {
 function projectEvidence(row) {
   if (FINANCIAL_QUICK_PROMPT_INTENTS.has(row.intent)) return modelFacingEvidenceProjection(row);
   if (row.completeness !== "complete") return null;
-  return { intent: row.intent, metrics: row.metrics, warnings: row.warnings, sources: row.sources, schema_version: row.schema_version, formula_version: row.formula_version };
+  const metrics = row.intent === "tax_transactions_needing_review" ? customerSafeTaxReviewMetrics(row.metrics) : row.metrics;
+  return { intent: row.intent, metrics, warnings: row.warnings, sources: row.sources, schema_version: row.schema_version, formula_version: row.formula_version };
+}
+function customerSafeTaxReviewMetrics(metrics = {}) {
+  const { bounded_references: _internalReferences, ...safeMetrics } = metrics;
+  return {
+    ...safeMetrics,
+    actionable_examples: (metrics.actionable_examples || []).map((example) => {
+      const customerSafeExample = { ...example };
+      delete customerSafeExample.transaction_id;
+      return customerSafeExample;
+    }),
+  };
 }
 function buildProvenance(row) {
   const sources = (row.sources || []).map((source) => source.type === "qbo_profit_and_loss" ? "QuickBooks Profit and Loss" : String(source.name || source.type || "Bookkeeping workflow"));

@@ -67,6 +67,23 @@ test("financial execution accepts only tenant-bound Cash reconciled Phase 1 pack
   await assert.rejects(() => buildBusinessQuickPromptEvidence({ db: {}, businessId: "biz", intent: row.intent, requestId: "req", builders: { financial: async () => ({ ...row, accounting_basis: "Accrual" }) } }), /cash_basis_required/);
 });
 
+test("tax-review model projection keeps actionable facts but strips internal transaction references", async () => {
+  const row = {
+    id: "pkg", schema_version: "business-evidence-package-v1", intent: "tax_transactions_needing_review", business_id: "biz",
+    period: null, comparison_period: null, accounting_basis: null, currency: null, sources: [], completeness: "complete",
+    reconciliation: { status: "unavailable", difference: null }, formula_version: "tax-bookkeeping-evidence-v2", warnings: [],
+    metrics: {
+      counts: { tax_classifications_needing_review: 1 },
+      bounded_references: [{ transaction_id: "internal-id", signal: "other" }],
+      actionable_examples: [{ transaction_id: "internal-id", date: "2026-10-10", merchant: "Example", amount: -20, currency: "USD", review_category: "other", review_reason: "Confirm treatment", status: "needs_review" }],
+    },
+  };
+  const result = await buildBusinessQuickPromptEvidence({ db: {}, businessId: "biz", intent: row.intent, builders: { taxReview: async () => row } });
+  assert.equal(result.projection.metrics.bounded_references, undefined);
+  assert.equal(result.projection.metrics.actionable_examples[0].transaction_id, undefined);
+  assert.equal(result.projection.metrics.actionable_examples[0].merchant, "Example");
+});
+
 test("sanitized status omits realm and setup uses server provider identity plus RPC only", async () => {
   const calls = [];
   const config = { status: "verified", qbo_realm_id: "hidden", provider_schema_version: "75", reporting_timezone: "America/New_York", home_currency: "USD", realm_verified_at: "r", currency_verified_at: "c", timezone_confirmed_at: "t", verified_at: "v", updated_at: "u" };
