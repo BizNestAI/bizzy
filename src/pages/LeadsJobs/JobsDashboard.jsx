@@ -153,6 +153,74 @@ function JobCostingInitialLoadingState({ type = "jobs" }) {
   );
 }
 
+function CollectionsInitialLoadingState({ message = "Loading your receivables" }) {
+  const shimmer = "animate-pulse motion-reduce:animate-none bg-white/[0.08]";
+  return (
+    <div
+      className="relative overflow-hidden rounded-[28px] border border-emerald-300/10 bg-white/[0.035] p-4 shadow-[0_28px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl sm:p-6"
+      role="status"
+      aria-live="polite"
+      aria-label={message}
+    >
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/45 to-transparent" />
+      <div className="mb-5 flex items-center gap-3 rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.045] px-4 py-3.5">
+        <div className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full border border-emerald-300/15 bg-emerald-300/[0.08]">
+          <div className="absolute inset-1 rounded-full border border-emerald-200/15" />
+          <RefreshCcw className="h-4 w-4 animate-spin text-emerald-200 motion-reduce:animate-none" />
+        </div>
+        <div>
+          <div className="text-sm font-semibold text-white/90">{message}</div>
+          <div className="mt-0.5 text-xs text-white/45">Preparing aging totals, outstanding invoices, and follow-up status.</div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {[0, 1].map((card) => (
+          <div key={card} className="min-h-[220px] rounded-[22px] border border-white/[0.055] bg-black/10 p-5">
+            <div className={`${shimmer} h-3 w-24 rounded-full`} />
+            <div className={`${shimmer} mt-3 h-7 w-40 rounded-lg`} />
+            <div className="mt-8 flex h-24 items-end gap-3">
+              {[42, 72, 54, 88, 64].map((height, index) => (
+                <div
+                  key={index}
+                  className={`${shimmer} flex-1 rounded-t-md`}
+                  style={{ height: `${card ? 100 - height / 2 : height}%`, animationDelay: `${index * 90}ms` }}
+                />
+              ))}
+            </div>
+            <div className="mt-5 flex gap-3">
+              <div className={`${shimmer} h-2.5 w-20 rounded-full`} />
+              <div className={`${shimmer} h-2.5 w-16 rounded-full`} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 rounded-[22px] border border-white/[0.055] bg-black/10 p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className={`${shimmer} h-4 w-36 rounded-full`} />
+            <div className={`${shimmer} mt-2.5 h-2.5 w-52 max-w-[60vw] rounded-full`} />
+          </div>
+          <div className={`${shimmer} h-8 w-20 rounded-full`} />
+        </div>
+        <div className="mt-5 divide-y divide-white/[0.055]">
+          {[0, 1, 2].map((row) => (
+            <div key={row} className="grid grid-cols-[1fr_auto] items-center gap-6 py-4 first:pt-0 last:pb-0">
+              <div className="space-y-2.5">
+                <div className={`${shimmer} h-3.5 rounded-full`} style={{ width: `${42 - row * 5}%` }} />
+                <div className={`${shimmer} h-2.5 rounded-full`} style={{ width: `${26 + row * 4}%` }} />
+              </div>
+              <div className={`${shimmer} h-4 w-16 rounded-full`} />
+            </div>
+          ))}
+        </div>
+      </div>
+      <span className="sr-only">{message}</span>
+    </div>
+  );
+}
+
 function timeAgo(iso) {
   if (!iso) return "";
   const now = Date.now();
@@ -401,11 +469,13 @@ function AgingChart({ rows, status, refreshing, onRefresh, showRefresh = true })
 function OutstandingInvoices({ rows }) {
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => {
-      const customer = getCustomerName(a).localeCompare(getCustomerName(b));
-      if (customer !== 0) return customer;
-      const customerIdentity = String(a.customer_id || "").localeCompare(String(b.customer_id || ""));
-      if (customerIdentity !== 0) return customerIdentity;
-      return getDaysOverdue(b) - getDaysOverdue(a);
+      const overdueDifference = getDaysOverdue(b) - getDaysOverdue(a);
+      if (overdueDifference !== 0) return overdueDifference;
+      const dueDateDifference = Date.parse(a.due_date || 0) - Date.parse(b.due_date || 0);
+      if (Number.isFinite(dueDateDifference) && dueDateDifference !== 0) return dueDateDifference;
+      const balanceDifference = Number(b.amount_due ?? b.balance ?? 0) - Number(a.amount_due ?? a.balance ?? 0);
+      if (balanceDifference !== 0) return balanceDifference;
+      return String(getInvoiceNumber(a)).localeCompare(String(getInvoiceNumber(b)), undefined, { numeric: true });
     });
   }, [rows]);
 
@@ -413,7 +483,7 @@ function OutstandingInvoices({ rows }) {
     <section className={`${glass} p-4 sm:p-6`} aria-label="Outstanding invoices">
       <div className="mb-4">
         <h3 className="text-lg font-semibold text-white">Outstanding invoices</h3>
-        <p className="text-sm text-white/55">Sorted by customer from QuickBooks open AR.</p>
+        <p className="text-sm text-white/55">Sorted from most overdue to least overdue.</p>
       </div>
       {!sorted.length ? (
         <div className="rounded-[18px] bg-white/[0.05] px-4 py-5 text-sm text-white/70">
@@ -8638,7 +8708,7 @@ export default function JobsDashboard() {
       <div className="w-full pt-0 pb-4">
         <div className="bizzy-page-width bizzy-page-width--workspace space-y-4">
           <ModuleHeader module="jobs" subtitle="Loading persisted QuickBooks status for Admin View." />
-          <SkeletonCard lines={5} />
+          <CollectionsInitialLoadingState message="Connecting your receivables" />
         </div>
       </div>
     );
@@ -8677,19 +8747,23 @@ export default function JobsDashboard() {
           onDismissHero={() => setHero(null)}
         />
 
-        {loading ? (
-          <div className="grid gap-4 lg:grid-cols-2">
-            <SkeletonCard lines={5} />
-            <SkeletonCard lines={5} />
-          </div>
-        ) : (
-          <AgingChart
-            rows={invoiceRows}
-            status={arStatus}
-            refreshing={syncingAr}
-            onRefresh={() => refreshAr({ force: true })}
-            showRefresh={!usingDemo && qbStatus === "connected"}
-          />
+        {loading ? <CollectionsInitialLoadingState /> : (
+          <>
+            <AgingChart
+              rows={invoiceRows}
+              status={arStatus}
+              refreshing={syncingAr}
+              onRefresh={() => refreshAr({ force: true })}
+              showRefresh={!usingDemo && qbStatus === "connected"}
+            />
+
+            <OutstandingInvoices rows={invoiceRows} />
+
+            <ArTracker
+              rows={invoiceRows}
+              onDraftFollowup={draftFollowup}
+            />
+          </>
         )}
 
         {arError ? (
@@ -8698,16 +8772,6 @@ export default function JobsDashboard() {
           </div>
         ) : null}
 
-        {loading ? <SkeletonCard lines={5} /> : <OutstandingInvoices rows={invoiceRows} />}
-
-        {loading ? (
-          <SkeletonCard lines={5} />
-        ) : (
-          <ArTracker
-            rows={invoiceRows}
-            onDraftFollowup={draftFollowup}
-          />
-        )}
       </div>
     </div>
   );
