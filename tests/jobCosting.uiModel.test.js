@@ -482,7 +482,7 @@ test("Live candidate-created jobs expose the Back to Suggested action from produ
   assert.equal(source.includes("Back to Suggested"), true);
 });
 
-test("candidate create and revert keep the user on the current Job Costing tab", async () => {
+test("candidate create moves directly to Live while revert keeps the current tab", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const approveStart = source.indexOf("const approveCandidateNew = useCallback(async (candidate) => {");
   const approveEnd = source.indexOf("const linkCandidateExisting = useCallback", approveStart);
@@ -495,7 +495,9 @@ test("candidate create and revert keep the user on the current Job Costing tab",
 
   const approveSource = source.slice(approveStart, approveEnd);
   const revertSource = source.slice(revertStart, revertEnd);
-  assert.equal(approveSource.includes('setBucketMode("live")'), false);
+  assert.equal(approveSource.includes('setBucketMode("live")'), true);
+  assert.equal(approveSource.includes("approval-preview"), false);
+  assert.equal(approveSource.includes("setCandidateApprovalPreview"), false);
   assert.equal(revertSource.includes('setBucketMode("suggested")'), false);
   assert.equal(source.includes("revertingCandidateJob ? \"scale-[0.98] opacity-55\""), true);
   assert.equal(source.includes("busy ? \"scale-[0.98] opacity-55\""), true);
@@ -739,7 +741,7 @@ test("Import Jobs opens in the dashboard-centered animated modal", async () => {
   assert.equal(importJobsSource.includes("Invoice and estimate candidates"), false);
 });
 
-test("Create Job confirmation hides duplicate-prevention implementation details", async () => {
+test("candidate link confirmation hides duplicate-prevention implementation details", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const modalStart = source.indexOf("function CandidateApprovalImpactModal({");
   const modalEnd = source.indexOf("function AddJobDrawer", modalStart);

@@ -6901,17 +6901,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
     setJobCandidateBusyId(candidate.id);
     setAssignmentError("");
     try {
-      if (!candidate.__previewConfirmed) {
-        const preview = usingDemo
-          ? buildDemoCandidateApprovalPreview(candidate, null, "create_new")
-          : (await safeFetch(apiUrl(`/api/job-costing/job-candidates/${encodeURIComponent(candidate.id)}/approval-preview`), {
-              method: "POST",
-              body: { business_id: businessId, mode: "create_new" },
-            }))?.preview;
-        if (!preview) throw new Error("Candidate approval preview was unavailable.");
-        setCandidateApprovalPreview({ candidate, preview, mode: "create_new" });
-        return;
-      }
       if (usingDemo) {
         setJobCandidates((prev) => prev.map((item) => (
           String(item.id) === String(candidate.id)
@@ -6946,6 +6935,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
             },
           ];
         });
+        setBucketMode("live");
         return;
       }
       const result = await safeFetch(apiUrl(`/api/job-costing/job-candidates/${encodeURIComponent(candidate.id)}/approve-new`), {
@@ -7008,6 +6998,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
       setJobCandidates(nextCandidates);
       writeJobCostingLiveCache(businessId, readOnly, { jobCandidates: nextCandidates });
       setAssignmentMessage(`${view.name} moved to Live Jobs.`);
+      setBucketMode("live");
       void Promise.all([loadJobCosting(), loadJobCandidates()]).catch((refreshError) => {
         console.warn("[JobCosting] post-candidate-create refresh failed", refreshError?.message || refreshError);
       });
