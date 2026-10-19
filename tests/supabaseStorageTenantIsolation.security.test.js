@@ -55,7 +55,8 @@ test("bid attachment backend no longer emits Supabase public storage URLs", () =
 
 test("financial report browser fallback does not directly sign storage paths", () => {
   assert.doesNotMatch(pnlArchiveViewer, /\.storage\s*[\r\n ]*\.from\(\s*["']financial-reports["']\s*\)\s*[\r\n ]*\.createSignedUrl/);
-  assert.match(pnlArchiveViewer, /apiFetch\(`\/api\/accounting\/pnl\/archive\/\$\{encodeURIComponent\(report\.id\)\}\/view`/);
+  assert.match(pnlArchiveViewer, /apiFetch\(`\/api\/accounting\/pnl\/archive\/\$\{encodeURIComponent\(report\.id\)\}\/content`/);
+  assert.match(pnlArchiveViewer, /URL\.createObjectURL\(blob\)/);
 });
 
 test("runtime harness includes storage cross-tenant and anonymous attacks", () => {

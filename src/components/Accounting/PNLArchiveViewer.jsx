@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Dialog, Listbox } from "@headlessui/react";
 import { FileText, Loader2 } from "lucide-react";
 import { ChevronUpDownIcon } from "@heroicons/react/20/solid";
@@ -38,8 +38,10 @@ export default function PNLArchiveViewer() {
   const [filteredMonth, setFilteredMonth] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
   const [selectedReport, setSelectedReport] = useState(null);
-  const [pdfSource, setPdfSource] = useState("bizzi");
+  const [previewError, setPreviewError] = useState(null);
   const [loadingReportKey, setLoadingReportKey] = useState(null);
+  const pdfUrlRef = useRef(null);
+  const previewRequestRef = useRef(null);
 
   const dynamicYears = useMemo(
     () => Array.from(new Set((reports || []).map((r) => r.year))).sort((a, b) => b - a),
@@ -74,6 +76,10 @@ export default function PNLArchiveViewer() {
 
   useEffect(() => {
     setReports([]);
+    previewRequestRef.current?.abort();
+    previewRequestRef.current = null;
+    if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+    pdfUrlRef.current = null;
     setPdfUrl(null);
     setSelectedReport(null);
     if (!currentBusiness?.id) {
@@ -86,13 +92,18 @@ export default function PNLArchiveViewer() {
 
   useEffect(() => {
     const cls = "pdf-modal-open";
-    if (pdfUrl) {
+    if (selectedReport) {
       document.body.classList.add(cls);
     } else {
       document.body.classList.remove(cls);
     }
     return () => document.body.classList.remove(cls);
-  }, [pdfUrl]);
+  }, [selectedReport]);
+
+  useEffect(() => () => {
+    previewRequestRef.current?.abort();
+    if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+  }, []);
 
   const filteredReports = useMemo(() => {
     return (reports || []).filter((r) => {
@@ -102,38 +113,60 @@ export default function PNLArchiveViewer() {
     });
   }, [reports, filteredYear, filteredMonth]);
 
-  async function getReportViewUrl(report) {
-    if (!currentBusiness?.id || !report?.id) return null;
-    const res = await apiFetch(`/api/accounting/pnl/archive/${encodeURIComponent(report.id)}/view`, {
-      headers: { "x-business-id": currentBusiness.id },
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-    const payload = await res.json();
-    return payload?.signed_url || null;
-  }
-
   async function openPdf(report) {
+    if (!currentBusiness?.id || !report?.id || loadingReportKey) return;
     const reportKey = `${report.year}-${report.month}`;
+    previewRequestRef.current?.abort();
+    const request = new AbortController();
+    previewRequestRef.current = request;
+    if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+    pdfUrlRef.current = null;
+    setPdfUrl(null);
+    setPreviewError(null);
+    setSelectedReport(report);
     setLoadingReportKey(reportKey);
     try {
-      const signedUrl = await getReportViewUrl(report);
-      if (!signedUrl) {
-        alert("This archived report is unavailable.");
-        return;
+      const res = await apiFetch(`/api/accounting/pnl/archive/${encodeURIComponent(report.id)}/content`, {
+        headers: { "x-business-id": currentBusiness.id },
+        cache: "no-store",
+        signal: request.signal,
+      });
+      if (!res.ok || !/^application\/pdf(?:;|$)/i.test(res.headers.get("content-type") || "")) {
+        throw new Error("report_unavailable");
       }
-
-      setPdfUrl(signedUrl);
-      setSelectedReport(report);
-      setPdfSource("bizzi");
+      const blob = await res.blob();
+      if (request.signal.aborted) return;
+      const objectUrl = URL.createObjectURL(blob);
+      pdfUrlRef.current = objectUrl;
+      setPdfUrl(objectUrl);
+    } catch {
+      if (!request.signal.aborted) setPreviewError("This archived report is unavailable.");
     } finally {
-      setLoadingReportKey(null);
+      if (previewRequestRef.current === request) {
+        previewRequestRef.current = null;
+        setLoadingReportKey(null);
+      }
     }
   }
   function closeModal() {
+    previewRequestRef.current?.abort();
+    previewRequestRef.current = null;
+    setLoadingReportKey(null);
+    if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+    pdfUrlRef.current = null;
     setPdfUrl(null);
     setSelectedReport(null);
-    setPdfSource("bizzi");
+    setPreviewError(null);
+  }
+
+  function downloadPdf() {
+    if (!pdfUrl || !selectedReport) return;
+    const link = document.createElement("a");
+    link.href = pdfUrl;
+    link.download = `${selectedReport.year}-${String(selectedReport.month).padStart(2, "0")}-pnl.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }
 
   return (
@@ -266,7 +299,7 @@ export default function PNLArchiveViewer() {
         </div>
       )}
 
-      <Dialog open={Boolean(pdfUrl)} onClose={closeModal} className="relative z-50">
+      <Dialog open={Boolean(selectedReport)} onClose={closeModal} className="relative z-50">
         <div className="bizzy-modal-main-backdrop fixed inset-0" aria-hidden="true" />
         <div className="fixed inset-0 flex items-center justify-center p-4 md:left-[var(--nav-w,0px)]">
           <Dialog.Panel className="bg-zinc-900 rounded-lg border border-zinc-700 w-full max-w-4xl max-h-[90vh] overflow-hidden">
@@ -274,13 +307,25 @@ export default function PNLArchiveViewer() {
               <Dialog.Title className="text-lg font-semibold text-white">
                 {selectedReport ? `${getMonthName(selectedReport.month)} ${selectedReport.year}` : "Report"}
                 <span className="ml-3 text-xs font-medium text-gray-400">
-                  {pdfSource === "qbo" ? "QuickBooks P&L" : "Bizzi PDF"}
+                  Bizzi PDF
                 </span>
               </Dialog.Title>
-              <button onClick={closeModal} className="text-gray-400 hover:text-white">Close</button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={downloadPdf}
+                  disabled={!pdfUrl}
+                  className="rounded-md border border-white/15 bg-white/10 px-3 py-1.5 text-sm font-medium text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Download PDF
+                </button>
+                <button type="button" onClick={closeModal} className="text-gray-400 hover:text-white">Close</button>
+              </div>
             </div>
             <div className="bg-black/60 h-[80vh]">
-              {pdfUrl ? (
+              {previewError ? (
+                <div className="flex h-full items-center justify-center p-6 text-gray-300" role="alert">{previewError}</div>
+              ) : pdfUrl ? (
                 <iframe
                   title="P&L PDF"
                   src={pdfUrl}
@@ -288,7 +333,10 @@ export default function PNLArchiveViewer() {
                   frameBorder="0"
                 />
               ) : (
-                <div className="p-6 text-gray-400">Loading PDF...</div>
+                <div className="flex h-full items-center justify-center gap-2 p-6 text-gray-300">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Loading PDF…
+                </div>
               )}
             </div>
           </Dialog.Panel>
