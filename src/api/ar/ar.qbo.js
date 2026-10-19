@@ -181,7 +181,7 @@ export async function fetchCustomersByIds({ business_id, customerIds = [] }) {
   const allCustomers = [];
   for (const chunk of chunks) {
     const escaped = chunk.map((d) => `'${String(d).replace(/'/g, "''")}'`).join(",");
-    const query = `select Id, DisplayName, ParentRef, PrimaryEmailAddr, PrimaryPhone, BillAddr from Customer where Id in (${escaped})`;
+    const query = `select Id, CompanyName, DisplayName, FullyQualifiedName, GivenName, FamilyName, ParentRef, PrimaryEmailAddr, PrimaryPhone, BillAddr from Customer where Id in (${escaped})`;
     const params = new URLSearchParams({ query, minorversion: "75" });
     const url = `${qbApiBase}/v3/company/${realmId}/query?${params.toString()}`;
 

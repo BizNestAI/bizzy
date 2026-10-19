@@ -2,6 +2,7 @@
 import { supabase } from "../../services/supabaseAdmin.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import {
+  CUSTOMER_NAME_UNAVAILABLE,
   fetchARAgingDetail,
   queryInvoicesByDocNumbers,
   fetchCustomersByIds,
@@ -9,8 +10,13 @@ import {
   fetchInvoiceById,
   queryOpenInvoices,
 } from "./ar.qbo.js";
+import {
+  daysPastDueDateOnly,
+  normalizeDateOnly,
+  projectCollectionsInvoice,
+} from "../../services/ar/collectionsInvoiceProjection.js";
 
-const toDateOnly = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+const toDateOnly = normalizeDateOnly;
 const toNumber = (v) => {
   if (v === null || v === undefined) return null;
   const num = Number(String(v).replace(/,/g, ""));
@@ -18,12 +24,7 @@ const toNumber = (v) => {
 };
 
 function computeDaysOverdue(dueDate) {
-  if (!dueDate) return null;
-  const due = new Date(dueDate);
-  if (Number.isNaN(due.getTime())) return null;
-  const now = new Date();
-  const diffMs = now.setHours(0, 0, 0, 0) - due.setHours(0, 0, 0, 0);
-  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+  return daysPastDueDateOnly(dueDate);
 }
 
 export function parseARAgingDetailToOpenItems(reportJson = {}) {
@@ -191,9 +192,7 @@ export async function syncOpenItems({ businessId, force = false, windowDays = nu
       client_name:
         item.client_name ||
         matched?.CustomerRef?.name ||
-        matched?.CustomerRef?.value ||
-        item.doc_number ||
-        "(Unknown customer)",
+        CUSTOMER_NAME_UNAVAILABLE,
       doc_number: item.doc_number,
       total_amount,
       balance,
@@ -247,8 +246,16 @@ export async function syncOpenItems({ businessId, force = false, windowDays = nu
     const parent_qbo_customer_id = is_job ? customer?.ParentRef?.value || null : null;
       const parentCustomer =
         parent_qbo_customer_id && (customerMap[parent_qbo_customer_id] || parentMap[parent_qbo_customer_id]);
-      const parent_customer_name = parentCustomer?.DisplayName || null;
-      const client_name = row.client_name || customer?.DisplayName || parentCustomer?.DisplayName || "(Unknown customer)";
+      const parent_customer_name = parentCustomer?.CompanyName || parentCustomer?.DisplayName || null;
+      const customerPersonName = [customer?.GivenName, customer?.FamilyName].filter(Boolean).join(" ");
+      const client_name =
+        customer?.CompanyName ||
+        customer?.DisplayName ||
+        customer?.FullyQualifiedName ||
+        customerPersonName ||
+        parent_customer_name ||
+        row.client_name ||
+        CUSTOMER_NAME_UNAVAILABLE;
       return {
       ...row,
       client_name,
@@ -394,7 +401,27 @@ export async function fetchTopOpenItems({ businessId, limit = null }) {
   const { data, error } = await query;
   if (error) throw new Error(error.message || "Failed to read ar_open_items");
 
-  return { rows: data || [] };
+  const rows = data || [];
+  const customerIds = [...new Set(rows.map((row) => row.qbo_customer_id).filter(Boolean))];
+  let customers = [];
+  if (customerIds.length) {
+    const customerResult = await supabase
+      .from("qbo_customers")
+      .select("business_id,realm_id,qbo_customer_id,display_name,company_name,email,fully_qualified_name,source_snapshot")
+      .eq("business_id", businessId)
+      .in("qbo_customer_id", customerIds);
+    if (customerResult.error) throw new Error(customerResult.error.message || "Failed to resolve customer identity");
+    customers = customerResult.data || [];
+  }
+  const customerMap = new Map(customers.map((customer) => [
+    `${customer.realm_id || ""}:${customer.qbo_customer_id}`,
+    customer,
+  ]));
+  const projected = rows.map((row) => projectCollectionsInvoice(
+    row,
+    customerMap.get(`${row.qbo_realm_id || ""}:${row.qbo_customer_id}`) || null
+  ));
+  return { rows: projected };
 }
 
 export async function fetchInvoiceDetails({ businessId, qboInvoiceId }) {

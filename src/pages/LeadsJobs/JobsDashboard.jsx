@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateCollectionDraft } from "../../services/ar/collectionMessageDraft.js";
+import {
+  CUSTOMER_NAME_UNAVAILABLE,
+  daysPastDueDateOnly,
+  formatDateOnly,
+  projectCollectionsInvoice,
+} from "../../services/ar/collectionsInvoiceProjection.js";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, Image as ImageIcon, Link2, Mic, Plus, RefreshCcw, Trash2, Upload, UploadCloud, Wand2, X } from "lucide-react";
@@ -163,14 +169,11 @@ function timeAgo(iso) {
 }
 
 function formatDate(date) {
-  if (!date) return "No date";
-  const parsed = new Date(date);
-  if (Number.isNaN(parsed.getTime())) return "No date";
-  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return formatDateOnly(date, { locale: undefined, month: "short", year: false }) || "No date";
 }
 
 function getCustomerName(row) {
-  return row.parent_customer_name || row.client_name || row.title || "(Unknown customer)";
+  return row.customer_display_name || row.customer?.display_name || projectCollectionsInvoice(row).customer_display_name || CUSTOMER_NAME_UNAVAILABLE;
 }
 
 function getInvoiceNumber(row) {
@@ -184,13 +187,7 @@ function getInvoiceKey(row) {
 function getDaysOverdue(row) {
   const days = Number(row.days_overdue || 0);
   if (Number.isFinite(days) && days > 0) return days;
-  if (!row.due_date) return 0;
-  const due = new Date(row.due_date);
-  if (Number.isNaN(due.getTime())) return 0;
-  const now = new Date();
-  due.setHours(0, 0, 0, 0);
-  now.setHours(0, 0, 0, 0);
-  return Math.max(0, Math.floor((now - due) / (1000 * 60 * 60 * 24)));
+  return daysPastDueDateOnly(row.due_date) ?? 0;
 }
 
 function buildAgingBuckets(rows) {
@@ -406,6 +403,8 @@ function OutstandingInvoices({ rows }) {
     return [...rows].sort((a, b) => {
       const customer = getCustomerName(a).localeCompare(getCustomerName(b));
       if (customer !== 0) return customer;
+      const customerIdentity = String(a.customer_id || "").localeCompare(String(b.customer_id || ""));
+      if (customerIdentity !== 0) return customerIdentity;
       return getDaysOverdue(b) - getDaysOverdue(a);
     });
   }, [rows]);
@@ -432,9 +431,9 @@ function OutstandingInvoices({ rows }) {
                 >
                   <div className="min-w-0">
                     <div className="font-medium text-white truncate">{getCustomerName(row)}</div>
-                    <div className="text-[11px] text-white/45 truncate">{row.title || row.external_source || "QuickBooks"}</div>
+                    <div className="text-[11px] text-white/45 truncate">Invoice #{getInvoiceNumber(row)}</div>
                   </div>
-                  <div className="text-white/75 truncate">{getInvoiceNumber(row)}</div>
+                  <div className="text-white/75 truncate">{row.customer_company_name && row.customer_given_name ? `Contact: ${[row.customer_given_name, row.customer_family_name].filter(Boolean).join(" ")}` : row.external_source || "QuickBooks"}</div>
                   <div>
                     <div className="text-white/80">{formatDate(row.due_date)}</div>
                     <div className={days > 0 ? "text-[11px] text-amber-200" : "text-[11px] text-white/45"}>
@@ -526,7 +525,7 @@ function ArTracker({ rows, onDraftFollowup }) {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <h4 className="text-sm font-semibold text-white truncate">
-                      {getCustomerName(row)} • {getInvoiceNumber(row)}
+                      {getCustomerName(row)} · Invoice {getInvoiceNumber(row)}
                     </h4>
                     <p className="text-[12px] text-white/50">
                       {money.format(row.amount_due ?? row.balance ?? 0)} due {formatDate(row.due_date)} • {getDaysOverdue(row)}d past due
@@ -534,7 +533,7 @@ function ArTracker({ rows, onDraftFollowup }) {
                   </div>
                   <div className="text-right text-[12px] text-white/55">
                     <div>Last drafted: {followups.last_drafted_at ? timeAgo(followups.last_drafted_at) : "Not yet"}</div>
-                    <div>Delivery: Copy and paste manually</div>
+                    <div>{row.customer_email ? "Delivery: Copy and paste manually" : "Customer email unavailable · Copy draft manually"}</div>
                   </div>
                 </div>
                 <div className="mt-4 grid gap-2 md:grid-cols-3">
@@ -563,6 +562,11 @@ function ArTracker({ rows, onDraftFollowup }) {
                   })}
                 </div>
                 <div className="mt-4 rounded-[16px] border border-white/10 bg-white/[0.035] p-4">
+                  {activeRound.stale ? (
+                    <div className="mb-3 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-100">
+                      Customer details updated · Regenerate draft
+                    </div>
+                  ) : null}
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="text-xs font-semibold text-white">Round {activeRound.round} collection email draft</div>
@@ -3646,22 +3650,27 @@ function JobAssignmentBoard({
       </div>
       )}
 
-      {assignmentModalMounted ? (
+      {assignmentModalMounted && typeof document !== "undefined" ? createPortal(
         <div
-          className={`bizzy-modal-main-backdrop fixed inset-0 z-[90] flex items-center justify-center px-3 py-6 transition-opacity duration-200 ease-out ${
+          data-job-costing-instruction-dialog
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="job-costing-instruction-title"
+          className={`bizzy-modal-main-backdrop fixed inset-0 z-[120] flex min-h-[100dvh] items-center justify-center overflow-y-auto px-4 py-8 transition-opacity duration-200 ease-out sm:px-6 ${
             assignmentModalVisible ? "opacity-100" : "opacity-0"
           }`}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) closeAssignmentModal();
           }}
         >
-          <div className={`w-full max-w-[860px] overflow-hidden rounded-[24px] border border-emerald-300/20 bg-[#111713] p-3 shadow-[0_28px_90px_rgba(0,0,0,0.65)] transition-all duration-200 ease-out ${
+          <div className={`w-full max-w-[780px] overflow-hidden rounded-[28px] border border-emerald-300/20 bg-[linear-gradient(145deg,#121a16_0%,#0d1210_100%)] p-4 shadow-[0_36px_120px_rgba(0,0,0,0.78),0_0_0_1px_rgba(52,211,153,0.05)] transition-all duration-200 ease-out sm:p-5 ${
             assignmentModalVisible ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-[0.97] opacity-0"
           }`}>
-            <div className="mb-3 flex items-center justify-between gap-3 px-1">
+            <div className="mb-4 flex items-center justify-between gap-4 px-1">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-200/65">Transaction Assignment</p>
-                <h2 className="mt-1 text-base font-semibold text-white">Assign by instruction</h2>
+                <h2 id="job-costing-instruction-title" className="mt-1 text-lg font-semibold tracking-tight text-white">Assign by instruction</h2>
+                <p className="mt-1 text-xs text-white/45">Describe which posted transactions belong to a Live job.</p>
               </div>
               <button
                 type="button"
@@ -3691,7 +3700,8 @@ function JobAssignmentBoard({
               startVoice={onStartVoice}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       ) : null}
     </section>
   );

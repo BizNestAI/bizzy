@@ -5,6 +5,12 @@ import { qboEnvName } from "../../utils/qboEnv.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../services/insights/contractorCfoTriggerService.js";
 import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 import { generateCollectionDraft } from "../../services/ar/collectionMessageDraft.js";
+import {
+  COLLECTION_DRAFT_TEMPLATE_VERSION,
+  isCollectionDraftStale,
+} from "../../services/ar/collectionsInvoiceProjection.js";
+
+/* global process */
 
 function getBusinessId(req) {
   const { business_id, businessId } = req.body || {};
@@ -37,18 +43,6 @@ const clampRound = (value) => {
   if (!Number.isFinite(round)) return 1;
   return Math.min(3, Math.max(1, Math.round(round)));
 };
-
-async function fetchOpenInvoiceForFollowup(businessId, qboInvoiceId) {
-  const { data, error } = await supabase
-    .from("ar_open_items")
-    .select("*")
-    .eq("business_id", businessId)
-    .eq("qbo_env", qboEnvName)
-    .eq("qbo_invoice_id", qboInvoiceId)
-    .maybeSingle();
-  if (error) throw new Error(error.message || "Failed to read invoice");
-  return data;
-}
 
 export async function syncOpenItemsHandler(req, res) {
   try {
@@ -117,6 +111,9 @@ export async function getTopOpenItemsHandler(req, res) {
             drafted_at: row.drafted_at || row.created_at || null,
             subject: row.subject || null,
             body: row.body || null,
+            qbo_customer_id: row.qbo_customer_id || null,
+            due_date: row.due_date || null,
+            ai_prompt_version: row.ai_prompt_version || null,
           });
           if (row.status === "drafted" || row.status === "draft") {
             const draftedAt = row.drafted_at || row.created_at || null;
@@ -134,8 +131,17 @@ export async function getTopOpenItemsHandler(req, res) {
     }
     const mapped = (rows || []).map((row) => ({
       id: row.id,
-      title: row.client_name || "(Unknown customer)",
-      client_name: row.client_name || "(Unknown customer)",
+      title: row.customer_display_name,
+      client_name: row.customer_display_name,
+      customer_id: row.customer_id,
+      customer: row.customer,
+      customer_display_name: row.customer_display_name,
+      customer_company_name: row.customer_company_name,
+      customer_given_name: row.customer_given_name,
+      customer_family_name: row.customer_family_name,
+      customer_email: row.customer_email,
+      customer_identity_status: row.customer_identity_status,
+      customer_identity_source: row.customer_identity_source,
       external_source: row.source === "qbo" ? "QuickBooks" : row.source || "Manual",
       external_id: row.doc_number || row.qbo_invoice_id,
       invoice_status: row.status === "partial" ? "partial" : "unpaid",
@@ -143,6 +149,8 @@ export async function getTopOpenItemsHandler(req, res) {
       total_amount: row.total_amount || null,
       qbo_invoice_id: row.qbo_invoice_id || null,
       doc_number: row.doc_number || null,
+      invoice_id: row.invoice_id,
+      invoice_number: row.invoice_number,
       invoice_date: row.invoice_date || null,
       due_date: row.due_date || null,
       days_overdue: row.days_overdue ?? 0,
@@ -150,11 +158,20 @@ export async function getTopOpenItemsHandler(req, res) {
       balance: row.balance || 0,
       last_payment_at: row.last_payment_at || null,
       parent_customer_name: row.parent_customer_name || null,
-      followups: followupMap[row.qbo_invoice_id] || {
+      followups: (() => {
+        const followups = followupMap[row.qbo_invoice_id] || {
         draft_count: 0,
         last_drafted_at: null,
         rounds: [],
-      },
+        };
+        return {
+          ...followups,
+          rounds: followups.rounds.map((followup) => ({
+            ...followup,
+            stale: isCollectionDraftStale(followup, row),
+          })),
+        };
+      })(),
     }));
     return res.status(200).json({ rows: mapped });
   } catch (err) {
@@ -256,7 +273,8 @@ export async function draftFollowupHandler(req, res) {
     }
 
     const round = clampRound(req.body?.round);
-    const invoice = await fetchOpenInvoiceForFollowup(businessId, qboInvoiceId);
+    const { rows } = await fetchTopOpenItems({ businessId });
+    const invoice = rows.find((row) => String(row.qbo_invoice_id) === String(qboInvoiceId)) || null;
     if (!invoice) return sendError(res, 404, "Invoice is not open or was not found.");
 
     const draft = generateCollectionDraft(invoice, round);
@@ -269,7 +287,10 @@ export async function draftFollowupHandler(req, res) {
       status: "drafted",
       subject: draft.subject,
       body: draft.body,
-      customer_name: invoice.client_name || invoice.parent_customer_name || null,
+      qbo_customer_id: invoice.customer_id || null,
+      doc_number: invoice.invoice_number || null,
+      client_name: invoice.customer_display_name || null,
+      customer_name: invoice.customer_display_name || null,
       invoice_number: invoice.doc_number || qboInvoiceId,
       amount_due: invoice.balance || 0,
       due_date: invoice.due_date || null,
@@ -277,6 +298,11 @@ export async function draftFollowupHandler(req, res) {
       sent_at: null,
       scheduled_for: null,
       updated_at: now,
+      ai_prompt_version: COLLECTION_DRAFT_TEMPLATE_VERSION,
+      meta: {
+        customer_identity_status: invoice.customer_identity_status,
+        customer_identity_source: invoice.customer_identity_source,
+      },
     };
 
     const { data, error } = await supabase
@@ -287,7 +313,7 @@ export async function draftFollowupHandler(req, res) {
     if (error) throw new Error(error.message || "Failed to save follow-up draft");
 
     return res.status(200).json({ ok: true, followup: data });
-  } catch (err) {
+  } catch {
     console.warn("[ar] collection draft unavailable");
     return sendError(res, 500, "Failed to draft AR follow-up");
   }

@@ -16,25 +16,18 @@ const money = (value) => {
 };
 
 const date = (value) => {
-  if (!value) return '';
-  const dateOnly = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const parsed = dateOnly
-    ? new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
-    : new Date(value);
-  if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  return formatDateOnly(value);
 };
 
 export function generateCollectionDraft(invoice = {}, roundValue = 1) {
   const round = Math.min(3, Math.max(1, Math.round(Number(roundValue) || 1)));
-  const customer = clean(invoice.client_name || invoice.parent_customer_name || invoice.customer_name);
   const invoiceNumber = clean(invoice.doc_number || invoice.invoice_number || invoice.qbo_invoice_id);
   const balance = money(invoice.balance ?? invoice.amount_due);
   const dueDate = date(invoice.due_date);
   const invoiceLabel = invoiceNumber ? `invoice ${invoiceNumber}` : 'the outstanding invoice';
   const detailParts = [balance ? `for ${balance}` : '', dueDate ? `due ${dueDate}` : ''].filter(Boolean);
   const detail = detailParts.length ? ` ${detailParts.join(', ')}` : '';
-  const greeting = customer ? `Hi ${customer},` : 'Hello,';
+  const greeting = collectionSalutation(invoice);
 
   const templates = {
     1: {
@@ -61,7 +54,13 @@ export function generateCollectionDraft(invoice = {}, roundValue = 1) {
     body: `${greeting}\n\n${selected.lead}\n\n${selected.ask}\n\nThank you,`,
     delivery: 'copy_and_paste',
     sent: false,
+    template_version: COLLECTION_DRAFT_TEMPLATE_VERSION,
   };
 }
 
 export default generateCollectionDraft;
+import {
+  COLLECTION_DRAFT_TEMPLATE_VERSION,
+  collectionSalutation,
+  formatDateOnly,
+} from "./collectionsInvoiceProjection.js";

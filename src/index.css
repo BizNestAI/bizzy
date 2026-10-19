@@ -291,6 +291,21 @@
   -webkit-backdrop-filter: blur(14px) saturate(115%);
 }
 
+/* The instruction composer is rendered in a body portal and must cover the
+   complete viewport, including the rail and any transformed dashboard shell. */
+[data-job-costing-instruction-dialog].bizzy-modal-main-backdrop {
+  inset: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(27, 102, 76, 0.12), rgba(3, 7, 6, 0.7) 48%, rgba(0, 0, 0, 0.86) 100%),
+    rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(14px) saturate(105%) brightness(68%);
+  -webkit-backdrop-filter: blur(14px) saturate(105%) brightness(68%);
+}
+
 @media (prefers-reduced-transparency: reduce) {
   .bizzy-modal-main-backdrop {
     background: rgba(0, 0, 0, 0.72);

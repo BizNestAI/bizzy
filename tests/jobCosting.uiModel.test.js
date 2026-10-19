@@ -520,6 +520,22 @@ test("Suggested Job create displays an in-card loading animation until it moves 
   assert.equal(cardSource.includes("Adding it to Live Jobs"), true);
 });
 
+test("Assign by instruction modal uses a full-viewport body portal and polished dialog semantics", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
+  const modalStart = source.indexOf('{assignmentModalMounted && typeof document !== "undefined" ? createPortal(');
+  const modalEnd = source.indexOf("function JobDeepDive", modalStart);
+  const modalSource = source.slice(modalStart, modalEnd);
+
+  assert.ok(modalStart > 0);
+  assert.ok(modalEnd > modalStart);
+  assert.equal(modalSource.includes("data-job-costing-instruction-dialog"), true);
+  assert.equal(modalSource.includes('role="dialog"'), true);
+  assert.equal(modalSource.includes('aria-modal="true"'), true);
+  assert.equal(modalSource.includes("document.body"), true);
+  assert.match(css, /\[data-job-costing-instruction-dialog\]\.bizzy-modal-main-backdrop[\s\S]*inset: 0 !important;[\s\S]*width: 100vw !important;[\s\S]*min-height: 100dvh;/);
+});
+
 test("Job Costing first-load state shows an explicit loading animation instead of empty zero data", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("function JobCostingInitialLoadingState"), true);
