@@ -5,6 +5,7 @@ import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { hasCompletedClassificationEvaluation, hasMeaningfulClassificationOutcome, isUnresolvedFallbackClassification } from "./taxClassification.repository.js";
 import { getTaxEligibilityReason } from "./taxTransactionEligibility.js";
 import { normalizePostedTransactionForTax } from "./taxTransactionNormalizer.js";
+import { deriveTaxReconciliationDisposition } from "./taxReconciliationBridge.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../bookkeeping/bookkeepingScope.js";
 
 const CHUNK_SIZE = 50;
@@ -114,6 +115,25 @@ export async function listPostedTransactionsForTax({
     counts: { eligiblePosted: count },
     warnings: collectListWarnings(paged),
   };
+}
+
+// The Tax/Reconciliations bridge needs the same active, tenant-scoped source
+// rows before Tax eligibility filters are applied. This read-only reader is
+// deliberately separate from the customer list API so an identity mismatch is
+// visible instead of being hidden by an equal aggregate count.
+export async function listTaxPostingSourceRows({
+  supabase,
+  businessId,
+  taxYear,
+  dateFrom,
+  dateTo,
+} = {}) {
+  if (!supabase) throw new Error("Supabase client required");
+  if (!businessId) throw validationError("missing_business_id", "businessId is required.");
+  const range = resolveDateRange({ taxYear, dateFrom, dateTo });
+  const bankRows = await fetchBankRows({ supabase, businessId, range });
+  const rows = await hydrateRows({ supabase, businessId, bankRows });
+  return rows.sort(compareTaxRows);
 }
 
 export async function listUnclassifiedPostedTransactions({ supabase, businessId, taxYear, limit = DEFAULT_LIMIT, offset = 0, cursor } = {}) {
@@ -424,11 +444,15 @@ function delay(ms) {
 function buildTaxRow({ bankTransaction, categorization, qboPostedTransaction, qboAccount, businessId }) {
   const normalized = normalizePostedTransactionForTax({ bankTransaction, categorization, qboPostedTransaction, qboAccount });
   const eligibilityReason = getTaxEligibilityReason({ bankTransaction, categorization, qboPostedTransaction, businessId });
-  return {
+  const row = {
     ...normalized,
     isEligible: eligibilityReason === "eligible_posted",
     eligibilityReason,
     taxTransactionStatus: eligibilityReason === "eligible_posted" ? "eligible_posted" : "excluded",
+  };
+  return {
+    ...row,
+    taxScopeDisposition: row.isEligible ? deriveTaxReconciliationDisposition(row) : null,
   };
 }
 

@@ -1,4 +1,5 @@
 import React from "react";
+import { Loader2 } from "lucide-react";
 import CardHeader from "../UI/CardHeader.jsx";
 
 const PANEL_BG = "#151717";
@@ -132,6 +133,63 @@ function MetricHeader({ children, className = "" }) {
   );
 }
 
+function LoadingLine({ className = "" }) {
+  return (
+    <div className={`relative overflow-hidden rounded-full bg-white/[0.07] motion-safe:animate-pulse motion-reduce:animate-none ${className}`}>
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-80 motion-reduce:hidden"
+        style={{
+          background:
+            "linear-gradient(110deg, transparent 0%, transparent 34%, rgba(32,216,155,0.16) 48%, transparent 62%, transparent 100%)",
+          animation: "bizzyBarSheen 2.4s ease-in-out infinite",
+        }}
+      />
+    </div>
+  );
+}
+
+function RunHistoryLoadingRows() {
+  return (
+    <>
+      <tr>
+        <td colSpan={9} className="px-4 pt-6 text-center">
+          <div role="status" aria-live="polite" aria-busy="true" className="inline-flex items-center gap-2.5 text-sm text-slate-300">
+            <span className="relative flex h-7 w-7 items-center justify-center" aria-hidden="true">
+              <span className="absolute inset-0 rounded-full border border-emerald-300/20 motion-safe:animate-ping motion-reduce:hidden" />
+              <Loader2 className="relative h-4 w-4 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
+              <span className="relative hidden h-2 w-2 rounded-full bg-emerald-200 motion-reduce:block" />
+            </span>
+            <span>Loading reconciliation history</span>
+            <span className="flex gap-1" aria-hidden="true">
+              {[0, 120, 240].map((delay) => (
+                <span
+                  key={delay}
+                  className="h-1.5 w-1.5 rounded-full bg-emerald-200 animate-dot-bounce motion-reduce:animate-none"
+                  style={{ animationDelay: `${delay}ms` }}
+                />
+              ))}
+            </span>
+          </div>
+        </td>
+      </tr>
+      {Array.from({ length: 3 }).map((_, index) => (
+        <tr key={index} aria-hidden="true" className="border-t border-white/[0.04]">
+          <td className="px-3 py-4"><LoadingLine className="h-4 w-28" /></td>
+          <td className="px-3 py-4"><LoadingLine className="h-3.5 w-4/5" /></td>
+          <td className="px-3 py-4"><LoadingLine className="ml-auto h-4 w-10" /></td>
+          <td className="px-3 py-4"><LoadingLine className="ml-auto h-4 w-8" /></td>
+          <td className="px-3 py-4"><LoadingLine className="ml-auto h-4 w-8" /></td>
+          <td className="px-3 py-4"><LoadingLine className="ml-auto h-4 w-10" /></td>
+          <td className="px-3 py-4"><LoadingLine className="ml-auto h-4 w-8" /></td>
+          <td className="px-3 py-4"><LoadingLine className="ml-auto h-4 w-8" /></td>
+          <td className="px-3 py-4"><LoadingLine className="ml-auto h-4 w-8" /></td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
 export default function ReconciliationRunHistory({
   runs = [],
   selectedRunId,
@@ -188,11 +246,7 @@ export default function ReconciliationRunHistory({
             </thead>
             <tbody className="divide-y divide-white/6">
               {loading ? (
-                <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-slate-300">
-                    Loading run history…
-                  </td>
-                </tr>
+                <RunHistoryLoadingRows />
               ) : !monthlyRuns.length ? (
                 <tr>
                   <td colSpan={9} className="px-4 py-8 text-center text-slate-300">

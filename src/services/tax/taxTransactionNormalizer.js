@@ -14,6 +14,7 @@ export function normalizePostedTransactionForTax({ bankTransaction, categorizati
   const qboTypeMismatch = Boolean(cat.qbo_txn_type && qbo.qbo_txn_type && String(cat.qbo_txn_type) !== String(qbo.qbo_txn_type));
   const qboStatus = normalizeStatus(qbo.status);
   const catStatus = normalizeStatus(cat.status);
+  const receiptBackedBizziPost = hasReceiptBackedBizziPost({ categorization: cat, qboPostedTransaction: qbo });
   const gl = buildQboGlAccountEvidence({ categorization: cat, qboPostedTransaction: qbo, qboAccount });
   const sourceWarnings = [];
 
@@ -51,6 +52,12 @@ export function normalizePostedTransactionForTax({ bankTransaction, categorizati
     categoryDetailed: bank.category_detailed || null,
     qboTxnId,
     qboTxnType,
+    categorizationQboTxnId: cat.qbo_txn_id || null,
+    categorizationQboTxnType: cat.qbo_txn_type || null,
+    qboReceiptId: qbo.id || null,
+    qboReceiptStatus: qbo.status || null,
+    qboReceiptTxnId: qbo.qbo_txn_id || null,
+    qboReceiptTxnType: qbo.qbo_txn_type || null,
     qboPostStatus: qbo.status || cat.status || null,
     qboPostedTransactionId: qbo.id || null,
     qboAccountId: gl.qboAccountId,
@@ -78,6 +85,7 @@ export function normalizePostedTransactionForTax({ bankTransaction, categorizati
       bankTransaction: Boolean(bankTransaction),
       categorizationPosted: hasPostedCategorization(categorization),
       qboPostedRecord: hasPostedQboRecord(qboPostedTransaction),
+      receiptBackedBizziPost,
       matchedQboIds: cat.qbo_txn_id && qbo.qbo_txn_id ? !qboIdMismatch : null,
     },
     sourceWarnings,
@@ -97,6 +105,13 @@ export function normalizePostedTransactionForTax({ bankTransaction, categorizati
       hasQboResponse: Boolean(qbo.response),
     },
   };
+}
+
+export function hasReceiptBackedBizziPost({ categorization = {}, qboPostedTransaction = {} } = {}) {
+  if (!hasPostedQboRecord(qboPostedTransaction)) return false;
+  const receiptQboId = String(qboPostedTransaction.qbo_txn_id || "").trim();
+  const categorizationQboId = String(categorization.qbo_txn_id || "").trim();
+  return !categorizationQboId || categorizationQboId === receiptQboId;
 }
 
 function finiteNumber(value) {

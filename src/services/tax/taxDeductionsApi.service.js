@@ -15,6 +15,8 @@ import { getTaxCategoryMeta } from "./taxCategoryCatalog.js";
 import { getTaxProfile, computeTaxProfileCompleteness } from "./taxProfile.service.js";
 import { getRequiredFederalTaxConfigSet } from "./taxRuleConfig.repository.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../bookkeeping/bookkeepingScope.js";
+import { listTaxPostingSourceRows } from "./taxPostedTransaction.repository.js";
+import { buildTaxReconciliationBridge } from "./taxReconciliationBridge.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -22,12 +24,14 @@ const SORTS = new Set(["date_desc", "date_asc", "amount_desc", "amount_asc", "co
 
 export async function getDeductionsOverview({ supabase, businessId, taxYear, asOfDate } = {}) {
   const context = requireContext({ supabase, businessId, taxYear, asOfDate });
-  const [summary, reconciliation] = await Promise.all([
+  const [summary, reconciliation, taxPostingSourceRows] = await Promise.all([
     computeTaxDeductionsSummary(context),
     safeReconciliation(context),
+    listTaxPostingSourceRows(context),
   ]);
   const setupState = await buildSetupState({ ...context, summary, reconciliation });
-  return { ...summary, reconciliation, setupState, warnings: [...summary.warnings, ...setupState.warnings] };
+  const populationBridge = buildTaxReconciliationBridge({ sourceRows: taxPostingSourceRows });
+  return { ...summary, reconciliation, populationBridge, setupState, warnings: [...summary.warnings, ...setupState.warnings] };
 }
 
 export async function listDeductionTransactions({ supabase, businessId, taxYear, asOfDate, filters = {}, pagination = {} } = {}) {

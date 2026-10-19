@@ -525,7 +525,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const completionNoticeTimerRef = useRef(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
   const refreshDeductions = deductions.refresh;
-  const classificationSummary = useMemo(() => buildDeductionClassificationSummary(deductions), [deductions]);
+  const populationBridge = deductions.overview?.populationBridge || null;
+  const classificationSummary = useMemo(
+    () => buildDeductionClassificationSummary(deductions, populationBridge),
+    [deductions, populationBridge]
+  );
   const classificationsRequired = !deductions.isDemo && classificationSummary.requiresClassification;
   const classificationActive = classificationSummary.isActiveJob;
   const prepareEligibility = useMemo(
@@ -772,25 +776,31 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           </div>
         </div>
         <ClassificationProgressSummary summary={classificationSummary} trackedPrepareRun={trackedPrepareRun} />
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
           <ClassificationStat label="Eligible" value={classificationSummary.postedTotal} />
           <ClassificationStat label="Auto-classified" value={classificationSummary.autoClassifiedTotal} />
+          <ClassificationStat label="Manual confirmed" value={classificationSummary.confirmedTotal} />
           <ClassificationStat label="Needs review" value={classificationSummary.reviewRequiredTotal} tone={classificationSummary.reviewRequiredTotal ? "amber" : "default"} />
           <ClassificationStat label="Unresolved" value={classificationSummary.unresolvedTotal} tone={classificationSummary.unresolvedTotal ? "amber" : "default"} />
           <ClassificationStat label="Excluded" value={classificationSummary.excludedTotal} />
-          <ClassificationStat
-            label="Processing"
-            value={classificationSummary.isActiveJob ? classificationSummary.remainingTotal : classificationSummary.processingTotal}
-          />
-          <ClassificationStat label="Failed" value={classificationSummary.failedTotal} tone={classificationSummary.failedTotal ? "rose" : "default"} />
         </div>
+        {classificationSummary.isActiveJob || classificationSummary.failedTotal > 0 ? (
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:max-w-[360px]">
+            {classificationSummary.isActiveJob ? (
+              <ClassificationStat label="Processing" value={classificationSummary.remainingTotal} tone="amber" />
+            ) : null}
+            {classificationSummary.failedTotal > 0 ? (
+              <ClassificationStat label="Failed" value={classificationSummary.failedTotal} tone="rose" />
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <WorkspaceViewTabs value={workspaceView} onChange={setWorkspaceView} />
 
       {workspaceView === "overview" ? (
         <>
-          <MatrixAuthoritySummary totals={matrixTotals} transactionCount={matrix.transactionCount} />
+          <MatrixAuthoritySummary totals={matrixTotals} transactionCount={matrix.transactionCount} populationBridge={populationBridge} />
           <DeductionAccountMatrix
             matrix={matrix}
             classificationsRequired={classificationsRequired}
@@ -968,29 +978,70 @@ function FilterTabButton({ tab, selected, count = null, onClick }) {
   );
 }
 
-function MatrixAuthoritySummary({ totals, transactionCount }) {
+function MatrixAuthoritySummary({ totals, transactionCount, populationBridge = null }) {
   const confirmedBreakdown = [
     `${totals.autoTransactionCount} Bizzi-classified`,
     totals.userConfirmedTransactionCount ? `${totals.userConfirmedTransactionCount} confirmed by you` : null,
     totals.accountantConfirmedTransactionCount ? `${totals.accountantConfirmedTransactionCount} confirmed by accountant` : null,
   ].filter(Boolean).join(" · ");
+  const bridgeScope = populationBridge?.tax_scope || null;
+  const bridgeIdentity = populationBridge?.identity_comparison || null;
+  const matrixCount = bridgeScope?.deductions_matrix_expense_count ?? transactionCount;
+  const evaluatedCount = bridgeScope?.posted_transactions_evaluated_count ?? null;
+  const outsideCount = bridgeScope?.posted_non_expense_outside_deductions_count ?? null;
+  const dispositionLabels = {
+    income_outside_deductions: "income / other income",
+    transfer_or_card_payment_not_deduction: "transfers / card payments",
+    owner_or_equity_not_deduction: "owner / equity activity",
+    refund_credit_or_asset_not_deduction: "refunds, credits, assets, or balance-sheet activity",
+    incomplete_or_unresolved: "incomplete QBO evidence",
+  };
+  const outsideBreakdown = Object.entries(bridgeScope?.dispositions || {})
+    .filter(([key, count]) => key !== "expense_cogs_in_matrix" && Number(count || 0) > 0)
+    .map(([key, count]) => `${count} ${dispositionLabels[key] || key.replace(/_/g, " ")}`);
   return (
-    <div className="mt-4 grid gap-2 md:grid-cols-3">
-      <div className="rounded-2xl border border-emerald-300/12 bg-emerald-300/[0.045] px-3 py-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-emerald-100/54">Confirmed deductions</div>
-        <div className="mt-1 text-xl font-semibold tabular-nums text-emerald-50">{formatCurrencyLocal(totals.authoritativeDeductibleTotal)}</div>
-        <div className="mt-0.5 text-xs text-white/42">{confirmedBreakdown || "0 confirmed transactions"}</div>
+    <div className="mt-4">
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-emerald-300/12 bg-emerald-300/[0.045] px-3 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-emerald-100/54">Confirmed deductions</div>
+          <div className="mt-1 text-xl font-semibold tabular-nums text-emerald-50">{formatCurrencyLocal(totals.authoritativeDeductibleTotal)}</div>
+          <div className="mt-0.5 text-xs text-white/42">{confirmedBreakdown || "0 confirmed transactions"}</div>
+        </div>
+        <div className="rounded-2xl border border-amber-300/14 bg-amber-300/[0.045] px-3 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-amber-100/58">Proposed — needs review</div>
+          <div className="mt-1 text-xl font-semibold tabular-nums text-amber-100">{formatCurrencyLocal(totals.proposedDeductibleTotal)}</div>
+          <div className="mt-0.5 text-xs text-white/42">{totals.reviewTransactionCount} review-required transactions</div>
+        </div>
+        <div className="rounded-2xl border border-white/[0.08] bg-black/16 px-3 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/42">Expense transactions in deductions</div>
+          <div className="mt-1 text-xl font-semibold tabular-nums text-white">{matrixCount}</div>
+          <div className="mt-0.5 text-xs text-white/42">posted expense rows grouped by QBO GL account · final Expense or COGS type</div>
+        </div>
+        <div className="rounded-2xl border border-sky-300/12 bg-sky-300/[0.035] px-3 py-3">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-sky-100/58">Outside deductions</div>
+          <div className="mt-1 text-xl font-semibold tabular-nums text-sky-50">{outsideCount == null ? "—" : outsideCount}</div>
+          <div className="mt-0.5 text-xs text-white/42">posted non-expense rows evaluated separately</div>
+        </div>
       </div>
-      <div className="rounded-2xl border border-amber-300/14 bg-amber-300/[0.045] px-3 py-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-amber-100/58">Proposed — needs review</div>
-        <div className="mt-1 text-xl font-semibold tabular-nums text-amber-100">{formatCurrencyLocal(totals.proposedDeductibleTotal)}</div>
-        <div className="mt-0.5 text-xs text-white/42">{totals.reviewTransactionCount} review-required transactions</div>
-      </div>
-      <div className="rounded-2xl border border-white/[0.08] bg-black/16 px-3 py-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/42">Matrix scope</div>
-        <div className="mt-1 text-xl font-semibold tabular-nums text-white">{transactionCount}</div>
-        <div className="mt-0.5 text-xs text-white/42">posted expense rows grouped by QBO GL account</div>
-      </div>
+      {bridgeScope ? (
+        <details className="mt-2 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58">
+          <summary className="cursor-pointer font-semibold text-white/74 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
+            How this total is calculated
+          </summary>
+          <div className="mt-2 space-y-1 leading-relaxed">
+            <p>
+              <span className="font-semibold text-white/82">{evaluatedCount}</span> posted transactions evaluated = <span className="font-semibold text-white/82">{matrixCount}</span> expense / COGS transactions included in deductions + <span className="font-semibold text-white/82">{outsideCount}</span> posted non-expense transactions outside deductions.
+            </p>
+            {outsideBreakdown.length ? <p>Outside deductions: {outsideBreakdown.join("; ")}.</p> : null}
+            <p>Pending Plaid items, transfers, card payments, and incomplete QBO links are never added to deductions merely to make counts match.</p>
+            {bridgeIdentity?.identity_match ? (
+              <p className="text-emerald-100/72">Reconciliations and Tax use the same {bridgeIdentity.tax_eligible_count} stable transaction IDs for this posted population.</p>
+            ) : (
+              <p className="text-amber-100/78">Reconciliations and Tax identities differ: {bridgeIdentity?.only_reconciliations_count || 0} only in Reconciliations and {bridgeIdentity?.only_tax_eligible_count || 0} only in Tax. Counts are not treated as reconciled.</p>
+            )}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -1773,11 +1824,14 @@ function PreviewSummaryList({ title, rows, nameKey }) {
   );
 }
 
-function buildDeductionClassificationSummary(deductions) {
+function buildDeductionClassificationSummary(deductions, populationBridge = null) {
   const coverage = deductions.classificationCoverage || deductions.overview?.coverage || {};
   const jobStatus = deductions.classificationJobStatus || coverage.jobStatus || coverage.job_status || null;
   const classificationStatus = coverage.classificationStatus || coverage.classification_status || null;
   const postedTotal = nullableNumber(
+    populationBridge?.tax_scope?.posted_transactions_evaluated_count
+    ?? populationBridge?.identity_comparison?.tax_eligible_count
+    ??
     coverage.postedTransactionCount
     ?? coverage.posted_transaction_count
     ?? coverage.eligiblePostedCount
@@ -1821,15 +1875,23 @@ function buildDeductionClassificationSummary(deductions) {
     ?? coverage.autoClassifiedCount
     ?? coverage.auto_classified_count
   );
+  const confirmedTotal = nullableNumber(
+    coverage.confirmedTransactionCount
+    ?? coverage.confirmed_transaction_count
+    ?? coverage.confirmedCount
+    ?? coverage.confirmed_count
+  ) ?? 0;
   const excludedTotal = nullableNumber(coverage.excludedTransactionCount ?? coverage.excluded_transaction_count ?? coverage.excludedCount);
   const processingTotal = nullableNumber(coverage.processingTransactionCount ?? coverage.processing_transaction_count ?? coverage.processingCount) ?? 0;
   const remainingTotal = jobRemaining ?? nullableNumber(coverage.remainingTransactionCount ?? coverage.remaining_transaction_count ?? coverage.remainingCount) ?? 0;
   const failedTotal = nullableNumber(coverage.failedTransactionCount ?? coverage.failed_transaction_count ?? coverage.failedCount) ?? 0;
   const lastRunAt = jobStatus?.completedAt || jobStatus?.failedAt || jobStatus?.heartbeatAt || jobStatus?.queuedAt || coverage.lastRunAt || coverage.last_run_at || deductions.classificationReviewSummary?.lastRunAt || null;
   const jobProcessed = nullableNumber(jobStatus?.processed);
-  const bucketClassified = [autoClassifiedTotal, reviewRequiredTotal, excludedTotal]
+  const unclassifiedForPrimaryCount = Math.max(0, Number(missingEvaluationTotal || 0));
+  const primaryUnresolvedTotal = Math.max(0, Number(unresolvedTotal || 0) + unclassifiedForPrimaryCount);
+  const bucketClassified = [autoClassifiedTotal, confirmedTotal, reviewRequiredTotal, excludedTotal]
     .some((value) => value != null)
-    ? Number(autoClassifiedTotal || 0) + Number(reviewRequiredTotal || 0) + Number(excludedTotal || 0)
+    ? Number(autoClassifiedTotal || 0) + Number(confirmedTotal || 0) + Number(reviewRequiredTotal || 0) + Number(excludedTotal || 0)
     : null;
   const effectiveClassified = bucketClassified ?? classifiedTotal ?? (postedTotal != null && unclassifiedTotal != null ? Math.max(0, postedTotal - unclassifiedTotal) : null);
   const requiresClassification = (postedTotal ?? 0) > 0 && ((unclassifiedTotal ?? 0) > 0 || unresolvedTotal > 0 || reviewRequiredTotal > 0 || (effectiveClassified ?? 0) === 0);
@@ -1839,9 +1901,10 @@ function buildDeductionClassificationSummary(deductions) {
     classifiedTotal: effectiveClassified,
     processedTotal: jobProcessed,
     autoClassifiedTotal,
+    confirmedTotal,
     unclassifiedTotal,
     missingEvaluationTotal,
-    unresolvedTotal,
+    unresolvedTotal: primaryUnresolvedTotal,
     reviewRequiredTotal,
     excludedTotal,
     processingTotal,
@@ -3957,6 +4020,9 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
     qboTxnId: row.qboTxnId || null,
     qboTxnType: row.qboTxnType || null,
     qboPostStatus: row.qboPostStatus || null,
+    qboAccountType: row.qboAccountType || null,
+    qboAccountSubtype: row.qboAccountSubtype || null,
+    taxScopeDisposition: row.taxScopeDisposition || null,
     bookAccount: row.qboAccountName || "Unmapped QuickBooks account",
     amount: absoluteAmount,
     signedAmount,
@@ -4013,6 +4079,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
   for (const row of rows) {
     const monthKey = getTransactionMonthKey(row.date, year);
     if (!monthKey) continue;
+    if (!isDemo && row.taxScopeDisposition && row.taxScopeDisposition !== "expense_cogs_in_matrix") continue;
     if (!isExpenseOutflow(row)) continue;
     const accountId = row.qboAccountId || row.raw?.qboAccountId || row.raw?.source_qbo_account_id || null;
     const accountName = row.qboAccountName || row.raw?.qboAccountName || row.raw?.source_qbo_account_name || null;
