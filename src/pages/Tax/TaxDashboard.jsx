@@ -28,10 +28,12 @@ import { calculateVehicleMileageDeduction } from "../../services/tax/vehicleMile
 const CURRENT_YEAR = new Date().getFullYear();
 
 export default function TaxDashboard() {
-  const { currentBusiness } = (useBusinessContext?.() || {});
+  const businessContext = useBusinessContext?.() || {};
+  const { currentBusiness } = businessContext;
   const adminView = useAdminView();
+  const contextPending = businessContext.loading || adminView.loading;
   const readOnly = adminView.active && adminView.readOnly;
-  const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || getStoredBusinessId());
+  const businessId = contextPending ? null : (adminView.active ? adminView.businessId : currentBusiness?.id) || null;
   const navigate = useNavigate();
   const taxYear = CURRENT_YEAR;
   const taxLiabilityEstimateEnabled = isTaxLiabilityEstimateEnabled();
@@ -45,7 +47,7 @@ export default function TaxDashboard() {
   const payments = useTaxPayments({ businessId, year: taxYear, enabled: taxLiabilityEstimateEnabled && Boolean(businessId) });
   const model = useMemo(() => buildTaxDashboardViewModel(tax.data), [tax.data]);
   const hasPreviousData = !!tax.data;
-  const initialLoading = taxLiabilityEstimateEnabled && tax.loading && !hasPreviousData;
+  const initialLoading = contextPending || (taxLiabilityEstimateEnabled && tax.loading && !hasPreviousData);
   const initialRequestFailed = taxLiabilityEstimateEnabled && Boolean(tax.error && !hasPreviousData && !tax.loading);
 
   useEffect(() => {
@@ -537,6 +539,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const attentionRows = useMemo(() => filterAttentionWorkspaceRows(workspaceRows, attentionTab), [workspaceRows, attentionTab]);
   const attentionGroups = useMemo(() => buildAttentionReviewGroups(attentionRows), [attentionRows]);
   const hasUsableDeductionsData = Boolean(
+    deductions.overview ||
     workspaceRows.length ||
     deductions.allTransactions ||
     deductions.transactions ||
@@ -545,11 +548,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   );
   const matrixRequestStatus = deductions.sectionStatus?.matrix || (deductions.loading ? "loading" : "idle");
   const classificationRequestStatus = deductions.sectionStatus?.classification || (deductions.loading ? "loading" : "idle");
+  const overviewRequestStatus = deductions.sectionStatus?.overview || (deductions.loading ? "loading" : "idle");
   const deductionsRenderState = resolveDeductionsRenderState({
-    sectionStatus: { matrix: matrixRequestStatus, classification: classificationRequestStatus },
+    sectionStatus: { overview: overviewRequestStatus, matrix: matrixRequestStatus, classification: classificationRequestStatus },
     hasData: hasUsableDeductionsData,
-    hasMatrixData: Boolean(deductions.allTransactions || deductions.transactions || deductions.classificationRows || deductions.postedTransactions),
-    hasClassificationData: Boolean(deductions.classificationCoverage),
+    hasSummaryData: Boolean(deductions.overview),
     refreshing: deductions.refreshing,
   });
   const initialDeductionsLoading = deductionsRenderState.showInitialLoading;
@@ -705,6 +708,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       {deductions.error && !deductions.refreshError && !initialDeductionsError ? (
         <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
           {deductions.error.message || "Deductions failed to load."}
+        </div>
+      ) : null}
+      {matrixRequestStatus === "error" && deductions.overview ? (
+        <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-sm text-amber-50" role="status">
+          Transaction details are temporarily unavailable. The persisted deduction summary remains available.
         </div>
       ) : null}
       {backfillError ? (
@@ -4333,14 +4341,6 @@ function parseLocalDate(value) {
     if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   }
   return new Date(value);
-}
-
-function getStoredBusinessId() {
-  try {
-    return localStorage.getItem("currentBusinessId") || null;
-  } catch {
-    return null;
-  }
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

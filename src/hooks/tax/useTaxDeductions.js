@@ -63,6 +63,7 @@ export function useTaxDeductions({
   const [resourceErrors, setResourceErrors] = useState({});
   const [requestStatus, setRequestStatus] = useState({
     scopeKey: null,
+    overview: "idle",
     matrix: "idle",
     classification: "idle",
   });
@@ -92,6 +93,7 @@ export function useTaxDeductions({
     setClassificationReviewSummary(null);
     setRequestStatus({
       scopeKey,
+      overview: enabled && businessId ? "loading" : "idle",
       matrix: enabled && businessId ? "loading" : "idle",
       classification: enabled && businessId ? "loading" : "idle",
     });
@@ -111,7 +113,7 @@ export function useTaxDeductions({
       setClassificationJobStatus(fixture.deductions?.coverage?.jobStatus || null);
       setClassificationRows(fixture.deductionTransactions);
       setClassificationReviewSummary(null);
-      setRequestStatus({ scopeKey, matrix: "success", classification: "success" });
+      setRequestStatus({ scopeKey, overview: "success", matrix: "success", classification: "success" });
       setLoading(false);
       setError(null);
       setResourceErrors({});
@@ -121,7 +123,7 @@ export function useTaxDeductions({
     const request = ++seq.current;
     setLoading(true);
     if (!refresh) {
-      setRequestStatus({ scopeKey, matrix: "loading", classification: "loading" });
+      setRequestStatus({ scopeKey, overview: "loading", matrix: "loading", classification: "loading" });
     }
     setError(null);
     setResourceErrors({});
@@ -150,6 +152,7 @@ export function useTaxDeductions({
         setResourceErrors(errors);
         setRequestStatus({
           scopeKey,
+          overview: overviewResult.status === "fulfilled" ? "success" : "error",
           matrix: allTransactionsResult.status === "fulfilled" ? "success" : "error",
           classification: coverageResult.status === "fulfilled" ? "success" : "error",
         });
@@ -290,6 +293,7 @@ export function useTaxDeductions({
     error,
     resourceErrors,
     sectionStatus: {
+      overview: scopedRequestStatus.overview,
       matrix: scopedRequestStatus.matrix,
       classification: scopedRequestStatus.classification,
     },
@@ -432,7 +436,10 @@ async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filte
   const rows = [];
   let latestPage = null;
   for (let offset = 0; ; offset += limit) {
-    const page = await getTaxDeductionTransactions({ businessId, year, asOfDate, filters, limit, offset, refresh, signal });
+    const page = await withBoundedReadRetry(
+      () => getTaxDeductionTransactions({ businessId, year, asOfDate, filters, limit, offset, refresh, signal }),
+      { signal }
+    );
     const pageRows = Array.isArray(page?.rows) ? page.rows : [];
     rows.push(...pageRows);
     latestPage = page;
@@ -450,6 +457,27 @@ async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filte
       hasMore: false,
     },
   };
+}
+
+export async function withBoundedReadRetry(operation, { signal, delayMs = 150 } = {}) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (signal?.aborted || error?.code === "request_aborted" || error?.retryable !== true) throw error;
+    await abortableDelay(delayMs, signal);
+    return operation();
+  }
+}
+
+function abortableDelay(delayMs, signal) {
+  if (signal?.aborted) return Promise.reject(Object.assign(new Error("Request aborted."), { code: "request_aborted" }));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, delayMs);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(Object.assign(new Error("Request aborted."), { code: "request_aborted" }));
+    }, { once: true });
+  });
 }
 
 async function fetchAllPostedTransactions({ businessId, year, refresh = false, signal }) {

@@ -130,7 +130,7 @@ export function validatePagination({ limit, offset, cursor } = {}) {
 }
 
 export function validateBusinessIdInput(req) {
-  const source = req?.params?.businessId ?? req?.body?.businessId ?? req?.body?.business_id ?? req?.query?.businessId ?? req?.query?.business_id ?? req?.businessId ?? req?.user?.business_id;
+  const source = req?.tenantContext?.businessId ?? req?.business?.id ?? req?.auth?.businessId ?? req?.businessId ?? req?.params?.businessId ?? req?.body?.businessId ?? req?.body?.business_id ?? req?.query?.businessId ?? req?.query?.business_id ?? req?.user?.business_id;
   if (!source) {
     throw validationError(TAX_ERROR_CODES.MISSING_BUSINESS_ID, "businessId is required.", { field: "businessId" });
   }

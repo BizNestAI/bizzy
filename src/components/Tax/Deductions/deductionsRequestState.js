@@ -1,21 +1,20 @@
 export function resolveScopedDeductionsRequestStatus({ requestStatus, scopeKey, enabled }) {
   if (requestStatus?.scopeKey === scopeKey) return requestStatus;
   const status = enabled ? "loading" : "idle";
-  return { scopeKey, matrix: status, classification: status };
+  return { scopeKey, overview: status, matrix: status, classification: status };
 }
 
 export function resolveDeductionsRenderState({
   sectionStatus = {},
   hasData = false,
-  hasMatrixData = hasData,
-  hasClassificationData = hasData,
+  hasSummaryData = hasData,
+  contextPending = false,
   refreshing = false,
 } = {}) {
-  const matrix = sectionStatus.matrix || "idle";
-  const classification = sectionStatus.classification || "idle";
+  const overview = sectionStatus.overview || "idle";
   return {
-    showInitialLoading: (!hasMatrixData && matrix === "loading") || (!hasClassificationData && classification === "loading"),
-    showInitialError: (!hasMatrixData && matrix === "error") || (!hasClassificationData && classification === "error"),
+    showInitialLoading: contextPending || (!hasSummaryData && overview === "loading"),
+    showInitialError: !contextPending && !hasSummaryData && overview === "error",
     showAuthoritativeData: hasData,
     showUpdating: hasData && refreshing,
   };

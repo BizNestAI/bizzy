@@ -9,18 +9,18 @@ import {
 test("a newly enabled scope is loading synchronously before its effect runs", () => {
   assert.deepEqual(
     resolveScopedDeductionsRequestStatus({
-      requestStatus: { scopeKey: ":2026::enabled", matrix: "idle", classification: "idle" },
+      requestStatus: { scopeKey: ":2026::enabled", overview: "idle", matrix: "idle", classification: "idle" },
       scopeKey: "business-1:2026::enabled",
       enabled: true,
     }),
-    { scopeKey: "business-1:2026::enabled", matrix: "loading", classification: "loading" }
+    { scopeKey: "business-1:2026::enabled", overview: "loading", matrix: "loading", classification: "loading" }
   );
 });
 
 test("unresolved initial requests render loading rather than authoritative zero data", () => {
   assert.deepEqual(
     resolveDeductionsRenderState({
-      sectionStatus: { matrix: "loading", classification: "loading" },
+      sectionStatus: { overview: "loading", matrix: "loading", classification: "loading" },
       hasData: false,
     }),
     { showInitialLoading: true, showInitialError: false, showAuthoritativeData: false, showUpdating: false }
@@ -30,7 +30,7 @@ test("unresolved initial requests render loading rather than authoritative zero 
 test("successful empty and nonempty responses do not render loading or error placeholders", () => {
   for (const hasData of [false, true]) {
     const state = resolveDeductionsRenderState({
-      sectionStatus: { matrix: "success", classification: "success" },
+      sectionStatus: { overview: "success", matrix: "success", classification: "success" },
       hasData,
     });
     assert.equal(state.showInitialLoading, false);
@@ -39,20 +39,41 @@ test("successful empty and nonempty responses do not render loading or error pla
   }
 });
 
-test("a rejected initial request renders an error and never the zero-valued data surface", () => {
+test("only a rejected authoritative overview renders the page-level error", () => {
   assert.deepEqual(
     resolveDeductionsRenderState({
-      sectionStatus: { matrix: "error", classification: "success" },
+      sectionStatus: { overview: "error", matrix: "success", classification: "success" },
       hasData: false,
     }),
     { showInitialLoading: false, showInitialError: true, showAuthoritativeData: false, showUpdating: false }
   );
 });
 
+test("a transaction-detail failure cannot replace an available persisted summary", () => {
+  assert.deepEqual(
+    resolveDeductionsRenderState({
+      sectionStatus: { overview: "success", matrix: "error", classification: "success" },
+      hasData: true,
+      hasSummaryData: true,
+    }),
+    { showInitialLoading: false, showInitialError: false, showAuthoritativeData: true, showUpdating: false }
+  );
+});
+
+test("pending canonical context stays in loading without showing a terminal error", () => {
+  assert.deepEqual(
+    resolveDeductionsRenderState({
+      sectionStatus: { overview: "error", matrix: "error", classification: "error" },
+      contextPending: true,
+    }),
+    { showInitialLoading: true, showInitialError: false, showAuthoritativeData: false, showUpdating: false }
+  );
+});
+
 test("background refresh retains authoritative values and exposes an updating status", () => {
   assert.deepEqual(
     resolveDeductionsRenderState({
-      sectionStatus: { matrix: "success", classification: "success" },
+      sectionStatus: { overview: "success", matrix: "success", classification: "success" },
       hasData: true,
       refreshing: true,
     }),
