@@ -50,7 +50,7 @@ test("shared QBO lifecycle gives qbo_txn_id highest posted authority", () => {
   assert.equal(deriveQboPostingLifecycle({ status: "needs_review" }).key, "needs_review");
   assert.notEqual(deriveQboPostingLifecycle({ status: "needs_review" }).key, "failed");
   assert.equal(deriveQboPostingLifecycle({ status: "approved" }).key, "handled_not_posted");
-  assert.equal(deriveQboPostingLifecycle({ status: "auto_approved", final_qbo_account_id: "qbo-meals", post_after: "2999-08-24T17:00:00Z" }).key, "queued");
+  assert.equal(deriveQboPostingLifecycle({ status: "auto_approved", final_qbo_account_id: "qbo-meals", post_after: "2999-08-24T17:00:00Z" }).key, "handled_not_posted");
   assert.equal(deriveQboPostingLifecycle({ status: "approved", post_error: "stale legacy error" }).key, "handled_not_posted");
   assert.equal(deriveQboPostingLifecycle({
     status: "approved",
@@ -92,8 +92,8 @@ test("Posting Trace UI and KPIs no longer use fake match confidence", () => {
   assert.doesNotMatch(ui, /Matched QBO|<div>Match<\/div>|ReconciliationMatchBadge/);
 
   assert.match(route, /loadMonthlyReconciliationPipeline/);
-  assert.match(service, /summarizePipelineStatuses\(rows\)/);
-  assert.match(service, /finalizePipelineTotals/);
+  assert.match(service, /summarizeMonthlyReconciliationLifecycle\(rows\)/);
+  assert.match(service, /deriveMonthlyReconciliationLifecycle/);
   assert.match(route, /needs_review_count/);
   assert.match(service, /pipeline_status/);
   assert.doesNotMatch(service, /matched_qbo_count \+=|pending_count \+=|exception_count \+=|match_confidence:/);

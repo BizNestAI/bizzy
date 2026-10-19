@@ -5,9 +5,12 @@ import { deriveQboPostingLifecycle } from "./qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
 import {
   derivePipelineStatus,
-  finalizePipelineTotals,
-  summarizePipelineStatuses,
 } from "./reconciliationPipelineStatus.js";
+import {
+  deriveMonthlyReconciliationLifecycle,
+  selectLatestQboPostingReceipt,
+  summarizeMonthlyReconciliationLifecycle,
+} from "./monthlyReconciliationLifecycle.js";
 
 function normalizeMonthParts(value) {
   if (value && typeof value === "object") {
@@ -165,6 +168,31 @@ async function loadReconciliationItemsForMonthlyPipeline(businessId, month, tran
   return new Map((items || []).filter((row) => row.bank_transaction_id).map((row) => [String(row.bank_transaction_id), row]));
 }
 
+async function loadQboPostingReceiptsForMonthlyPipeline(businessId, transactionIds = []) {
+  const ids = Array.from(new Set((transactionIds || []).filter(Boolean).map(String)));
+  if (!businessId || !ids.length) return new Map();
+  const receipts = await safeRows(() =>
+    supabase
+      .from("qbo_posted_transactions")
+      .select("id,transaction_id,status,qbo_txn_id,qbo_txn_type,posted_at,created_at,updated_at")
+      .eq("business_id", businessId)
+      .in("transaction_id", ids),
+    "Monthly reconciliation QBO posting receipts"
+  );
+  const receiptRowsByTxn = new Map();
+  for (const receipt of receipts || []) {
+    if (!receipt?.transaction_id) continue;
+    const key = String(receipt.transaction_id);
+    const existing = receiptRowsByTxn.get(key) || [];
+    existing.push(receipt);
+    receiptRowsByTxn.set(key, existing);
+  }
+  return new Map(Array.from(receiptRowsByTxn.entries()).map(([transactionId, rows]) => [
+    transactionId,
+    selectLatestQboPostingReceipt(rows),
+  ]));
+}
+
 export function buildMonthlyPipelineRow({
   row,
   cat = {},
@@ -172,6 +200,7 @@ export function buildMonthlyPipelineRow({
   accountById = new Map(),
   accountByName = new Map(),
   reconciliationItem = null,
+  qboPostingReceipt = null,
 } = {}) {
   const accountId = cat.final_qbo_account_id || cat.suggested_qbo_account_id || null;
   const accountName = cat.final_qbo_account_name || cat.suggested_qbo_account_name || "Uncategorized";
@@ -181,6 +210,12 @@ export function buildMonthlyPipelineRow({
     bank: row,
     cat,
     reconciliationItem,
+  });
+  const monthlyLifecycle = deriveMonthlyReconciliationLifecycle({
+    bank: row,
+    cat,
+    reconciliationItem,
+    qboPostingReceipt,
   });
   const amount = Number(row.signed_amount ?? row.amount ?? 0);
   return {
@@ -204,17 +239,24 @@ export function buildMonthlyPipelineRow({
     qbo_lifecycle_status: qboSyncStatus,
     qbo_sync_status: qboSyncStatus,
     reconciliation_item_status: reconciliationItem?.status || null,
+    primary_outcome: monthlyLifecycle.key,
+    monthly_lifecycle: monthlyLifecycle,
+    monthly_lifecycle_key: monthlyLifecycle.key,
+    monthly_lifecycle_label: monthlyLifecycle.label,
+    monthly_lifecycle_detail: monthlyLifecycle.detail || null,
     pipeline_status: pipelineStatus,
     pipeline_status_key: pipelineStatus.key,
     pipeline_status_label: pipelineStatus.label,
     pipeline_exception_detail: pipelineStatus.exception_reason || null,
-    status: pipelineStatus.key,
+    status: monthlyLifecycle.key,
     details: {
+      monthly_lifecycle: monthlyLifecycle,
       pipeline_status: pipelineStatus,
       pending: row.pending === true,
       reconciliation_item_status: reconciliationItem?.status || null,
       reconciliation_item_id: reconciliationItem?.id || null,
       qbo_lifecycle_status: qboSyncStatus,
+      qbo_posting_receipt_id: qboPostingReceipt?.id || null,
     },
   };
 }
@@ -226,7 +268,7 @@ function applyPipelineFilters(rows = [], opts = {}) {
   }
   if (opts.status && opts.status !== "all") {
     const statusSet = new Set(String(opts.status).split(",").map((item) => item.trim()).filter(Boolean));
-    filtered = filtered.filter((row) => statusSet.has(row.pipeline_status_key));
+    filtered = filtered.filter((row) => statusSet.has(row.monthly_lifecycle_key));
   }
   const search = String(opts.search || "").trim().toLowerCase();
   if (search) {
@@ -262,6 +304,7 @@ export async function loadMonthlyReconciliationPipeline(businessId, opts = {}) {
     canonicalRows.map((row) => row.plaid_account_id).filter(Boolean)
   );
   const reconciliationItemByTxn = await loadReconciliationItemsForMonthlyPipeline(businessId, month, transactionIds);
+  const qboPostingReceiptByTxn = await loadQboPostingReceiptsForMonthlyPipeline(businessId, transactionIds);
   const accountById = opts.accountById || new Map();
   const accountByName = opts.accountByName || new Map();
   const rows = canonicalRows
@@ -274,8 +317,9 @@ export async function loadMonthlyReconciliationPipeline(businessId, opts = {}) {
       accountById,
       accountByName,
       reconciliationItem: reconciliationItemByTxn.get(String(row.id)) || null,
+      qboPostingReceipt: qboPostingReceiptByTxn.get(String(row.id)) || null,
     }));
-  const totals = finalizePipelineTotals(summarizePipelineStatuses(rows));
+  const totals = summarizeMonthlyReconciliationLifecycle(rows);
   const filteredRows = sortMonthlyReconciliationRows(
     applyPipelineFilters(rows, opts),
     opts.sort_by,
@@ -293,9 +337,10 @@ export async function loadMonthlyReconciliationPipeline(businessId, opts = {}) {
     total: filteredRows.length,
     totals,
     source_contract: {
-      source_tables: ["bank_transactions", "transaction_categorizations", "reconciliation_items"],
+      source_tables: ["bank_transactions", "transaction_categorizations", "qbo_posted_transactions", "reconciliation_items"],
       population_basis: "canonical active Plaid-backed bank_transactions for selected month",
-      status_basis: "Unified reconciliation pipeline status over Books Review, QBO posting, and reconciliation_items authority",
+      status_basis: "Server-owned monthly lifecycle projection over Plaid, Bizzi workflow, durable QBO posting receipts, and reconciliation evidence",
+      statement_reconciliation_basis: "Not inferred from posted or matched lifecycle outcomes.",
     },
   };
 }
@@ -342,10 +387,22 @@ export async function loadAvailableMonthlyReconciliationPeriods(businessId, opts
       counts: {
         total_seen: totals.plaid_transactions_count || 0,
         needs_review_count: totals.needs_review_count || 0,
-        handled_not_posted_count: totals.handled_not_posted_count || 0,
-        matched_count: totals.posted_matched_count || 0,
+        pending_count: totals.pending_count || 0,
+        handled_waiting_count: totals.handled_waiting_count || 0,
+        scheduled_count: totals.scheduled_count || 0,
+        posting_in_progress_count: totals.posting_in_progress_count || 0,
+        posted_by_bizzi_count: totals.posted_by_bizzi_count || 0,
+        matched_existing_qbo_count: totals.matched_existing_qbo_count || 0,
+        matched_transfer_or_card_payment_count: totals.matched_transfer_or_card_payment_count || 0,
+        excluded_count: totals.excluded_count || 0,
         failed_post_count: totals.posting_failed_count || 0,
-        exceptions_count: totals.exceptions_count || 0,
+        ambiguous_count: totals.ambiguous_count || 0,
+        conservation_ok: totals.conservation_ok === true,
+        // Deprecated compatibility fields for older callers. The customer
+        // Reconciliations UI uses the explicit lifecycle counts above.
+        handled_not_posted_count: totals.handled_waiting_count || 0,
+        matched_count: totals.posted_by_bizzi_count || 0,
+        exceptions_count: totals.ambiguous_count || 0,
         duplicate_in_qbo_count: 0,
         missing_in_qbo_count: 0,
       },

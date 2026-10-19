@@ -6,13 +6,18 @@ import {
 } from "./reconciliationIssueCopy.js";
 
 const STATUS_OPTIONS = [
-  { value: "all", label: "All pipeline states" },
-  { value: "posted_matched", label: "Posted & matched" },
+  { value: "all", label: "All lifecycle outcomes" },
+  { value: "posted_by_bizzi", label: "Posted by Bizzi" },
+  { value: "matched_existing_qbo", label: "Matched to existing QuickBooks" },
+  { value: "matched_transfer_or_card_payment", label: "Matched transfer or card payment" },
+  { value: "pending", label: "Pending in Plaid" },
   { value: "needs_review", label: "Needs review" },
-  { value: "handled_not_posted", label: "Handled not posted" },
-  { value: "scheduled_for_qbo", label: "Scheduled for QBO" },
+  { value: "handled_waiting", label: "Handled · waiting to post" },
+  { value: "scheduled", label: "Scheduled to post" },
+  { value: "posting_in_progress", label: "Posting in progress" },
   { value: "posting_failed", label: "Posting failed" },
-  { value: "reconciliation_exception", label: "Reconciliation exception" },
+  { value: "excluded", label: "Excluded" },
+  { value: "ambiguous", label: "Ambiguous · reconciliation required" },
 ];
 
 const PANEL_BG = "#151717";
@@ -49,6 +54,22 @@ function formatMonth(value) {
 
 function pipelineStatusLabel(status) {
   switch (status) {
+    case "posted_by_bizzi":
+      return "Posted by Bizzi";
+    case "matched_existing_qbo":
+      return "Matched to existing QuickBooks";
+    case "matched_transfer_or_card_payment":
+      return "Matched transfer or card payment";
+    case "handled_waiting":
+      return "Handled · waiting to post";
+    case "scheduled":
+      return "Scheduled to post";
+    case "posting_in_progress":
+      return "Posting in progress";
+    case "excluded":
+      return "Excluded";
+    case "ambiguous":
+      return "Ambiguous · reconciliation required";
     case "pending_bank_transaction":
       return "Pending bank transaction";
     case "handled_not_posted":
@@ -85,6 +106,7 @@ function pipelineStatusLabel(status) {
 }
 
 function pipelineStatusDisplayLabel(row) {
+  if (row?.monthly_lifecycle?.label) return row.monthly_lifecycle.label;
   if (row?.pipeline_status?.label) return row.pipeline_status.label;
   if (
     row?.status === "missing_in_qbo" &&
@@ -97,6 +119,19 @@ function pipelineStatusDisplayLabel(row) {
 
 function pipelineStatusClass(status) {
   switch (status) {
+    case "posted_by_bizzi":
+    case "matched_existing_qbo":
+    case "matched_transfer_or_card_payment":
+      return "border-emerald-400/35 bg-emerald-500/12 text-emerald-100";
+    case "handled_waiting":
+    case "excluded":
+      return "border-white/12 bg-white/[0.055] text-slate-200";
+    case "scheduled":
+      return "border-sky-400/35 bg-sky-500/12 text-sky-100";
+    case "posting_in_progress":
+      return "border-amber-300/35 bg-amber-400/12 text-amber-100";
+    case "ambiguous":
+      return "border-rose-400/35 bg-rose-500/12 text-rose-100";
     case "pending_bank_transaction":
     case "handled_not_posted":
       return "border-white/12 bg-white/[0.055] text-slate-200";
@@ -371,7 +406,7 @@ export default function ReconciliationAuditTable({
         <div>
           <CardHeader
             title={`Reconciliation Audit — ${selectedMonthLabel}`}
-            subtitle="Every Plaid transaction for the selected month, including category, posting state, and QuickBooks lifecycle."
+            subtitle="Every canonical Plaid transaction for the selected month, including GL category, lifecycle outcome, and QuickBooks disposition."
             size="sm"
             titleTone="bold"
           />
@@ -417,7 +452,7 @@ export default function ReconciliationAuditTable({
       <div className="mt-4 grid gap-2 md:grid-cols-3">
         <DarkFilterSelect
           id="reconciliation-audit-pipeline-status"
-          label="Pipeline state"
+          label="Lifecycle outcome"
           value={filters.status}
           options={STATUS_OPTIONS}
           onChange={(status) => setFilters((prev) => ({ ...prev, status }))}
@@ -456,8 +491,8 @@ export default function ReconciliationAuditTable({
                 <SortableHeader label="Transaction" sortKey="transaction" sort={sort} onSortChange={onSortChange} />
                 <SortableHeader label="Bank Account" sortKey="bank_account" sort={sort} onSortChange={onSortChange} />
                 <SortableHeader label="Amount" sortKey="amount" sort={sort} onSortChange={onSortChange} align="right" />
-                <SortableHeader label="Category" sortKey="category" sort={sort} onSortChange={onSortChange} />
-                <SortableHeader label="Pipeline Status" sortKey="pipeline_status" sort={sort} onSortChange={onSortChange} />
+                <SortableHeader label="GL Category" sortKey="category" sort={sort} onSortChange={onSortChange} />
+                <SortableHeader label="Lifecycle" sortKey="pipeline_status" sort={sort} onSortChange={onSortChange} />
               </tr>
             </thead>
             <tbody className="divide-y divide-white/6">
@@ -500,8 +535,8 @@ export default function ReconciliationAuditTable({
               ) : (
                 rows.map((row) => {
                   const accountLabel = accountMap.get(row.plaid_account_id) || row.plaid_account_id || "—";
-                  const pipelineKey = row.pipeline_status?.key || row.pipeline_status_key || row.status;
-                  const statusTone = row.pipeline_status?.tone || getReconciliationTone(row.status, row.details || {});
+                  const pipelineKey = row.monthly_lifecycle?.key || row.monthly_lifecycle_key || row.pipeline_status?.key || row.pipeline_status_key || row.status;
+                  const statusTone = row.monthly_lifecycle ? null : row.pipeline_status?.tone || getReconciliationTone(row.status, row.details || {});
                   return (
                     <tr key={row.id} className="align-middle transition hover:bg-white/[0.025]">
                       <td className="px-3 py-2 text-[12px] text-slate-200 whitespace-nowrap">{formatDate(row.txn_date)}</td>
@@ -535,7 +570,7 @@ export default function ReconciliationAuditTable({
                           >
                             {pipelineStatusDisplayLabel(row)}
                           </span>
-                          {Array.isArray(row.pipeline_status?.secondary_statuses) &&
+                          {!row.monthly_lifecycle && Array.isArray(row.pipeline_status?.secondary_statuses) &&
                           row.pipeline_status.secondary_statuses.some((item) => item?.key === "pending_bank_transaction") ? (
                             <span className="inline-flex rounded-full border border-white/10 bg-white/[0.045] px-2 py-[2px] text-[10px] text-slate-300">
                               Pending
@@ -557,6 +592,10 @@ export default function ReconciliationAuditTable({
           Some audit-only rows are shown for traceability but excluded from active reconciliation totals.
         </div>
       ) : null}
+
+      <div className="mt-3 text-[12px] text-slate-400">
+        GL category and lifecycle outcome are separate: a resolved transfer or card payment can correctly have no expense category.
+      </div>
 
       {total > pageSize ? (
         <div className="mt-3 flex items-center justify-end gap-2 text-[12px] text-slate-300">

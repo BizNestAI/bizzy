@@ -99,8 +99,8 @@ test("monthly review source ledger has independent authoritative Plaid Rows popu
   assert.doesNotMatch(loadBody, /applyActiveBookkeepingScope/);
   assert.match(route, /loadMonthlyReconciliationPipeline/);
   assert.match(route, /reconciliationTrace = monthlyPipeline\.rows/);
-  assert.match(service, /summarizePipelineStatuses\(rows\)/);
-  assert.match(read("src/services/bookkeeping/reconciliationPipelineStatus.js"), /plaid_transactions_count/);
+  assert.match(service, /summarizeMonthlyReconciliationLifecycle\(rows\)/);
+  assert.match(read("src/services/bookkeeping/monthlyReconciliationLifecycle.js"), /plaid_transactions_count/);
 });
 
 test("customer reconciliation month inventory is derived from the same canonical Plaid population", () => {

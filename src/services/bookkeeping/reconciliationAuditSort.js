@@ -8,7 +8,7 @@ export function sortMonthlyReconciliationRows(rows = [], sortBy = "date", sortDi
     if (key === "bank_account") return row?.bank_account || row?.plaid_account_id || "";
     if (key === "amount") return Number(row?.amount) || 0;
     if (key === "category") return row?.category_name || row?.bizzi_gl_account || "";
-    if (key === "pipeline_status") return row?.pipeline_status_label || row?.pipeline_status?.label || row?.status || "";
+    if (key === "pipeline_status") return row?.monthly_lifecycle_label || row?.monthly_lifecycle?.label || row?.pipeline_status_label || row?.pipeline_status?.label || row?.status || "";
     return row?.txn_date || row?.date || "";
   };
   return [...rows].sort((a, b) => {
@@ -22,4 +22,3 @@ export function sortMonthlyReconciliationRows(rows = [], sortBy = "date", sortDi
     return dateComparison || String(a?.id || "").localeCompare(String(b?.id || ""));
   });
 }
-

@@ -62,8 +62,8 @@ function compareCue(run, previousRun) {
       text: `${deltaLabel(currentCounts.failed_post_count, prevCounts.failed_post_count, "failed posts")} since last run`,
     },
     {
-      weight: Math.abs((currentCounts.matched_count || 0) - (prevCounts.matched_count || 0)),
-      text: `${deltaLabel(currentCounts.matched_count, prevCounts.matched_count, "matched")} since last run`,
+      weight: Math.abs((currentCounts.posted_by_bizzi_count || 0) - (prevCounts.posted_by_bizzi_count || 0)),
+      text: `${deltaLabel(currentCounts.posted_by_bizzi_count, prevCounts.posted_by_bizzi_count, "Bizzi posts")} since last run`,
     },
     {
       weight: Math.abs((currentCounts.needs_review_count || 0) - (prevCounts.needs_review_count || 0)),
@@ -82,6 +82,7 @@ function compareCue(run, previousRun) {
 function monthlyNotes(run, previousRun) {
   const counts = run?.counts || {};
   const failed = Number(counts.failed_post_count || 0);
+  const ambiguous = Number(counts.ambiguous_count || 0);
   const needsReview = Number(counts.needs_review_count || 0);
   const pending = Number(counts.pending_count || 0);
   const seen = Number(counts.total_seen || 0);
@@ -89,11 +90,11 @@ function monthlyNotes(run, previousRun) {
   if (run?.overall_status === "failed" || run?.status === "failed") {
     return "Monthly ledger refresh did not complete. Bizzi will retry automatically.";
   }
-  if (failed > 0) {
-    return `${failed} transaction${failed === 1 ? "" : "s"} failed while posting to QuickBooks.`;
+  if (failed + ambiguous > 0) {
+    return `${failed + ambiguous} transaction${failed + ambiguous === 1 ? "" : "s"} need lifecycle evidence review.`;
   }
   if (needsReview > 0) {
-    return `${needsReview} transaction${needsReview === 1 ? "" : "s"} still need categorization.`;
+    return `${needsReview} transaction${needsReview === 1 ? "" : "s"} still need workflow review.`;
   }
   if (pending > 0) {
     return `${pending} pending bank item${pending === 1 ? "" : "s"} still need to settle.`;
@@ -110,17 +111,14 @@ function toCount(value) {
 
 function lifecycleMetrics(run) {
   const counts = run?.counts || {};
-  const plaidTotal = toCount(counts.total_seen);
-  const needsReview = toCount(counts.needs_review_count);
-  const duplicateInQbo = toCount(counts.duplicate_in_qbo_count);
-  const fullyReconciled = toCount(counts.matched_count);
-
   return {
-    plaidTotal,
-    categorized: Math.max(0, plaidTotal - needsReview),
-    posted: fullyReconciled + duplicateInQbo,
-    fullyReconciled,
-    failedPosting: toCount(counts.failed_post_count),
+    plaidTotal: toCount(counts.total_seen),
+    pending: toCount(counts.pending_count),
+    needsReview: toCount(counts.needs_review_count),
+    postedByBizzi: toCount(counts.posted_by_bizzi_count ?? counts.matched_count),
+    matchedExistingQbo: toCount(counts.matched_existing_qbo_count),
+    matchedTransferOrCardPayment: toCount(counts.matched_transfer_or_card_payment_count),
+    openExceptions: toCount(counts.failed_post_count) + toCount(counts.ambiguous_count),
   };
 }
 
@@ -163,37 +161,41 @@ export default function ReconciliationRunHistory({
 
       <div className="overflow-hidden rounded-2xl border border-white/6 bg-[#111313]">
         <div className="overflow-x-auto">
-          <table className={`${selectedRunAudit ? "min-w-[1440px]" : "min-w-[1120px]"} w-full table-fixed text-sm text-slate-100`}>
+          <table className={`${selectedRunAudit ? "min-w-[1560px]" : "min-w-[1240px]"} w-full table-fixed text-sm text-slate-100`}>
             <colgroup>
-              <col className="w-[17%]" />
-              <col className="w-[30%]" />
-              <col className="w-[10%]" />
-              <col className="w-[10%]" />
+              <col className="w-[16%]" />
+              <col className="w-[23%]" />
+              <col className="w-[9%]" />
               <col className="w-[8%]" />
-              <col className="w-[13%]" />
-              <col className="w-[12%]" />
+              <col className="w-[10%]" />
+              <col className="w-[11%]" />
+              <col className="w-[9%]" />
+              <col className="w-[9%]" />
+              <col className="w-[9%]" />
             </colgroup>
             <thead className="bg-white/[0.03] text-[11px] uppercase text-slate-400">
               <tr className="border-b border-white/6">
                 <th className="px-3 py-3 text-left tracking-[0.18em]">Month</th>
                 <th className="px-3 py-3 text-left tracking-[0.18em]">Notes</th>
                 <MetricHeader>Plaid total</MetricHeader>
-                <MetricHeader>Categorized</MetricHeader>
-                <MetricHeader>Posted</MetricHeader>
-                <MetricHeader>Fully reconciled</MetricHeader>
-                <MetricHeader>Failed posting</MetricHeader>
+                <MetricHeader>Pending</MetricHeader>
+                <MetricHeader>Needs review</MetricHeader>
+                <MetricHeader>Posted by Bizzi</MetricHeader>
+                <MetricHeader>Matched QBO</MetricHeader>
+                <MetricHeader>Card / transfer</MetricHeader>
+                <MetricHeader>Open exceptions</MetricHeader>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/6">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-300">
+                  <td colSpan={9} className="px-4 py-8 text-center text-slate-300">
                     Loading run history…
                   </td>
                 </tr>
               ) : !monthlyRuns.length ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-300">
+                  <td colSpan={9} className="px-4 py-8 text-center text-slate-300">
                     No monthly reconciliation ledger yet.
                   </td>
                 </tr>
@@ -225,14 +227,16 @@ export default function ReconciliationRunHistory({
                         </td>
                         <td className="px-3 py-3 text-[12px] leading-5 text-slate-400">{monthlyNotes(run, previousRun)}</td>
                         <td className="px-3 py-3 text-right text-slate-200">{metrics.plaidTotal}</td>
-                        <td className="px-3 py-3 text-right text-slate-200">{metrics.categorized}</td>
-                        <td className="px-3 py-3 text-right text-slate-200">{metrics.posted}</td>
-                        <td className="px-3 py-3 text-right text-slate-200">{metrics.fullyReconciled}</td>
-                        <td className="px-3 py-3 text-right text-slate-200">{metrics.failedPosting}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.pending}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.needsReview}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.postedByBizzi}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.matchedExistingQbo}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.matchedTransferOrCardPayment}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.openExceptions}</td>
                       </tr>
                       {isSelected && selectedRunAudit ? (
                         <tr className="bg-black/18">
-                          <td colSpan={7} className="px-3 py-4">
+                          <td colSpan={9} className="px-3 py-4">
                             <div className="w-full min-w-0">
                               {selectedRunAudit}
                             </div>

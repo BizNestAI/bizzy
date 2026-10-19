@@ -1369,6 +1369,18 @@ function DeductionsLoadingState() {
   return (
     <div className="mt-5 space-y-4" role="status" aria-busy="true" aria-live="polite">
       <span className="sr-only">Loading deduction totals and classification activity.</span>
+      <div className="flex items-center gap-3 rounded-2xl border border-emerald-300/12 bg-emerald-300/[0.045] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.18)]">
+        <div className="relative flex h-10 w-10 shrink-0 items-center justify-center" aria-hidden="true">
+          <span className="absolute inset-0 rounded-full border border-emerald-300/20 motion-safe:animate-ping" />
+          <span className="absolute inset-1 rounded-full bg-emerald-300/[0.08]" />
+          <Loader2 className="relative h-5 w-5 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
+          <span className="relative hidden h-2 w-2 rounded-full bg-emerald-200 motion-reduce:block" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-white">Preparing your deductions overview</p>
+          <p className="mt-0.5 text-xs text-white/52">Loading your latest saved totals and transaction details.</p>
+        </div>
+      </div>
       <div className="relative overflow-hidden rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-3">
         <SkeletonSheen />
         <div className="relative flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
