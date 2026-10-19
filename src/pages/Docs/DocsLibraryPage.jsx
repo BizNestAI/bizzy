@@ -1,5 +1,6 @@
 // File: /src/pages/Docs/DocsLibraryPage.jsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Dialog } from "@headlessui/react";
 import { Check, ChevronDown, ChevronLeft, Download, ExternalLink, FileText, Folder, Loader2, Trash2, UploadCloud } from "lucide-react";
 
 import AccountingDocumentUploadModal from "../../components/BizzyDocs/UploadDocModal";
@@ -103,6 +104,7 @@ export default function DocsLibraryPage(props) {
   const [showUpload, setShowUpload] = useState(false);
   const [busyDocId, setBusyDocId] = useState("");
   const [showYearMenu, setShowYearMenu] = useState(false);
+  const [pendingDeleteDoc, setPendingDeleteDoc] = useState(null);
   const yearMenuRef = useRef(null);
 
   const loadDocs = useCallback(async () => {
@@ -206,12 +208,11 @@ export default function DocsLibraryPage(props) {
 
   async function deleteDocument(doc) {
     if (!doc?.id) return;
-    const ok = window.confirm(`Delete ${doc.original_filename || doc.filename || doc.title || "this document"}?`);
-    if (!ok) return;
     setBusyDocId(doc.id);
     setError("");
     try {
       await deleteAccountingDocument({ id: doc.id, business_id: effectiveBusinessId });
+      setPendingDeleteDoc(null);
       setNotice("Document deleted.");
       await loadDocs();
     } catch (err) {
@@ -419,7 +420,7 @@ export default function DocsLibraryPage(props) {
                         {!readOnly ? (
                           <button
                             type="button"
-                            onClick={() => deleteDocument(doc)}
+                            onClick={() => setPendingDeleteDoc(doc)}
                             disabled={busyDocId === doc.id}
                             className="rounded-lg border border-white/10 p-2 text-white/55 transition hover:border-rose-400/50 hover:text-rose-200 disabled:opacity-50"
                             aria-label={`Delete ${filename}`}
@@ -450,6 +451,45 @@ export default function DocsLibraryPage(props) {
           await loadDocs();
         }}
       />
+
+      <Dialog
+        open={Boolean(pendingDeleteDoc)}
+        onClose={() => {
+          if (!busyDocId) setPendingDeleteDoc(null);
+        }}
+        className="relative z-[11000]"
+      >
+        <div className="bizzy-modal-main-backdrop fixed inset-0 bg-black/70" aria-hidden="true" />
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Dialog.Panel className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0B0E13] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.65)]">
+            <Dialog.Title className="text-lg font-semibold text-white">Delete document?</Dialog.Title>
+            <Dialog.Description className="mt-2 text-sm leading-6 text-white/65">
+              This will permanently delete{pendingDeleteDoc ? (
+                <> <span className="font-medium text-white">{pendingDeleteDoc.original_filename || pendingDeleteDoc.filename || pendingDeleteDoc.title || "this document"}</span></>
+              ) : " this document"}. This action can’t be undone.
+            </Dialog.Description>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setPendingDeleteDoc(null)}
+                disabled={Boolean(busyDocId)}
+                className="rounded-lg border border-white/12 px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteDocument(pendingDeleteDoc)}
+                disabled={!pendingDeleteDoc || Boolean(busyDocId)}
+                className="inline-flex min-w-[132px] items-center justify-center gap-2 rounded-lg border border-rose-400/45 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busyDocId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {busyDocId ? "Deleting…" : "Delete document"}
+              </button>
+            </div>
+          </Dialog.Panel>
+        </div>
+      </Dialog>
     </div>
   );
 }
