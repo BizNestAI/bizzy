@@ -2,7 +2,6 @@
 import { supabase } from "../../services/supabaseAdmin.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import {
-  CUSTOMER_NAME_UNAVAILABLE,
   fetchARAgingDetail,
   queryInvoicesByDocNumbers,
   fetchCustomersByIds,
@@ -11,6 +10,7 @@ import {
   queryOpenInvoices,
 } from "./ar.qbo.js";
 import {
+  CUSTOMER_NAME_UNAVAILABLE,
   daysPastDueDateOnly,
   normalizeDateOnly,
   projectCollectionsInvoice,
