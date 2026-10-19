@@ -4,6 +4,7 @@ export const MONTHLY_BRIEF_STATES = Object.freeze({
   NOT_GENERATED: "not_generated",
   REQUEST_FAILED: "request_failed",
   CONTEXT_UNAVAILABLE: "context_unavailable",
+  AUTHENTICATION_PENDING: "authentication_pending",
 });
 
 export function parseMonthlyBriefResponse(payload) {
@@ -44,7 +45,7 @@ export function monthlyBriefErrorState(requestId = null) {
     status: MONTHLY_BRIEF_STATES.REQUEST_FAILED,
     brief: null,
     requestId,
-    error: "Bizzi couldn’t load this monthly brief. The brief may still exist.",
+    error: "Bizzi couldn’t load your latest monthly brief. Your saved brief may still be available.",
   };
 }
 

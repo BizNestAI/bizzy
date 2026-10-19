@@ -12,7 +12,11 @@ import socialAuthRouter from "./api/auth/socialAuth.js";
 import signupConfirmationRouter from "./api/auth/signupConfirmation.routes.js";
 import onboardingRouter from "./api/onboarding/onboarding.routes.js";
 import financialMetricsRoute from "./api/accounting/metrics.js";
-import pulseRoute, { monthlyBriefRequestContext } from "./api/accounting/pulse.js";
+import pulseRoute, {
+  createMonthlyBriefLookupHandler,
+  monthlyBriefRequestContext,
+  requireMonthlyBriefEntitlement,
+} from "./api/accounting/pulse.js";
 import forecastRouter from "./api/accounting/forecast.js";
 import forecastAccuracyRouter from "./api/accounting/forecastAccuracy.js";
 import scenariosRouter from "./api/accounting/scenario.js";
@@ -243,6 +247,14 @@ app.use("/api/onboarding", onboardingRouter);
 app.use("/auth", quickbooksAuth);
 app.use("/auth", socialAuthRouter);
 app.use("/api/accounting/metrics", ...requireCustomerOrAdminView, financialMetricsRoute);
+app.get(
+  "/api/accounting/pulse/latest",
+  monthlyBriefRequestContext,
+  requireAuthOrAdminView,
+  requireBusinessAccess({ inferSingleBusiness: true }),
+  requireMonthlyBriefEntitlement(),
+  createMonthlyBriefLookupHandler({ latest: true })
+);
 app.use("/api/accounting/pulse", monthlyBriefRequestContext);
 app.use("/api/accounting/pulse", ...requireCustomerOrAdminView, pulseRoute);
 app.use("/api/accounting/expense-breakdown", ...requireCustomerOrAdminView, expenseBreakdownRouter);

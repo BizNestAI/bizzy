@@ -1,10 +1,11 @@
 // File: /src/components/Accounting/MonthlyBriefCard.jsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import CardHeader from "../UI/CardHeader";
-import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { apiFetch } from "../../utils/apiBase.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
+import { useAuth } from "../../context/AuthContext.jsx";
+import { useBusiness } from "../../context/BusinessContext.jsx";
 import {
   MONTHLY_BRIEF_STATES,
   fetchMonthlyBriefLookup,
@@ -89,11 +90,15 @@ function adaptDemoPulseToPeriod(pulse, year, month) {
   };
 }
 
-export default function MonthlyBriefCard({ userId, businessId }) {
+export default function MonthlyBriefCard() {
   const adminView = useAdminView();
-  const { year, month } = useFinancialPeriod(businessId);
+  const { user, loading: authLoading } = useAuth() || {};
+  const { businessId: contextBusinessId, loading: businessLoading } = useBusiness();
+  const requestIdentityScope = adminView.active
+    ? `admin:${adminView.businessId || "pending"}`
+    : `customer:${user?.id || "pending"}:${contextBusinessId || "server-resolved"}`;
   const [lookup, setLookup] = useState({
-    status: MONTHLY_BRIEF_STATES.CONTEXT_UNAVAILABLE,
+    status: MONTHLY_BRIEF_STATES.AUTHENTICATION_PENDING,
     brief: null,
     error: null,
     requestId: null,
@@ -104,33 +109,35 @@ export default function MonthlyBriefCard({ userId, businessId }) {
   const demoPulse = useMemo(() => {
     if (!usingDemo) return null;
     const demo = getDemoData();
-    return adaptDemoPulseToPeriod(normalizePulse(demo?.financials?.pulse || null), year, month);
-  }, [month, usingDemo, year]);
+    const now = new Date();
+    return adaptDemoPulseToPeriod(normalizePulse(demo?.financials?.pulse || null), now.getFullYear(), now.getMonth() + 1);
+  }, [usingDemo]);
 
-  const label = useMemo(() => monthLabel(year, month), [year, month]);
+  const pulsePeriod = useMemo(() => {
+    const [year, month] = String(lookup.brief?.month || "").split("-").map(Number);
+    return { year, month };
+  }, [lookup.brief?.month]);
+  const label = useMemo(() => monthLabel(pulsePeriod.year, pulsePeriod.month), [pulsePeriod.month, pulsePeriod.year]);
 
   const fetchPulse = useCallback(async (signal) => {
+    // This scope is only a stale-response boundary. Tenant authority remains server-side.
+    const identityScopeAtRequest = requestIdentityScope;
     const generation = ++requestGeneration.current;
     if (demoPulse) {
       setLookup({ status: MONTHLY_BRIEF_STATES.AVAILABLE, brief: demoPulse, error: null, requestId: "demo" });
       return;
     }
-    if (!userId || !businessId || !year || !month) {
-      setLookup({ status: MONTHLY_BRIEF_STATES.CONTEXT_UNAVAILABLE, brief: null, error: null, requestId: null });
+    const authenticationPending = authLoading || adminView.loading || (!adminView.active && businessLoading);
+    if (authenticationPending || (!adminView.active && !user)) {
+      setLookup({ status: MONTHLY_BRIEF_STATES.AUTHENTICATION_PENDING, brief: null, error: null, requestId: null });
       return;
     }
     setLookup({ status: MONTHLY_BRIEF_STATES.LOADING, brief: null, error: null, requestId: null });
     try {
-      const url =
-        `/api/accounting/pulse` +
-        `?user_id=${encodeURIComponent(userId)}` +
-        `&business_id=${encodeURIComponent(businessId)}` +
-        `&year=${encodeURIComponent(year)}` +
-        `&month=${encodeURIComponent(month)}` +
-        (adminView.active ? `&admin_view_optional=1` : "");
+      const url = "/api/accounting/pulse/latest";
 
       const next = await fetchMonthlyBriefLookup({ apiFetch, url, signal });
-      if (generation === requestGeneration.current && !signal?.aborted) {
+      if (generation === requestGeneration.current && identityScopeAtRequest === requestIdentityScope && !signal?.aborted) {
         setLookup({ ...next, error: null });
       }
     } catch (err) {
@@ -138,7 +145,7 @@ export default function MonthlyBriefCard({ userId, businessId }) {
         setLookup(monthlyBriefErrorState(err.requestId || null));
       }
     }
-  }, [adminView.active, businessId, demoPulse, month, userId, year]);
+  }, [adminView.active, adminView.loading, authLoading, businessLoading, demoPulse, requestIdentityScope, user]);
 
   const handleRefresh = useCallback(async () => {
     const ac = new AbortController();
@@ -234,14 +241,14 @@ export default function MonthlyBriefCard({ userId, businessId }) {
             ))}
           </div>
 	        ) : lookup.status === MONTHLY_BRIEF_STATES.NOT_GENERATED ? (
-	          <p className="text-sm text-white/60">No monthly brief has been generated for this period.</p>
-	        ) : lookup.status === MONTHLY_BRIEF_STATES.CONTEXT_UNAVAILABLE ? (
-	          <p className="text-sm text-white/60">Monthly brief context is unavailable.</p>
+	          <p className="text-sm text-white/60">Your first monthly brief will appear automatically after the next eligible 1st or 15th processing cycle.</p>
+	        ) : lookup.status === MONTHLY_BRIEF_STATES.AUTHENTICATION_PENDING ? (
+	          <p className="text-sm text-white/60">Loading your latest monthly brief...</p>
 	        ) : null}
 
         {lookup.status === MONTHLY_BRIEF_STATES.AVAILABLE ? (
           <div className="flex flex-wrap gap-2 text-[11px] font-medium text-white/50">
-            <span>{pulse.cadence === "final" ? "Final" : "Mid-month"}</span>
+            <span>{pulse.cadence === "final" ? "Final monthly brief" : "Mid-month brief"}</span>
             {pulse.accountingMethod ? <span>{pulse.accountingMethod} basis</span> : null}
             {pulse.dataThroughDate && !String(pulse.dataThroughDate).endsWith("-01") ? (
               <span>Data through {generatedDateLabel(pulse.dataThroughDate)}</span>

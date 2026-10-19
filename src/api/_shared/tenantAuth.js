@@ -103,6 +103,33 @@ async function hasBusinessMembership({ supabase, userId, businessId }) {
   return data || null;
 }
 
+async function inferSingleAuthorizedBusinessId({ supabase, userId }) {
+  const [{ data: owned, error: ownedError }, { data: linked, error: linkedError }] = await Promise.all([
+    supabase.from("business_profiles").select("id").eq("user_id", userId),
+    supabase.from("user_business_link").select("business_id").eq("user_id", userId),
+  ]);
+  if (ownedError || linkedError) {
+    throw new TenantAuthError(
+      TENANT_AUTH_CODES.BUSINESS_ACCESS_DENIED,
+      "Could not resolve business access.",
+      403
+    );
+  }
+  const ids = [...new Set([
+    ...(owned || []).map((row) => row.id),
+    ...(linked || []).map((row) => row.business_id),
+  ].filter(Boolean))];
+  if (ids.length === 1) return ids[0];
+  if (ids.length > 1) {
+    throw new TenantAuthError(
+      TENANT_AUTH_CODES.AMBIGUOUS_BUSINESS_CONTEXT,
+      "Business selection is required.",
+      400
+    );
+  }
+  throw new TenantAuthError(TENANT_AUTH_CODES.BUSINESS_REQUIRED, "Business context is unavailable.", 400);
+}
+
 function mapAdminViewError(err) {
   if (err?.code === "admin_view_session_expired") {
     return new TenantAuthError(TENANT_AUTH_CODES.ADMIN_VIEW_EXPIRED, "Admin View session expired.", 401);
@@ -180,6 +207,7 @@ export async function resolveAuthorizedBusiness({
   businessId = undefined,
   supabase = defaultSupabase,
   now = new Date(),
+  inferSingleBusiness = false,
 } = {}) {
   const adminViewBusiness = await resolveAdminViewBusiness({ req, businessId, supabase, now });
   if (adminViewBusiness) return adminViewBusiness;
@@ -189,7 +217,9 @@ export async function resolveAuthorizedBusiness({
     throw new TenantAuthError(TENANT_AUTH_CODES.AUTH_REQUIRED, "Authentication is required.", 401);
   }
 
-  const requestedBusinessId = businessId || getRequestedBusinessId(req);
+  const requestedBusinessId = businessId
+    || getRequestedBusinessId(req, { required: !inferSingleBusiness })
+    || await inferSingleAuthorizedBusinessId({ supabase, userId });
   req.__businessAccessCache ||= new Map();
   const cacheKey = `${userId}:${requestedBusinessId}`;
   if (req.__businessAccessCache.has(cacheKey)) return req.__businessAccessCache.get(cacheKey);
@@ -300,6 +330,7 @@ export function requireBusinessAccess(options = {}) {
         businessId: options.businessId,
         supabase: options.supabase || defaultSupabase,
         now: options.now || new Date(),
+        inferSingleBusiness: options.inferSingleBusiness === true,
       });
       attachAuthorizedBusiness(req, business);
       return next();

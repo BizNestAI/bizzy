@@ -239,6 +239,32 @@ test("missing requested business where required fails with 400", async () => {
   assert.equal(res.body.code, TENANT_AUTH_CODES.BUSINESS_REQUIRED);
 });
 
+test("single-business inference resolves canonical tenant without browser business identity", async () => {
+  const req = makeReq({ auth: { userId: USER_A } });
+  const res = makeRes();
+  const supabase = makeTenantSupabase({
+    business_profiles: [{ id: BUSINESS_A, user_id: USER_A, business_name: "A" }],
+    user_business_link: [],
+  });
+  let nextCalled = false;
+  await requireBusinessAccess({ supabase, inferSingleBusiness: true })(req, res, () => { nextCalled = true; });
+  assert.equal(nextCalled, true);
+  assert.equal(req.business.id, BUSINESS_A);
+  assert.equal(req.auth.businessId, BUSINESS_A);
+});
+
+test("single-business inference fails closed when multiple tenants are authorized", async () => {
+  const req = makeReq({ auth: { userId: USER_A } });
+  const res = makeRes();
+  const supabase = makeTenantSupabase({
+    business_profiles: [{ id: BUSINESS_A, user_id: USER_A }],
+    user_business_link: [{ user_id: USER_A, business_id: BUSINESS_SHARED }],
+  });
+  await requireBusinessAccess({ supabase, inferSingleBusiness: true })(req, res, () => {});
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.code, TENANT_AUTH_CODES.AMBIGUOUS_BUSINESS_CONTEXT);
+});
+
 test("deleted or nonexistent business fails with 404", async () => {
   const req = makeReq({
     auth: { userId: USER_A },
@@ -425,10 +451,6 @@ test("default Admin View write guard denies mutations while preserving normal cu
 function makeReq(overrides = {}) {
   return {
     method: "GET",
-    headers: {},
-    params: {},
-    query: {},
-    body: {},
     ...overrides,
     headers: { ...(overrides.headers || {}) },
     params: { ...(overrides.params || {}) },

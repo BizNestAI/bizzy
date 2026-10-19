@@ -911,7 +911,7 @@ export default function AccountingDashboard() {
         {/* Insights below the charts */}
         <CardFrame padded={false} variant="emerald-dark">
           <div className="rounded-[inherit] overflow-hidden">
-            <MonthlyBriefCard userId={userId} businessId={businessId} />
+            <MonthlyBriefCard />
           </div>
         </CardFrame>
       </RowGap>

@@ -56,7 +56,8 @@ test("Admin View forecast and pulse widgets use optional persisted-only reads in
   assert.match(forecastEditor, /params\.set\('admin_view_optional', '1'\)/);
   assert.match(forecastEditor, /No persisted forecast is available for this business/);
   assert.match(forecastVsActual, /No persisted forecast accuracy is available for this business/);
-  assert.match(monthlyBrief, /&admin_view_optional=1/);
+  assert.match(monthlyBrief, /\/api\/accounting\/pulse\/latest/);
+  assert.doesNotMatch(monthlyBrief, /useFinancialPeriod/);
   assert.match(pulseCard, /&admin_view_optional=1/);
   assert.match(forecastApi, /adminViewOptional[\s\S]*status\(200\)\.json/);
   assert.match(pulseApi, /status: "not_generated", brief: null/);

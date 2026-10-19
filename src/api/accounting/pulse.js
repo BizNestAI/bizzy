@@ -6,6 +6,10 @@ import {
   generateFinancialPulseSnapshot,
   shouldGenerateScheduledFinancialPulse,
 } from "./monthlyFinancialPulse.js";
+import {
+  FULL_ENTITLEMENT_STATUSES,
+  resolveBusinessEntitlement,
+} from "../_shared/entitlementAuth.js";
 
 /* global process */
 
@@ -94,6 +98,35 @@ export function selectPreferredAvailablePulse(rows = []) {
     })[0] || null;
 }
 
+function isValidAutomaticPulse(row) {
+  const insightsValid = Array.isArray(row?.business_insights);
+  return row?.id
+    && /^\d{4}-\d{2}-01$/.test(String(row.month || ""))
+    && ["final", "mid_month"].includes(row.cadence)
+    && row.status === "available"
+    && row.accounting_method === "Cash"
+    && typeof row.revenue_summary === "string"
+    && typeof row.spending_trend === "string"
+    && typeof row.variance_from_forecast === "string"
+    && insightsValid
+    && typeof row.motivational_message === "string";
+}
+
+export function selectLatestAvailableAutomaticPulse(rows = []) {
+  return [...rows]
+    .filter(isValidAutomaticPulse)
+    .sort((a, b) => {
+      const month = String(b.month).localeCompare(String(a.month));
+      if (month) return month;
+      const cadence = cadencePriority(b.cadence) - cadencePriority(a.cadence);
+      if (cadence) return cadence;
+      const generated = String(b.generated_at || b.created_at || "")
+        .localeCompare(String(a.generated_at || a.created_at || ""));
+      if (generated) return generated;
+      return String(b.id).localeCompare(String(a.id));
+    })[0] || null;
+}
+
 function briefResponse(row, monthText) {
   const pulse = normalizePulse(row, monthText);
   return {
@@ -139,6 +172,7 @@ export function monthlyBriefRequestContext(req, res, next) {
       authenticated_mode: req.tenantContext?.mode || req.auth?.tenantMode || "unknown",
       response_status: info.response_status,
       selected_cadence: info.selected_cadence,
+      selected_reporting_month: info.selected_reporting_month || null,
       brief_present: info.brief_present === true,
       safe_error_code: info.safe_error_code || null,
       duration_ms: Math.max(0, Date.now() - startedAt),
@@ -148,12 +182,12 @@ export function monthlyBriefRequestContext(req, res, next) {
   next();
 }
 
-export function createMonthlyBriefLookupHandler({ db = supabase } = {}) {
+export function createMonthlyBriefLookupHandler({ db = supabase, latest = false } = {}) {
   return async function monthlyBriefLookup(req, res) {
     const requestId = req.monthlyBriefLookup?.request_id || safeRequestId(req.header?.("x-request-id"));
     const businessId = req.business?.id || req.auth?.businessId || req.tenantContext?.businessId || null;
-    const year = Number(req.query?.year);
-    const month = Number(req.query?.month);
+    const year = latest ? null : Number(req.query?.year);
+    const month = latest ? null : Number(req.query?.month);
     const setTelemetry = (values) => Object.assign(req.monthlyBriefLookup ||= {}, values);
 
     if (!businessId) {
@@ -166,7 +200,7 @@ export function createMonthlyBriefLookupHandler({ db = supabase } = {}) {
         request_id: requestId,
       });
     }
-    if (!validPeriod(year, month)) {
+    if (!latest && !validPeriod(year, month)) {
       setTelemetry({ response_status: "context_unavailable", safe_error_code: "invalid_reporting_period" });
       return res.status(400).json({
         ok: false,
@@ -177,9 +211,10 @@ export function createMonthlyBriefLookupHandler({ db = supabase } = {}) {
       });
     }
 
-    const monthText = monthKey(year, month);
+    const monthText = latest ? null : monthKey(year, month);
+    res.setHeader("Cache-Control", "no-store");
     try {
-      if (shouldUseMockAccounting(req) || String(req.query?.mock || "") === "1") {
+      if (!latest && (shouldUseMockAccounting(req) || String(req.query?.mock || "") === "1")) {
         const mock = buildMockPulse(monthText);
         const brief = {
           id: `mock-${monthText}`,
@@ -200,22 +235,31 @@ export function createMonthlyBriefLookupHandler({ db = supabase } = {}) {
         return res.status(200).json({ ok: true, status: "available", brief, request_id: requestId });
       }
 
-      const { data, error } = await db
+      let query = db
         .from("monthly_financial_pulse")
         .select("id,business_id,month,cadence,status,accounting_method,generated_at,data_through_date,created_at,revenue_summary,spending_trend,variance_from_forecast,business_insights,motivational_message")
         .eq("business_id", businessId)
-        .eq("month", monthText)
         .eq("status", "available");
+      if (!latest) query = query.eq("month", monthText);
+      const { data, error } = await query;
       if (error) throw error;
 
-      const selected = selectPreferredAvailablePulse(data || []);
+      const selected = latest
+        ? selectLatestAvailableAutomaticPulse(data || [])
+        : selectPreferredAvailablePulse(data || []);
       if (!selected) {
         setTelemetry({ response_status: "not_generated", selected_cadence: null, brief_present: false, safe_error_code: null });
         return res.status(200).json({ ok: true, status: "not_generated", brief: null, request_id: requestId });
       }
 
-      const brief = briefResponse(selected, monthText);
-      setTelemetry({ response_status: "available", selected_cadence: brief.cadence, brief_present: true, safe_error_code: null });
+      const brief = briefResponse(selected, selected.month || monthText);
+      setTelemetry({
+        response_status: "available",
+        selected_cadence: brief.cadence,
+        selected_reporting_month: brief.reporting_month,
+        brief_present: true,
+        safe_error_code: null,
+      });
       return res.status(200).json({ ok: true, status: "available", brief, request_id: requestId });
     } catch {
       setTelemetry({ response_status: "request_failed", safe_error_code: "monthly_brief_lookup_failed" });
@@ -226,6 +270,46 @@ export function createMonthlyBriefLookupHandler({ db = supabase } = {}) {
         error: "monthly_brief_lookup_failed",
         message: "Bizzi couldn’t load this monthly brief. The brief may still exist.",
         request_id: requestId,
+      });
+    }
+  };
+}
+
+export function requireMonthlyBriefEntitlement({ db = supabase } = {}) {
+  return async function monthlyBriefEntitlement(req, res, next) {
+    const businessId = req.business?.id || req.auth?.businessId || req.tenantContext?.businessId || null;
+    try {
+      const entitlement = await resolveBusinessEntitlement({
+        businessId,
+        role: req.business?.membershipRole || "staff",
+        db,
+      });
+      if (!FULL_ENTITLEMENT_STATUSES.has(entitlement.status)) {
+        req.monthlyBriefLookup && Object.assign(req.monthlyBriefLookup, {
+          response_status: "context_unavailable",
+          safe_error_code: "monthly_brief_entitlement_required",
+        });
+        return res.status(402).json({
+          ok: false,
+          status: "context_unavailable",
+          error: "monthly_brief_entitlement_required",
+          message: "An active subscription is required.",
+          request_id: req.monthlyBriefLookup?.request_id || null,
+        });
+      }
+      req.entitlement = entitlement;
+      return next();
+    } catch {
+      req.monthlyBriefLookup && Object.assign(req.monthlyBriefLookup, {
+        response_status: "request_failed",
+        safe_error_code: "monthly_brief_entitlement_lookup_failed",
+      });
+      return res.status(503).json({
+        ok: false,
+        status: "request_failed",
+        error: "monthly_brief_entitlement_lookup_failed",
+        message: "Bizzi couldn’t load your latest monthly brief. Your saved brief may still be available.",
+        request_id: req.monthlyBriefLookup?.request_id || null,
       });
     }
   };

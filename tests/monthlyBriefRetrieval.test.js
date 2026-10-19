@@ -10,6 +10,7 @@ process.env.OPENAI_API_KEY ||= "test-openai-key";
 
 const {
   createMonthlyBriefLookupHandler,
+  selectLatestAvailableAutomaticPulse,
   selectPreferredAvailablePulse,
 } = await import("../src/api/accounting/pulse.js");
 const {
@@ -25,6 +26,39 @@ const octoberMid = fixture({ id: "oct-mid", month: "2026-10-01", cadence: "mid_m
 
 test("September final deterministically wins over September mid-month and October", () => {
   assert.equal(selectPreferredAvailablePulse([octoberMid, septemberMid, septemberFinal]).id, "sep-final");
+});
+
+test("latest automatic brief ranks logical cadence slots, not late creation time", () => {
+  const lateAugust = fixture({ id: "aug-late", month: "2026-08-01", cadence: "final", generated_at: "2026-10-20T00:00:00Z" });
+  const octoberFinal = fixture({ id: "oct-final", month: "2026-10-01", cadence: "final", generated_at: "2026-11-01T05:00:00Z" });
+  assert.equal(selectLatestAvailableAutomaticPulse([septemberMid]).id, "sep-mid");
+  assert.equal(selectLatestAvailableAutomaticPulse([septemberMid, septemberFinal]).id, "sep-final");
+  assert.equal(selectLatestAvailableAutomaticPulse([septemberFinal, octoberMid]).id, "oct-mid");
+  assert.equal(selectLatestAvailableAutomaticPulse([octoberMid, octoberFinal]).id, "oct-final");
+  assert.equal(selectLatestAvailableAutomaticPulse([lateAugust, octoberMid]).id, "oct-mid");
+});
+
+test("latest selection excludes failed, manual, Accrual, and malformed rows", () => {
+  const invalid = [
+    fixture({ id: "failed-oct", month: "2026-10-01", cadence: "mid_month", status: "failed" }),
+    fixture({ id: "manual-oct", month: "2026-10-01", cadence: "manual" }),
+    fixture({ id: "accrual-oct", month: "2026-10-01", cadence: "mid_month", accounting_method: "Accrual" }),
+    { ...fixture({ id: "malformed-oct", month: "2026-10-01", cadence: "mid_month" }), revenue_summary: null },
+  ];
+  assert.equal(selectLatestAvailableAutomaticPulse([...invalid, septemberFinal]).id, "sep-final");
+});
+
+test("latest route returns October independently of a selected September chart period", async () => {
+  const db = fakeDb([septemberMid, septemberFinal, octoberMid]);
+  const result = await invoke(createMonthlyBriefLookupHandler({ db, latest: true }), {
+    query: { year: "2026", month: "9", business_id: "attacker-business" },
+    business: { id: "canonical-business" },
+    auth: { businessId: "canonical-business", userId: "canonical-user" },
+  });
+  assert.equal(result.body.brief.id, "oct-mid");
+  assert.equal(result.body.brief.reporting_month, "2026-10-01");
+  assert.equal(result.headers["Cache-Control"], "no-store");
+  assert.equal(db.filters.month, undefined);
 });
 
 test("authenticated canonical September lookup returns final and ignores client tenant redirection", async () => {
@@ -129,7 +163,9 @@ test("component source guards request races and retry remains a lookup-only GET"
   assert.match(stateSource, /method: "GET"/);
   assert.doesNotMatch(source, /pulse\/generate/);
   assert.doesNotMatch(source, /window\.location\.reload/);
-  assert.match(stateSource, /Bizzi couldn’t load this monthly brief\. The brief may still exist\./);
+  assert.match(stateSource, /Bizzi couldn’t load your latest monthly brief\. Your saved brief may still be available\./);
+  assert.match(source, /\/api\/accounting\/pulse\/latest/);
+  assert.doesNotMatch(source, /useFinancialPeriod/);
 });
 
 test("lookup source has no provider or chat-credit operation", () => {
@@ -185,6 +221,8 @@ async function invoke(handler, request) {
   const response = {
     statusCode: 200,
     body: null,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value; },
     status(code) { this.statusCode = code; return this; },
     json(body) { this.body = body; return this; },
   };

@@ -47,6 +47,18 @@ test("Monthly Brief schedule targets current month mid-month on the 15th", () =>
   ]);
 });
 
+test("Monthly Brief calendar cadence remains October MTD, October final, then November MTD", () => {
+  assert.deepEqual(dueMonthlyBriefTargets({ now: new Date("2026-10-15T16:00:00.000Z"), lookbackDays: 0 }), [
+    { target_month: "2026-10-01", cadence: "mid_month", due_on: "2026-10-15" },
+  ]);
+  assert.deepEqual(dueMonthlyBriefTargets({ now: new Date("2026-11-01T16:00:00.000Z"), lookbackDays: 0 }), [
+    { target_month: "2026-10-01", cadence: "final", due_on: "2026-11-01" },
+  ]);
+  assert.deepEqual(dueMonthlyBriefTargets({ now: new Date("2026-11-15T16:00:00.000Z"), lookbackDays: 0 }), [
+    { target_month: "2026-11-01", cadence: "mid_month", due_on: "2026-11-15" },
+  ]);
+});
+
 test("Monthly Brief catch-up sweep includes recent missed due dates", () => {
   const targets = dueMonthlyBriefTargets({
     now: new Date("2026-09-20T16:00:00.000Z"),
