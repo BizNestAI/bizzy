@@ -2,12 +2,15 @@
 import { Router } from 'express';
 import {
   deleteAccountingDocController,
+  deleteDocController,
+  createDocController,
   getAccountingDocDownloadController,
   summarizeAndSaveDoc,
   listAccountingDocsController,
   listDocsController,
   getDocController,
   getFacetsController,
+  updateDocController,
   uploadAccountingDocController,
 } from './docs.controller.js';
 import { supabase } from '../../services/supabaseAdmin.js';
@@ -95,8 +98,8 @@ function rateLimitSummarize(req, res, next) {
 docsRouter.get('/list', attachRequestId, normalizeIds, noStore, async (req, res) => {
   try {
     return await listDocsController(req, res);
-  } catch (e) {
-    console.error('[docs:list] error:', e, 'req_id=', req.requestId);
+  } catch {
+    console.error('[docs:list] error');
     return res.status(500).json({ error: 'list_failed', request_id: req.requestId });
   }
 });
@@ -104,8 +107,8 @@ docsRouter.get('/list', attachRequestId, normalizeIds, noStore, async (req, res)
 docsRouter.get('/accounting', attachRequestId, requireRouteAuth, normalizeIds, noStore, async (req, res) => {
   try {
     return await listAccountingDocsController(req, res);
-  } catch (e) {
-    console.error('[docs:accounting:list] error:', e, 'req_id=', req.requestId);
+  } catch {
+    console.error('[docs:accounting:list] error');
     return res.status(500).json({ error: 'accounting_docs_list_failed', request_id: req.requestId });
   }
 });
@@ -113,8 +116,8 @@ docsRouter.get('/accounting', attachRequestId, requireRouteAuth, normalizeIds, n
 docsRouter.post('/accounting/upload', attachRequestId, requireRouteAuth, normalizeIds, noStore, async (req, res) => {
   try {
     return await uploadAccountingDocController(req, res);
-  } catch (e) {
-    console.error('[docs:accounting:upload] error:', e, 'req_id=', req.requestId);
+  } catch {
+    console.error('[docs:accounting:upload] error');
     return res.status(500).json({ error: 'accounting_doc_upload_failed', request_id: req.requestId });
   }
 });
@@ -122,8 +125,8 @@ docsRouter.post('/accounting/upload', attachRequestId, requireRouteAuth, normali
 docsRouter.get('/accounting/:id/download', attachRequestId, requireRouteAuth, normalizeIds, noStore, async (req, res) => {
   try {
     return await getAccountingDocDownloadController(req, res);
-  } catch (e) {
-    console.error('[docs:accounting:download] error:', e, 'req_id=', req.requestId);
+  } catch {
+    console.error('[docs:accounting:download] error');
     return res.status(500).json({ error: 'download_failed', request_id: req.requestId });
   }
 });
@@ -131,8 +134,8 @@ docsRouter.get('/accounting/:id/download', attachRequestId, requireRouteAuth, no
 docsRouter.delete('/accounting/:id', attachRequestId, requireRouteAuth, normalizeIds, noStore, async (req, res) => {
   try {
     return await deleteAccountingDocController(req, res);
-  } catch (e) {
-    console.error('[docs:accounting:delete] error:', e, 'req_id=', req.requestId);
+  } catch {
+    console.error('[docs:accounting:delete] error');
     return res.status(500).json({ error: 'delete_failed', request_id: req.requestId });
   }
 });
@@ -145,8 +148,8 @@ docsRouter.delete('/accounting/:id', attachRequestId, requireRouteAuth, normaliz
 docsRouter.get('/facets', attachRequestId, normalizeIds, noStore, async (req, res) => {
   try {
     return await getFacetsController(req, res);
-  } catch (e) {
-    console.error('[docs:facets] error:', e, 'req_id=', req.requestId);
+  } catch {
+    console.error('[docs:facets] error');
     return res.status(500).json({ error: 'facets_failed', request_id: req.requestId });
   }
 });
@@ -158,11 +161,15 @@ docsRouter.get('/facets', attachRequestId, normalizeIds, noStore, async (req, re
 docsRouter.get('/detail/:id', attachRequestId, normalizeIds, noStore, async (req, res) => {
   try {
     return await getDocController(req, res);
-  } catch (e) {
-    console.error('[docs:detail] error:', e, 'req_id=', req.requestId);
+  } catch {
+    console.error('[docs:detail] error');
     return res.status(404).json({ error: 'not_found', request_id: req.requestId });
   }
 });
+
+docsRouter.post('/detail', attachRequestId, normalizeIds, noStore, createDocController);
+docsRouter.patch('/detail/:id', attachRequestId, normalizeIds, noStore, updateDocController);
+docsRouter.delete('/detail/:id', attachRequestId, normalizeIds, noStore, deleteDocController);
 
 /**
  * POST /api/docs/summarize-and-save

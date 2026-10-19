@@ -32,11 +32,14 @@ test("accounting document folders count uploaded docs by month", () => {
 });
 
 test("accounting document upload validation accepts supported files", () => {
-  assert.equal(validateAccountingDocumentFile({ name: "statement.PDF", size: 1024 }), "");
-  assert.equal(validateAccountingDocumentFile({ name: "statement.xlsx", size: ACCOUNTING_DOCUMENT_MAX_FILE_BYTES }), "");
+  assert.equal(validateAccountingDocumentFile({ name: "statement.PDF", size: 1024, type: "application/pdf" }), "");
+  assert.equal(validateAccountingDocumentFile({ name: "receipt.jpeg", size: ACCOUNTING_DOCUMENT_MAX_FILE_BYTES, type: "image/jpeg" }), "");
 });
 
 test("accounting document upload validation rejects unsupported and oversized files", () => {
   assert.match(validateAccountingDocumentFile({ name: "notes.docx", size: 1024 }), /Unsupported file type/);
+  assert.match(validateAccountingDocumentFile({ name: "statement.xlsx", size: 1024 }), /Unsupported file type/);
+  assert.match(validateAccountingDocumentFile({ name: "statement.pdf", size: 0, type: "application/pdf" }), /empty/);
+  assert.match(validateAccountingDocumentFile({ name: "statement.pdf", size: 10, type: "text/html" }), /does not match/);
   assert.match(validateAccountingDocumentFile({ name: "statement.pdf", size: ACCOUNTING_DOCUMENT_MAX_FILE_BYTES + 1 }), /too large/);
 });

@@ -1,9 +1,19 @@
 // File: /src/api/docs/docs.controller.js
-/* global process */
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { supabase } from '../../services/supabaseAdmin.js';
 import { summarizeWithLLM } from './summarizer.js';
+import {
+  SENSITIVE_BUCKETS,
+  assertSensitiveObject,
+  canonicalBusinessId,
+  isStorageObjectMissing,
+  rejectConflictingBusinessId,
+} from '../_shared/sensitiveStorage.js';
+import {
+  accountingFileExtension,
+  validateAccountingUpload,
+} from './accountingUploadValidation.js';
 
 /* ──────────────────────────────────────────────────────────────
  * Schemas & helpers
@@ -33,9 +43,19 @@ const listQuery = z.object({
   offset: z.coerce.number().int().min(0).max(10_000).default(0),
 });
 
-const DOCS_BUCKET = process.env.SUPABASE_ACCOUNTING_DOCS_BUCKET || process.env.STORAGE_DOCS_BUCKET || 'bizzy-docs';
-const MAX_ACCOUNTING_DOC_BYTES = 25 * 1024 * 1024;
-const ALLOWED_ACCOUNTING_EXTENSIONS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'csv', 'xls', 'xlsx']);
+const docCreateBody = z.object({
+  title: z.string().trim().min(1).max(200),
+  category: z.enum(['financials','tax','marketing','investments','general']).default('general'),
+  content: z.unknown(),
+  tags: z.array(z.string().max(80)).max(20).default([]),
+});
+
+const docUpdateBody = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  content: z.unknown().optional(),
+}).refine((value) => value.title !== undefined || value.content !== undefined, 'empty_patch');
+
+const DOCS_BUCKET = SENSITIVE_BUCKETS.ACCOUNTING_DOCUMENTS;
 const ALLOWED_ACCOUNTING_TYPES = new Set([
   'bank_statement',
   'credit_card_statement',
@@ -67,7 +87,7 @@ const accountingUploadBody = z.object({
 });
 
 function getTrustedBusinessId(req) {
-  return req.business?.id || req.auth?.businessId || req?.ctx?.businessId || req?.query?.business_id || req?.body?.business_id;
+  return canonicalBusinessId(req);
 }
 
 function getTrustedUserId(req) {
@@ -77,6 +97,8 @@ function getTrustedUserId(req) {
 function sanitizeFilename(filename = 'document') {
   const safe = String(filename || 'document')
     .normalize('NFKD')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f/\\]+/g, '')
     .replace(/[^\w.\- ]+/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
@@ -85,8 +107,7 @@ function sanitizeFilename(filename = 'document') {
 }
 
 function getFileExtension(filename = '') {
-  const pieces = String(filename || '').split('.');
-  return pieces.length > 1 ? pieces.pop().toLowerCase() : '';
+  return accountingFileExtension(filename);
 }
 
 function getUploadedFile(req) {
@@ -115,25 +136,19 @@ function mapAccountingDoc(row = {}) {
   const meta = accountingMetaFromDoc(row);
   return {
     id: row.id,
-    business_id: row.business_id,
     title: row.title,
-    filename: row.filename,
     original_filename: meta.original_filename,
     year: meta.year,
     month: meta.month,
     document_type: meta.document_type,
     financial_account_id: meta.financial_account_id,
     financial_account_name: meta.financial_account_name,
-    mime_type: row.mime_type,
     size: row.size,
     file_size: meta.file_size,
-    storage_bucket: row.storage_bucket,
-    storage_path: row.storage_path,
     uploaded_by_user_id: meta.uploaded_by_user_id,
     uploaded_by_name: row.author || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
-    content: row.content,
   };
 }
 
@@ -182,10 +197,14 @@ const fail = (req, res, status, error, meta) => res.status(status).json({ error,
  * ────────────────────────────────────────────────────────────── */
 export async function summarizeAndSaveDoc(req, res) {
   try {
+    const businessId = getTrustedBusinessId(req);
+    rejectConflictingBusinessId(req, businessId);
+    const userId = getTrustedUserId(req);
+    if (!userId) return fail(req, res, 401, 'missing_or_invalid_user_id');
     const trustedBody = {
       ...(req.body || {}),
-      business_id: req.business?.id || req.auth?.businessId || req.body?.business_id,
-      user_id: req.auth?.userId || req.user?.id || req.body?.user_id,
+      business_id: businessId,
+      user_id: userId,
     };
     const parsed = summarizePayload.parse(trustedBody);
     const { business_id, user_id, category, title, messages } = parsed;
@@ -194,7 +213,7 @@ export async function summarizeAndSaveDoc(req, res) {
     let content;
     try {
       content = await summarizeWithLLM(title, category, messages);
-    } catch (e) {
+    } catch {
       console.warn('[docs] LLM unavailable; using bounded fallback');
       content = cheapSummary(messages);
       content.title = title;
@@ -241,8 +260,8 @@ export async function summarizeAndSaveDoc(req, res) {
  * ────────────────────────────────────────────────────────────── */
 export async function listDocsController(req, res) {
   try {
-    const businessId = req.business?.id || req.auth?.businessId || req?.ctx?.businessId || req?.query?.business_id;
-    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    const businessId = getTrustedBusinessId(req);
+    rejectConflictingBusinessId(req, businessId);
 
     const parsed = listQuery.safeParse(req.query || {});
     if (!parsed.success) {
@@ -252,8 +271,9 @@ export async function listDocsController(req, res) {
 
     let query = supabase
       .from('bizzy_docs')
-      .select('id,business_id,title,filename,category,size,mime_type,created_at,author,updated_at', { count: 'exact' })
-      .eq('business_id', businessId);
+      .select('id,title,filename,category,size,mime_type,created_at,author,updated_at', { count: 'exact' })
+      .eq('business_id', businessId)
+      .is('storage_path', null);
 
     if (category && category !== 'all') query = query.eq('category', category);
 
@@ -280,9 +300,9 @@ export async function listDocsController(req, res) {
     const safeData = Array.isArray(data) ? data : [];
     return ok(req, res, { data: safeData, count: count || 0 });
   } catch (err) {
-    console.error('[docs:list] controller error', err);
-    const status = err?.status || 400;
-    return res.status(status).json({ error: err?.message || 'list_failed', request_id: req.requestId });
+    console.error('[docs:list] controller error');
+    const status = Number(err?.status || 500);
+    return res.status(status).json({ error: status < 500 ? err.code || 'invalid_request' : 'list_failed', request_id: req.requestId });
   }
 }
 
@@ -291,22 +311,82 @@ export async function listDocsController(req, res) {
  * ────────────────────────────────────────────────────────────── */
 export async function getDocController(req, res) {
   try {
-    const businessId = req.business?.id || req.auth?.businessId || req?.ctx?.businessId || req?.query?.business_id;
-    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    const businessId = getTrustedBusinessId(req);
+    rejectConflictingBusinessId(req, businessId);
 
     const { id } = req.params;
     const { data, error } = await supabase
       .from('bizzy_docs')
-      .select('*')
+      .select('id,title,filename,category,content,tags,created_at,size,mime_type,author,updated_at')
       .eq('business_id', businessId)
       .eq('id', id)
+      .is('storage_path', null)
       .single();
 
     if (error || !data) return fail(req, res, 404, 'not_found');
     return ok(req, res, { data });
   } catch (err) {
-    const status = err?.status || 400;
-    return res.status(status).json({ error: err?.message || 'detail_failed', request_id: req.requestId });
+    const status = Number(err?.status || 500);
+    return res.status(status).json({ error: status < 500 ? err.code || 'invalid_request' : 'detail_failed', request_id: req.requestId });
+  }
+}
+
+export async function createDocController(req, res) {
+  try {
+    const businessId = getTrustedBusinessId(req);
+    rejectConflictingBusinessId(req, businessId);
+    const userId = getTrustedUserId(req);
+    if (!userId) return fail(req, res, 401, 'missing_or_invalid_user_id');
+    const parsed = docCreateBody.safeParse(req.body || {});
+    if (!parsed.success) return fail(req, res, 400, 'invalid_document');
+    const { data, error } = await supabase.from('bizzy_docs').insert({
+      business_id: businessId,
+      user_id: userId,
+      ...parsed.data,
+    }).select('id').single();
+    if (error) throw new Error('document_create_failed');
+    return ok(req, res, { ok: true, id: data.id });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+    return fail(req, res, status, status < 500 ? err.code || 'invalid_request' : 'document_create_failed');
+  }
+}
+
+export async function updateDocController(req, res) {
+  try {
+    const businessId = getTrustedBusinessId(req);
+    rejectConflictingBusinessId(req, businessId);
+    const parsed = docUpdateBody.safeParse(req.body || {});
+    if (!parsed.success) return fail(req, res, 400, 'invalid_document_patch');
+    const { data: existing, error: lookupError } = await supabase.from('bizzy_docs')
+      .select('id').eq('id', req.params.id).eq('business_id', businessId).is('storage_path', null).maybeSingle();
+    if (lookupError) throw new Error('document_lookup_failed');
+    if (!existing) return fail(req, res, 404, 'not_found');
+    const { error } = await supabase.from('bizzy_docs').update(parsed.data)
+      .eq('id', req.params.id).eq('business_id', businessId).is('storage_path', null);
+    if (error) throw new Error('document_update_failed');
+    return getDocController(req, res);
+  } catch (err) {
+    const status = Number(err?.status || 500);
+    return fail(req, res, status, status < 500 ? err.code || 'invalid_request' : 'document_update_failed');
+  }
+}
+
+export async function deleteDocController(req, res) {
+  try {
+    const businessId = getTrustedBusinessId(req);
+    rejectConflictingBusinessId(req, businessId);
+    const { data: existing, error: lookupError } = await supabase.from('bizzy_docs')
+      .select('id,storage_path').eq('id', req.params.id).eq('business_id', businessId).maybeSingle();
+    if (lookupError) throw new Error('document_lookup_failed');
+    if (!existing || existing.storage_path) return fail(req, res, 404, 'not_found');
+    const { error } = await supabase.from('bizzy_docs').delete()
+      .eq('id', req.params.id).eq('business_id', businessId).is('storage_path', null);
+    if (error) throw new Error('document_delete_failed');
+    return ok(req, res, { ok: true });
+  } catch (err) {
+    const status = Number(err?.status || 500);
+    return fail(req, res, status, status < 500 ? err.code || 'invalid_request' : 'document_delete_failed');
   }
 }
 
@@ -315,8 +395,8 @@ export async function getDocController(req, res) {
  * ────────────────────────────────────────────────────────────── */
 export async function getFacetsController(req, res) {
   try {
-    const businessId = req.business?.id || req.auth?.businessId || req?.ctx?.businessId || req?.query?.business_id;
-    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    const businessId = getTrustedBusinessId(req);
+    rejectConflictingBusinessId(req, businessId);
 
     const cats = ['general', 'financials', 'tax', 'marketing', 'investments'];
 
@@ -326,8 +406,9 @@ export async function getFacetsController(req, res) {
           .from('bizzy_docs')
           .select('id', { count: 'exact', head: true })
           .eq('business_id', businessId)
+          .is('storage_path', null)
           .eq('category', c);
-        if (error) console.warn('[docs:facets] count error for', c, error?.message);
+        if (error) console.warn('[docs:facets] count error');
         return [c, count || 0];
       })
     );
@@ -335,26 +416,27 @@ export async function getFacetsController(req, res) {
     const { count: all } = await supabase
       .from('bizzy_docs')
       .select('id', { count: 'exact', head: true })
-      .eq('business_id', businessId);
+      .eq('business_id', businessId)
+      .is('storage_path', null);
 
     return ok(req, res, { data: { all: all || 0, ...Object.fromEntries(results) } });
   } catch (err) {
-    const status = err?.status || 400;
-    return res.status(status).json({ error: err?.message || 'facets_failed', request_id: req.requestId });
+    const status = Number(err?.status || 500);
+    return res.status(status).json({ error: status < 500 ? err.code || 'invalid_request' : 'facets_failed', request_id: req.requestId });
   }
 }
 
 export async function listAccountingDocsController(req, res) {
   try {
     const businessId = getTrustedBusinessId(req);
-    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    rejectConflictingBusinessId(req, businessId);
     const parsed = accountingListQuery.safeParse({ ...(req.query || {}), business_id: businessId });
     if (!parsed.success) return fail(req, res, 400, 'invalid_query', { issues: parsed.error.issues });
 
     const { year, month } = parsed.data;
     let query = supabase
       .from('bizzy_docs')
-      .select('*')
+      .select('id,business_id,title,original_filename,year,month,document_type,financial_account_id,file_size,size,uploaded_by_user_id,user_id,author,created_at,updated_at,storage_bucket,storage_path,content')
       .eq('business_id', businessId)
       .not('storage_path', 'is', null)
       .order('created_at', { ascending: false });
@@ -366,6 +448,14 @@ export async function listAccountingDocsController(req, res) {
     if (error) throw error;
 
     const docs = (data || [])
+      .filter((row) => {
+        try {
+          assertSensitiveObject({ businessId, expectedBucket: DOCS_BUCKET, persistedBucket: row.storage_bucket, objectPath: row.storage_path });
+          return true;
+        } catch {
+          return false;
+        }
+      })
       .map(mapAccountingDoc)
       .filter((row) => {
         if (year && Number(row.year) !== Number(year)) return false;
@@ -375,8 +465,9 @@ export async function listAccountingDocsController(req, res) {
 
     return ok(req, res, { data: docs, count: docs.length });
   } catch (err) {
-    console.error('[docs:accounting:list] error', err);
-    return fail(req, res, err?.status || 400, err?.message || 'accounting_docs_list_failed');
+    console.error('[docs:accounting:list] error');
+    const status = Number(err?.status || 500);
+    return fail(req, res, status, status < 500 ? err.code || 'invalid_request' : 'accounting_docs_list_failed');
   }
 }
 
@@ -385,7 +476,7 @@ export async function uploadAccountingDocController(req, res) {
   try {
     const businessId = getTrustedBusinessId(req);
     const userId = getTrustedUserId(req);
-    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    rejectConflictingBusinessId(req, businessId);
     if (!userId) return fail(req, res, 401, 'missing_or_invalid_user_id');
 
     const parsed = accountingUploadBody.safeParse({ ...(req.body || {}), business_id: businessId });
@@ -393,21 +484,24 @@ export async function uploadAccountingDocController(req, res) {
 
     const file = getUploadedFile(req);
     if (!file) return fail(req, res, 400, 'missing_file');
+    const validationError = validateAccountingUpload(file);
+    if (validationError) {
+      const status = validationError === 'file_too_large' ? 413 : validationError === 'empty_file' || validationError === 'invalid_filename' ? 400 : 415;
+      return fail(req, res, status, validationError);
+    }
     const ext = getFileExtension(file.name);
-    if (!ALLOWED_ACCOUNTING_EXTENSIONS.has(ext)) return fail(req, res, 400, 'unsupported_file_type');
-    if (Number(file.size || 0) > MAX_ACCOUNTING_DOC_BYTES) return fail(req, res, 400, 'file_too_large');
 
     const { year, month, document_type, financial_account_id } = parsed.data;
     if (!ALLOWED_ACCOUNTING_TYPES.has(document_type)) return fail(req, res, 400, 'unsupported_document_type');
 
     const documentId = randomUUID();
-    const originalFilename = file.name || `document.${ext}`;
+    const originalFilename = String(file.name || `document.${ext}`).slice(0, 180);
     const storagePath = `${businessId}/${year}/${String(month).padStart(2, '0')}/${documentId}-${sanitizeFilename(originalFilename)}`;
     const financialAccountName = await fetchFinancialAccountName(businessId, financial_account_id);
 
     const { error: uploadError } = await supabase.storage.from(DOCS_BUCKET).upload(storagePath, file.data, {
       cacheControl: '3600',
-      contentType: file.mimetype || 'application/octet-stream',
+      contentType: String(file.mimetype).toLowerCase(),
       upsert: false,
     });
     if (uploadError) throw uploadError;
@@ -440,7 +534,7 @@ export async function uploadAccountingDocController(req, res) {
       title: originalFilename,
       category: 'financials',
       filename: originalFilename,
-      mime_type: file.mimetype || 'application/octet-stream',
+      mime_type: String(file.mimetype).toLowerCase(),
       size: file.size,
       storage_bucket: DOCS_BUCKET,
       storage_path: storagePath,
@@ -470,15 +564,16 @@ export async function uploadAccountingDocController(req, res) {
     if (uploadedPath) {
       await supabase.storage.from(DOCS_BUCKET).remove([uploadedPath]).catch?.(() => {});
     }
-    console.error('[docs:accounting:upload] error', err);
-    return fail(req, res, err?.status || 400, err?.message || 'accounting_doc_upload_failed');
+    console.error('[docs:accounting:upload] error');
+    const status = Number(err?.status || 500);
+    return fail(req, res, status, status < 500 ? err.code || 'invalid_request' : 'accounting_doc_upload_failed');
   }
 }
 
 export async function getAccountingDocDownloadController(req, res) {
   try {
     const businessId = getTrustedBusinessId(req);
-    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    rejectConflictingBusinessId(req, businessId);
     const { id } = req.params;
     const { data: doc, error } = await supabase
       .from('bizzy_docs')
@@ -489,21 +584,29 @@ export async function getAccountingDocDownloadController(req, res) {
     if (error) throw error;
     if (!doc?.storage_path) return fail(req, res, 404, 'not_found');
 
+    const target = assertSensitiveObject({
+      businessId,
+      expectedBucket: DOCS_BUCKET,
+      persistedBucket: doc.storage_bucket,
+      objectPath: doc.storage_path,
+    });
+
     const { data, error: signedError } = await supabase.storage
-      .from(doc.storage_bucket || DOCS_BUCKET)
-      .createSignedUrl(doc.storage_path, 60 * 5);
+      .from(target.bucket)
+      .createSignedUrl(target.objectPath, 60 * 5, { download: true });
     if (signedError || !data?.signedUrl) throw signedError || new Error('signed_url_failed');
     return ok(req, res, { ok: true, signed_url: data.signedUrl });
   } catch (err) {
-    console.error('[docs:accounting:download] error', err);
-    return fail(req, res, err?.status || 400, err?.message || 'download_failed');
+    console.error('[docs:accounting:download] error');
+    const status = Number(err?.status || 500);
+    return fail(req, res, status, status < 500 ? err.code || 'invalid_request' : 'download_failed');
   }
 }
 
 export async function deleteAccountingDocController(req, res) {
   try {
     const businessId = getTrustedBusinessId(req);
-    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    rejectConflictingBusinessId(req, businessId);
     const { id } = req.params;
     const { data: doc, error } = await supabase
       .from('bizzy_docs')
@@ -515,8 +618,9 @@ export async function deleteAccountingDocController(req, res) {
     if (!doc) return fail(req, res, 404, 'not_found');
 
     if (doc.storage_path) {
-      const { error: storageError } = await supabase.storage.from(doc.storage_bucket || DOCS_BUCKET).remove([doc.storage_path]);
-      if (storageError) throw storageError;
+      const target = assertSensitiveObject({ businessId, expectedBucket: DOCS_BUCKET, persistedBucket: doc.storage_bucket, objectPath: doc.storage_path });
+      const { error: storageError } = await supabase.storage.from(target.bucket).remove([target.objectPath]);
+      if (storageError && !isStorageObjectMissing(storageError)) throw new Error('storage_delete_failed');
     }
 
     const { error: deleteError } = await supabase
@@ -528,7 +632,8 @@ export async function deleteAccountingDocController(req, res) {
 
     return ok(req, res, { ok: true });
   } catch (err) {
-    console.error('[docs:accounting:delete] error', err);
-    return fail(req, res, err?.status || 400, err?.message || 'delete_failed');
+    console.error('[docs:accounting:delete] error');
+    const status = Number(err?.status || 500);
+    return fail(req, res, status, status < 500 ? err.code || 'invalid_request' : 'delete_failed');
   }
 }

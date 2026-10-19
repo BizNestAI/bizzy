@@ -1,18 +1,13 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { supabase } from "../../services/supabaseClient";
-import { useUser } from "@supabase/auth-helpers-react";
 import { Dialog, Listbox } from "@headlessui/react";
-import { Download, FileText, Loader2 } from "lucide-react";
+import { FileText, Loader2 } from "lucide-react";
 import { ChevronUpDownIcon } from "@heroicons/react/20/solid";
-import { motion } from "framer-motion";
+import { motion as Motion } from "framer-motion";
 import useCurrentBusiness from "../../hooks/useCurrentBusiness";
 import AskBizzyInsightButton from "../Bizzy/AskBizzyInsightButton";
 import { getMonthName } from "../../utils/dateUtils";
-import { apiFetch, getApiBase } from "../../utils/apiBase.js";
-import { shouldUseDemoData } from "../../services/demo/demoClient.js";
+import { apiFetch } from "../../utils/apiBase.js";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
-
-const SYNC_ENDPOINT = "/api/accounting/reports-sync";
 
 const MONTHS = [
   "All Months",
@@ -35,11 +30,8 @@ function archiveReportStateLabel(status) {
 }
 
 export default function PNLArchiveViewer() {
-  const user = useUser();
   const { currentBusiness } = useCurrentBusiness();
   const adminView = useAdminView();
-  const readOnly = adminView.active && adminView.readOnly;
-  const usingDemo = shouldUseDemoData(currentBusiness);
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filteredYear, setFilteredYear] = useState(null);
@@ -62,85 +54,33 @@ export default function PNLArchiveViewer() {
   async function fetchReports() {
     if (!currentBusiness?.id) return;
     setLoading(true);
-    if (!usingDemo || adminView.active) {
-      try {
-        const res = await apiFetch("/api/accounting/pnl/archive", {
-          headers: { "x-business-id": currentBusiness.id },
-        });
-        if (!res.ok) {
-          setReports([]);
-          return;
-        }
-        const data = await res.json();
-        setReports(Array.isArray(data?.reports) ? data.reports : []);
-      } catch (error) {
-        console.warn("[PNLArchiveViewer] archive fetch failed:", error?.message || error);
-        setReports([]);
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
-    let query = supabase
-      .from("report_metadata")
-      .select("*")
-      .eq("business_id", currentBusiness.id)
-      .order("year", { ascending: false })
-      .order("month", { ascending: false });
-
-    if (!usingDemo) {
-      query = query.not("monthly_review_published_at", "is", null);
-    }
-
-    const { data, error } = await query;
-    if (error) {
-      console.error("[PNLArchiveViewer] fetch error:", error);
-      setReports([]);
-    } else {
-      setReports(data || []);
-    }
-    setLoading(false);
-  }
-
-  async function maybeSeedMockOnce() {
-    if (adminView.active) return;
-    if (!usingDemo) return;
-    if (!currentBusiness?.id) return;
-    const key = `pnl_mock_seeded_${currentBusiness.id}`;
-    const { data } = await supabase
-      .from("report_metadata")
-      .select("id", { count: "exact" })
-      .eq("business_id", currentBusiness.id)
-      .limit(1);
-    const isEmpty = !data || data.length === 0;
-    if (!isEmpty) {
-      localStorage.setItem(key, "1");
-      return;
-    }
     try {
-      await apiFetch(SYNC_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: user?.id || "demo-user",
-          business_id: currentBusiness.id,
-          window: 12,
-          forceMock: true,
-        }),
+      const res = await apiFetch("/api/accounting/pnl/archive", {
+        headers: { "x-business-id": currentBusiness.id },
+        cache: "no-store",
       });
-      localStorage.setItem(key, "1");
-      await fetchReports();
-    } catch (e) {
-      console.warn("[PNLArchiveViewer] mock seed failed:", e?.message || e);
+      if (!res.ok) {
+        setReports([]);
+        return;
+      }
+      const data = await res.json();
+      setReports(Array.isArray(data?.reports) ? data.reports : []);
+    } catch {
+      setReports([]);
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => {
-    if (!currentBusiness?.id) return;
-    (async () => {
-      await fetchReports();
-      await maybeSeedMockOnce();
-    })();
+    setReports([]);
+    setPdfUrl(null);
+    setSelectedReport(null);
+    if (!currentBusiness?.id) {
+      setLoading(false);
+      return;
+    }
+    fetchReports();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminView.active, currentBusiness?.id]);
 
@@ -162,83 +102,30 @@ export default function PNLArchiveViewer() {
     });
   }, [reports, filteredYear, filteredMonth]);
 
-  async function generatePdfOnDemand(report, { forceRefresh = false } = {}) {
-    if (!currentBusiness?.id) return { error: "missing_business" };
-    try {
-      const payload = {
-        user_id: user?.id || null,
-        business_id: currentBusiness.id,
-        year: report.year,
-        month: report.month,
-        forceRefresh,
-        forceMock: usingDemo,
-      };
-      console.log("[PNLArchiveViewer] generatePdfOnDemand", payload, { apiBase: getApiBase() });
-      const res = await apiFetch("/api/accounting/pnl/pdf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const raw = await res.text();
-        let parsed = null;
-        try { parsed = JSON.parse(raw); } catch (_) { /* ignore */ }
-        console.error("[PNLArchiveViewer] generate PDF failed", res.status, res.url || "", raw);
-        return { error: "backend_failed", status: res.status, raw, parsed };
-      }
-      const json = await res.json();
-      console.log("[PNLArchiveViewer] generatePdfOnDemand response", { url: res.url, json });
-      await fetchReports();
-      return json;
-    } catch (err) {
-      console.error("[PNLArchiveViewer] generatePdfOnDemand error", err?.message || err);
-      alert(err?.message || "Failed to generate PDF");
-      return { error: err?.message || "Failed to generate PDF" };
-    }
+  async function getReportViewUrl(report) {
+    if (!currentBusiness?.id || !report?.id) return null;
+    const res = await apiFetch(`/api/accounting/pnl/archive/${encodeURIComponent(report.id)}/view`, {
+      headers: { "x-business-id": currentBusiness.id },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const payload = await res.json();
+    return payload?.signed_url || null;
   }
 
   async function openPdf(report) {
     const reportKey = `${report.year}-${report.month}`;
     setLoadingReportKey(reportKey);
-    console.log("[PNLArchiveViewer] openPdf start", {
-      userId: user?.id,
-      businessId: currentBusiness?.id,
-      year: report.year,
-      month: report.month,
-      storage_path: report.storage_path,
-    });
-
     try {
-      let signedUrl = report.signed_url || report.signedUrl || null;
-      let source = "bizzi";
-
-      if (readOnly) {
-        if (!signedUrl) {
-          alert("This archived report is unavailable in read-only Admin View.");
-          return;
-        }
-      }
-
+      const signedUrl = await getReportViewUrl(report);
       if (!signedUrl) {
-        const generated = await generatePdfOnDemand(report, { forceRefresh: !usingDemo });
-        if (generated?.signed_url) {
-          signedUrl = generated.signed_url;
-          await fetchReports(); // refresh storage_path to canonical
-        } else {
-          console.error("[PNLArchiveViewer] generatePdfOnDemand result", generated);
-          const msgParts = [];
-          if (generated?.error) msgParts.push(generated.error);
-          if (generated?.status) msgParts.push(`status ${generated.status}`);
-          if (generated?.raw) msgParts.push(generated.raw);
-          const msg = msgParts.length ? msgParts.join(" | ") : "Unable to load PDF";
-          alert(msg);
-          return;
-        }
+        alert("This archived report is unavailable.");
+        return;
       }
 
       setPdfUrl(signedUrl);
       setSelectedReport(report);
-      setPdfSource(source);
+      setPdfSource("bizzi");
     } finally {
       setLoadingReportKey(null);
     }
@@ -247,36 +134,6 @@ export default function PNLArchiveViewer() {
     setPdfUrl(null);
     setSelectedReport(null);
     setPdfSource("bizzi");
-  }
-
-  async function downloadPdf(report) {
-    if (readOnly) {
-      const signedUrl = report.signed_url || report.signedUrl || null;
-      if (!signedUrl) return;
-      const a = document.createElement("a");
-      a.href = signedUrl;
-      a.download = `${report.year}-${String(report.month).padStart(2, "0")}-pnl.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      return;
-    }
-    console.log("[PNLArchiveViewer] downloadPdf start", {
-      userId: user?.id,
-      businessId: currentBusiness?.id,
-      year: report.year,
-      month: report.month,
-      storage_path: report.storage_path,
-    });
-    const generated = await generatePdfOnDemand(report, { forceRefresh: false });
-    if (generated?.signed_url) {
-      const a = document.createElement("a");
-      a.href = generated.signed_url;
-      a.download = `${report.year}-${String(report.month).padStart(2, "0")}-pnl.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
   }
 
   return (
@@ -359,7 +216,7 @@ export default function PNLArchiveViewer() {
           {filteredReports.map((report) => {
             const monthName = getMonthName(report.month);
             return (
-              <motion.div
+              <Motion.div
                 key={`${report.year}-${report.month}`}
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -403,7 +260,7 @@ export default function PNLArchiveViewer() {
                     <span className="text-white/80">Loading report…</span>
                   </div>
                 )}
-              </motion.div>
+              </Motion.div>
             );
           })}
         </div>

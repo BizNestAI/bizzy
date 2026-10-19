@@ -44,6 +44,7 @@ export function clearStoredAuthAndBusinessState() {
   }
   try { removeCustomerCacheEntries(window.localStorage); } catch { /* ignore */ }
   try { removeCustomerCacheEntries(window.sessionStorage); } catch { /* ignore */ }
+  window.dispatchEvent(new CustomEvent("bizzy:auth-cleared"));
 }
 
 export function markStoredSessionIdentity(userId) {
@@ -65,4 +66,5 @@ export function clearStoredBusinessState() {
       /* ignore */
     }
   }
+  window.dispatchEvent(new CustomEvent("bizzy:business-changed", { detail: { businessId: null } }));
 }

@@ -337,23 +337,27 @@ app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
 
-startForecastCron();
-startBooksPostingCron();
-startInteractivePostingCommandWorker();
-startBookkeepingProcessingWorker();
-startOperatorRequestSummaryCron();
-startPlaidDailySyncCron();
-startContractorCfoInsightsCron();
-startTaxClassificationWorker();
-startTaxRecalculationWorker();
-startTaxScheduler();
-startQboJobCostingSyncCron();
-startQboFinancialHealthCron();
-startMonthlyFinancialPulseCron();
-if (String(process.env.DISABLE_RECON_CRON || "").toLowerCase() !== "true") {
-  startReconciliationCron();
+if (String(process.env.DISABLE_BACKGROUND_WORKERS || "").toLowerCase() !== "true") {
+  startForecastCron();
+  startBooksPostingCron();
+  startInteractivePostingCommandWorker();
+  startBookkeepingProcessingWorker();
+  startOperatorRequestSummaryCron();
+  startPlaidDailySyncCron();
+  startContractorCfoInsightsCron();
+  startTaxClassificationWorker();
+  startTaxRecalculationWorker();
+  startTaxScheduler();
+  startQboJobCostingSyncCron();
+  startQboFinancialHealthCron();
+  startMonthlyFinancialPulseCron();
+  if (String(process.env.DISABLE_RECON_CRON || "").toLowerCase() !== "true") {
+    startReconciliationCron();
+  } else {
+    console.info("[recon-cron] disabled via env");
+  }
 } else {
-  console.info("[recon-cron] disabled via env");
+  console.info("[background-workers] disabled via env");
 }
 
 export default app;

@@ -100,6 +100,7 @@ import { ensureForecastV1Run } from "../../services/accounting/forecastV1Service
 import { getConnectedFinancialAccountsForBusiness } from "../../services/plaid/plaidIntegrationService.js";
 import { fetchAdminViewPersistedAccountMappings } from "../bookkeeping/routes/bookkeeping.accountMappings.routes.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../_shared/internalStaffAuth.js";
+import { SENSITIVE_BUCKETS, assertSensitiveObject } from "../_shared/sensitiveStorage.js";
 import {
   confirmPendingSettled,
   excludePendingAuthorization,
@@ -411,10 +412,12 @@ router.get("/businesses/:businessId/pnl-report/view", async (req, res) => {
     if (!reportState.report?.storage_path || !["published_current", "published_legacy_unverified", "published_outdated"].includes(reportState.status)) {
       return res.status(404).json({ ok: false, error: "published_report_not_found" });
     }
+    const target = assertSensitiveObject({ businessId, expectedBucket: SENSITIVE_BUCKETS.FINANCIAL_REPORTS, objectPath: reportState.report.storage_path });
     const { data: signed, error: signedError } = await supabase.storage
-      .from("financial-reports")
-      .createSignedUrl(reportState.report.storage_path, 60 * 10);
+      .from(target.bucket)
+      .createSignedUrl(target.objectPath, 60 * 5, { download: true });
     if (signedError || !signed?.signedUrl) throw signedError || new Error("signed_url_unavailable");
+    res.set("Cache-Control", "no-store");
     return res.json({ ok: true, report_state: reportState.status, signed_url: signed.signedUrl });
   } catch (e) {
     console.error("[monthly-review] view pnl failed", e?.message || e);
@@ -1889,6 +1892,7 @@ router.post("/runs/:runId/reconcile-pnl-source", async (req, res) => {
     if (snapshotError) throw snapshotError;
     if (!snapshot?.raw_hash) return res.status(409).json({ ok: false, error: "report_source_identity_not_reconstructable", message: "The published report's original source fingerprint is unavailable." });
     const slash = report.storage_path.lastIndexOf("/");
+    assertSensitiveObject({ businessId: run.business_id, expectedBucket: SENSITIVE_BUCKETS.FINANCIAL_REPORTS, objectPath: report.storage_path });
     const directory = slash >= 0 ? report.storage_path.slice(0, slash) : "";
     const filename = slash >= 0 ? report.storage_path.slice(slash + 1) : report.storage_path;
     const { data: objects, error: objectError } = await supabase.storage.from("financial-reports").list(directory, { search: filename, limit: 10 });

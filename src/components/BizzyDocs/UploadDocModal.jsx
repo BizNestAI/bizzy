@@ -16,7 +16,7 @@ const ACCOUNTING_DOCUMENT_TYPES = [
   { key: "other_accounting_document", label: "Other accounting document", requiresAccount: false },
 ];
 
-const ACCEPT = ".pdf,.png,.jpg,.jpeg,.csv,.xls,.xlsx,application/pdf,image/png,image/jpeg,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const ACCEPT = ".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg";
 
 function monthName(month) {
   const date = new Date(2026, Number(month || 1) - 1, 1);
@@ -228,7 +228,7 @@ export default function AccountingDocumentUploadModal({
             className="w-full rounded-lg border border-white/10 bg-white/5 p-4 text-left transition hover:border-[var(--accent)] disabled:opacity-60"
           >
             <div className="text-sm font-semibold text-white/85">{fileSummary(files)}</div>
-            <div className="mt-2 text-xs text-white/50">PDF, PNG, JPG, CSV, XLS, or XLSX. Up to 25 MB per file.</div>
+            <div className="mt-2 text-xs text-white/50">PDF, PNG, or JPG. Up to 25 MB per file.</div>
           </button>
           <input
             ref={inputRef}

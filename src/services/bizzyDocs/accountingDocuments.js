@@ -1,6 +1,12 @@
 export const ACCOUNTING_DOCUMENT_START_YEAR = 2026;
 export const ACCOUNTING_DOCUMENT_MAX_FILE_BYTES = 25 * 1024 * 1024;
-export const ACCOUNTING_DOCUMENT_ALLOWED_EXTENSIONS = new Set(["pdf", "png", "jpg", "jpeg", "csv", "xls", "xlsx"]);
+export const ACCOUNTING_DOCUMENT_ALLOWED_EXTENSIONS = new Set(["pdf", "png", "jpg", "jpeg"]);
+export const ACCOUNTING_DOCUMENT_ALLOWED_MIME_TYPES = new Map([
+  ["pdf", "application/pdf"],
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+]);
 
 export const ACCOUNTING_DOCUMENT_MONTHS = [
   "January",
@@ -42,7 +48,9 @@ export function accountingDocumentExtension(file = {}) {
 export function validateAccountingDocumentFile(file) {
   if (!file) return "Choose a file.";
   const ext = accountingDocumentExtension(file);
-  if (!ACCOUNTING_DOCUMENT_ALLOWED_EXTENSIONS.has(ext)) return "Unsupported file type. Upload PDF, PNG, JPG, CSV, XLS, or XLSX.";
+  if (!ACCOUNTING_DOCUMENT_ALLOWED_EXTENSIONS.has(ext)) return "Unsupported file type. Upload PDF, PNG, or JPG.";
+  if (!Number.isFinite(Number(file.size)) || Number(file.size) <= 0) return "The file is empty.";
   if (file.size > ACCOUNTING_DOCUMENT_MAX_FILE_BYTES) return "File is too large. Maximum size is 25 MB per file.";
+  if (file.type && file.type.toLowerCase() !== ACCOUNTING_DOCUMENT_ALLOWED_MIME_TYPES.get(ext)) return "The file type does not match its extension.";
   return "";
 }

@@ -1,5 +1,5 @@
 import express from "express";
-import { pullPnlPdfsForYear } from "./pullPnlPdfs.js"; // <-- path must match your file
+import { canonicalBusinessId, rejectConflictingBusinessId } from "../_shared/sensitiveStorage.js";
 
 const router = express.Router();
 
@@ -9,30 +9,14 @@ const router = express.Router();
  * returns: { synced, skipped, mocked, errors }
  */
 router.post("/", async (req, res) => {
+  res.set("Cache-Control", "no-store");
   try {
-    const b = req.body || {};
-    const user_id = b.user_id || b.userId;
-    const business_id = b.business_id || b.businessId;
-    const window = Number(b.window || 12);
-    const endYear = b.endYear ? Number(b.endYear) : undefined;
-    const endMonth = b.endMonth ? Number(b.endMonth) : undefined;
-    const forceMock = Boolean(b.forceMock);
-
-    if (!user_id || !business_id) {
-      return res.status(400).json({ error: "Missing user_id or business_id" });
-    }
-
-    const out = await pullPnlPdfsForYear(user_id, business_id, {
-      window,
-      endYear,
-      endMonth,
-      forceMock,
-    });
-
-    return res.status(200).json(out);
+    const businessId = canonicalBusinessId(req);
+    rejectConflictingBusinessId(req, businessId);
+    return res.status(403).json({ ok: false, error: "report_publication_admin_only", code: "report_publication_admin_only" });
   } catch (e) {
-    console.error("[reports-sync] error:", e?.message || e);
-    return res.status(500).json({ error: "reports_sync_failed" });
+    const status = Number(e?.status || 500);
+    return res.status(status).json({ ok: false, error: status < 500 ? e.code || e.message : "reports_sync_failed" });
   }
 });
 

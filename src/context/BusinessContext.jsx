@@ -33,7 +33,9 @@ export const BusinessProvider = ({ children }) => {
         const url = new URL(window.location.href);
         const urlBusinessId = url.searchParams.get("business_id");
         if (urlBusinessId && urlBusinessId !== businessId) setBusinessId(urlBusinessId);
-      } catch {}
+      } catch {
+        // Ignore malformed navigation state and retain the verified context.
+      }
     };
     syncFromUrl();
     window.addEventListener("popstate", syncFromUrl);
@@ -61,6 +63,7 @@ export const BusinessProvider = ({ children }) => {
         localStorage.removeItem("isProfileComplete");
         localStorage.removeItem("bizzy:businessName");
       }
+      window.dispatchEvent(new CustomEvent("bizzy:business-changed", { detail: { businessId: id || null } }));
     }
   };
 
@@ -187,7 +190,7 @@ export const BusinessProvider = ({ children }) => {
 export function useBusinessContext() {
   const ctx = useContext(BusinessContext);
   if (!ctx) {
-    console.warn("[BusinessContext] load profile error:", error?.message || error, error?.details || '');
+    console.warn("[BusinessContext] provider unavailable");
     return {
       businessId: null,
       setBusinessId: () => {},

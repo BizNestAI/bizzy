@@ -1,11 +1,13 @@
+/* global Buffer, process */
 import axios from "axios";
 import PDFDocument from "pdfkit";
+import { SENSITIVE_BUCKETS, assertSensitiveObject } from "../_shared/sensitiveStorage.js";
 import { createHash } from "crypto";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
 import { getQuickBooksAccessToken } from "../../services/quickbooksTokenService.js";
 
-const BUCKET = "financial-reports";
+const BUCKET = SENSITIVE_BUCKETS.FINANCIAL_REPORTS;
 const DEV_LOG = process.env.NODE_ENV !== "production";
 const MOCK_PDF_BASE64 =
   "JVBERi0xLjQKJcTl8uXrp/Og0MTGCjEgMCBvYmoKPDwvVHlwZS9DYXRhbG9nCi9QYWdlcyAyIDAgUgovT3V0bGluZXMgMyAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzCi9LaWRzIFsgNCAwIFIgXQovQ291bnQgMT4+CmVuZG9iagozIDAgb2JqCjw8L1R5cGUvT3V0bGluZXMKL0NvdW50IDAgPj4KZW5kb2JqCjQgMCBvYmoKPDwvVHlwZS9QYWdlCi9NZWRpYUJveCBbMCAwIDU5NSA4NDJdCi9QYXJlbnQgMiAwIFIKL1Jlc291cmNlcyA8PC9Gb250IDw8L0YxIDUgMCBSPj4+PgovQ29udGVudHMgNiAwIFI+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlL0ZvbnQvU3VidHlwZS9UeXBlMQovTmFtZS9GMS9CYXNlRm9udC9IZWx2ZXRpY2E+PgplbmRvYmoKNiAwIG9iago8PC9MZW5ndGggMTQ1Pj4Kc3RyZWFtCkJUCjEwMCA3NzAgVGQKKE1vY2sgUHJvZml0ICYgTG9zcyBSZXBvcnQpIFRqCkVUCmJUCjEwMCA3MzAgVGQKKEdlbmVyYXRlZCBieSBCaXp6eSAtIERldm1vZGUgTW9jaykgVGoKRVQKQlQKMTAwIDcwMCBUZAooVGhpcyBpcyBhIHBsYWNlaG9sZGVyIFBERiB3aGlsZSB5b3Ugc3luYyBRQk8pIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDcKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDgwIDAwMDAwIG4gCjAwMDAwMDAxNzggMDAwMDAgbiAKMDAwMDAwMDI1NiAwMDAwMCBuIAowMDAwMDAwNDc0IDAwMDAwIG4gCjAwMDAwMDA2MDIgMDAwMDAgbiAKdHJhaWxlcgo8PC9TaXplIDcKL1Jvb3QgMSAwIFIKL0luZm8gOCAwIFI+PgpzdGFydHhyZWYKNjY5CiUlRU9G";
@@ -382,7 +384,7 @@ async function storageFileExists(filePath) {
     limit: 1,
   });
   if (error) {
-    console.warn("[pnlPdfService] storage list failed", error.message || error);
+    console.warn("[pnlPdfService] storage list failed", { code: error?.statusCode || error?.name || "storage_error" });
     return false;
   }
   return Array.isArray(data) && data.some((f) => f.name === fileName);
@@ -391,6 +393,7 @@ async function storageFileExists(filePath) {
 export async function ensureMockPnLPdf({ business_id, year, month }) {
   const monthStr = String(month).padStart(2, "0");
   const filePath = `${business_id}/${year}-${monthStr}-pnl.pdf`;
+  assertSensitiveObject({ businessId: business_id, expectedBucket: BUCKET, objectPath: filePath });
   const revenue = mockRevenueForMonth(month);
   const netProfit = Math.round(revenue * 0.25);
 
@@ -436,9 +439,10 @@ export async function ensureMockPnLPdf({ business_id, year, month }) {
 export async function ensurePnLPdf({ business_id, year, month, forceRefresh = false, forceMock = false }) {
   const monthStr = String(month).padStart(2, "0");
   const filePath = `${business_id}/${year}-${monthStr}-pnl.pdf`;
+  assertSensitiveObject({ businessId: business_id, expectedBucket: BUCKET, objectPath: filePath });
   const startDate = `${year}-${monthStr}-01`;
   const endDate = new Date(year, Number(monthStr), 0).toISOString().slice(0, 10);
-  console.log("[pnlPdfService] ensurePnLPdf start", { business_id, year, month, filePath, forceRefresh, forceMock });
+  console.log("[pnlPdfService] ensure start", { year, month, forceRefresh, forceMock });
 
   if (forceMock) {
     return ensureMockPnLPdf({ business_id, year, month });
@@ -465,7 +469,7 @@ export async function ensurePnLPdf({ business_id, year, month, forceRefresh = fa
     existingHash = existingMeta?.qbo_report_hash || null;
     const now = Date.now();
     stale = !generatedAtTs || now - generatedAtTs > ttlHours * 60 * 60 * 1000;
-  } catch (e) {
+  } catch {
     stale = true;
   }
 
@@ -474,10 +478,10 @@ export async function ensurePnLPdf({ business_id, year, month, forceRefresh = fa
     if (existsCached && !stale) {
       const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(filePath, 60 * 5);
       if (!error && data?.signedUrl) {
-        console.log("[pnlPdfService] cache hit", { bucket: BUCKET, key: filePath });
+        console.log("[pnlPdfService] cache hit", { year, month });
         return { storage_path: filePath, signed_url: data.signedUrl, source: "cache" };
       }
-      console.warn("[pnlPdfService] cache sign failed, regenerating", { error });
+      console.warn("[pnlPdfService] cache sign failed, regenerating", { code: error?.statusCode || error?.name || "storage_error" });
     }
   }
 
@@ -502,14 +506,14 @@ export async function ensurePnLPdf({ business_id, year, month, forceRefresh = fa
         source_end_date: endDate,
         accounting_method: "Cash",
       });
-      console.log("[pnlPdfService] hash match; reused cached PDF", { bucket: BUCKET, key: filePath });
+      console.log("[pnlPdfService] hash match; reused cached PDF", { year, month });
       return { storage_path: filePath, signed_url: data.signedUrl, source: "cache" };
     }
   }
 
   const totals = extractPnLTotals(report);
   if (DEV_LOG) {
-    console.log("[pnlPdfService] totals", { business_id, year, month, totals, filePath });
+    console.log("[pnlPdfService] totals computed", { year, month });
   }
   const buffer = await renderPnLToPdfBuffer({
     report,
@@ -519,13 +523,13 @@ export async function ensurePnLPdf({ business_id, year, month, forceRefresh = fa
     accountingMethod: "Cash",
   });
 
-  console.log("[pnlPdfService] uploading PDF", { bucket: BUCKET, key: filePath, bytes: buffer.length });
+  console.log("[pnlPdfService] uploading PDF", { year, month, bytes: buffer.length });
   const { error: upErr } = await supabase.storage.from(BUCKET).upload(filePath, buffer, {
     contentType: "application/pdf",
     upsert: true,
   });
   if (upErr) {
-    console.error("[pnlPdfService] storage upload failed", { bucket: BUCKET, key: filePath, error: upErr });
+    console.error("[pnlPdfService] storage upload failed", { code: upErr?.statusCode || upErr?.name || "storage_error" });
     const err = new Error(`pnl_pdf_upload_failed: ${upErr.message || upErr}`);
     err.code = "pnl_pdf_upload_failed";
     err.cause = upErr;
@@ -533,7 +537,7 @@ export async function ensurePnLPdf({ business_id, year, month, forceRefresh = fa
   }
 
   const existsAfter = await storageFileExists(filePath);
-  console.log("[pnlPdfService] post-upload exists", { bucket: BUCKET, key: filePath, existsAfter });
+  console.log("[pnlPdfService] post-upload check", { year, month, existsAfter });
 
   await upsertReportMetadata({
     business_id,
@@ -549,18 +553,18 @@ export async function ensurePnLPdf({ business_id, year, month, forceRefresh = fa
     accounting_method: "Cash",
   });
   if (DEV_LOG) {
-    console.log("[pnlPdfService] report_metadata updated", { business_id, year, month, storage_path: filePath });
+    console.log("[pnlPdfService] report metadata updated", { year, month });
   }
 
   const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(filePath, 60 * 5);
   if (error) {
-    console.error("[pnlPdfService] signed url failed", { bucket: BUCKET, key: filePath, error });
+    console.error("[pnlPdfService] signed url failed", { code: error?.statusCode || error?.name || "storage_error" });
     const err = new Error(`pnl_pdf_signed_url_failed: ${error.message || error}`);
     err.code = "pnl_pdf_signed_url_failed";
     err.cause = error;
     throw err;
   }
-  console.log("[pnlPdfService] signed url success", { bucket: BUCKET, key: filePath });
+  console.log("[pnlPdfService] signed url success", { year, month });
 
   return { storage_path: filePath, signed_url: data.signedUrl, source: "generated" };
 }

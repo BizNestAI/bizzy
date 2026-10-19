@@ -1,11 +1,20 @@
 // File: /src/services/bizzyDocs/docsService.js
 import { apiUrl, safeFetch } from '../../utils/safeFetch';
-import { supabase } from '../supabaseClient'; // kept for direct CRUD
 import { getDemoData, shouldUseDemoData, getDemoMode } from '../demo/demoClient';
 
 // In-memory micro-cache for list/facets (short-lived, per-tab snappiness)
 const _cache = new Map(); // key -> { ts, value }
 const CACHE_MS = 10_000;
+
+export function clearBizzyDocsCache() {
+  _cache.clear();
+}
+
+if (typeof window !== 'undefined') {
+  for (const eventName of ['bizzy:business-changed', 'bizzy:auth-cleared', 'bizzy:admin-view-cleared']) {
+    window.addEventListener(eventName, clearBizzyDocsCache);
+  }
+}
 
 function getBizId() {
     try {
@@ -345,16 +354,10 @@ export async function getDoc(id, { business_id } = {}) {
   }
   if (!biz) throw new Error('Missing id or business_id for getDoc');
 
-  // ✅ Safe direct Supabase query — ensures single doc per business
-  const { data, error } = await supabase
-    .from('bizzy_docs')
-    .select('*')
-    .eq('id', id)
-    .eq('business_id', biz)
-    .maybeSingle(); // returns 0 or 1 row safely
-
-  if (error) throw error;
-  return data || null;
+  const url = new URL(apiUrl(`/api/docs/detail/${encodeURIComponent(id)}`));
+  url.searchParams.set('business_id', biz);
+  const response = await safeFetch(url.toString(), { headers: { ...idHeaders(), 'x-request-id': cryptoRandomId() }, cache: 'no-store' });
+  return response?.data || null;
 }
 
 /** GET /api/docs/facets */
@@ -409,132 +412,45 @@ export async function createDocViaSummary({
   };
 }
 
-/* ------------------------------------------------------------------
- * Legacy direct Supabase CRUD (kept for compatibility)
- * ------------------------------------------------------------------ */
-
-// ✅ Create doc
 export async function createDoc({
   business_id,
-  user_id,
   title,
   category,
   content,
   tags = [],
 }) {
   const biz = business_id || getBizId();
-  const uid = user_id || getUserId();
   if (inDemoDocsMode(biz)) throw new Error('Bizzi Docs are read-only in demo mode.');
-
-  const { data, error } = await supabase
-    .from('bizzy_docs')
-    .insert([{ business_id: biz, user_id: uid, title, category, content, tags }])
-    .select('*')
-    .maybeSingle(); // safer than .single()
-
-  if (error) throw error;
+  const data = await safeFetch(apiUrl('/api/docs/detail'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...idHeaders(), 'x-request-id': cryptoRandomId() },
+    body: JSON.stringify({ business_id: biz, title, category, content, tags }),
+  });
   _cache.clear();
   return data;
 }
 
-// ✅ Update doc
 export async function updateDoc(id, patch) {
   const biz = getBizId();
   if (!id || !biz) throw new Error('Missing id or business_id for updateDoc');
   if (inDemoDocsMode(biz)) throw new Error('Bizzi Docs are read-only in demo mode.');
 
-  // 1) Update WITHOUT asking for a representation (avoids 406 when SELECT is not allowed in the same call)
-   const { error } = await supabase
-     .from('bizzy_docs')
-     .update(patch)
-     .eq('id', id)
-     .eq('business_id', biz);
-   if (error) throw error;
- 
-   // 2) Bust caches, then fetch the fresh row with a separate SELECT
-   _cache.clear();
-   return getDoc(id, { business_id: biz });
+  const data = await safeFetch(apiUrl(`/api/docs/detail/${encodeURIComponent(id)}`), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...idHeaders(), 'x-request-id': cryptoRandomId() },
+    body: JSON.stringify({ business_id: biz, title: patch?.title, content: patch?.content }),
+  });
+  _cache.clear();
+  return data?.data || null;
 }
 
-// ✅ Delete doc
 export async function deleteDoc(id) {
   const biz = getBizId();
   if (inDemoDocsMode(biz)) throw new Error('Bizzi Docs are read-only in demo mode.');
-  const { error } = await supabase
-    .from('bizzy_docs')
-    .delete()
-    .eq('id', id)
-    .eq('business_id', biz);
-
-  if (error) throw error;
+  const url = new URL(apiUrl(`/api/docs/detail/${encodeURIComponent(id)}`));
+  url.searchParams.set('business_id', biz);
+  await safeFetch(url.toString(), { method: 'DELETE', headers: { ...idHeaders(), 'x-request-id': cryptoRandomId() } });
   _cache.clear();
-}
-
-/**
- * File upload doc helper — gracefully handles duplicates
- */
-export async function createUploadedFileDoc({
-  business_id,
-  user_id,
-  title,
-  category = 'general',
-  filename,
-  mime_type,
-  size,
-  storage_bucket,
-  storage_path,
-  file_hash,
-  tags = [],
-  contentOverride,
-}) {
-  const row = {
-    business_id: business_id || getBizId(),
-    user_id: user_id || getUserId(),
-    title: title || filename || 'Uploaded file',
-    category,
-    filename,
-    mime_type,
-    size,
-    content: contentOverride || {
-      format: 'upload',
-      sections: [],
-      plain_excerpt: filename || '',
-    },
-    tags,
-  };
-  if (storage_bucket) row.storage_bucket = storage_bucket;
-  if (storage_path)   row.storage_path = storage_path;
-  if (file_hash)      row.file_hash = file_hash;
-  if (inDemoDocsMode(row.business_id)) throw new Error('Bizzi Docs are read-only in demo mode.');
-
-  try {
-    const { data, error } = await supabase
-      .from('bizzy_docs')
-      .insert([row])
-      .select('id')
-      .maybeSingle();
-
-    if (error) throw error;
-    _cache.clear();
-    return data?.id || null;
-  } catch (e) {
-    const isDuplicate = (e && (e.code === '23505' || /duplicate key/i.test(e.message)));
-    if (isDuplicate && file_hash) {
-      const { data: existing, error: selErr } = await supabase
-        .from('bizzy_docs')
-        .select('id')
-        .eq('business_id', row.business_id)
-        .eq('file_hash', file_hash)
-        .limit(1)
-        .maybeSingle();
-
-      if (!selErr && existing?.id) {
-        _cache.clear();
-        return existing.id;
-      }
-    }
-    throw e;
-  }
 }
 
 /** Recent docs helper (reuses /list so it stays consistent) */

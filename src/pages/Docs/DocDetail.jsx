@@ -6,9 +6,6 @@ import { useCurrentBusiness } from '../../context/BusinessContext';
 import { jsPDF } from 'jspdf';
 import domtoimage from 'dom-to-image-more';
 import MarkdownRenderer from '../../components/Bizzy/MarkdownRenderer';
-import { supabase } from '../../services/supabaseClient';
-import { extractPdfText } from '../../utils/pdfText';
-import { toMarkdownSections } from '../../utils/pdfToBizzyFormat';
 import '../../styles/prose-bizzy.css';
 
 const LIST_ROUTE = '/dashboard/bizzi-docs';
@@ -30,7 +27,7 @@ function fmtBytes(n) {
   return `${v.toFixed(v < 10 && i ? 1 : 0)} ${u[i]}`;
 }
 
-const AMOUNT_RE = /(?<![\d,.\$])\s(\$?[0-9][0-9,]*(?:\.\d{2})?)\s*$/;
+const AMOUNT_RE = /(?<![\d,.$])\s(\$?[0-9][0-9,]*(?:\.\d{2})?)\s*$/;
 
 function looksLikeHtml(s) { return /<\/?[a-z][\s\S]*>/i.test(s || ''); }
 
@@ -41,21 +38,6 @@ function stripHtmlToPlain(html) {
     const text = tmp.textContent || tmp.innerText || '';
     return text.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
   } catch { return html || ''; }
-}
-
-function mdToPlain(s = '') {
-  return String(s)
-    .replace(/```[\s\S]*?```/g, m => m.replace(/```/g, ''))
-    .replace(/^#{1,6}\s*/gm, '')
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/\*(.*?)\*/g, '$1')
-    .replace(/_(.*?)_/g, '$1')
-    .replace(/`(.*?)`/g, '$1')
-    .replace(/^\s*-\s+/gm, '• ')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 /** VIEW formatting (markdown). */
@@ -99,15 +81,13 @@ function formatForEdit(input) {
   return out.join('\n');
 }
 
-function plainForExport(viewMd) { return mdToPlain(viewMd); }
-
 /* -------------------------------- component ------------------------------ */
 export default function DocDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const ctx = (typeof useCurrentBusiness === 'function' ? useCurrentBusiness() : null) || {};
+  const ctx = useCurrentBusiness() || {};
   const ctxBusinessId = ctx?.businessId;
   const lsBusinessId =
     (typeof window !== 'undefined' && (localStorage.getItem('business_id') || localStorage.getItem('currentBusinessId'))) || '';
@@ -127,39 +107,6 @@ export default function DocDetail() {
 
   const cardRef = useRef(null);
 
-  const isPdf = (d) => !!d && ((d.mime_type?.toLowerCase().includes('pdf')) || /\.pdf$/i.test(d.filename || ''));
-
-  async function maybeAutoExtractPdf(row) {
-    try {
-      if (!isPdf(row)) return row;
-      const isUploadStub = !Array.isArray(row.content?.sections) || row.content.sections.length === 0;
-      if (!isUploadStub) return row;
-      if (!row.storage_bucket || !row.storage_path) return row;
-
-      const { data, error } = await supabase.storage.from(row.storage_bucket).download(row.storage_path);
-      if (error) throw error;
-
-      const buf  = await data.arrayBuffer();
-      const text = await extractPdfText(buf);
-      const fm   = toMarkdownSections(text);
-      const next = {
-        format: 'sections',
-        sections: fm.sections,
-        plain_excerpt: text.slice(0, 600),
-      };
-
-      const patched = await updateDoc(row.id, {
-        title: (row.title || row.filename || 'From PDF').replace(/\.pdf$/i, ''),
-        content: next,
-      });
-
-      return patched || row;
-    } catch (e) {
-      console.warn('[auto-extract] pdf failed:', e);
-      return row;
-    }
-  }
-
   // load
   useEffect(() => {
     let alive = true;
@@ -172,9 +119,6 @@ export default function DocDetail() {
         let row = await getDoc(id, { business_id: effectiveBusinessId });
         if (!alive) return;
         if (!row) throw new Error('not_found');
-
-        row = await maybeAutoExtractPdf(row);
-        if (!alive) return;
 
         const sections = Array.isArray(row.content?.sections) ? row.content.sections : [];
         const combined = sections.length

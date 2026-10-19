@@ -67,9 +67,9 @@ test("Reports Admin View reads report_metadata through verified backend archive 
   const viewer = read("src/components/Accounting/PNLArchiveViewer.jsx");
 
   assert.match(routes, /router\.get\("\/archive"/);
-  assert.match(routes, /req\?\.tenantContext\?\.businessId/);
+  assert.match(routes, /canonicalBusinessId\(req\)/);
   assert.match(routes, /\.from\("report_metadata"\)[\s\S]*\.eq\("business_id", businessId\)/);
-  assert.match(viewer, /if \(adminView\.active\)/);
+  assert.match(viewer, /\[adminView\.active, currentBusiness\?\.id\]/);
   assert.match(viewer, /apiFetch\("\/api\/accounting\/pnl\/archive", \{/);
   assert.match(viewer, /"x-business-id": currentBusiness\.id/);
 });
