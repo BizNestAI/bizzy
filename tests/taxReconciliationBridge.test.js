@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  TAX_RECONCILIATION_INCOMPLETE_REASON_CODES,
   TAX_RECONCILIATION_BRIDGE_DISPOSITIONS,
   buildTaxReconciliationBridge,
+  deriveTaxReconciliationScope,
   deriveTaxReconciliationDisposition,
 } from "../src/services/tax/taxReconciliationBridge.js";
 
@@ -131,4 +133,27 @@ test("Tax/Reconciliations bridge keeps income, payments, refunds, owners, assets
     deriveTaxReconciliationDisposition(taxRow("incomplete", { qboAccountId: null, qboAccountName: null, qboAccountType: null })),
     TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOMPLETE_OR_UNRESOLVED
   );
+});
+
+test("Tax/Reconciliations bridge gives genuinely incomplete QBO evidence a safe, specific reason", () => {
+  const missingType = deriveTaxReconciliationScope(taxRow("missing-type", {
+    qboAccountId: "expense-account",
+    qboAccountName: "Software",
+    qboAccountType: null,
+  }));
+  assert.deepEqual(missingType, {
+    disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOMPLETE_OR_UNRESOLVED,
+    reasonCode: TAX_RECONCILIATION_INCOMPLETE_REASON_CODES.MISSING_DESTINATION_GL_TYPE,
+  });
+
+  const bridge = buildTaxReconciliationBridge({
+    sourceRows: [taxRow("missing-type", {
+      qboAccountId: "expense-account",
+      qboAccountName: "Software",
+      qboAccountType: null,
+    })],
+  });
+  assert.deepEqual(bridge.tax_scope.incomplete_evidence_reasons, {
+    [TAX_RECONCILIATION_INCOMPLETE_REASON_CODES.MISSING_DESTINATION_GL_TYPE]: 1,
+  });
 });

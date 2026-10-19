@@ -9,6 +9,7 @@ import { normalizePostedTransactionForTax } from "../src/services/tax/taxTransac
 import {
   getPostedTransactionForTax,
   listPostedTransactionsForTax,
+  listTaxPostingSourceRows,
   listUnclassifiedPostedTransactions,
 } from "../src/services/tax/taxPostedTransaction.repository.js";
 
@@ -164,6 +165,91 @@ test("repository hydrates production-sized posted rows through bounded related c
   assert.equal(relatedIns.some((call) => call.count === 205), false);
 });
 
+test("canonical QBO account-cache columns hydrate final GL evidence without duplicate categorization receipt fields", async () => {
+  const examples = [
+    ["software", "Software", "Expense", "Expense", null],
+    ["meals", "Meals", "Expense", "Expense", null],
+    ["insurance", "Insurance", "Expense", "Expense", null],
+    ["equipment-rental", "Equipment Rental", "Expense", "Expense", null],
+    ["supplies", "Supplies", "Expense", "Expense", null],
+    ["parking", "Parking", "Expense", "Expense", null],
+    ["gas", "Gas", "Expense", "Expense", null],
+    ["sales", "Sales of Product Income", "Income", "Deposit", null],
+    ["processing-fees", "Payment Processing Fees", "Expense", "Expense", null],
+    ["card-payment", "Credit Card", "CreditCard", "CreditCardPayment", "cc_payment"],
+  ];
+  const bankRows = examples.map(([id], index) => bankTxn({
+    id,
+    plaid_transaction_id: `plaid-${id}`,
+    date: `2026-0${(index % 9) + 1}-15`,
+  }));
+  const categorizationRows = examples.map(([id, name, , qboTxnType, taxonomyType]) => cat({
+    id: `cat-${id}`,
+    transaction_id: id,
+    // The receipt is authoritative here; this optional duplicate field is
+    // deliberately absent on the Software row.
+    qbo_txn_id: id === "software" ? null : `qbo-${id}`,
+    qbo_txn_type: qboTxnType,
+    final_qbo_account_id: `acct-${id}`,
+    final_qbo_account_name: name,
+    meta: taxonomyType ? { taxonomy_type: taxonomyType } : {},
+  }));
+  const qboRows = examples.map(([id, , , qboTxnType]) => qbo({
+    id: `receipt-${id}`,
+    transaction_id: id,
+    qbo_txn_id: `qbo-${id}`,
+    qbo_txn_type: qboTxnType,
+    qbo_env: "production",
+    realm_id: "realm-1",
+  }));
+  const qboAccounts = examples.map(([id, name, type]) => ({
+    business_id: BUSINESS_ID,
+    qbo_env: "production",
+    realm_id: "realm-1",
+    qbo_account_id: `acct-${id}`,
+    // These are the canonical qbo_accounts_cache field names. They must not
+    // be replaced with categorization's denormalized qbo_account_* fields.
+    name,
+    account_type: type,
+    account_subtype: name,
+    active: true,
+  }));
+
+  const rows = await listTaxPostingSourceRows({
+    supabase: makeSupabase({
+      bank_transactions: bankRows,
+      transaction_categorizations: categorizationRows,
+      qbo_posted_transactions: qboRows,
+      qbo_accounts_cache: qboAccounts,
+    }),
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+  });
+  const byId = new Map(rows.map((row) => [row.transactionId, row]));
+
+  assert.equal(byId.get("software").qboAccountType, "Expense");
+  assert.equal(byId.get("software").taxScopeDisposition, "expense_cogs_in_matrix");
+  assert.equal(byId.get("sales").taxScopeDisposition, "income_outside_deductions");
+  assert.equal(byId.get("processing-fees").taxScopeDisposition, "expense_cogs_in_matrix");
+  assert.equal(byId.get("card-payment").taxScopeDisposition, "transfer_or_card_payment_not_deduction");
+  assert.equal(rows.filter((row) => row.taxScopeDisposition === "expense_cogs_in_matrix").length, 8);
+  assert.equal(rows.filter((row) => row.taxScopeDisposition === "incomplete_or_unresolved").length, 0);
+});
+
+test("a QBO account-cache schema error is surfaced instead of silently marking every row incomplete", async () => {
+  const supabase = makeSupabase({
+    bank_transactions: [bankTxn({ id: "schema-row" })],
+    transaction_categorizations: [cat({ transaction_id: "schema-row", final_qbo_account_id: "acct-software", final_qbo_account_name: "Software" })],
+    qbo_posted_transactions: [qbo({ transaction_id: "schema-row" })],
+    __errors: { qbo_accounts_cache: { code: "42703", message: "column does not exist" } },
+  });
+
+  await assert.rejects(
+    () => listTaxPostingSourceRows({ supabase, businessId: BUSINESS_ID, taxYear: 2026 }),
+    (err) => err?.code === "42703"
+  );
+});
+
 test("unclassified query only suppresses classifications for same tax year", async () => {
   const supabase = makeSupabase({
     bank_transactions: [bankTxn({ id: "same-year" }), bankTxn({ id: "other-year-classified" })],
@@ -197,7 +283,7 @@ test("unclassified query only suppresses classifications for same tax year", asy
 test("tax transactions API is mounted behind auth and validates business access/pagination", () => {
   const server = readFileSync(resolve(__dirname, "../src/server.js"), "utf8");
   const routes = readFileSync(resolve(__dirname, "../src/api/tax/taxTransactions.routes.js"), "utf8");
-  assert.match(server, /app\.use\("\/api\/tax", \.\.\.requireCustomerOrAdminView, taxRouter\)/);
+  assert.match(server, /app\.use\("\/api\/tax", \.\.\.requireCustomerOrAdminView, requireSubscribedMutation, taxRouter\)/);
   assert.match(routes, /assertTaxBusinessAccess/);
   assert.match(routes, /validatePagination/);
   assert.match(routes, /optionalTaxYear/);
@@ -289,16 +375,17 @@ function qbo(overrides = {}) {
 function makeSupabase(tables, calls = []) {
   return {
     from(table) {
-      return new Query(table, tables[table] || [], calls);
+      return new Query(table, tables[table] || [], calls, tables.__errors?.[table] || null);
     },
   };
 }
 
 class Query {
-  constructor(table, rows, calls = []) {
+  constructor(table, rows, calls = [], error = null) {
     this.table = table;
     this.rows = [...rows];
     this.calls = calls;
+    this.error = error;
     this.rangeStart = null;
     this.rangeEnd = null;
   }
@@ -330,16 +417,16 @@ class Query {
     return this;
   }
   range(start, end) {
-    const next = new Query(this.table, this.rows, this.calls);
+    const next = new Query(this.table, this.rows, this.calls, this.error);
     next.rangeStart = start;
     next.rangeEnd = end;
     return next;
   }
   maybeSingle() {
-    return Promise.resolve({ data: this.rows[0] || null, error: null });
+    return Promise.resolve({ data: this.error ? null : this.rows[0] || null, error: this.error });
   }
   then(resolve) {
     const rows = this.rangeStart == null ? this.rows : this.rows.slice(this.rangeStart, this.rangeEnd + 1);
-    return Promise.resolve({ data: rows, error: null }).then(resolve);
+    return Promise.resolve({ data: this.error ? null : rows, error: this.error }).then(resolve);
   }
 }

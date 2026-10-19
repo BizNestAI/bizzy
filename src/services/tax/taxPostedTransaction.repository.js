@@ -5,7 +5,7 @@ import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { hasCompletedClassificationEvaluation, hasMeaningfulClassificationOutcome, isUnresolvedFallbackClassification } from "./taxClassification.repository.js";
 import { getTaxEligibilityReason } from "./taxTransactionEligibility.js";
 import { normalizePostedTransactionForTax } from "./taxTransactionNormalizer.js";
-import { deriveTaxReconciliationDisposition } from "./taxReconciliationBridge.js";
+import { deriveTaxReconciliationScope } from "./taxReconciliationBridge.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../bookkeeping/bookkeepingScope.js";
 
 const CHUNK_SIZE = 50;
@@ -36,7 +36,12 @@ const QBO_SELECT = [
 ].join(",");
 
 const QBO_ACCOUNT_CACHE_SELECT = [
-  "business_id", "qbo_env", "realm_id", "qbo_account_id", "qbo_account_name", "qbo_account_type", "qbo_account_subtype", "status",
+  // qbo_accounts_cache is the canonical chart-of-accounts cache.  Its durable
+  // column names are deliberately different from the denormalized
+  // transaction_categorizations names (name/account_type/account_subtype).
+  // Selecting the latter caused PostgREST to reject the projection; the
+  // compatibility fallback below then returned an empty map for every row.
+  "business_id", "qbo_env", "realm_id", "qbo_account_id", "name", "account_type", "account_subtype", "active",
 ].join(",");
 
 export async function getPostedTransactionForTax({ supabase, businessId, transactionId } = {}) {
@@ -364,7 +369,11 @@ async function fetchQboAccountMap({ supabase, businessId, catRows = [], qboRows 
       .eq("business_id", businessId)
       .in("qbo_account_id", chunk);
     if (error) {
-      if (["42P01", "42703"].includes(String(error.code || "").toUpperCase())) return new Map();
+      // A missing optional cache is compatible with older isolated test
+      // fixtures. A missing *column* is not: treating it as an empty cache
+      // turns every otherwise-valid posted row into incomplete QBO evidence.
+      // Surface that contract problem instead of silently zeroing deductions.
+      if (String(error.code || "").toUpperCase() === "42P01") return new Map();
       throw error;
     }
     rows.push(...(data || []));
@@ -450,9 +459,11 @@ function buildTaxRow({ bankTransaction, categorization, qboPostedTransaction, qb
     eligibilityReason,
     taxTransactionStatus: eligibilityReason === "eligible_posted" ? "eligible_posted" : "excluded",
   };
+  const taxScope = row.isEligible ? deriveTaxReconciliationScope(row) : null;
   return {
     ...row,
-    taxScopeDisposition: row.isEligible ? deriveTaxReconciliationDisposition(row) : null,
+    taxScopeDisposition: taxScope?.disposition || null,
+    taxScopeReasonCode: taxScope?.reasonCode || null,
   };
 }
 

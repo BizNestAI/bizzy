@@ -38,6 +38,7 @@ export function buildQboGlAccountEvidence({
     categorization.meta?.final_qbo_account_type,
     categorization.meta?.suggested_qbo_account_type,
     qboAccount.qbo_account_type,
+    qboAccount.account_type,
     qboAccount.AccountType,
     qboAccount.type,
     qboPostedTransaction.payload?.AccountRef?.type,
@@ -51,6 +52,7 @@ export function buildQboGlAccountEvidence({
     categorization.meta?.final_qbo_account_subtype,
     categorization.meta?.suggested_qbo_account_subtype,
     qboAccount.qbo_account_subtype,
+    qboAccount.account_subtype,
     qboAccount.AccountSubType,
     qboAccount.subType,
     qboAccount.subtype

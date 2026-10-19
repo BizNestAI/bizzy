@@ -11,6 +11,15 @@ export const TAX_RECONCILIATION_BRIDGE_DISPOSITIONS = Object.freeze({
   INCOMPLETE_OR_UNRESOLVED: "incomplete_or_unresolved",
 });
 
+export const TAX_RECONCILIATION_INCOMPLETE_REASON_CODES = Object.freeze({
+  MISSING_POSTED_RECEIPT: "missing_posted_qbo_receipt",
+  CONFLICTING_RECEIPT_LINK: "conflicting_qbo_receipt_link",
+  MISSING_DESTINATION_GL_ID: "missing_destination_qbo_gl_id",
+  MISSING_DESTINATION_GL_NAME: "missing_destination_qbo_gl_name",
+  MISSING_DESTINATION_GL_TYPE: "missing_destination_qbo_gl_type",
+  UNSUPPORTED_DESTINATION_GL_TYPE: "unsupported_destination_qbo_gl_type",
+});
+
 const DISPOSITION_META = Object.freeze({
   [TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.EXPENSE_COGS_IN_MATRIX]: {
     label: "Expense / COGS in deductions",
@@ -110,13 +119,20 @@ export function isReceiptBackedBizziPost(row = {}) {
   return !categorizationQboId || categorizationQboId === receiptQboId;
 }
 
-export function deriveTaxReconciliationDisposition(row = {}) {
+export function deriveTaxReconciliationScope(row = {}) {
   // A Tax row without the same durable receipt used by Reconciliations is not
   // safe to place in the deductions matrix, even when a legacy category link
   // exists. Keeping it explicit prevents a display-only count from becoming a
   // tax conclusion.
   if (!isReceiptBackedBizziPost(row)) {
-    return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOMPLETE_OR_UNRESOLVED;
+    const receiptQboId = String(row.qboReceiptTxnId || row.qbo_receipt_txn_id || "").trim();
+    const categorizationQboId = String(row.categorizationQboTxnId || row.categorization_qbo_txn_id || "").trim();
+    return {
+      disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOMPLETE_OR_UNRESOLVED,
+      reasonCode: receiptQboId && categorizationQboId
+        ? TAX_RECONCILIATION_INCOMPLETE_REASON_CODES.CONFLICTING_RECEIPT_LINK
+        : TAX_RECONCILIATION_INCOMPLETE_REASON_CODES.MISSING_POSTED_RECEIPT,
+    };
   }
 
   const taxonomyType = normalized(row.taxonomyType || row.taxonomy_type);
@@ -128,36 +144,50 @@ export function deriveTaxReconciliationDisposition(row = {}) {
   const signedAmount = Number(row.signedAmount ?? row.signed_amount ?? row.amount ?? 0);
 
   if (TRANSFER_TAXONOMY_TYPES.has(taxonomyType) || TRANSFER_QBO_TYPES.has(qboTxnType)) {
-    return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.TRANSFER_OR_CARD_PAYMENT_NOT_DEDUCTION;
+    return { disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.TRANSFER_OR_CARD_PAYMENT_NOT_DEDUCTION, reasonCode: null };
   }
 
   if (CREDIT_QBO_TYPES.has(qboTxnType) || (EXPENSE_ACCOUNT_TYPES.has(accountType) && signedAmount > 0)) {
-    return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.REFUND_CREDIT_OR_ASSET_NOT_DEDUCTION;
+    return { disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.REFUND_CREDIT_OR_ASSET_NOT_DEDUCTION, reasonCode: null };
   }
 
   // Final GL evidence is required before classifying the accounting scope.
   // A name alone can be stale or ambiguous, so it fails closed here.
   if (!accountId || !accountName || !accountType) {
-    return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOMPLETE_OR_UNRESOLVED;
+    return {
+      disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOMPLETE_OR_UNRESOLVED,
+      reasonCode: !accountId
+        ? TAX_RECONCILIATION_INCOMPLETE_REASON_CODES.MISSING_DESTINATION_GL_ID
+        : !accountName
+          ? TAX_RECONCILIATION_INCOMPLETE_REASON_CODES.MISSING_DESTINATION_GL_NAME
+          : TAX_RECONCILIATION_INCOMPLETE_REASON_CODES.MISSING_DESTINATION_GL_TYPE,
+    };
   }
 
   if (INCOME_ACCOUNT_TYPES.has(accountType)) {
-    return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOME_OUTSIDE_DEDUCTIONS;
+    return { disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOME_OUTSIDE_DEDUCTIONS, reasonCode: null };
   }
 
   if (EQUITY_ACCOUNT_TYPES.has(accountType) || /\b(owner|member|partner|shareholder|draw|contribution)\b/.test(`${accountName} ${accountSubtype}`.toLowerCase())) {
-    return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.OWNER_OR_EQUITY_NOT_DEDUCTION;
+    return { disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.OWNER_OR_EQUITY_NOT_DEDUCTION, reasonCode: null };
   }
 
   if (BALANCE_SHEET_ACCOUNT_TYPES.has(accountType)) {
-    return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.REFUND_CREDIT_OR_ASSET_NOT_DEDUCTION;
+    return { disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.REFUND_CREDIT_OR_ASSET_NOT_DEDUCTION, reasonCode: null };
   }
 
   if (EXPENSE_ACCOUNT_TYPES.has(accountType)) {
-    return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.EXPENSE_COGS_IN_MATRIX;
+    return { disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.EXPENSE_COGS_IN_MATRIX, reasonCode: null };
   }
 
-  return TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOMPLETE_OR_UNRESOLVED;
+  return {
+    disposition: TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.INCOMPLETE_OR_UNRESOLVED,
+    reasonCode: TAX_RECONCILIATION_INCOMPLETE_REASON_CODES.UNSUPPORTED_DESTINATION_GL_TYPE,
+  };
+}
+
+export function deriveTaxReconciliationDisposition(row = {}) {
+  return deriveTaxReconciliationScope(row).disposition;
 }
 
 function monthKey(row = {}) {
@@ -208,10 +238,12 @@ export function buildTaxReconciliationBridge({ sourceRows = [] } = {}) {
   const onlyReconciliations = [...reconciliationIds].filter((id) => !taxEligibleIds.has(id));
   const onlyTax = [...taxEligibleIds].filter((id) => !reconciliationIds.has(id));
   const counts = emptyCounts();
+  const incompleteReasonCounts = {};
 
   for (const row of taxEligibleRows) {
-    const disposition = deriveTaxReconciliationDisposition(row);
-    counts[disposition] += 1;
+    const scope = deriveTaxReconciliationScope(row);
+    counts[scope.disposition] += 1;
+    if (scope.reasonCode) incompleteReasonCounts[scope.reasonCode] = (incompleteReasonCounts[scope.reasonCode] || 0) + 1;
   }
 
   const matrixCount = counts[TAX_RECONCILIATION_BRIDGE_DISPOSITIONS.EXPENSE_COGS_IN_MATRIX];
@@ -244,6 +276,7 @@ export function buildTaxReconciliationBridge({ sourceRows = [] } = {}) {
       posted_non_expense_outside_deductions_count: outsideMatrixCount,
       conservation_ok: taxEligibleCount === matrixCount + outsideMatrixCount,
       dispositions: counts,
+      incomplete_evidence_reasons: incompleteReasonCounts,
       months: summarizeMonths(taxEligibleRows),
     },
   };

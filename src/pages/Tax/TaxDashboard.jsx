@@ -542,6 +542,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const attentionCounts = useMemo(() => buildAttentionCounts(workspaceRows), [workspaceRows]);
   const attentionRows = useMemo(() => filterAttentionWorkspaceRows(workspaceRows, attentionTab), [workspaceRows, attentionTab]);
   const attentionGroups = useMemo(() => buildAttentionReviewGroups(attentionRows), [attentionRows]);
+  const customerWorkflow = useMemo(() => buildCustomerDeductionsWorkflow(workspaceRows), [workspaceRows]);
+  const customerStatusMessage = useMemo(
+    () => customerDeductionsStatusMessage(classificationSummary, customerWorkflow),
+    [classificationSummary, customerWorkflow]
+  );
   const hasUsableDeductionsData = Boolean(
     deductions.overview ||
     workspaceRows.length ||
@@ -561,7 +566,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   });
   const initialDeductionsLoading = deductionsRenderState.showInitialLoading;
   const initialDeductionsError = deductionsRenderState.showInitialError;
-  const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
   const matrix = useMemo(
     () => {
       if (initialDeductionsLoading) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
@@ -578,7 +582,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       </span>
     )
     : classificationsRequired
-    ? previewStatusMessage
+    ? customerStatusMessage
     : "Deductible totals by QBO GL account from posted QuickBooks expense transactions. Click a month amount to inspect the linked transaction details behind it.";
 
   const openBackfillPreview = async () => {
@@ -627,7 +631,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
         });
       }
       setBackfillPreview(null);
-      onNotice?.("Deductions preparation started.");
+      onNotice?.("Updating deduction estimates.");
     } catch (err) {
       setBackfillError(err?.message || "Could not start tax classification.");
     } finally {
@@ -654,7 +658,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
 
     setTrackedPrepareRun(null);
     if (job.status === "failed") {
-      setBackfillError("Deductions preparation failed. Review the run details and try again when ready.");
+      setBackfillError(job.canRetry === true
+        ? "Some transactions could not be evaluated yet. Existing deduction totals remain available and Bizzi will retry automatically."
+        : "Some transactions could not be evaluated yet. Existing deduction totals remain available while Bizzi investigates the technical update.");
       return;
     }
 
@@ -677,9 +683,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="text-[12px] uppercase tracking-[0.14em] text-white/65">Deductions</div>
-          <div className="text-xl font-semibold leading-tight">Deductions preview</div>
+          <div className="text-xl font-semibold leading-tight">{year} deductions overview</div>
           <p className="mt-1 max-w-2xl text-sm text-white/55">
-            {deductionsMessage}
+            Preliminary bookkeeping estimate—not a tax return. {deductionsMessage}
           </p>
         </div>
 
@@ -691,7 +697,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
               disabled={!canPrepareDeductions || backfillLoading}
               className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/24 bg-emerald-300/[0.10] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.16] disabled:cursor-not-allowed disabled:opacity-55 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
             >
-              {classificationActive ? "Preparing deductions" : backfillLoading ? "Preparing..." : classificationSummary.jobStatus?.canRetry ? "Retry preparation" : "Prepare deductions"}
+              {classificationActive ? "Updating deductions" : backfillLoading ? "Updating..." : "Update deductions"}
             </button>
           </span>
           <button
@@ -766,7 +772,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/62">Classification status</div>
-            <p className="mt-1 text-sm font-semibold text-emerald-50">{previewStatusMessage}</p>
+            <p className="mt-1 text-sm font-semibold text-emerald-50">{customerStatusMessage}</p>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/50">
               Bizzi uses deterministic tax rules and QBO-confirmed posted transaction evidence. Ambiguous items stay in review and no tax estimate is generated from this section.
             </p>
@@ -776,23 +782,14 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           </div>
         </div>
         <ClassificationProgressSummary summary={classificationSummary} trackedPrepareRun={trackedPrepareRun} />
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-          <ClassificationStat label="Eligible" value={classificationSummary.postedTotal} />
-          <ClassificationStat label="Auto-classified" value={classificationSummary.autoClassifiedTotal} />
-          <ClassificationStat label="Manual confirmed" value={classificationSummary.confirmedTotal} />
-          <ClassificationStat label="Needs review" value={classificationSummary.reviewRequiredTotal} tone={classificationSummary.reviewRequiredTotal ? "amber" : "default"} />
-          <ClassificationStat label="Unresolved" value={classificationSummary.unresolvedTotal} tone={classificationSummary.unresolvedTotal ? "amber" : "default"} />
-          <ClassificationStat label="Excluded" value={classificationSummary.excludedTotal} />
+        <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <ClassificationStat label="Estimated deductible expenses" value={formatCurrencyLocal(matrixTotals.authoritativeDeductibleTotal + matrixTotals.proposedDeductibleTotal)} />
+          <ClassificationStat label="Reviewed" value={customerWorkflow.reviewedCount} />
+          <ClassificationStat label="Using standard rules" value={customerWorkflow.standardRuleCount} />
+          <ClassificationStat label="Needs your input" value={customerWorkflow.customerInputCount} tone={customerWorkflow.customerInputCount ? "amber" : "default"} />
         </div>
-        {classificationSummary.isActiveJob || classificationSummary.failedTotal > 0 ? (
-          <div className="mt-2 grid grid-cols-2 gap-2 sm:max-w-[360px]">
-            {classificationSummary.isActiveJob ? (
-              <ClassificationStat label="Processing" value={classificationSummary.remainingTotal} tone="amber" />
-            ) : null}
-            {classificationSummary.failedTotal > 0 ? (
-              <ClassificationStat label="Failed" value={classificationSummary.failedTotal} tone="rose" />
-            ) : null}
-          </div>
+        {customerWorkflow.technicalCount > 0 ? (
+          <p className="mt-2 text-xs text-white/45">{customerWorkflow.technicalCount} transaction{customerWorkflow.technicalCount === 1 ? "" : "s"} need bookkeeping evidence or a background update. They are not customer tax questions.</p>
         ) : null}
       </div>
 
@@ -800,10 +797,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
 
       {workspaceView === "overview" ? (
         <>
-          <MatrixAuthoritySummary totals={matrixTotals} transactionCount={matrix.transactionCount} populationBridge={populationBridge} />
+          <MatrixAuthoritySummary transactionCount={matrix.transactionCount} populationBridge={populationBridge} />
           <DeductionAccountMatrix
             matrix={matrix}
-            classificationsRequired={classificationsRequired}
             onSelectCell={setSelectedCell}
           />
         </>
@@ -828,6 +824,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           {attentionTab === "needs_review" ? (
             <AttentionReviewGroups
               groups={attentionGroups}
+              year={year}
               readOnly={readOnly}
               onOpenDecision={setReviewDecision}
             />
@@ -866,6 +863,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
 
       <ReviewDecisionModal
         decision={reviewDecision}
+        taxYear={year}
         readOnly={readOnly}
         onClose={() => setReviewDecision(null)}
         onApply={async ({ transactionIds, changes, reason }) => {
@@ -891,7 +889,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       />
 
       <div className="mt-3 flex flex-col gap-2 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">
-        <span>{workspaceView === "overview" ? "Automatic deduction totals exclude proposed review-required amounts." : "No deduction total is shown until classification authority exists."}</span>
+        <span>{workspaceView === "overview" ? "Estimated totals include supported standard rules; reviewed totals remain separately identified." : "No deduction total is shown until classification authority exists."}</span>
         <span>{classificationsRequired ? formatClassificationSummaryLine(classificationSummary) : matrix.transactionCount ? `${matrix.transactionCount} posted expense transactions loaded` : "Transaction detail loads from posted QuickBooks expense data."}</span>
       </div>
 
@@ -921,6 +919,7 @@ const CLASSIFICATION_TABS = [
   { value: "all", label: "All" },
   { value: "auto_classified", label: "Auto-classified" },
   { value: "needs_review", label: "Needs review" },
+  { value: "outside_deductions", label: "Outside deductions" },
   { value: "excluded", label: "Excluded" },
   { value: "unclassified", label: "Unclassified" },
 ];
@@ -932,9 +931,9 @@ const WORKSPACE_VIEW_TABS = [
 ];
 
 const ATTENTION_TABS = [
-  { value: "needs_review", label: "Needs review" },
-  { value: "unclassified", label: "Unclassified" },
-  { value: "failed", label: "Failed" },
+  { value: "needs_review", label: "Needs your input" },
+  { value: "unclassified", label: "Bookkeeping evidence" },
+  { value: "failed", label: "Technical updates" },
 ];
 
 function WorkspaceViewTabs({ value, onChange }) {
@@ -978,12 +977,7 @@ function FilterTabButton({ tab, selected, count = null, onClick }) {
   );
 }
 
-function MatrixAuthoritySummary({ totals, transactionCount, populationBridge = null }) {
-  const confirmedBreakdown = [
-    `${totals.autoTransactionCount} Bizzi-classified`,
-    totals.userConfirmedTransactionCount ? `${totals.userConfirmedTransactionCount} confirmed by you` : null,
-    totals.accountantConfirmedTransactionCount ? `${totals.accountantConfirmedTransactionCount} confirmed by accountant` : null,
-  ].filter(Boolean).join(" · ");
+function MatrixAuthoritySummary({ transactionCount, populationBridge = null }) {
   const bridgeScope = populationBridge?.tax_scope || null;
   const bridgeIdentity = populationBridge?.identity_comparison || null;
   const matrixCount = bridgeScope?.deductions_matrix_expense_count ?? transactionCount;
@@ -1000,38 +994,16 @@ function MatrixAuthoritySummary({ totals, transactionCount, populationBridge = n
     .filter(([key, count]) => key !== "expense_cogs_in_matrix" && Number(count || 0) > 0)
     .map(([key, count]) => `${count} ${dispositionLabels[key] || key.replace(/_/g, " ")}`);
   return (
-    <div className="mt-4">
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-emerald-300/12 bg-emerald-300/[0.045] px-3 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-emerald-100/54">Confirmed deductions</div>
-          <div className="mt-1 text-xl font-semibold tabular-nums text-emerald-50">{formatCurrencyLocal(totals.authoritativeDeductibleTotal)}</div>
-          <div className="mt-0.5 text-xs text-white/42">{confirmedBreakdown || "0 confirmed transactions"}</div>
-        </div>
-        <div className="rounded-2xl border border-amber-300/14 bg-amber-300/[0.045] px-3 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-amber-100/58">Proposed — needs review</div>
-          <div className="mt-1 text-xl font-semibold tabular-nums text-amber-100">{formatCurrencyLocal(totals.proposedDeductibleTotal)}</div>
-          <div className="mt-0.5 text-xs text-white/42">{totals.reviewTransactionCount} review-required transactions</div>
-        </div>
-        <div className="rounded-2xl border border-white/[0.08] bg-black/16 px-3 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/42">Expense transactions in deductions</div>
-          <div className="mt-1 text-xl font-semibold tabular-nums text-white">{matrixCount}</div>
-          <div className="mt-0.5 text-xs text-white/42">posted expense rows grouped by QBO GL account · final Expense or COGS type</div>
-        </div>
-        <div className="rounded-2xl border border-sky-300/12 bg-sky-300/[0.035] px-3 py-3">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-sky-100/58">Outside deductions</div>
-          <div className="mt-1 text-xl font-semibold tabular-nums text-sky-50">{outsideCount == null ? "—" : outsideCount}</div>
-          <div className="mt-0.5 text-xs text-white/42">posted non-expense rows evaluated separately</div>
-        </div>
-      </div>
+    <div className="mt-4 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58">
+      <p>
+        <span className="font-semibold text-white/82">{evaluatedCount ?? "—"}</span> posted transactions evaluated · <span className="font-semibold text-white/82">{matrixCount}</span> expense / COGS transactions included · <span className="font-semibold text-white/82">{outsideCount ?? "—"}</span> non-expense transactions handled separately.
+      </p>
       {bridgeScope ? (
-        <details className="mt-2 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58">
+        <details className="mt-2 border-t border-white/[0.08] pt-2">
           <summary className="cursor-pointer font-semibold text-white/74 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
             How this total is calculated
           </summary>
           <div className="mt-2 space-y-1 leading-relaxed">
-            <p>
-              <span className="font-semibold text-white/82">{evaluatedCount}</span> posted transactions evaluated = <span className="font-semibold text-white/82">{matrixCount}</span> expense / COGS transactions included in deductions + <span className="font-semibold text-white/82">{outsideCount}</span> posted non-expense transactions outside deductions.
-            </p>
             {outsideBreakdown.length ? <p>Outside deductions: {outsideBreakdown.join("; ")}.</p> : null}
             <p>Pending Plaid items, transfers, card payments, and incomplete QBO links are never added to deductions merely to make counts match.</p>
             {bridgeIdentity?.identity_match ? (
@@ -1046,7 +1018,7 @@ function MatrixAuthoritySummary({ totals, transactionCount, populationBridge = n
   );
 }
 
-function DeductionAccountMatrix({ matrix, classificationsRequired, onSelectCell }) {
+function DeductionAccountMatrix({ matrix, onSelectCell }) {
   return (
     <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
       {matrix.accounts.length ? (
@@ -1074,12 +1046,10 @@ function DeductionAccountMatrix({ matrix, classificationsRequired, onSelectCell 
                     </td>
                   ))}
                   <td className="px-3 py-3 text-right align-middle text-sm tabular-nums">
-                    <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.authoritativeDeductibleTotal)}</div>
-                    {account.reviewTransactionCount > 0 ? (
-                      <div className="mt-1 text-[11px] font-semibold text-amber-100/76">
-                        {account.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(account.proposedDeductibleTotal)} proposed` : account.reviewActionLabel || "Review"}
-                      </div>
-                    ) : null}
+                    <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.authoritativeDeductibleTotal + account.proposedDeductibleTotal)}</div>
+                    {account.reviewedTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-emerald-100/76">{formatCurrencyLocal(account.reviewedDeductibleTotal)} reviewed</div> : null}
+                    {account.standardRuleTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-sky-100/76">{formatCurrencyLocal(account.standardRuleDeductibleTotal)} standard rule</div> : null}
+                    {account.customerInputTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-amber-100/76">{formatCurrencyLocal(account.needsInputDeductibleTotal)} needs input</div> : null}
                   </td>
                 </tr>
               ))}
@@ -1088,9 +1058,7 @@ function DeductionAccountMatrix({ matrix, classificationsRequired, onSelectCell 
         </div>
       ) : (
         <div className="px-4 py-8 text-center text-sm text-white/54">
-          {classificationsRequired
-            ? "Deduction totals stay unavailable until transaction tax treatment is reviewed."
-            : "No posted QuickBooks expense category totals are available yet."}
+          No posted QuickBooks expense category totals are available yet.
         </div>
       )}
     </div>
@@ -1102,8 +1070,12 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
     return <span className="block px-2 py-1.5 text-[12px] text-white/22">—</span>;
   }
   const openCell = (authority) => {
-    const transactions = authority === "confirmed"
-      ? cell.transactions.filter((row) => isAuthoritativeDeductionBucket(classificationBucket(row)) && !isStandardMileageGasRow(row))
+    const transactions = authority === "reviewed"
+      ? cell.transactions.filter((row) => hasReviewedTaxTreatment(row) && !isStandardMileageGasRow(row))
+      : authority === "standard_rule"
+        ? cell.transactions.filter((row) => hasStandardRuleTaxTreatment(row) && !isStandardMileageGasRow(row))
+        : authority === "needs_input"
+          ? cell.transactions.filter(requiresCustomerTaxInput)
       : authority === "standard_mileage"
         ? cell.transactions.filter(isStandardMileageGasRow)
         : authority === "resolved_zero"
@@ -1124,22 +1096,43 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
         transactions,
         selectedAuthority: authority,
         expenseTotal: transactions.reduce((sum, row) => sum + normalizeMoney(row.amount), 0),
-        authoritativeDeductibleTotal: authority === "confirmed" ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
-        proposedDeductibleTotal: authority === "proposed" ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
+        authoritativeDeductibleTotal: ["reviewed", "standard_rule"].includes(authority) ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
+        proposedDeductibleTotal: ["needs_input", "proposed"].includes(authority) ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
       },
     });
   };
   const resolvedZeroLabel = matrixResolvedZeroLabel(cell);
+  const residualReviewCount = Math.max(0, cell.reviewTransactionCount - cell.standardRuleTransactionCount - cell.customerInputTransactionCount);
   return (
     <div className="flex flex-col items-stretch gap-1">
-      {cell.authoritativeDeductibleTotal > 0 || cell.resolvedZeroTransactionCount > 0 ? (
+      {cell.reviewedTransactionCount > 0 ? (
         <button
           type="button"
-          onClick={() => openCell(cell.authoritativeDeductibleTotal > 0 ? "confirmed" : "resolved_zero")}
+          onClick={() => openCell("reviewed")}
           className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
-          title={`${account.name}, ${month.longLabel}, confirmed deductions`}
+          title={`${account.name}, ${month.longLabel}, ${cell.reviewedTransactionCount} reviewed transaction${cell.reviewedTransactionCount === 1 ? "" : "s"}`}
         >
-          {cell.authoritativeDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.authoritativeDeductibleTotal)} confirmed` : resolvedZeroLabel}
+          {`${formatCurrencyLocal(cell.reviewedDeductibleTotal)} reviewed`}
+        </button>
+      ) : null}
+      {cell.standardRuleTransactionCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => openCell("standard_rule")}
+          className="w-full rounded-lg border border-sky-300/10 bg-sky-300/[0.05] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-sky-100 transition hover:border-sky-200/30 hover:bg-sky-300/[0.10] focus:outline-none focus:ring-2 focus:ring-sky-300/30"
+          title={`${account.name}, ${month.longLabel}, ${cell.standardRuleTransactionCount} standard-rule transaction${cell.standardRuleTransactionCount === 1 ? "" : "s"}`}
+        >
+          {`${formatCurrencyLocal(cell.standardRuleDeductibleTotal)} standard rule`}
+        </button>
+      ) : null}
+      {cell.resolvedZeroTransactionCount > 0 && !cell.reviewedTransactionCount && !cell.standardRuleTransactionCount ? (
+        <button
+          type="button"
+          onClick={() => openCell("resolved_zero")}
+          className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+          title={`${account.name}, ${month.longLabel}, reviewed zero-dollar deduction treatment`}
+        >
+          {resolvedZeroLabel}
         </button>
       ) : null}
       {cell.standardMileageTransactionCount > 0 ? (
@@ -1152,14 +1145,24 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
           Covered by standard mileage
         </button>
       ) : null}
-      {cell.reviewTransactionCount > 0 ? (
+      {cell.customerInputTransactionCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => openCell("needs_input")}
+          className="w-full rounded-lg border border-amber-300/10 bg-amber-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-amber-100 transition hover:border-amber-200/30 hover:bg-amber-300/[0.11] focus:outline-none focus:ring-2 focus:ring-amber-300/30"
+          title={`${account.name}, ${month.longLabel}, ${cell.customerInputTransactionCount} transaction${cell.customerInputTransactionCount === 1 ? " needs" : "s need"} customer input`}
+        >
+          {cell.needsInputDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.needsInputDeductibleTotal)} needs input` : `${cell.customerInputTransactionCount} need${cell.customerInputTransactionCount === 1 ? "s" : ""} input`}
+        </button>
+      ) : null}
+      {residualReviewCount > 0 ? (
         <button
           type="button"
           onClick={() => openCell("proposed")}
           className="w-full rounded-lg border border-amber-300/10 bg-amber-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-amber-100 transition hover:border-amber-200/30 hover:bg-amber-300/[0.11] focus:outline-none focus:ring-2 focus:ring-amber-300/30"
-          title={`${account.name}, ${month.longLabel}, proposed needs-review amounts`}
+          title={`${account.name}, ${month.longLabel}, treatment still being checked`}
         >
-          {cell.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.proposedDeductibleTotal)} proposed` : cell.reviewActionLabel || "Review"}
+          {cell.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.proposedDeductibleTotal)} reviewing` : cell.reviewActionLabel || "Reviewing"}
         </button>
       ) : null}
       {cell.needsTaxReviewTransactionCount > 0 ? (
@@ -1221,7 +1224,7 @@ function matrixZeroTreatmentLabel(row) {
   return "Not deductible";
 }
 
-function AttentionReviewGroups({ groups, readOnly, onOpenDecision }) {
+function AttentionReviewGroups({ groups, year, readOnly, onOpenDecision }) {
   if (!groups.length) return null;
   return (
     <div className="border-b border-white/[0.08] px-3 py-3">
@@ -1234,8 +1237,8 @@ function AttentionReviewGroups({ groups, readOnly, onOpenDecision }) {
                 <div className="mt-0.5 text-xs text-white/46">{group.actionLabel} · {group.taxCategoryLabel}</div>
               </div>
               <div className="shrink-0 text-right">
-                <div className="text-sm font-semibold tabular-nums text-amber-100">{group.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(group.proposedDeductibleTotal)} proposed` : group.actionLabel}</div>
-                <div className="mt-0.5 text-xs text-white/42">{group.transactionCount} rows · {formatCurrencyLocal(group.grossTotal)} gross</div>
+                <div className="text-sm font-semibold tabular-nums text-amber-100">{group.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(group.proposedDeductibleTotal)} estimated` : group.actionLabel}</div>
+                <div className="mt-0.5 text-xs text-white/42">{group.transactionCount} rows · {formatCurrencyLocal(group.grossTotal)} gross · {formatDeductiblePercent(group.deductiblePercent)}</div>
               </div>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -1245,15 +1248,16 @@ function AttentionReviewGroups({ groups, readOnly, onOpenDecision }) {
                 onClick={() => onOpenDecision({ group, scope: "one_transaction" })}
                 className="rounded-full border border-white/10 bg-white/[0.045] px-3 py-1.5 text-[12px] font-semibold text-white/68 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-amber-300/25"
               >
-                Apply to one transaction
+                Review individual transactions
               </button>
               <button
                 type="button"
                 disabled={readOnly || !group.canApply}
                 onClick={() => onOpenDecision({ group, scope: "account_year" })}
+                title={`Applies to ${group.transactionCount} ${group.qboAccountName} transaction${group.transactionCount === 1 ? "" : "s"} in ${year}. Exceptions can be excluded before saving.`}
                 className="rounded-full border border-amber-300/18 bg-amber-300/[0.08] px-3 py-1.5 text-[12px] font-semibold text-amber-50 transition hover:bg-amber-300/[0.13] disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-amber-300/25"
               >
-                Apply to GL account this year
+                {`Use this treatment for all ${year} ${group.qboAccountName}`}
               </button>
               <button
                 type="button"
@@ -1261,7 +1265,7 @@ function AttentionReviewGroups({ groups, readOnly, onOpenDecision }) {
                 title="Going-forward business-use confirmations require a schema-backed account-level authority record before they can be safely persisted."
                 className="rounded-full border border-white/10 bg-white/[0.025] px-3 py-1.5 text-[12px] font-semibold text-white/34 disabled:cursor-not-allowed"
               >
-                Apply going forward
+                Use for future transactions
               </button>
             </div>
             {!group.canApply ? (
@@ -1274,7 +1278,7 @@ function AttentionReviewGroups({ groups, readOnly, onOpenDecision }) {
   );
 }
 
-function ReviewDecisionModal({ decision, readOnly, onClose, onApply }) {
+function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply }) {
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [dedicatedPremises, setDedicatedPremises] = useState(false);
   const [exceptionIds, setExceptionIds] = useState([]);
@@ -1324,7 +1328,7 @@ function ReviewDecisionModal({ decision, readOnly, onClose, onApply }) {
           <div className="min-w-0">
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-100/62">Tax review decision</div>
             <h3 className="mt-1 truncate text-lg font-semibold">{group.qboAccountName}</h3>
-            <p className="mt-1 text-sm text-white/54">{group.actionLabel} for {scope === "one_transaction" ? "one transaction" : "this QBO GL account in the selected tax year"}.</p>
+            <p className="mt-1 text-sm text-white/54">{group.actionLabel} for {scope === "one_transaction" ? "one transaction" : `${group.transactionCount} ${group.qboAccountName} transactions in ${taxYear}`}.</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} className="rounded-full border border-white/10 bg-white/[0.04] p-1.5 text-white/70 hover:bg-white/10 disabled:opacity-50" aria-label="Close tax review decision">
             <X className="h-4 w-4" />
@@ -1332,8 +1336,13 @@ function ReviewDecisionModal({ decision, readOnly, onClose, onApply }) {
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {error ? <div className="mb-3 rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-sm text-rose-100">{error}</div> : null}
+          <div className="rounded-2xl border border-white/10 bg-black/18 px-4 py-3 text-xs leading-relaxed text-white/58">
+            <div><span className="font-semibold text-white/78">Scope:</span> {group.qboAccountName} · {taxYear} · {rows.length} transaction{rows.length === 1 ? "" : "s"}.</div>
+            <div className="mt-1"><span className="font-semibold text-white/78">Proposed treatment:</span> {group.actionLabel} · {formatDeductiblePercent(group.deductiblePercent)} · {group.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(group.proposedDeductibleTotal)} estimated deductible` : "amount pending"}.</div>
+            <div className="mt-1">Any rows you leave unchecked remain unchanged.</div>
+          </div>
           {action.kind === "confirm_business_purpose" ? (
-            <div className="rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
+            <div className="mt-3 rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
               Confirm these transactions had a business purpose. Bizzi will preserve the proposed category and percentage, then record a user-confirmed audit history row.
             </div>
           ) : action.kind === "business_use_percent" ? (
@@ -1562,44 +1571,14 @@ function ClassificationProgressSummary({ summary, trackedPrepareRun = null }) {
   const job = summary.jobStatus;
   if (!job || !["queued", "delayed", "processing", "stalled", "failed"].includes(job.status)) return null;
   const total = Number(job.total || job.queuedCount || 0);
-  const processed = Math.min(total, Math.max(0, Number(job.processed || 0)));
-  const remaining = Math.max(0, Number(job.remaining ?? Math.max(0, total - processed)));
-  const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
   const active = ["queued", "processing", "delayed", "stalled"].includes(job.status);
-  const isTargetedRun = total > 0 && total < Number(summary.postedTotal || 0);
-  const isTrackedUserPrepareRun = Boolean(trackedPrepareRun?.jobId && job.jobId && String(job.jobId) === trackedPrepareRun.jobId);
-  const heading = isTrackedUserPrepareRun && active
-    ? "Preparing deductions from your request."
-    : isTargetedRun && active
-    ? `Updating ${total === 1 ? "one changed transaction" : `${total} changed transactions`}.`
-    : job.status === "queued"
-      ? "Deductions preparation is queued."
-      : job.status === "delayed"
-        ? "Deductions preparation is delayed."
-        : job.status === "failed"
-        ? "Deductions preparation needs attention."
-        : job.status === "stalled"
-          ? "Deductions preparation appears to be stalled."
-          : "Bizzi is classifying your transactions.";
+  const affectedText = total > 0 ? `${total} recently posted transaction${total === 1 ? "" : "s"}` : "recently posted transactions";
+  const heading = job.status === "failed" ? "Some deduction estimates need an update." : "Updating deduction estimates";
   const detail = job.status === "failed"
-    ? "The run stopped before all eligible transactions were classified. Any completed classifications are preserved."
-    : job.status === "stalled"
-      ? "No recent worker heartbeat was recorded. Retry is available when the backend marks it safe."
-      : job.status === "delayed"
-        ? "No worker has claimed this job yet. Bizzi will keep checking automatically."
-      : job.status === "queued"
-        ? isTrackedUserPrepareRun
-          ? "This is the preparation run you started in this session."
-          : isTargetedRun
-          ? "The full deductions matrix stays visible while Bizzi refreshes the changed row."
-          : "Bizzi will begin classifying your posted transactions shortly."
-      : job.isSlow
-        ? "Still working. You can leave this page and check back shortly."
-        : isTrackedUserPrepareRun
-          ? "This is the preparation run you started in this session. The deductions matrix stays visible while it runs."
-        : isTargetedRun
-          ? "The full deductions matrix stays visible while Bizzi refreshes the changed row."
-          : "This usually takes a few minutes. You can leave this page while Bizzi continues.";
+    ? job.canRetry === true
+      ? `${affectedText} could not be evaluated yet. Existing deduction totals remain available. Bizzi will retry automatically.`
+      : `${affectedText} could not be evaluated yet. Existing deduction totals remain available while Bizzi investigates the technical update.`
+    : `Bizzi is evaluating ${affectedText}. Existing deduction results remain available.`;
   return (
     <div className={`mt-3 rounded-2xl border px-3 py-3 ${
       job.status === "failed" || job.status === "stalled" || job.status === "delayed"
@@ -1620,26 +1599,7 @@ function ClassificationProgressSummary({ summary, trackedPrepareRun = null }) {
             <div className="mt-1 text-xs leading-relaxed text-white/52">{detail}</div>
           </div>
         </div>
-        <div className="shrink-0 text-sm font-semibold tabular-nums text-emerald-50">
-          <ClassificationProgressCount job={job} total={total} processed={processed} />
-        </div>
-      </div>
-      {total > 0 ? (
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/[0.08]" aria-label={`Classification progress ${percent}%`}>
-          <div
-            className={`h-full rounded-full bg-emerald-300 transition-[width] duration-500 ${active ? "bizzi-progress-fill" : ""}`}
-            style={{ width: `${Math.max(2, percent)}%` }}
-          />
-        </div>
-      ) : null}
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-white/54 sm:grid-cols-4">
-        <span>Run processed <b className="font-semibold text-white/82">{job.processed ?? 0}</b></span>
-        <span>Run remaining <b className="font-semibold text-white/82">{remaining}</b></span>
-        <span>Run auto-classified <b className="font-semibold text-white/82">{job.autoClassified ?? 0}</b></span>
-        <span>Run needs review <b className="font-semibold text-white/82">{job.needsReview ?? 0}</b></span>
-        <span>Run unresolved <b className="font-semibold text-white/82">{job.unresolved ?? 0}</b></span>
-        <span>Run excluded <b className="font-semibold text-white/82">{job.excluded ?? 0}</b></span>
-        <span>Run failed <b className="font-semibold text-white/82">{job.failed ?? 0}</b></span>
+        {trackedPrepareRun?.jobId && job.jobId && String(trackedPrepareRun.jobId) === String(job.jobId) ? <div className="shrink-0 text-xs font-semibold text-emerald-100/75">Updating</div> : null}
       </div>
     </div>
   );
@@ -1711,14 +1671,6 @@ function ClassificationWorkspaceTable({ rows, loading, emptyMessage = "No transa
       </table>
     </div>
   );
-}
-
-function ClassificationProgressCount({ job, total, processed }) {
-  if (job.status === "queued" && processed <= 0) return `0 of ${total} queued`;
-  if (job.status === "processing" || processed > 0) return `${processed} of ${total} processed`;
-  if (job.status === "delayed") return `${total} awaiting worker`;
-  if (job.status === "stalled") return `${processed} of ${total} complete`;
-  return `${processed} of ${total} complete`;
 }
 
 function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfirm }) {
@@ -1926,13 +1878,33 @@ function buildPrepareDeductionsEligibility({ summary = {}, readOnly = false, loa
   const hasEligibleUnclassifiedRows = Number(summary.missingEvaluationTotal ?? summary.unclassifiedTotal ?? 0) > 0;
   const hasUnresolvedFallbackRows = Number(summary.unresolvedTotal || 0) > 0;
   const hasApprovedApplicableRules = summary.hasApprovedApplicableRules;
-  const canRetry = summary.jobStatus?.canRetry === true || summary.classificationStatus === "classification_failed";
+  const retryingTechnicalFailure = summary.jobStatus?.canRetry === true;
+  const terminalTechnicalFailure = !retryingTechnicalFailure && (
+    summary.jobStatus?.status === "failed" ||
+    summary.classificationStatus === "classification_failed"
+  );
   const canPrepareInitial = hasEligibleUnclassifiedRows && !hasUnresolvedFallbackRows;
   const canRepairUnresolved = hasUnresolvedFallbackRows;
   if (readOnly) return disabled("Tax classification changes are unavailable in read-only Admin View.");
   if (loading) return disabled("Deductions data is still loading.");
   if (hasActiveRun) return disabled("Deductions preparation is already running.");
-  if ((canPrepareInitial || canRepairUnresolved || canRetry) && hasApprovedApplicableRules === false) {
+  if (retryingTechnicalFailure) return disabled("Bizzi is retrying a technical update automatically. Existing deduction estimates remain available.", {
+    hasActiveRun,
+    hasEligibleUnclassifiedRows,
+    hasUnresolvedFallbackRows,
+    hasApprovedApplicableRules,
+    canPrepareInitial,
+    canRepairUnresolved,
+  });
+  if (terminalTechnicalFailure) return disabled("A technical deduction update needs attention. Existing deduction estimates remain available.", {
+    hasActiveRun,
+    hasEligibleUnclassifiedRows,
+    hasUnresolvedFallbackRows,
+    hasApprovedApplicableRules,
+    canPrepareInitial,
+    canRepairUnresolved,
+  });
+  if ((canPrepareInitial || canRepairUnresolved) && hasApprovedApplicableRules === false) {
     return disabled("Approved classification rules are unavailable for these rows. Accountant-approved GL rules must be activated before preparation can improve them.", {
       hasActiveRun,
       hasEligibleUnclassifiedRows,
@@ -1943,7 +1915,7 @@ function buildPrepareDeductionsEligibility({ summary = {}, readOnly = false, loa
       isPreparing: false,
     });
   }
-  const enabled = canPrepareInitial || canRepairUnresolved || canRetry;
+  const enabled = canPrepareInitial || canRepairUnresolved;
   return {
     enabled,
     reason: enabled ? "" : "No eligible or unresolved posted transactions are available for preparation.",
@@ -1987,6 +1959,94 @@ function buildClassificationWorkspaceRows(deductions) {
   return rows.map(normalizeClassificationWorkspaceRow).filter(Boolean);
 }
 
+function taxScopeForRow(row = {}) {
+  return row.taxScopeDisposition || row.tax_scope_disposition || row.raw?.taxScopeDisposition || row.raw?.tax_scope_disposition || null;
+}
+
+function isOutsideDeductionsRow(row = {}) {
+  const scope = taxScopeForRow(row);
+  return Boolean(scope && scope !== "expense_cogs_in_matrix" && scope !== "incomplete_or_unresolved");
+}
+
+function hasStableRuleEvidence(row = {}) {
+  const source = String(firstValue(
+    row.classificationSource,
+    row.classification_source,
+    row.source,
+    row.raw?.source,
+    row.raw?.classification?.source
+  ) || "").toLowerCase();
+  return source === "rule_engine" || Boolean(firstValue(
+    row.matchedRuleCode,
+    row.matched_rule_code,
+    row.ruleCode,
+    row.rule_code,
+    row.raw?.matched_rule_code,
+    row.raw?.rule_code,
+    row.raw?.classification?.rule_code
+  ));
+}
+
+function requiresCustomerTaxInput(row = {}) {
+  if (classificationBucket(row) !== "needs_review" || isOutsideDeductionsRow(row)) return false;
+  const decision = reviewDecisionForRow(row);
+  if (["vehicle_method", "business_use_percent", "utility_allocation"].includes(decision.kind)) return true;
+  const category = String(row.taxCategory || row.tax_category || "").toLowerCase();
+  // A business-meals or travel treatment depends on a fact Bizzi cannot prove
+  // from the final GL alone. Other stable-rule rows stay estimated instead of
+  // becoming a transaction-by-transaction customer task.
+  return ["business_meals", "travel_transportation"].includes(category);
+}
+
+function isStandardRuleProposal(row = {}) {
+  return classificationBucket(row) === "needs_review" &&
+    taxScopeForRow(row) === "expense_cogs_in_matrix" &&
+    hasStableRuleEvidence(row) &&
+    !requiresCustomerTaxInput(row);
+}
+
+function hasReviewedTaxTreatment(row = {}) {
+  return ["user_confirmed", "accountant_confirmed"].includes(classificationBucket(row));
+}
+
+function hasStandardRuleTaxTreatment(row = {}) {
+  return classificationBucket(row) === "auto_classified" || isStandardRuleProposal(row);
+}
+
+function buildCustomerDeductionsWorkflow(rows = []) {
+  return rows.reduce((counts, row) => {
+    const bucket = classificationBucket(row);
+    if (bucket === "user_confirmed" || bucket === "accountant_confirmed") counts.reviewedCount += 1;
+    if (bucket === "auto_classified" || isStandardRuleProposal(row)) counts.standardRuleCount += 1;
+    if (requiresCustomerTaxInput(row)) counts.customerInputCount += 1;
+    if (bucket === "unclassified" || bucket === "failed" || bucket === "technical_evidence_incomplete") counts.technicalCount += 1;
+    return counts;
+  }, { reviewedCount: 0, standardRuleCount: 0, customerInputCount: 0, technicalCount: 0 });
+}
+
+function customerDeductionsStatusMessage(summary = {}, workflow = {}) {
+  const job = summary.jobStatus || {};
+  const total = Number(job.total || job.remaining || 0);
+  if (["queued", "processing", "delayed", "stalled"].includes(job.status)) {
+    return total > 0
+      ? `Updating deduction estimates for ${total} recently posted transaction${total === 1 ? "" : "s"}. Existing results remain available.`
+      : "Updating deduction estimates. Existing results remain available.";
+  }
+  if (job.status === "failed") {
+    const retryMessage = job.canRetry === true
+      ? "Bizzi will retry automatically."
+      : "Bizzi is investigating the technical update.";
+    return total > 0
+      ? `${total} transaction${total === 1 ? " could" : "s could"} not be evaluated yet. Existing deduction totals remain available. ${retryMessage}`
+      : `Some transactions could not be evaluated yet. Existing deduction totals remain available. ${retryMessage}`;
+  }
+  if (workflow.customerInputCount > 0) {
+    return `${workflow.customerInputCount} transaction${workflow.customerInputCount === 1 ? " needs" : "s need"} your input. Standard-rule estimates remain available.`;
+  }
+  if (workflow.technicalCount > 0) return "Some transactions need bookkeeping evidence. Existing deduction estimates remain available.";
+  return "Deductions are estimated from final QuickBooks categories and supported tax rules.";
+}
+
 function normalizeClassificationWorkspaceRow(row) {
   if (!row) return null;
   const bucket = classificationBucket(row);
@@ -2015,10 +2075,10 @@ function filterClassificationWorkspaceRows(rows, tab) {
 function buildAttentionCounts(rows) {
   const counts = { all: 0, needs_review: 0, unclassified: 0, failed: 0 };
   for (const row of rows) {
-    if (row.classificationBucket === "needs_review") {
+    if (requiresCustomerTaxInput(row)) {
       counts.needs_review += 1;
       counts.all += 1;
-    } else if (row.classificationBucket === "unclassified") {
+    } else if (["unclassified", "technical_evidence_incomplete"].includes(row.classificationBucket)) {
       counts.unclassified += 1;
       counts.all += 1;
     } else if (row.classificationBucket === "failed") {
@@ -2030,19 +2090,21 @@ function buildAttentionCounts(rows) {
 }
 
 function filterAttentionWorkspaceRows(rows, tab) {
+  if (tab === "needs_review") return rows.filter(requiresCustomerTaxInput);
+  if (tab === "unclassified") return rows.filter((row) => ["unclassified", "technical_evidence_incomplete"].includes(row.classificationBucket));
   return rows.filter((row) => row.classificationBucket === tab);
 }
 
 function attentionEmptyMessage(tab) {
-  if (tab === "unclassified") return "No unclassified transactions need attention.";
-  if (tab === "failed") return "No failed classification rows need attention.";
-  return "No review-required transactions need attention.";
+  if (tab === "unclassified") return "No transactions are waiting for bookkeeping evidence.";
+  if (tab === "failed") return "No technical updates are waiting to retry.";
+  return "No transactions need your input.";
 }
 
 function buildAttentionReviewGroups(rows) {
   const groups = new Map();
   for (const row of rows) {
-    if (classificationBucket(row) !== "needs_review" || hasManualClassificationAuthority(row)) continue;
+    if (!requiresCustomerTaxInput(row) || hasManualClassificationAuthority(row)) continue;
     const decision = reviewDecisionForRow(row);
     const qboAccountName = safeText(row.qboAccountName || row.bookAccount, "Unmapped QuickBooks account");
     const qboAccountId = firstValue(row.qboAccountId, row.raw?.qboAccountId, row.raw?.source_qbo_account_id, qboAccountName);
@@ -2059,6 +2121,7 @@ function buildAttentionReviewGroups(rows) {
         rows: [],
         grossTotal: 0,
         proposedDeductibleTotal: 0,
+        deductiblePercent: row.deductiblePercent ?? null,
         transactionCount: 0,
       });
     }
@@ -2150,60 +2213,6 @@ function reviewDecisionReason({ group, scope, businessUsePercent, dedicatedPremi
   return `User confirmed business purpose for ${scopeLabel}.`;
 }
 
-function classificationWorkspaceMessage(summary) {
-  if (summary.jobStatus?.status === "queued") {
-    return "Deductions preparation is queued.";
-  }
-  if (summary.jobStatus?.status === "delayed") {
-    return "Deductions preparation is delayed.";
-  }
-  if (summary.jobStatus?.status === "processing") {
-    return summary.jobStatus?.isStalled
-      ? "Deductions preparation appears to be delayed."
-      : "Bizzi is classifying your posted QuickBooks transactions.";
-  }
-  if (summary.jobStatus?.status === "stalled") {
-    return "Deductions preparation appears to be stalled.";
-  }
-  if (summary.jobStatus?.status === "failed") {
-    return "Deductions preparation needs attention.";
-  }
-  if (summary.classificationStatus === "classification_queued") {
-    return "Deductions preparation is queued.";
-  }
-  if (summary.classificationStatus === "classifying") {
-    const total = Number(summary.postedTotal || 0);
-    const processed = Math.max(0, Number(summary.classifiedTotal || 0) + Number(summary.excludedTotal || 0) + Number(summary.failedTotal || 0));
-    return total > 0
-      ? `Bizzi has classified ${Math.min(processed, total)} of ${total} transactions.`
-      : "Bizzi is classifying your posted QuickBooks transactions.";
-  }
-  if (summary.classificationStatus === "classification_failed" || summary.classificationStatus === "failed") {
-    return "Tax classification needs attention before deductible totals can be calculated.";
-  }
-  if ((summary.processingTotal ?? 0) > 0) {
-    return "Bizzi is classifying your posted QuickBooks transactions.";
-  }
-  const meaningfulAutoMajority = (summary.postedTotal ?? 0) > 0 &&
-    (summary.autoClassifiedTotal ?? 0) > (summary.postedTotal / 2);
-  if ((summary.postedTotal ?? 0) > 0 && (summary.unresolvedTotal ?? 0) > 0 && (summary.autoClassifiedTotal ?? 0) <= 0 && (summary.excludedTotal ?? 0) <= 0) {
-    return `${summary.unresolvedTotal} transactions still need classification rules or additional context.`;
-  }
-  if ((summary.reviewRequiredTotal ?? 0) > 0 && meaningfulAutoMajority) {
-    return "Most transactions were classified automatically. Review the items that need more context.";
-  }
-  if ((summary.reviewRequiredTotal ?? 0) > 0) {
-    return `${summary.reviewRequiredTotal} transactions have proposed tax treatment and need review.`;
-  }
-  if ((summary.postedTotal ?? 0) > 0 && (summary.unclassifiedTotal ?? 0) > 0) {
-    return `${summary.postedTotal} posted QuickBooks transactions are ready for automatic tax classification.`;
-  }
-  if ((summary.postedTotal ?? 0) <= 0) {
-    return "No QBO-confirmed posted transactions are available for tax classification yet.";
-  }
-  return "Tax classifications are up to date.";
-}
-
 function formatRelativeRefreshTime(value) {
   const ms = Date.now() - Date.parse(value || "");
   if (!Number.isFinite(ms) || ms < 60_000) return "just now";
@@ -2219,6 +2228,9 @@ function classificationBucket(row) {
   const status = String(row?.status || row?.classificationStatus || row?.classification_status || "").trim().toLowerCase();
   const treatment = String(row?.taxTreatment || row?.deductibilityStatus || "").trim().toLowerCase();
   const category = String(row?.taxCategory || row?.tax_category || row?.raw?.taxCategory || row?.raw?.tax_category || "").trim().toLowerCase();
+  const taxScope = taxScopeForRow(row);
+  if (taxScope === "incomplete_or_unresolved") return "technical_evidence_incomplete";
+  if (isOutsideDeductionsRow(row)) return "outside_deductions";
   if (status === "failed" || status === "classification_failed") return "failed";
   if (status === "needs_tax_review" || category === "tax_review_holding" || row?.raw?.metadata?.is_holding === true) return "needs_tax_review";
   if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
@@ -2237,6 +2249,8 @@ function classificationStatusClass(bucket) {
   if (bucket === "mixed") return "border-sky-300/18 bg-sky-300/[0.08] text-sky-50";
   if (bucket === "user_confirmed" || bucket === "accountant_confirmed") return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-50";
   if (bucket === "excluded") return "border-white/12 bg-white/[0.055] text-white/58";
+  if (bucket === "outside_deductions") return "border-sky-300/18 bg-sky-300/[0.06] text-sky-50";
+  if (bucket === "technical_evidence_incomplete") return "border-rose-300/18 bg-rose-400/[0.06] text-rose-100";
   if (bucket === "unclassified") return "border-white/12 bg-white/[0.045] text-white/62";
   return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-50";
 }
@@ -2253,6 +2267,8 @@ function aggregateClassificationStatus(rows = []) {
   if (bucket === "needs_tax_review") return { bucket, label: "Needs tax review", tone: "amber" };
   if (bucket === "failed") return { bucket, label: "Failed", tone: "red" };
   if (bucket === "excluded") return { bucket, label: "Excluded", tone: "neutral" };
+  if (bucket === "outside_deductions") return { bucket, label: "Outside deductions", tone: "neutral" };
+  if (bucket === "technical_evidence_incomplete") return { bucket, label: "Bookkeeping evidence needed", tone: "red" };
   return { bucket: "unclassified", label: "Unclassified", tone: "neutral" };
 }
 
@@ -2263,6 +2279,8 @@ function classificationStatusLabel(bucket, row) {
   if (bucket === "user_confirmed") return "Confirmed by you";
   if (bucket === "accountant_confirmed") return "Confirmed by accountant";
   if (bucket === "excluded") return "Excluded";
+  if (bucket === "outside_deductions") return "Outside deductions";
+  if (bucket === "technical_evidence_incomplete") return "Bookkeeping evidence needed";
   if (bucket === "unclassified") return "Unclassified";
   return safeText(row.statusLabel, "Auto-classified");
 }
@@ -2283,6 +2301,8 @@ function isStandardMileageGasRow(row) {
 }
 
 function deductibilityLabel(row) {
+  if (classificationBucket(row) === "outside_deductions") return "Not a deduction";
+  if (classificationBucket(row) === "technical_evidence_incomplete") return "Bookkeeping evidence needed";
   if (classificationBucket(row) === "unclassified") {
     return row.taxTreatment === "not_determined" ? "Not determined" : "Pending classification";
   }
@@ -2302,6 +2322,8 @@ function deductibilityLabel(row) {
 }
 
 function deductiblePercentLabel(row) {
+  if (classificationBucket(row) === "outside_deductions") return "Handled separately";
+  if (classificationBucket(row) === "technical_evidence_incomplete") return "Not yet available";
   if (classificationBucket(row) === "unclassified") return "";
   if (classificationBucket(row) === "needs_tax_review") return "Not yet determined";
   if (isStandardMileageGasRow(row)) return "Covered by standard mileage";
@@ -4059,6 +4081,9 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     expenseTotal: 0,
     authoritativeDeductibleTotal: 0,
     proposedDeductibleTotal: 0,
+    standardRuleDeductibleTotal: 0,
+    reviewedDeductibleTotal: 0,
+    needsInputDeductibleTotal: 0,
     displayDeductibleTotal: 0,
     autoTransactionCount: 0,
     userConfirmedTransactionCount: 0,
@@ -4069,6 +4094,9 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     failedTransactionCount: 0,
     unclassifiedTransactionCount: 0,
     reviewTransactionCount: 0,
+    standardRuleTransactionCount: 0,
+    reviewedTransactionCount: 0,
+    customerInputTransactionCount: 0,
     needsTaxReviewTransactionCount: 0,
     needsTaxReviewGrossExpense: 0,
     reviewActionLabel: null,
@@ -4100,6 +4128,9 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         expenseTotal: 0,
         authoritativeDeductibleTotal: 0,
         proposedDeductibleTotal: 0,
+        standardRuleDeductibleTotal: 0,
+        reviewedDeductibleTotal: 0,
+        needsInputDeductibleTotal: 0,
         displayDeductibleTotal: 0,
         transactionCount: 0,
         autoTransactionCount: 0,
@@ -4111,6 +4142,9 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         failedTransactionCount: 0,
         unclassifiedTransactionCount: 0,
         reviewTransactionCount: 0,
+        standardRuleTransactionCount: 0,
+        reviewedTransactionCount: 0,
+        customerInputTransactionCount: 0,
         needsTaxReviewTransactionCount: 0,
         needsTaxReviewGrossExpense: 0,
         reviewActionLabel: null,
@@ -4124,11 +4158,17 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     const standardMileageGas = isStandardMileageGasRow(row);
     const authoritativeAmount = ["auto_classified", "user_confirmed", "accountant_confirmed"].includes(bucket) && !standardMileageGas ? deductibleAmount : 0;
     const proposedAmount = bucket === "needs_review" ? deductibleAmount : 0;
+    const standardRuleAmount = hasStandardRuleTaxTreatment(row) && !standardMileageGas ? deductibleAmount : 0;
+    const reviewedAmount = hasReviewedTaxTreatment(row) && !standardMileageGas ? deductibleAmount : 0;
+    const needsInputAmount = requiresCustomerTaxInput(row) ? deductibleAmount : 0;
     const needsTaxReviewAmount = bucket === "needs_tax_review" ? expenseAmount : 0;
     const displayAmount = scope === "needs_review" ? proposedAmount : scope === "all" ? authoritativeAmount + proposedAmount : authoritativeAmount;
     month.expenseTotal += expenseAmount;
     month.authoritativeDeductibleTotal += authoritativeAmount;
     month.proposedDeductibleTotal += proposedAmount;
+    month.standardRuleDeductibleTotal += standardRuleAmount;
+    month.reviewedDeductibleTotal += reviewedAmount;
+    month.needsInputDeductibleTotal += needsInputAmount;
     month.displayDeductibleTotal += displayAmount;
     if (bucket === "auto_classified") month.autoTransactionCount += 1;
     if (bucket === "user_confirmed") month.userConfirmedTransactionCount += 1;
@@ -4142,6 +4182,9 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
       month.reviewTransactionCount += 1;
       month.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
     }
+    if (hasStandardRuleTaxTreatment(row) && !standardMileageGas) month.standardRuleTransactionCount += 1;
+    if (hasReviewedTaxTreatment(row) && !standardMileageGas) month.reviewedTransactionCount += 1;
+    if (requiresCustomerTaxInput(row)) month.customerInputTransactionCount += 1;
     if (bucket === "needs_tax_review") {
       month.needsTaxReviewTransactionCount += 1;
       month.needsTaxReviewGrossExpense += needsTaxReviewAmount;
@@ -4150,6 +4193,9 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     account.expenseTotal += expenseAmount;
     account.authoritativeDeductibleTotal += authoritativeAmount;
     account.proposedDeductibleTotal += proposedAmount;
+    account.standardRuleDeductibleTotal += standardRuleAmount;
+    account.reviewedDeductibleTotal += reviewedAmount;
+    account.needsInputDeductibleTotal += needsInputAmount;
     account.displayDeductibleTotal += displayAmount;
     account.transactionCount += 1;
     if (bucket === "auto_classified") account.autoTransactionCount += 1;
@@ -4164,6 +4210,9 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
       account.reviewTransactionCount += 1;
       account.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
     }
+    if (hasStandardRuleTaxTreatment(row) && !standardMileageGas) account.standardRuleTransactionCount += 1;
+    if (hasReviewedTaxTreatment(row) && !standardMileageGas) account.reviewedTransactionCount += 1;
+    if (requiresCustomerTaxInput(row)) account.customerInputTransactionCount += 1;
     if (bucket === "needs_tax_review") {
       account.needsTaxReviewTransactionCount += 1;
       account.needsTaxReviewGrossExpense += needsTaxReviewAmount;
@@ -4426,4 +4475,9 @@ function parseLocalDate(value) {
 export const __TaxDashboardTestInternals = {
   DeductionMonthDetailModal,
   buildDeductionAccountMatrix,
+  buildCustomerDeductionsWorkflow,
+  classificationBucket,
+  filterAttentionWorkspaceRows,
+  isStandardRuleProposal,
+  requiresCustomerTaxInput,
 };
