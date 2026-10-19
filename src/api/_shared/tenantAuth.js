@@ -282,7 +282,14 @@ export function attachAuthorizedBusiness(req, business) {
 export function sendTenantAuthError(res, err) {
   const status = Number(err?.status || 500);
   const code = err?.code || "BUSINESS_ACCESS_DENIED";
-  return res.status(status).json({ ok: false, error: code, code });
+  const requestId = res.locals?.monthlyBriefRequestId || null;
+  return res.status(status).json({
+    ok: false,
+    status: "context_unavailable",
+    error: code,
+    code,
+    ...(requestId ? { request_id: requestId } : {}),
+  });
 }
 
 export function requireBusinessAccess(options = {}) {

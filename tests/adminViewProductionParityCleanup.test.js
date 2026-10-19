@@ -59,7 +59,8 @@ test("Admin View forecast and pulse widgets use optional persisted-only reads in
   assert.match(monthlyBrief, /&admin_view_optional=1/);
   assert.match(pulseCard, /&admin_view_optional=1/);
   assert.match(forecastApi, /adminViewOptional[\s\S]*status\(200\)\.json/);
-  assert.match(pulseApi, /adminViewOptional[\s\S]*status\(200\)\.json/);
+  assert.match(pulseApi, /status: "not_generated", brief: null/);
+  assert.match(pulseApi, /\.eq\("status", "available"\)/);
 });
 
 test("Reports Admin View reads report_metadata through verified backend archive endpoint", () => {

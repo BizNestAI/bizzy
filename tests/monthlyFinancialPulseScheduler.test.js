@@ -223,6 +223,37 @@ test("Monthly Brief completed job without persisted pulse is retried", async () 
   assert.ok(job.finished_at);
 });
 
+test("Monthly Brief existing-pulse reuse preserves source_snapshot_id", async () => {
+  const db = createFakePulseDb({
+    tables: {
+      monthly_financial_pulse: [{
+        id: "existing-pulse",
+        business_id: "biz-a",
+        month: "2026-08-01",
+        cadence: "final",
+        status: "available",
+        source_snapshot_id: "cash-snapshot-id",
+      }],
+      monthly_financial_pulse_jobs: [{
+        id: "existing-job",
+        business_id: "biz-a",
+        user_id: "owner-a",
+        target_month: "2026-08-01",
+        cadence: "final",
+        status: "completed",
+        source_snapshot_id: "cash-snapshot-id",
+      }],
+    },
+  });
+  const result = await ensureMonthlyBriefForTarget({
+    db,
+    business: { business_id: "biz-a", user_id: "owner-a" },
+    target: { target_month: "2026-08-01", cadence: "final", due_on: "2026-09-01" },
+  });
+  assert.equal(result.status, "already_available");
+  assert.equal(db.tables.monthly_financial_pulse_jobs[0].source_snapshot_id, "cash-snapshot-id");
+});
+
 test("Monthly Brief scheduler skips stale malformed business and continues others", async () => {
   const db = createFakePulseDb({
     quickbooks_tokens: [

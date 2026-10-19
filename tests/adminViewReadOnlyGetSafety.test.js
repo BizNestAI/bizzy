@@ -35,13 +35,13 @@ test("Admin View metrics GET is persisted-cache only before QBO or derived-data 
 });
 
 test("Admin View pulse GET never honors generate=1 and returns persisted data only", () => {
-  const adminBranch = pulseSource.indexOf("if (isAdminViewRequest(req))");
-  assert.ok(adminBranch > 0, "pulse route must branch for Admin View");
-  assert.ok(adminBranch < pulseSource.indexOf("if (shouldGenerate)"), "Admin View must branch before generation condition");
-  assert.ok(adminBranch < pulseSource.indexOf("generateFinancialPulseSnapshot", adminBranch), "Admin View must branch before pulse generation call");
-  assert.match(pulseSource, /monthly_financial_pulse/);
-  assert.match(pulseSource, /admin_view_cache_only: true/);
-  assert.match(pulseSource, /sendAdminViewReadOnlyUnavailable\(res, \{ error: "admin_view_read_only_data_unavailable" \}\)/);
+  const handlerStart = pulseSource.indexOf("export function createMonthlyBriefLookupHandler");
+  const handlerEnd = pulseSource.indexOf('router.get("/"', handlerStart);
+  const handler = pulseSource.slice(handlerStart, handlerEnd);
+  assert.ok(handlerStart > 0, "pulse route must expose the persisted lookup handler");
+  assert.match(handler, /monthly_financial_pulse/);
+  assert.match(handler, /\.eq\("status", "available"\)/);
+  assert.doesNotMatch(handler, /generateFinancialPulseSnapshot|shouldGenerate|chat[_-]?credit/i);
 });
 
 test("Admin View forecast GET reads persisted rows only and cannot upsert generated forecasts", () => {

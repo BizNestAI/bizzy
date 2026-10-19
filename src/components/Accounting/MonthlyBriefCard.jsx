@@ -1,10 +1,15 @@
 // File: /src/components/Accounting/MonthlyBriefCard.jsx
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import CardHeader from "../UI/CardHeader";
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { apiFetch } from "../../utils/apiBase.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
+import {
+  MONTHLY_BRIEF_STATES,
+  fetchMonthlyBriefLookup,
+  monthlyBriefErrorState,
+} from "./monthlyBriefState.js";
 
 function monthLabel(y, m) {
   if (!y || !m) return "";
@@ -87,9 +92,13 @@ function adaptDemoPulseToPeriod(pulse, year, month) {
 export default function MonthlyBriefCard({ userId, businessId }) {
   const adminView = useAdminView();
   const { year, month } = useFinancialPeriod(businessId);
-  const [pulse, setPulse] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [lookup, setLookup] = useState({
+    status: MONTHLY_BRIEF_STATES.CONTEXT_UNAVAILABLE,
+    brief: null,
+    error: null,
+    requestId: null,
+  });
+  const requestGeneration = useRef(0);
   const usingDemo = shouldUseDemoData();
 
   const demoPulse = useMemo(() => {
@@ -101,17 +110,16 @@ export default function MonthlyBriefCard({ userId, businessId }) {
   const label = useMemo(() => monthLabel(year, month), [year, month]);
 
   const fetchPulse = useCallback(async (signal) => {
+    const generation = ++requestGeneration.current;
     if (demoPulse) {
-      setPulse(demoPulse);
-      setError(null);
+      setLookup({ status: MONTHLY_BRIEF_STATES.AVAILABLE, brief: demoPulse, error: null, requestId: "demo" });
       return;
     }
     if (!userId || !businessId || !year || !month) {
-      setPulse(null);
+      setLookup({ status: MONTHLY_BRIEF_STATES.CONTEXT_UNAVAILABLE, brief: null, error: null, requestId: null });
       return;
     }
-    setLoading(true);
-    setError(null);
+    setLookup({ status: MONTHLY_BRIEF_STATES.LOADING, brief: null, error: null, requestId: null });
     try {
       const url =
         `/api/accounting/pulse` +
@@ -121,34 +129,14 @@ export default function MonthlyBriefCard({ userId, businessId }) {
         `&month=${encodeURIComponent(month)}` +
         (adminView.active ? `&admin_view_optional=1` : "");
 
-      const res = await apiFetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-id": userId,
-          "x-business-id": businessId,
-        },
-        signal,
-      });
-      const ct = res.headers.get("content-type") || "";
-      const raw = await res.text();
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${raw.slice(0, 160)}`);
-      if (!ct.includes("application/json")) throw new Error(`Non-JSON response (${ct})`);
-      const data = JSON.parse(raw);
-      if (adminView.active && data?.admin_view_unavailable) {
-        setPulse(null);
-        setError("No persisted monthly brief is available for this business.");
-        return;
+      const next = await fetchMonthlyBriefLookup({ apiFetch, url, signal });
+      if (generation === requestGeneration.current && !signal?.aborted) {
+        setLookup({ ...next, error: null });
       }
-      setPulse(normalizePulse(data?.pulse ?? null));
     } catch (err) {
-      if (err.name !== "AbortError") {
-        if (!adminView.active) console.error("[MonthlyBrief] pulse fetch failed:", err);
-        setError(err.message || "Failed to load monthly pulse.");
-        setPulse(null);
+      if (err.name !== "AbortError" && generation === requestGeneration.current) {
+        setLookup(monthlyBriefErrorState(err.requestId || null));
       }
-    } finally {
-      setLoading(false);
     }
   }, [adminView.active, businessId, demoPulse, month, userId, year]);
 
@@ -160,13 +148,14 @@ export default function MonthlyBriefCard({ userId, businessId }) {
   useEffect(() => {
     const ac = new AbortController();
     if (demoPulse) {
-      setPulse(demoPulse);
-      setError(null);
+      setLookup({ status: MONTHLY_BRIEF_STATES.AVAILABLE, brief: demoPulse, error: null, requestId: "demo" });
     } else {
       fetchPulse(ac.signal);
     }
     return () => ac.abort();
   }, [demoPulse, fetchPulse]);
+
+  const pulse = lookup.brief;
 
   const monthPill = (
     <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-200">
@@ -177,7 +166,7 @@ export default function MonthlyBriefCard({ userId, businessId }) {
   const rightControls = (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {monthPill}
-	      {pulse?.generatedAt && (
+	      {lookup.status === MONTHLY_BRIEF_STATES.AVAILABLE && pulse?.generatedAt && (
 	        <span className="rounded-full bg-white/[0.045] px-2.5 py-1 text-[11px] font-medium text-white/55" title={`Generated ${timeAgo(pulse.generatedAt)}`}>
 	          Generated {generatedDateLabel(pulse.generatedAt)}
 	        </span>
@@ -211,7 +200,7 @@ export default function MonthlyBriefCard({ userId, businessId }) {
         titleClassName="text-[13px] tracking-[0.16em]"
       />
 
-      {loading && !pulse ? (
+      {lookup.status === MONTHLY_BRIEF_STATES.LOADING ? (
         <div className="space-y-3 animate-pulse">
           <div className="h-4 bg-white/10 rounded w-2/3" />
           <div className="h-3 bg-white/10 rounded w-5/6" />
@@ -219,18 +208,18 @@ export default function MonthlyBriefCard({ userId, businessId }) {
         </div>
       ) : null}
 
-      {error ? (
-        <div className="text-red-400 text-sm mb-3">
-          Could not load brief.{" "}
+      {lookup.status === MONTHLY_BRIEF_STATES.REQUEST_FAILED ? (
+        <div className="mb-3 text-sm text-amber-100" role="alert">
+          {lookup.error}{" "}
           <button className="underline hover:no-underline" onClick={handleRefresh}>
             Retry
           </button>
-          <div className="opacity-70 mt-1">{error}</div>
+          {lookup.requestId ? <div className="mt-1 opacity-60">Request {lookup.requestId}</div> : null}
         </div>
       ) : null}
 
       <div className="space-y-4">
-        {briefContent?.lead ? (
+        {lookup.status === MONTHLY_BRIEF_STATES.AVAILABLE && briefContent?.lead ? (
           <p className="max-w-4xl text-sm leading-6 text-white/82">
             {briefContent.lead}
           </p>
@@ -244,15 +233,21 @@ export default function MonthlyBriefCard({ userId, businessId }) {
               </div>
             ))}
           </div>
-	        ) : pulse?.status === "waiting_for_snapshot" ? (
-	          <p className="text-sm text-white/60">Waiting for the Cash-basis QuickBooks snapshot for this period.</p>
-	        ) : pulse?.status === "generating" ? (
-	          <p className="text-sm text-white/60">Generating monthly brief...</p>
-	        ) : pulse?.status === "failed" ? (
-	          <p className="text-sm text-amber-100">Monthly brief generation needs retry.</p>
-	        ) : (
+	        ) : lookup.status === MONTHLY_BRIEF_STATES.NOT_GENERATED ? (
 	          <p className="text-sm text-white/60">No monthly brief has been generated for this period.</p>
-	        )}
+	        ) : lookup.status === MONTHLY_BRIEF_STATES.CONTEXT_UNAVAILABLE ? (
+	          <p className="text-sm text-white/60">Monthly brief context is unavailable.</p>
+	        ) : null}
+
+        {lookup.status === MONTHLY_BRIEF_STATES.AVAILABLE ? (
+          <div className="flex flex-wrap gap-2 text-[11px] font-medium text-white/50">
+            <span>{pulse.cadence === "final" ? "Final" : "Mid-month"}</span>
+            {pulse.accountingMethod ? <span>{pulse.accountingMethod} basis</span> : null}
+            {pulse.dataThroughDate && !String(pulse.dataThroughDate).endsWith("-01") ? (
+              <span>Data through {generatedDateLabel(pulse.dataThroughDate)}</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       </div>
 

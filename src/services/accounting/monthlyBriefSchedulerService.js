@@ -78,6 +78,8 @@ export async function runMonthlyBriefSchedulerSweepOnce({
   const discovery = await discoverEligibleQboBusinesses({ db });
   const businesses = discovery.businesses || [];
   let completed = 0;
+  let reused = 0;
+  let queued = 0;
   let waiting = 0;
   let failed = 0;
   let skipped = discovery.skipped || 0;
@@ -87,7 +89,13 @@ export async function runMonthlyBriefSchedulerSweepOnce({
     for (const target of targets) {
       try {
         const result = await ensureMonthlyBriefForTarget({ db, business, target, generatePulse, now });
-        if (result.status === "completed" || result.status === "already_available") completed += 1;
+        if (result.status === "completed") {
+          completed += 1;
+          queued += 1;
+        } else if (result.status === "already_available") {
+          completed += 1;
+          reused += 1;
+        }
         else if (result.status === "waiting_for_snapshot") waiting += 1;
         else if (result.status === "skipped_active" || result.status === "skipped_completed") skipped += 1;
         else if (result.status === "failed") {
@@ -115,6 +123,8 @@ export async function runMonthlyBriefSchedulerSweepOnce({
     businesses: businesses.length,
     discovered_businesses: discovery.discovered,
     completed,
+    reused,
+    queued,
     waiting,
     failed,
     skipped,
@@ -183,7 +193,15 @@ export async function ensureMonthlyBriefForTarget({
 
   const existingPulse = await readPulse({ db, businessId, target });
   if (existingPulse?.status === "available") {
-    await upsertJob({ db, businessId, userId, target, status: "completed", result: { pulse_id: existingPulse.id, reused: true } });
+    await upsertJob({
+      db,
+      businessId,
+      userId,
+      target,
+      status: "completed",
+      sourceSnapshotId: existingPulse.source_snapshot_id || undefined,
+      result: { pulse_id: existingPulse.id, reused: true },
+    });
     return { status: "already_available", pulse_id: existingPulse.id };
   }
 
@@ -362,7 +380,7 @@ async function upsertJob({
   userId,
   target,
   status,
-  sourceSnapshotId = null,
+  sourceSnapshotId,
   error = null,
   result = {},
   started = false,
@@ -376,13 +394,13 @@ async function upsertJob({
     target_month: target.target_month,
     cadence: target.cadence,
     status,
-    source_snapshot_id: sourceSnapshotId,
     accounting_method: HEALTH_ACCOUNTING_METHOD,
     due_on: target.due_on,
     last_error: error,
     result,
     updated_at: now,
   };
+  if (sourceSnapshotId !== undefined) payload.source_snapshot_id = sourceSnapshotId;
   if (started) payload.started_at = now;
   if (started && !finished) payload.finished_at = null;
   if (finished) payload.finished_at = now;

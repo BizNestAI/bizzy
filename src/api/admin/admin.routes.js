@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { requireInternalStaff } from "../_shared/internalStaffAuth.js";
+import { getMonthlyFinancialPulseSchedulerHealth } from "../../cron/monthlyFinancialPulse.cron.js";
 
 const router = Router();
 
@@ -17,6 +18,10 @@ router.get("/me", requireAuth, requireInternalStaff(), (req, res) => {
       active: true,
     },
   });
+});
+
+router.get("/worker-health/monthly-brief", requireAuth, requireInternalStaff(), (_req, res) => {
+  res.json({ ok: true, scheduler: getMonthlyFinancialPulseSchedulerHealth() });
 });
 
 export default router;

@@ -1,18 +1,18 @@
 // File: /src/api/accounting/pulse.js
 import express from "express";
+import { createHash, randomUUID } from "node:crypto";
 import { supabase } from "../../services/supabaseAdmin.js";
 import {
   generateFinancialPulseSnapshot,
   shouldGenerateScheduledFinancialPulse,
 } from "./monthlyFinancialPulse.js";
-import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 
 /* global process */
 
 const router = express.Router();
 const ENV_MOCK = String(process.env.USE_MOCK_ACCOUNTING || "").toLowerCase() === "true";
 
-function useMockAccounting(req) {
+function shouldUseMockAccounting(req) {
   const mode = (req.headers["x-data-mode"] || req.query?.data_mode || "").toLowerCase();
   if (mode === "demo" || mode === "mock") return true;
   if (mode === "live" || mode === "testing") return false;
@@ -59,179 +59,184 @@ function normalizePulse(row, monthText = null) {
   };
 }
 
+function safeRequestId(value) {
+  const candidate = String(value || "").trim();
+  return /^[a-zA-Z0-9._:-]{8,128}$/.test(candidate) ? candidate : randomUUID();
+}
+
+function businessHash(businessId) {
+  return businessId
+    ? createHash("sha256").update(String(businessId)).digest("hex").slice(0, 16)
+    : null;
+}
+
+function validPeriod(year, month) {
+  return Number.isInteger(year) && year >= 2000 && year <= 2100
+    && Number.isInteger(month) && month >= 1 && month <= 12;
+}
+
+function cadencePriority(cadence) {
+  if (cadence === "final") return 2;
+  if (cadence === "mid_month") return 1;
+  return 0;
+}
+
+export function selectPreferredAvailablePulse(rows = []) {
+  return [...rows]
+    .filter((row) => row?.status === "available")
+    .sort((a, b) => {
+      const cadence = cadencePriority(b.cadence) - cadencePriority(a.cadence);
+      if (cadence) return cadence;
+      const generated = String(b.generated_at || b.created_at || "")
+        .localeCompare(String(a.generated_at || a.created_at || ""));
+      if (generated) return generated;
+      return String(b.id || "").localeCompare(String(a.id || ""));
+    })[0] || null;
+}
+
+function briefResponse(row, monthText) {
+  const pulse = normalizePulse(row, monthText);
+  return {
+    id: row.id,
+    reporting_month: monthText,
+    cadence: row.cadence,
+    accounting_method: row.accounting_method,
+    generated_at: row.generated_at || row.created_at || null,
+    data_through_date: row.data_through_date && row.data_through_date !== monthText
+      ? row.data_through_date
+      : null,
+    content: {
+      revenue_summary: pulse.revenueSummary || "",
+      spending_trend: pulse.spendingTrend || "",
+      variance_from_forecast: pulse.varianceFromForecast || "",
+      business_insights: pulse.businessInsights || [],
+      motivational_message: pulse.motivationalMessage || "",
+    },
+  };
+}
+
+export function monthlyBriefRequestContext(req, res, next) {
+  if (String(req.method || "GET").toUpperCase() !== "GET") return next();
+  const startedAt = Date.now();
+  const requestId = safeRequestId(req.header?.("x-request-id"));
+  req.monthlyBriefLookup = {
+    request_id: requestId,
+    response_status: "context_unavailable",
+    selected_cadence: null,
+    brief_present: false,
+    safe_error_code: "authorization_or_context_rejected",
+  };
+  res.locals.monthlyBriefRequestId = requestId;
+  res.setHeader("x-request-id", requestId);
+  res.once("finish", () => {
+    const info = req.monthlyBriefLookup || {};
+    const businessId = req.business?.id || req.auth?.businessId || req.tenantContext?.businessId || null;
+    console.info("[monthly-brief-lookup]", {
+      request_id: requestId,
+      business_hash: businessHash(businessId),
+      requested_year: Number(req.query?.year || 0) || null,
+      requested_month: Number(req.query?.month || 0) || null,
+      authenticated_mode: req.tenantContext?.mode || req.auth?.tenantMode || "unknown",
+      response_status: info.response_status,
+      selected_cadence: info.selected_cadence,
+      brief_present: info.brief_present === true,
+      safe_error_code: info.safe_error_code || null,
+      duration_ms: Math.max(0, Date.now() - startedAt),
+      http_status: res.statusCode,
+    });
+  });
+  next();
+}
+
+export function createMonthlyBriefLookupHandler({ db = supabase } = {}) {
+  return async function monthlyBriefLookup(req, res) {
+    const requestId = req.monthlyBriefLookup?.request_id || safeRequestId(req.header?.("x-request-id"));
+    const businessId = req.business?.id || req.auth?.businessId || req.tenantContext?.businessId || null;
+    const year = Number(req.query?.year);
+    const month = Number(req.query?.month);
+    const setTelemetry = (values) => Object.assign(req.monthlyBriefLookup ||= {}, values);
+
+    if (!businessId) {
+      setTelemetry({ response_status: "context_unavailable", safe_error_code: "canonical_business_required" });
+      return res.status(400).json({
+        ok: false,
+        status: "context_unavailable",
+        error: "canonical_business_required",
+        message: "Business context is unavailable.",
+        request_id: requestId,
+      });
+    }
+    if (!validPeriod(year, month)) {
+      setTelemetry({ response_status: "context_unavailable", safe_error_code: "invalid_reporting_period" });
+      return res.status(400).json({
+        ok: false,
+        status: "context_unavailable",
+        error: "invalid_reporting_period",
+        message: "A valid reporting year and month are required.",
+        request_id: requestId,
+      });
+    }
+
+    const monthText = monthKey(year, month);
+    try {
+      if (shouldUseMockAccounting(req) || String(req.query?.mock || "") === "1") {
+        const mock = buildMockPulse(monthText);
+        const brief = {
+          id: `mock-${monthText}`,
+          reporting_month: monthText,
+          cadence: "mid_month",
+          accounting_method: "Cash",
+          generated_at: mock.created_at,
+          data_through_date: null,
+          content: {
+            revenue_summary: mock.revenueSummary,
+            spending_trend: mock.spendingTrend,
+            variance_from_forecast: mock.varianceFromForecast,
+            business_insights: mock.businessInsights,
+            motivational_message: mock.motivationalMessage,
+          },
+        };
+        setTelemetry({ response_status: "available", selected_cadence: brief.cadence, brief_present: true, safe_error_code: null });
+        return res.status(200).json({ ok: true, status: "available", brief, request_id: requestId });
+      }
+
+      const { data, error } = await db
+        .from("monthly_financial_pulse")
+        .select("id,business_id,month,cadence,status,accounting_method,generated_at,data_through_date,created_at,revenue_summary,spending_trend,variance_from_forecast,business_insights,motivational_message")
+        .eq("business_id", businessId)
+        .eq("month", monthText)
+        .eq("status", "available");
+      if (error) throw error;
+
+      const selected = selectPreferredAvailablePulse(data || []);
+      if (!selected) {
+        setTelemetry({ response_status: "not_generated", selected_cadence: null, brief_present: false, safe_error_code: null });
+        return res.status(200).json({ ok: true, status: "not_generated", brief: null, request_id: requestId });
+      }
+
+      const brief = briefResponse(selected, monthText);
+      setTelemetry({ response_status: "available", selected_cadence: brief.cadence, brief_present: true, safe_error_code: null });
+      return res.status(200).json({ ok: true, status: "available", brief, request_id: requestId });
+    } catch {
+      setTelemetry({ response_status: "request_failed", safe_error_code: "monthly_brief_lookup_failed" });
+      console.error("[monthly-brief-lookup-failed]", { request_id: requestId, error_code: "monthly_brief_lookup_failed" });
+      return res.status(500).json({
+        ok: false,
+        status: "request_failed",
+        error: "monthly_brief_lookup_failed",
+        message: "Bizzi couldn’t load this monthly brief. The brief may still exist.",
+        request_id: requestId,
+      });
+    }
+  };
+}
+
 /**
  * GET /api/accounting/pulse
- * query: user_id|userId, business_id|businessId, year, month, generate=1, mock=1
- * returns: { pulse: {...} | null }
+ * query: compatibility business/user identity, year, month, mock=1
+ * returns an explicit available/not_generated/request_failed contract
  */
-router.get("/", async (req, res) => {
-  try {
-    const q = req.query || {};
-    const user_id = req.auth?.userId || req.user?.id || q.user_id || q.userId || req.header("x-user-id") || null;
-    const business_id = req.business?.id || req.auth?.businessId || q.business_id || q.businessId || req.header("x-business-id") || null;
-    const year = Number(q.year || 0);
-    const month = Number(q.month || 0);
-    const monthText = year && month ? monthKey(year, month) : null;
-    const cadence = q.cadence ? String(q.cadence) : null;
-    const shouldGenerate = String(q.generate || "0") === "1";
-    const mockRaw = String(q.mock ?? "");
-    const wantMock = mockRaw === "1" || mockRaw.toLowerCase() === "true";
-    const adminViewOptional = q.admin_view_optional === "1" || q.admin_view_optional === "true";
-
-    if ((!user_id && !isAdminViewRequest(req)) || !business_id) {
-      return res.status(400).json({ error: "Missing user_id or business_id" });
-    }
-
-    if (isAdminViewRequest(req)) {
-      if (monthText) {
-        let pulseQuery = supabase
-          .from("monthly_financial_pulse")
-          .select("*")
-          .eq("business_id", business_id)
-          .eq("month", monthText);
-        if (cadence) pulseQuery = pulseQuery.eq("cadence", cadence);
-        const { data, error, status } = await pulseQuery
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (error && status !== 406) {
-          console.error("[Pulse Fetch Error]", error.message || error);
-          return res.status(500).json({ error: "Failed to fetch financial pulse." });
-        }
-        if (data) {
-          return res.status(200).json({
-            pulse: normalizePulse(data, monthText),
-            admin_view_cache_only: true,
-          });
-        }
-        if (adminViewOptional) {
-          return res.status(200).json({
-            pulse: null,
-            admin_view_cache_only: true,
-            admin_view_unavailable: true,
-            message: "No persisted financial pulse is available for this business.",
-          });
-        }
-        return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });
-      }
-
-      const { data: latest, error: latestErr, status: latestStatus } = await supabase
-        .from("monthly_financial_pulse")
-        .select("*")
-        .eq("business_id", business_id)
-        .order("month", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (latestErr && latestStatus !== 406) {
-        console.error("[Pulse Latest Error]", latestErr.message || latestErr);
-        return res.status(500).json({ error: "Failed to fetch financial pulse." });
-      }
-      if (latest) {
-        return res.status(200).json({
-          pulse: normalizePulse(latest || null),
-          admin_view_cache_only: true,
-        });
-      }
-      if (adminViewOptional) {
-        return res.status(200).json({
-          pulse: null,
-          admin_view_cache_only: true,
-          admin_view_unavailable: true,
-          message: "No persisted financial pulse is available for this business.",
-        });
-      }
-      return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });
-    }
-
-    // 🔧 Mock short-circuit (env or ?mock=1) for a specific month
-    if ((useMockAccounting(req) || wantMock) && monthText) {
-      return res.status(200).json({ pulse: normalizePulse(buildMockPulse(monthText), monthText), source: "mock" });
-    }
-
-    // If we have a target month, try that first
-    if (monthText) {
-      let pulseQuery = supabase
-        .from("monthly_financial_pulse")
-        .select("*")
-        .eq("business_id", business_id)
-        .eq("month", monthText);
-      if (cadence) pulseQuery = pulseQuery.eq("cadence", cadence);
-      const { data, error, status } = await pulseQuery
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (error && status !== 406) {
-        console.error("[Pulse Fetch Error]", error.message || error);
-        return res.status(500).json({ error: "Failed to fetch financial pulse." });
-      }
-
-      if (data) return res.status(200).json({ pulse: normalizePulse(data, monthText) });
-
-      // Optionally generate on the fly
-      if (shouldGenerate) {
-        if (!shouldGenerateScheduledFinancialPulse(monthText)) {
-          return res.status(409).json({
-            error: "pulse_generation_not_scheduled",
-            message: "Monthly Brief generation only runs on the 15th for the current month and on the 1st for the previous month.",
-          });
-        }
-	        const out = await generateFinancialPulseSnapshot({
-          monthlyMetrics: {}, // let the generator self-hydrate
-          forecastData: {},
-          priorMonthMetrics: {},
-          user_id,
-	          business_id,
-	          month: monthText,
-	          cadence: cadence || "manual",
-	        });
-
-        // Re-read to return the saved row (keeps client shape consistent)
-	        let afterQuery = supabase
-	          .from("monthly_financial_pulse")
-	          .select("*")
-	          .eq("business_id", business_id)
-	          .eq("month", monthText);
-	        if (cadence) afterQuery = afterQuery.eq("cadence", cadence);
-	        const { data: after } = await afterQuery
-	          .order("created_at", { ascending: false })
-	          .limit(1)
-	          .maybeSingle();
-
-        return res.status(200).json({ pulse: normalizePulse(after || out || null, monthText), generated: true, draft: out });
-      }
-
-      // If not generating: optionally fallback to mock for demos
-      if (wantMock) {
-        return res.status(200).json({ pulse: normalizePulse(buildMockPulse(monthText), monthText), source: "mock" });
-      }
-
-      // No row and not generating → null so client can show friendly empty state
-      return res.status(200).json({ pulse: null });
-    }
-
-    // No explicit month: return latest (or null)
-    const { data: latest, error: latestErr, status: latestStatus } = await supabase
-      .from("monthly_financial_pulse")
-      .select("*")
-      .eq("business_id", business_id)
-      .order("month", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (latestErr && latestStatus !== 406) {
-      console.error("[Pulse Latest Error]", latestErr.message || latestErr);
-      return res.status(500).json({ error: "Failed to fetch financial pulse." });
-    }
-
-    return res.status(200).json({ pulse: normalizePulse(latest || null) });
-  } catch (err) {
-    console.error("[Unhandled Pulse Error]", err?.message || err);
-    return res.status(500).json({ error: "Unexpected error fetching pulse." });
-  }
-});
+router.get("/", createMonthlyBriefLookupHandler());
 
 /**
  * POST /api/accounting/pulse/generate
