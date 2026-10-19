@@ -56,6 +56,14 @@ function safeCandidate(value, forbidden) {
   return candidate && !forbidden.has(candidate.toLowerCase()) ? candidate : "";
 }
 
+export function extractQboInvoiceCustomerIdentity(invoice = {}) {
+  const customerRef = invoice?.CustomerRef || invoice?.customer_ref || null;
+  return {
+    customer_id: text(customerRef?.value) || null,
+    customer_ref_name: text(customerRef?.name) || null,
+  };
+}
+
 export function projectCollectionsInvoice(row = {}, customer = null) {
   const invoiceId = text(row.qbo_invoice_id || row.invoice_id || row.id) || null;
   const invoiceNumber = text(row.doc_number || row.invoice_number) || null;
@@ -68,12 +76,17 @@ export function projectCollectionsInvoice(row = {}, customer = null) {
   const givenName = safeCandidate(customer?.given_name || raw.GivenName, forbidden);
   const familyName = safeCandidate(customer?.family_name || raw.FamilyName, forbidden);
   const joinedName = [givenName, familyName].filter(Boolean).join(" ");
+  const customerRecordName = companyName || displayName || fullyQualifiedName || joinedName;
+  const customerRefName = safeCandidate(
+    row.customer_ref_name || row.customer_ref?.name || row.CustomerRef?.name,
+    forbidden
+  );
   const persistedName = safeCandidate(row.parent_customer_name || row.client_name, forbidden);
-  const resolvedName = companyName || displayName || fullyQualifiedName || joinedName || persistedName;
+  const resolvedName = customerRecordName || customerRefName || persistedName;
   const email = text(customer?.email || raw.PrimaryEmailAddr?.Address) || null;
-  const identitySource = customer
+  const identitySource = customerRecordName
     ? "qbo_customer"
-    : persistedName
+    : customerRefName || persistedName
       ? "qbo_invoice_customer_ref"
       : "unresolved";
 
@@ -82,11 +95,13 @@ export function projectCollectionsInvoice(row = {}, customer = null) {
     invoice_id: invoiceId,
     invoice_number: invoiceNumber,
     customer_id: customerId,
+    customer_ref_name: customerRefName || null,
     customer_display_name: resolvedName || CUSTOMER_NAME_UNAVAILABLE,
     customer_company_name: companyName || null,
     customer_given_name: givenName || null,
     customer_family_name: familyName || null,
     customer_email: email,
+    customer_email_present: Boolean(email),
     customer_identity_status: resolvedName ? "resolved" : "unresolved",
     customer_identity_source: identitySource,
     invoice_date: normalizeDateOnly(row.invoice_date),

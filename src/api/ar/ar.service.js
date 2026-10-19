@@ -12,6 +12,7 @@ import {
 import {
   CUSTOMER_NAME_UNAVAILABLE,
   daysPastDueDateOnly,
+  extractQboInvoiceCustomerIdentity,
   normalizeDateOnly,
   projectCollectionsInvoice,
 } from "../../services/ar/collectionsInvoiceProjection.js";
@@ -29,36 +30,60 @@ function computeDaysOverdue(dueDate) {
 
 export function parseARAgingDetailToOpenItems(reportJson = {}) {
   const rows = reportJson?.Rows?.Row || [];
+  const columns = reportJson?.Columns?.Column || [];
+  const columnIndex = (...patterns) => columns.findIndex((column) => {
+    const label = `${column?.ColTitle || ""} ${column?.ColType || ""}`.trim();
+    return patterns.some((pattern) => pattern.test(label));
+  });
+  const customerIndex = columnIndex(/^customer\b/i, /customer.*name/i);
+  const typeIndex = columnIndex(/transaction.*type/i, /^type\b/i);
+  const dateIndex = columnIndex(/^date\b/i, /tx_date/i);
+  const docNumberIndex = columnIndex(/^num(?:ber)?\b/i, /doc.*num/i);
+  const dueDateIndex = columnIndex(/due.*date/i);
+  const openBalanceIndex = columnIndex(/open.*balance/i);
   let flatCount = 0;
   const items = [];
 
   const walk = (nodes, context = {}) => {
     if (!Array.isArray(nodes)) return;
     nodes.forEach((node) => {
-      if (node?.type === "Section" && node?.Header?.ColData?.[0]?.value) {
-        const client = node.Header.ColData[0].value;
-        walk(node.Rows?.Row, { client_name: client });
+      if (node?.type === "Section") {
+        const headerColumns = node?.Header?.ColData || [];
+        const indexedCustomer = customerIndex >= 0 ? headerColumns[customerIndex] : null;
+        const customerCell = indexedCustomer?.value
+          ? indexedCustomer
+          : headerColumns.find((column) => column?.value) || null;
+        walk(node.Rows?.Row, customerCell ? {
+          client_name: customerCell.value || null,
+          qbo_customer_id: customerCell.id || null,
+        } : context);
         return;
       }
 
       if (node?.type === "Data") {
         flatCount += 1;
         const cols = node?.ColData || [];
-        // Common column ordering from QBO AgedReceivablesDetail:
-        // 0 Customer, 1 Type, 2 Date, 3 Num, 4 Due Date, 5 Aging bucket(s), last = Open Balance
-        const client_name = context.client_name || cols[0]?.value || null;
-        const doc_number = cols[3]?.value || null;
-        const invoice_date = toDateOnly(cols[2]?.value || null);
-        const due_date = toDateOnly(cols[4]?.value || null);
-        const balanceRaw = cols[cols.length - 1]?.value || null;
+        const at = (index, fallback) => cols[index >= 0 ? index : fallback] || null;
+        const customerCell = at(customerIndex, 0);
+        const doc_number = at(docNumberIndex, 3)?.value || null;
+        const candidateName = context.client_name || customerCell?.value || null;
+        const client_name = candidateName && String(candidateName) !== String(doc_number)
+          ? candidateName
+          : null;
+        const invoice_date = toDateOnly(at(dateIndex, 2)?.value || null);
+        const due_date = toDateOnly(at(dueDateIndex, 4)?.value || null);
+        const balanceRaw = at(openBalanceIndex, cols.length - 1)?.value || null;
         const balance = toNumber(balanceRaw) || 0;
 
         items.push({
           client_name,
+          customer_ref_name: client_name,
+          qbo_customer_id: context.qbo_customer_id || (client_name ? customerCell?.id : null) || null,
           doc_number,
           due_date,
           invoice_date,
           balance,
+          transaction_type: at(typeIndex, 1)?.value || null,
           currency: reportJson?.Header?.Currency || null,
           // qbo_invoice_id may not be present in this report; resolve later
           qbo_invoice_id: null,
@@ -107,6 +132,7 @@ export async function syncOpenItems({ businessId, force = false, windowDays = nu
     const { invoices, realmId: realmFromQuery } = await queryOpenInvoices({ business_id: businessId });
     realmId = realmFromQuery;
     items = (invoices || []).map((inv) => {
+      const customerIdentity = extractQboInvoiceCustomerIdentity(inv);
       const invoice_date = toDateOnly(inv.TxnDate);
       const due_date = toDateOnly(inv.DueDate);
       const total_amount = toNumber(inv.TotalAmt);
@@ -119,10 +145,11 @@ export async function syncOpenItems({ businessId, force = false, windowDays = nu
         return "unpaid";
       })();
       return {
-        client_name: null,
+        client_name: customerIdentity.customer_ref_name || CUSTOMER_NAME_UNAVAILABLE,
+        customer_ref_name: customerIdentity.customer_ref_name,
         doc_number: inv.DocNumber || null,
         qbo_invoice_id: inv.Id || null,
-        qbo_customer_id: inv?.CustomerRef?.value || null,
+        qbo_customer_id: customerIdentity.customer_id,
         invoice_date,
         due_date,
         total_amount,
@@ -159,6 +186,7 @@ export async function syncOpenItems({ businessId, force = false, windowDays = nu
 
   const upsertRows = items.map((item) => {
     const matched = item.doc_number ? invoiceMap[item.doc_number] : null;
+    const matchedCustomer = extractQboInvoiceCustomerIdentity(matched);
     const qbo_invoice_id = matched?.Id || item.qbo_invoice_id || null;
     if (matched?.Id) resolvedIds += 1;
 
@@ -188,10 +216,11 @@ export async function syncOpenItems({ businessId, force = false, windowDays = nu
       qbo_env: qboEnvName,
       qbo_realm_id: realmId,
       qbo_invoice_id,
-      qbo_customer_id: matched?.CustomerRef?.value || null,
+      qbo_customer_id: matchedCustomer.customer_id || item.qbo_customer_id || null,
       client_name:
+        matchedCustomer.customer_ref_name ||
+        item.customer_ref_name ||
         item.client_name ||
-        matched?.CustomerRef?.name ||
         CUSTOMER_NAME_UNAVAILABLE,
       doc_number: item.doc_number,
       total_amount,
@@ -402,7 +431,35 @@ export async function fetchTopOpenItems({ businessId, limit = null }) {
   if (error) throw new Error(error.message || "Failed to read ar_open_items");
 
   const rows = data || [];
-  const customerIds = [...new Set(rows.map((row) => row.qbo_customer_id).filter(Boolean))];
+  const invoiceIds = [...new Set(rows.map((row) => row.qbo_invoice_id).filter(Boolean))];
+  let invoiceIdentityMap = new Map();
+  if (invoiceIds.length) {
+    const invoiceResult = await supabase
+      .from("job_revenue_documents")
+      .select("realm_id,external_document_id,customer_ref")
+      .eq("business_id", businessId)
+      .eq("source_system", "quickbooks")
+      .eq("source_document_type", "invoice")
+      .in("external_document_id", invoiceIds);
+    if (invoiceResult.error) {
+      console.warn("[ar] persisted invoice identity lookup failed", invoiceResult.error.message || invoiceResult.error);
+    } else {
+      invoiceIdentityMap = new Map((invoiceResult.data || []).map((invoice) => [
+        `${invoice.realm_id || ""}:${invoice.external_document_id}`,
+        invoice.customer_ref || null,
+      ]));
+    }
+  }
+  const hydratedRows = rows.map((row) => {
+    const customerRef = invoiceIdentityMap.get(`${row.qbo_realm_id || ""}:${row.qbo_invoice_id}`) || null;
+    const persistedIdentity = extractQboInvoiceCustomerIdentity({ customer_ref: customerRef });
+    return {
+      ...row,
+      qbo_customer_id: row.qbo_customer_id || persistedIdentity.customer_id,
+      customer_ref_name: persistedIdentity.customer_ref_name,
+    };
+  });
+  const customerIds = [...new Set(hydratedRows.map((row) => row.qbo_customer_id).filter(Boolean))];
   let customers = [];
   if (customerIds.length) {
     const customerResult = await supabase
@@ -417,7 +474,7 @@ export async function fetchTopOpenItems({ businessId, limit = null }) {
     `${customer.realm_id || ""}:${customer.qbo_customer_id}`,
     customer,
   ]));
-  const projected = rows.map((row) => projectCollectionsInvoice(
+  const projected = hydratedRows.map((row) => projectCollectionsInvoice(
     row,
     customerMap.get(`${row.qbo_realm_id || ""}:${row.qbo_customer_id}`) || null
   ));

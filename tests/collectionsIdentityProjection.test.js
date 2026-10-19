@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import process from "node:process";
 import test from "node:test";
 import { generateCollectionDraft } from "../src/services/ar/collectionMessageDraft.js";
 import {
@@ -7,6 +8,7 @@ import {
   CUSTOMER_NAME_UNAVAILABLE,
   collectionSalutation,
   daysPastDueDateOnly,
+  extractQboInvoiceCustomerIdentity,
   formatDateOnly,
   isCollectionDraftStale,
   projectCollectionsInvoice,
@@ -50,6 +52,72 @@ test("invoice identifiers are never accepted as customer identity", () => {
     assert.equal(projected.customer_identity_status, "unresolved");
     assert.equal(collectionSalutation(projected), "Hello,");
   }
+});
+
+test("full QBO invoice CustomerRef hydrates canonical identity without a customer-cache row", () => {
+  for (const source of [
+    { Id: "invoice-1107", DocNumber: "1107", CustomerRef: { value: "customer-a", name: "Projection and Video LLC" } },
+    { Id: "invoice-1108", DocNumber: "1108", CustomerRef: { value: "customer-b", name: "Snowball" } },
+  ]) {
+    const identity = extractQboInvoiceCustomerIdentity(source);
+    const projected = projectCollectionsInvoice({
+      qbo_invoice_id: source.Id,
+      doc_number: source.DocNumber,
+      qbo_customer_id: identity.customer_id,
+      customer_ref_name: identity.customer_ref_name,
+    });
+    assert.equal(projected.customer_id, source.CustomerRef.value);
+    assert.equal(projected.customer_ref_name, source.CustomerRef.name);
+    assert.equal(projected.customer_display_name, source.CustomerRef.name);
+    assert.equal(projected.customer_identity_status, "resolved");
+    assert.equal(projected.customer_identity_source, "qbo_invoice_customer_ref");
+    assert.equal(projected.customer_email_present, false);
+    assert.match(generateCollectionDraft(projected, 1).body, new RegExp(`^Hi ${source.CustomerRef.name},`));
+  }
+});
+
+test("AR report parsing uses column metadata and scopes parent customer identity to section children", async () => {
+  process.env.SUPABASE_URL ||= "http://127.0.0.1:54321";
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= "local-test-key";
+  const { parseARAgingDetailToOpenItems } = await import("../src/api/ar/ar.service.js");
+  const report = {
+    Header: { Currency: "USD" },
+    Columns: { Column: [
+      { ColTitle: "Date", ColType: "tx_date" },
+      { ColTitle: "Transaction Type" },
+      { ColTitle: "Num" },
+      { ColTitle: "Customer" },
+      { ColTitle: "Due Date" },
+      { ColTitle: "Open Balance" },
+    ] },
+    Rows: { Row: [
+      {
+        type: "Section",
+        Header: { ColData: [{}, {}, {}, { value: "Projection and Video LLC", id: "customer-a" }] },
+        Rows: { Row: [{ type: "Data", ColData: [
+          { value: "2026-09-16" }, { value: "Invoice" }, { value: "1107" }, {},
+          { value: "2026-09-16" }, { value: "300.00" },
+        ] }] },
+      },
+      {
+        type: "Section",
+        Header: { ColData: [{}, {}, {}, { value: "Snowball", id: "customer-b" }] },
+        Rows: { Row: [{ type: "Data", ColData: [
+          { value: "2026-09-16" }, { value: "Invoice" }, { value: "1108" }, {},
+          { value: "2026-10-16" }, { value: "150.00" },
+        ] }] },
+      },
+    ] },
+  };
+  const rows = parseARAgingDetailToOpenItems(report);
+  assert.deepEqual(rows.map((row) => ({
+    doc_number: row.doc_number,
+    qbo_customer_id: row.qbo_customer_id,
+    customer_ref_name: row.customer_ref_name,
+  })), [
+    { doc_number: "1107", qbo_customer_id: "customer-a", customer_ref_name: "Projection and Video LLC" },
+    { doc_number: "1108", qbo_customer_id: "customer-b", customer_ref_name: "Snowball" },
+  ]);
 });
 
 test("draft salutation prefers given name, then company, then generic while subject keeps invoice number", () => {
@@ -98,6 +166,7 @@ test("server customer cache join is canonical-business and realm scoped without 
   const controller = await readFile(new URL("../src/api/ar/ar.controller.js", import.meta.url), "utf8");
   const qbo = await readFile(new URL("../src/api/ar/ar.qbo.js", import.meta.url), "utf8");
   assert.match(service, /\.from\("qbo_customers"\)[\s\S]*\.eq\("business_id", businessId\)/);
+  assert.match(service, /\.from\("job_revenue_documents"\)[\s\S]*\.eq\("business_id", businessId\)/);
   assert.match(service, /customerMap\.get\(`\$\{row\.qbo_realm_id \|\| ""\}:\$\{row\.qbo_customer_id\}`\)/);
   assert.doesNotMatch(controller, /source_snapshot/);
   assert.doesNotMatch(controller, /qbo_realm_id:/);
