@@ -496,11 +496,28 @@ test("candidate create moves directly to Live while revert keeps the current tab
   const approveSource = source.slice(approveStart, approveEnd);
   const revertSource = source.slice(revertStart, revertEnd);
   assert.equal(approveSource.includes('setBucketMode("live")'), true);
+  assert.equal(approveSource.includes("setCreatingJobCandidateId(candidate.id)"), true);
+  assert.equal(approveSource.includes('setCreatingJobCandidateId("")'), true);
   assert.equal(approveSource.includes("approval-preview"), false);
   assert.equal(approveSource.includes("setCandidateApprovalPreview"), false);
   assert.equal(revertSource.includes('setBucketMode("suggested")'), false);
   assert.equal(source.includes("revertingCandidateJob ? \"scale-[0.98] opacity-55\""), true);
-  assert.equal(source.includes("busy ? \"scale-[0.98] opacity-55\""), true);
+  assert.equal(source.includes("busy ? \"scale-[0.98]\""), true);
+});
+
+test("Suggested Job create displays an in-card loading animation until it moves to Live", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const cardStart = source.indexOf("function CandidateBucketCard({");
+  const cardEnd = source.indexOf("function AssignmentImpactModal", cardStart);
+  const cardSource = source.slice(cardStart, cardEnd);
+
+  assert.ok(cardStart > 0);
+  assert.ok(cardEnd > cardStart);
+  assert.equal(cardSource.includes("aria-busy={creating}"), true);
+  assert.equal(cardSource.includes('role="status"'), true);
+  assert.equal(cardSource.includes("animate-spin"), true);
+  assert.equal(cardSource.includes("Creating job…"), true);
+  assert.equal(cardSource.includes("Adding it to Live Jobs"), true);
 });
 
 test("Job Costing first-load state shows an explicit loading animation instead of empty zero data", async () => {
@@ -654,10 +671,31 @@ test("active Job buckets expose icon-only delete and create handlers", async () 
   assert.equal(pageSource.includes('revenue_source_status: "manual_no_revenue_source"'), true);
   assert.equal(pageSource.includes("const deleteManualJob = useCallback"), true);
   assert.equal(pageSource.includes("getLocalJobId(job)"), true);
-  assert.equal(pageSource.includes("setSelectedJob(previousSelectedJob || null)"), true);
+  assert.equal(pageSource.includes("setSelectedJob((current) => current || previousSelectedJob || null)"), true);
   assert.equal(pageSource.includes('method: "DELETE"'), true);
   assert.equal(pageSource.includes("hydrateDemoAssignmentMetadata(transaction, remainingRows)"), true);
-  assert.equal(pageSource.includes("setTransactions(previousTransactions)"), true);
+  const deleteStart = pageSource.indexOf("const deleteManualJob = useCallback");
+  const deleteEnd = pageSource.indexOf("const syncQboProjects = useCallback", deleteStart);
+  assert.equal(pageSource.slice(deleteStart, deleteEnd).includes("setTransactions(previousTransactions)"), false);
+  assert.equal(pageSource.includes("pendingDeletedJobIdsRef.current.has(jobId)"), true);
+  assert.equal(pageSource.includes("setDeletingJobIds((current) => new Set(current).add(jobId))"), true);
+  assert.equal(source.includes("deletingJobIds.has(String(job.id))"), true);
+});
+
+test("Live job deletion is optimistic and does not globally pause later deletes", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("const deleteManualJob = useCallback(async (job) => {");
+  const end = source.indexOf("const syncQboProjects = useCallback", start);
+  const deleteSource = source.slice(start, end);
+
+  assert.ok(start > 0);
+  assert.ok(end > start);
+  assert.equal(deleteSource.includes("if (!jobId || deletingJobId) return"), false);
+  assert.equal(deleteSource.includes("pendingDeletedJobIdsRef.current.has(jobId)"), true);
+  assert.ok(deleteSource.indexOf("setJobs(nextJobs)") < deleteSource.indexOf("await safeFetch"));
+  assert.equal(deleteSource.includes("setJobs(previousJobs)"), false);
+  assert.equal(deleteSource.includes("setTransactions(previousTransactions)"), false);
+  assert.equal(deleteSource.includes("const excludedJobIds = new Set"), true);
 });
 
 test("Job Costing dashboard filters archived and deleted jobs from summary and cache payloads", async () => {
@@ -687,7 +725,7 @@ test("Job Costing dashboard filters archived and deleted jobs from summary and c
   assert.equal(loaderSource.includes("filterActiveUiJobs("), true);
   assert.equal(deleteSource.includes("pendingDeletedJobIdsRef.current.add(jobId)"), true);
   assert.equal(deleteSource.includes("confirmedDeletedJobIdsRef.current.add(jobId)"), true);
-  assert.equal(deleteSource.includes("filterActiveUiJobs(data.jobs, confirmedDeletedJobIdsRef.current)"), true);
+  assert.equal(deleteSource.includes("filterActiveUiJobs(data.jobs, excludedJobIds)"), true);
 });
 
 test("drag/drop assignment updates job buckets optimistically before server reconciliation", async () => {

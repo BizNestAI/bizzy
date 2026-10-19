@@ -3008,6 +3008,7 @@ function JobAssignmentBoard({
   jobCandidatesError = "",
   projectsCapability = null,
   jobCandidateBusyId = "",
+  creatingJobCandidateId = "",
   assignmentRef,
   instruction,
   setInstruction,
@@ -3040,7 +3041,7 @@ function JobAssignmentBoard({
   onDeleteJob,
   revertingCandidateJobId,
   markingCompleteJobId,
-  deletingJobId = "",
+  deletingJobIds = new Set(),
   completedJobs = [],
   bucketMode = "live",
   setBucketMode,
@@ -3401,6 +3402,7 @@ function JobAssignmentBoard({
                         candidate={candidate}
                         jobs={jobs}
                         busyId={jobCandidateBusyId}
+                        creating={String(creatingJobCandidateId) === String(candidate.id)}
                         onApproveNew={readOnly ? null : onApproveCandidateNew}
                         onLinkExisting={readOnly ? null : onLinkCandidateExisting}
                         onDismiss={readOnly ? null : onDismissCandidate}
@@ -3435,7 +3437,7 @@ function JobAssignmentBoard({
                     completed={bucketMode === "completed"}
                     markingComplete={String(markingCompleteJobId || "") === String(job.id)}
                     revertingCandidateJob={String(revertingCandidateJobId || "") === String(job.id)}
-                    deletingJob={String(deletingJobId || "") === String(job.id)}
+                    deletingJob={deletingJobIds.has(String(job.id))}
                   />
                 ))
               ) : (
@@ -5997,14 +5999,25 @@ class SuggestedJobCardBoundary extends React.Component {
   }
 }
 
-function CandidateBucketCard({ candidate, jobs = [], busyId, onApproveNew, onLinkExisting, onDismiss, onMerge, readOnly = false }) {
+function CandidateBucketCard({ candidate, jobs = [], busyId, creating = false, onApproveNew, onLinkExisting, onDismiss, onMerge, readOnly = false }) {
   const firstMatch = candidate.possibleMatches?.[0] || null;
   const matchJobId = firstMatch?.job_id || firstMatch?.id || jobs?.[0]?.id || "";
   const busy = busyId === candidate.id;
   return (
-    <article className={`group flex h-[318px] w-[340px] shrink-0 flex-col rounded-[18px] border border-amber-300/22 bg-[linear-gradient(135deg,rgba(251,191,36,0.08),rgba(16,185,129,0.045)_58%,rgba(255,255,255,0.025))] p-3.5 shadow-[0_18px_42px_rgba(0,0,0,0.26)] transition-all duration-300 ease-out hover:border-amber-200/35 ${
-      busy ? "scale-[0.98] opacity-55" : "scale-100 opacity-100"
+    <article aria-busy={creating} className={`group relative flex h-[318px] w-[340px] shrink-0 flex-col overflow-hidden rounded-[18px] border border-amber-300/22 bg-[linear-gradient(135deg,rgba(251,191,36,0.08),rgba(16,185,129,0.045)_58%,rgba(255,255,255,0.025))] p-3.5 shadow-[0_18px_42px_rgba(0,0,0,0.26)] transition-all duration-300 ease-out hover:border-amber-200/35 ${
+      busy ? "scale-[0.98]" : "scale-100"
     }`}>
+      {creating ? (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-[inherit] bg-[#0c1210]/88 backdrop-blur-sm" role="status" aria-live="polite">
+          <span className="flex h-11 w-11 items-center justify-center rounded-full border border-emerald-300/25 bg-emerald-300/10 shadow-[0_0_28px_rgba(52,211,153,0.16)]">
+            <RefreshCcw className="h-5 w-5 animate-spin text-emerald-200" />
+          </span>
+          <div className="text-center">
+            <p className="text-sm font-semibold text-white">Creating job…</p>
+            <p className="mt-1 text-xs text-white/48">Adding it to Live Jobs</p>
+          </div>
+        </div>
+      ) : null}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -6358,10 +6371,11 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
   const [jobCandidatesTotal, setJobCandidatesTotal] = useState(() => Number(initialLiveCache?.jobCandidatesTotal || 0));
   const [jobCandidatesError, setJobCandidatesError] = useState("");
   const [jobCandidateBusyId, setJobCandidateBusyId] = useState("");
+  const [creatingJobCandidateId, setCreatingJobCandidateId] = useState("");
   const [addJobOpen, setAddJobOpen] = useState(false);
   const [creatingManualJob, setCreatingManualJob] = useState(false);
   const creatingManualJobRef = useRef(false);
-  const [deletingJobId, setDeletingJobId] = useState("");
+  const [deletingJobIds, setDeletingJobIds] = useState(() => new Set());
   const [importJobsOpen, setImportJobsOpen] = useState(false);
   const [projectsCapability, setProjectsCapability] = useState(() => initialLiveCache?.projectsCapability || null);
   const [importJobsLoading, setImportJobsLoading] = useState(false);
@@ -6899,6 +6913,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
     if (!candidate?.id) return;
     const view = normalizeCandidateView(candidate);
     setJobCandidateBusyId(candidate.id);
+    setCreatingJobCandidateId(candidate.id);
     setAssignmentError("");
     try {
       if (usingDemo) {
@@ -7006,6 +7021,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
       setAssignmentError(e?.message || "Could not create job from candidate.");
     } finally {
       setJobCandidateBusyId("");
+      setCreatingJobCandidateId("");
     }
   }, [businessId, jobCandidates, loadJobCandidates, loadJobCosting, readOnly, usingDemo]);
 
@@ -7187,8 +7203,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
 
   const deleteManualJob = useCallback(async (job) => {
     const jobId = String(getLocalJobId(job) || "");
-    if (!jobId || deletingJobId) return;
-    setDeletingJobId(jobId);
+    if (!jobId || pendingDeletedJobIdsRef.current.has(jobId)) return;
+    setDeletingJobIds((current) => new Set(current).add(jobId));
     pendingDeletedJobIdsRef.current.add(jobId);
     setAssignmentError("");
     setAssignmentMessage("");
@@ -7217,15 +7233,19 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
         body: { business_id: businessId },
       });
       confirmedDeletedJobIdsRef.current.add(jobId);
+      const excludedJobIds = new Set([
+        ...pendingDeletedJobIdsRef.current,
+        ...confirmedDeletedJobIdsRef.current,
+      ]);
       if (Array.isArray(data?.jobs)) {
-        const nextServerJobs = filterActiveUiJobs(data.jobs, confirmedDeletedJobIdsRef.current);
+        const nextServerJobs = filterActiveUiJobs(data.jobs, excludedJobIds);
         setJobs(nextServerJobs);
         writeJobCostingLiveCache(businessId, readOnly, { jobs: nextServerJobs });
       }
       if (Array.isArray(data?.transactions)) {
         setTransactions(data.transactions);
         writeJobCostingLiveCache(businessId, readOnly, {
-          jobs: Array.isArray(data?.jobs) ? filterActiveUiJobs(data.jobs, confirmedDeletedJobIdsRef.current) : nextJobs,
+          jobs: Array.isArray(data?.jobs) ? filterActiveUiJobs(data.jobs, excludedJobIds) : nextJobs,
           transactions: data.transactions,
           transactionTotal: Number(data?.transactions_total ?? data?.total_count ?? data.transactions.length) || data.transactions.length,
         });
@@ -7233,16 +7253,48 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
       void loadJobCosting();
     } catch (e) {
       pendingDeletedJobIdsRef.current.delete(jobId);
-      setJobs(previousJobs);
-      setTransactions(previousTransactions);
-      writeJobCostingLiveCache(businessId, readOnly, { jobs: previousJobs, transactions: previousTransactions });
-      setSelectedJob(previousSelectedJob || null);
+      const deletedJob = previousJobs.find((item) => String(getLocalJobId(item)) === jobId) || job;
+      setJobs((current) => {
+        if (current.some((item) => String(getLocalJobId(item)) === jobId)) return current;
+        const originalIndex = Math.max(0, previousJobs.findIndex((item) => String(getLocalJobId(item)) === jobId));
+        const restored = [...current];
+        restored.splice(Math.min(originalIndex, restored.length), 0, deletedJob);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: restored });
+        return restored;
+      });
+      setTransactions((current) => {
+        const originals = new Map(previousTransactions.map((item) => [String(item.id || item.transaction_id), item]));
+        const restored = current.map((transaction) => {
+          const original = originals.get(String(transaction.id || transaction.transaction_id));
+          if (!original) return transaction;
+          const originalRows = (Array.isArray(original.assignment_rows) ? original.assignment_rows : [])
+            .filter((row) => String(row?.job_id || "") === jobId);
+          const originalPrimaryAssignment = String(original.job_id || "") === jobId;
+          if (!originalRows.length && !originalPrimaryAssignment) return transaction;
+          const currentRows = Array.isArray(transaction.assignment_rows) ? transaction.assignment_rows : [];
+          const restoredRows = [
+            ...currentRows.filter((row) => String(row?.job_id || "") !== jobId),
+            ...originalRows,
+          ];
+          return hydrateDemoAssignmentMetadata({ ...transaction, ...(originalPrimaryAssignment ? {
+            job_id: original.job_id,
+            job_name: original.job_name,
+          } : {}) }, restoredRows);
+        });
+        writeJobCostingLiveCache(businessId, readOnly, { transactions: restored });
+        return restored;
+      });
+      setSelectedJob((current) => current || previousSelectedJob || null);
       setAssignmentError(e?.message || "Could not delete job.");
     } finally {
       pendingDeletedJobIdsRef.current.delete(jobId);
-      setDeletingJobId("");
+      setDeletingJobIds((current) => {
+        const next = new Set(current);
+        next.delete(jobId);
+        return next;
+      });
     }
-  }, [businessId, deletingJobId, jobs, loadJobCosting, readOnly, selectedJob, transactions, usingDemo]);
+  }, [businessId, jobs, loadJobCosting, readOnly, selectedJob, transactions, usingDemo]);
 
   const syncQboProjects = useCallback(async () => {
     setImportJobsLoading(true);
@@ -7881,6 +7933,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
             jobCandidatesError={jobCandidatesError}
             projectsCapability={projectsCapability}
             jobCandidateBusyId={jobCandidateBusyId}
+            creatingJobCandidateId={creatingJobCandidateId}
             assignmentRef={assignmentRef}
             instruction={instruction}
             setInstruction={setInstruction}
@@ -7913,7 +7966,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
             onDeleteJob={deleteManualJob}
             revertingCandidateJobId={revertingCandidateJobId}
             markingCompleteJobId={markingCompleteJobId}
-            deletingJobId={deletingJobId}
+            deletingJobIds={deletingJobIds}
             onAcceptSuggestion={acceptSuggestion}
             onRejectSuggestion={rejectSuggestion}
             onApproveCandidateNew={approveCandidateNew}
