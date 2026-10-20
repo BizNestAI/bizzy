@@ -397,6 +397,41 @@ export async function overrideTaxClassification({ businessId, year, transactionI
   return result;
 }
 
+export async function getTaxDeductionDecisionRules({ businessId, year, refresh = false, signal } = {}) {
+  requireBusinessId(businessId);
+  const params = query({ businessId, year });
+  const payload = unwrap(await cachedGet(`/api/tax/deduction-decision-rules?${params}`, {
+    signal,
+    cacheKey: key("deduction-decision-rules", params),
+    bypassCache: refresh,
+  }));
+  return Array.isArray(payload?.rows) ? payload.rows : [];
+}
+
+export async function saveTaxDeductionDecisionRule({ businessId, year, transactionId, changes = {}, decisionType, signal } = {}) {
+  requireBusinessId(businessId);
+  requireValue(transactionId, "transactionId");
+  const result = unwrap(await request(`/api/tax/deduction-decision-rules?${query({ businessId, year })}`, {
+    method: "POST",
+    body: { businessId, year, transactionId, changes, decisionType },
+    signal,
+  }));
+  clearBusinessCache(businessId);
+  return result;
+}
+
+export async function updateTaxDeductionDecisionRule({ businessId, year, ruleId, changes = {}, decisionType, signal } = {}) {
+  requireBusinessId(businessId);
+  requireValue(ruleId, "ruleId");
+  const result = unwrap(await request(`/api/tax/deduction-decision-rules/${encodeURIComponent(ruleId)}?${query({ businessId, year })}`, {
+    method: "PATCH",
+    body: { businessId, year, changes, decisionType },
+    signal,
+  }));
+  clearBusinessCache(businessId);
+  return result;
+}
+
 export async function excludeTaxClassification({ businessId, year, transactionId, reason, signal } = {}) {
   requireBusinessId(businessId);
   requireValue(transactionId, "transactionId");
@@ -841,6 +876,9 @@ export default {
   confirmTaxClassification,
   rejectTaxClassification,
   overrideTaxClassification,
+  getTaxDeductionDecisionRules,
+  saveTaxDeductionDecisionRule,
+  updateTaxDeductionDecisionRule,
   sendTaxClassificationsToReview,
   excludeTaxClassification,
   restoreTaxClassification,

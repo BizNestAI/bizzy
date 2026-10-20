@@ -521,6 +521,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const [workspaceView, setWorkspaceView] = useState("overview");
   const [classificationTab, setClassificationTab] = useState("all");
   const [reviewDecision, setReviewDecision] = useState(null);
+  const [decisionRuleEditor, setDecisionRuleEditor] = useState(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
   const refreshDeductions = deductions.refresh;
   const populationBridge = deductions.overview?.populationBridge || null;
@@ -541,6 +542,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const attentionGroups = useMemo(
     () => buildAttentionReviewGroups([], { lifecycleProjection }),
     [lifecycleProjection]
+  );
+  const deductionDecisionRules = useMemo(
+    () => enrichDeductionDecisionRules(deductions.decisionRules, workspaceRows),
+    [deductions.decisionRules, workspaceRows]
   );
   const legacyCoverageReconciliation = useMemo(
     () => reconcileLegacyTaxCoverage({
@@ -713,6 +718,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         <TaxLifecycleConservationSummary projection={lifecycleProjection} legacy={legacyCoverageReconciliation} />
       </div>
 
+      <DeductionDecisionRulesPanel
+        rules={deductionDecisionRules}
+        readOnly={readOnly}
+        onChangeRule={setDecisionRuleEditor}
+      />
+
       <WorkspaceViewTabs value={workspaceView} onChange={setWorkspaceView} />
 
       {workspaceView === "overview" ? (
@@ -736,7 +747,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           </div>
           <AttentionReviewGroups
             groups={attentionGroups}
-            completedGroups={lifecycleProjection.completedDecisionGroups.map(toDecisionActionGroup)}
             year={year}
             readOnly={readOnly}
             onOpenDecision={setReviewDecision}
@@ -773,6 +783,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           if (!reviewDecision || readOnly) return null;
           const ids = Array.from(new Set(transactionIds.filter(Boolean)));
           if (!ids.length) return null;
+          await deductions.saveDeductionDecisionRule({
+            transactionId: ids[0],
+            changes,
+            decisionType: reviewDecision.group.decision.kind,
+          });
           if (ids.length === 1) {
             const result = await deductions.overrideClassification(ids[0], { ...changes, reason });
             setReviewDecision(null);
@@ -788,6 +803,16 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           }
           setReviewDecision(null);
           return result;
+        }}
+      />
+
+      <DeductionDecisionRuleEditor
+        rule={decisionRuleEditor}
+        readOnly={readOnly}
+        onClose={() => setDecisionRuleEditor(null)}
+        onSave={async ({ ruleId, changes, decisionType }) => {
+          await deductions.updateDeductionDecisionRule({ ruleId, changes, decisionType });
+          setDecisionRuleEditor(null);
         }}
       />
 
@@ -807,6 +832,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
             onBulkUpdateClassifications={deductions.bulkUpdateClassifications}
             onSendToTaxReview={deductions.sendClassificationsToTaxReview}
             onSetTaxProfileMemory={deductions.setProfileMemory}
+            onSaveDeductionDecisionRule={deductions.saveDeductionDecisionRule}
             onRefresh={refreshDeductions}
             readOnly={readOnly}
           />
@@ -860,6 +886,140 @@ function WorkspaceViewTabs({ value, onChange }) {
       ))}
     </div>
   );
+}
+
+function DeductionDecisionRulesPanel({ rules = [], readOnly, onChangeRule }) {
+  return (
+    <section className="mt-4 rounded-2xl border border-emerald-300/14 bg-emerald-300/[0.035] px-3 py-3 sm:px-4" aria-labelledby="deduction-rules-heading">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div id="deduction-rules-heading" className="text-sm font-semibold text-emerald-50">Your deduction rules</div>
+          <p className="mt-0.5 max-w-3xl text-xs leading-relaxed text-white/50">Choices you save here apply automatically to future posted transactions in the matching QuickBooks GL account. They do not silently change prior transactions.</p>
+        </div>
+        <div className="text-[11px] font-medium text-emerald-100/58">Company-specific</div>
+      </div>
+      {rules.length ? (
+        <div className="mt-3 grid gap-2 xl:grid-cols-2">
+          {rules.map((rule) => (
+            <div key={rule.id || rule.accountKey} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-emerald-200/10 bg-black/15 px-3 py-2.5">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-white/86">{rule.accountName}</div>
+                <div className="mt-0.5 text-xs text-white/52">{deductionRuleSummary(rule)}</div>
+              </div>
+              <button
+                type="button"
+                disabled={readOnly || !rule.id}
+                onClick={() => onChangeRule?.(rule)}
+                className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300/[0.08] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-emerald-300/30"
+              >
+                Change
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-2 text-xs text-white/48">No company deduction rules have been saved yet. Confirm a tax question below to save its treatment for future transactions.</div>
+      )}
+    </section>
+  );
+}
+
+function DeductionDecisionRuleEditor({ rule, readOnly, onClose, onSave }) {
+  const [percent, setPercent] = useState("");
+  const [vehicleMethod, setVehicleMethod] = useState("actual_expense");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const isVehicle = isVehicleDeductionRule(rule);
+
+  useEffect(() => {
+    setPercent(rule?.deductiblePercent == null ? "" : String(rule.deductiblePercent));
+    setVehicleMethod(String(rule?.taxTreatment || "").includes("standard_mileage") ? "standard_mileage" : "actual_expense");
+    setSaving(false);
+    setError("");
+  }, [rule?.deductiblePercent, rule?.id, rule?.taxTreatment]);
+
+  if (!rule) return null;
+  if (typeof document === "undefined") return null;
+  const numericPercent = Number(percent);
+  const percentValid = Number.isFinite(numericPercent) && numericPercent >= 0 && numericPercent <= 100;
+  const canSave = !readOnly && (vehicleMethod === "standard_mileage" || percentValid);
+  const save = async () => {
+    if (!canSave) return;
+    const normalizedPercent = vehicleMethod === "standard_mileage" ? 0 : numericPercent;
+    const changes = {
+      taxCategory: rule.taxCategory,
+      deductibilityStatus: deductionStatusForPercent(normalizedPercent),
+      deductiblePercent: normalizedPercent,
+      taxTreatment: vehicleMethod === "standard_mileage"
+        ? "vehicle_standard_mileage_no_separate_gas"
+        : isVehicle
+          ? "vehicle_actual_expense_business_use"
+          : rule.taxTreatment,
+    };
+    setSaving(true);
+    setError("");
+    try {
+      await onSave?.({ ruleId: rule.id, changes, decisionType: isVehicle ? "vehicle_method" : "business_use_percent" });
+    } catch (err) {
+      setError(err?.message || "Could not update this deduction rule.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return createPortal(
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[200000] flex items-center justify-center px-3 py-5" role="presentation" onMouseDown={onClose}>
+      <section role="dialog" aria-modal="true" aria-labelledby="deduction-rule-editor-title" className="w-full max-w-lg rounded-[22px] border border-white/10 bg-[#080b0f] p-5 text-white shadow-[0_28px_100px_rgba(0,0,0,0.72)]" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-100/62">Deduction rule</div>
+            <h2 id="deduction-rule-editor-title" className="mt-1 text-xl font-semibold">{rule.accountName}</h2>
+            <p className="mt-1 text-sm text-white/55">This updates the automatic treatment for future posted transactions in this QuickBooks GL account.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/70 transition hover:bg-white/10" aria-label="Close deduction rule editor"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs text-white/56">
+          <div><span className="text-white/40">Tax category:</span> {formatTaxCategoryLabel(rule.taxCategory)}</div>
+          <div className="mt-1"><span className="text-white/40">Current treatment:</span> {deductionRuleSummary(rule)}</div>
+        </div>
+        {isVehicle ? (
+          <fieldset className="mt-4 space-y-2">
+            <legend className="text-sm font-semibold text-white/82">Vehicle method</legend>
+            <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-white/10 px-3 py-2.5 text-sm text-white/72"><input type="radio" name="vehicle-deduction-method" checked={vehicleMethod === "standard_mileage"} onChange={() => setVehicleMethod("standard_mileage")} /><span><span className="font-semibold text-white/86">Standard mileage</span><span className="mt-0.5 block text-xs text-white/46">Gas in this account is not separately deductible.</span></span></label>
+            <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-white/10 px-3 py-2.5 text-sm text-white/72"><input type="radio" name="vehicle-deduction-method" checked={vehicleMethod === "actual_expense"} onChange={() => setVehicleMethod("actual_expense")} /><span><span className="font-semibold text-white/86">Actual expenses</span><span className="mt-0.5 block text-xs text-white/46">Use the business-use percentage below.</span></span></label>
+          </fieldset>
+        ) : null}
+        {vehicleMethod !== "standard_mileage" ? (
+          <label className="mt-4 block text-sm font-semibold text-white/82">Business-use percentage<input type="number" min="0" max="100" step="0.01" value={percent} onChange={(event) => setPercent(event.target.value)} className="mt-2 block w-full rounded-xl border border-white/12 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-emerald-300/45" /></label>
+        ) : null}
+        {error ? <div className="mt-3 rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-xs text-rose-100">{error}</div> : null}
+        <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-full border border-white/12 px-3 py-2 text-sm font-semibold text-white/70 transition hover:bg-white/[0.06]">Cancel</button><button type="button" disabled={!canSave || saving} onClick={save} className="rounded-full bg-emerald-300 px-3.5 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-45">{saving ? "Saving…" : "Save rule"}</button></div>
+      </section>
+    </div>,
+    document.body
+  );
+}
+
+function enrichDeductionDecisionRules(rules = [], workspaceRows = []) {
+  const accountNames = new Map(workspaceRows.map((row) => [String(row.qboAccountName || "").toLowerCase(), row.qboAccountName]).filter(([key]) => key));
+  return (Array.isArray(rules) ? rules : []).map((rule) => ({
+    ...rule,
+    accountName: accountNames.get(String(rule.accountName || "").toLowerCase()) || rule.accountName,
+  }));
+}
+
+function isVehicleDeductionRule(rule = {}) {
+  return String(rule.taxCategory || "").includes("vehicle") || String(rule.taxTreatment || "").startsWith("vehicle_");
+}
+
+function deductionStatusForPercent(percent) {
+  return Number(percent) >= 100 ? "fully_deductible" : Number(percent) <= 0 ? "nondeductible" : "partially_deductible";
+}
+
+function deductionRuleSummary(rule = {}) {
+  if (String(rule.taxTreatment || "").includes("standard_mileage")) return "Standard mileage · gas not deducted separately";
+  if (String(rule.taxTreatment || "").includes("actual_expense")) return `${formatDeductiblePercent(rule.deductiblePercent)} business use · actual vehicle expenses`;
+  return `${formatDeductiblePercent(rule.deductiblePercent)} deductible · ${formatTaxCategoryLabel(rule.taxCategory)}`;
 }
 
 function FilterTabButton({ tab, selected, count = null, onClick }) {
@@ -967,10 +1127,6 @@ function formatMonthKey(monthKey) {
   const match = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
   if (!match) return String(monthKey || "selected month");
   return new Date(Number(match[1]), Number(match[2]) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" });
-}
-
-function formatDecisionDate(value) {
-  return value ? `Reviewed ${formatDateLocal(value)}` : "Reviewed";
 }
 
 function DeductionAccountMatrix({ matrix, onSelectCell, onOpenDecision, decisionGroups = [] }) {
@@ -1193,8 +1349,8 @@ function matrixZeroTreatmentLabel(row) {
   return "Not deductible";
 }
 
-function AttentionReviewGroups({ groups, completedGroups = [], year, readOnly, onOpenDecision }) {
-  if (!groups.length && !completedGroups.length) return null;
+function AttentionReviewGroups({ groups, year, readOnly, onOpenDecision }) {
+  if (!groups.length) return null;
   return (
     <div className="border-b border-white/[0.08] px-3 py-3">
       {groups.length ? (
@@ -1211,16 +1367,8 @@ function AttentionReviewGroups({ groups, completedGroups = [], year, readOnly, o
                 <div className="mt-0.5 text-xs text-white/42">{group.transactionCount} transactions · {formatCurrencyLocal(group.grossTotal)} gross · {formatDeductiblePercent(group.deductiblePercent)}</div>
               </div>
             </div>
-            <div className="mt-2 text-xs text-white/46">Applies to this QBO GL account for {year} across {formatDecisionMonths(group.months)}. You will confirm before any annual change is saved.</div>
+            <div className="mt-2 text-xs text-white/46">Applies to this QBO GL account for {year} across {formatDecisionMonths(group.months)}. Confirming saves this choice as the automatic treatment for future posted transactions in this account.</div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={readOnly || !group.canApply}
-                onClick={() => onOpenDecision({ group, scope: "one_transaction" })}
-                className="rounded-full border border-white/10 bg-white/[0.045] px-3 py-1.5 text-[12px] font-semibold text-white/68 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-amber-300/25"
-              >
-                Review individual transactions
-              </button>
               <button
                 type="button"
                 disabled={readOnly || !group.canApply}
@@ -1234,32 +1382,6 @@ function AttentionReviewGroups({ groups, completedGroups = [], year, readOnly, o
             {group.blockedReason ? <div className="mt-2 text-xs text-white/42">{group.blockedReason}</div> : null}
           </div>
           ))}
-        </div>
-      ) : null}
-      {completedGroups.length ? (
-        <div className={`${groups.length ? "mt-4 border-t border-white/[0.08] pt-4" : ""}`}>
-          <div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-white/46">Reviewed decisions</div>
-          <div className="grid gap-2 xl:grid-cols-2">
-            {completedGroups.map((group) => (
-              <div key={group.key} className="rounded-2xl border border-emerald-300/12 bg-emerald-300/[0.035] p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-white/84">{group.qboAccountName}</div>
-                    <div className="mt-0.5 text-xs text-white/46">Reviewed · {formatDecisionDate(group.latestDecisionAt)} · {year} · {group.transactionCount} transactions</div>
-                    <div className="mt-1 text-xs text-white/42">Current treatment: {group.actionLabel} · {formatDeductiblePercent(group.deductiblePercent)}</div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={readOnly}
-                    onClick={() => onOpenDecision({ group, scope: "account_year" })}
-                    className="shrink-0 rounded-full border border-emerald-300/18 bg-emerald-300/[0.08] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.13] disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-emerald-300/25"
-                  >
-                    {group.actionLabel}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       ) : null}
     </div>
@@ -1286,14 +1408,14 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   }, [decision?.group?.key, decision?.scope, decision?.selectedMonth]);
 
   if (!decision?.group) return null;
-  const { group, scope } = decision;
-  const rows = scope === "one_transaction" ? group.rows.slice(0, 1) : group.rows;
+  const { group } = decision;
+  const rows = group.rows;
   const selectedRows = rows.filter((row) => !exceptionIds.includes(row.id));
   const action = group.decision;
   const requiresPercent = action.kind === "business_use_percent" || (action.kind === "utility_allocation" && !dedicatedPremises);
   const hasPercentInput = dedicatedPremises || String(businessUsePercent).trim() !== "";
   const percentValue = dedicatedPremises ? 100 : Number(businessUsePercent);
-  const changingReviewedEstimate = Boolean(group.completed && scope === "account_year" && (action.kind === "business_use_percent" || action.kind === "utility_allocation"));
+  const changingReviewedEstimate = Boolean(group.completed && (action.kind === "business_use_percent" || action.kind === "utility_allocation"));
   const canSubmit = !readOnly && action.kind !== "vehicle_method" && group.canApply && businessUseAnswer !== "unsure" && selectedRows.length > 0 && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
 
   const submit = async () => {
@@ -1305,7 +1427,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
       await onApply({
         transactionIds: selectedRows.map((row) => row.id),
         changes,
-        reason: reviewDecisionReason({ group, scope, businessUsePercent: percentValue, dedicatedPremises }),
+        reason: reviewDecisionReason({ group, businessUsePercent: percentValue, dedicatedPremises }),
       });
     } catch (err) {
       setError(err?.message || "Could not save this tax review decision.");
@@ -1321,7 +1443,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
           <div className="min-w-0">
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-100/62">Tax review decision</div>
             <h3 className="mt-1 truncate text-lg font-semibold">{group.qboAccountName}</h3>
-            <p className="mt-1 text-sm text-white/54">{group.actionLabel} for {scope === "one_transaction" ? "one transaction" : `${group.transactionCount} ${group.qboAccountName} transactions in ${taxYear}`}{decision.selectedMonth ? `, opened from ${formatMonthKey(decision.selectedMonth)}` : ""}.</p>
+            <p className="mt-1 text-sm text-white/54">{group.actionLabel} for {group.transactionCount} {group.qboAccountName} transactions in {taxYear}{decision.selectedMonth ? `, opened from ${formatMonthKey(decision.selectedMonth)}` : ""}.</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} className="rounded-full border border-white/10 bg-white/[0.04] p-1.5 text-white/70 hover:bg-white/10 disabled:opacity-50" aria-label="Close tax review decision">
             <X className="h-4 w-4" />
@@ -1369,6 +1491,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
           <div className="mt-4 rounded-2xl border border-white/10 bg-black/18">
             <div className="border-b border-white/[0.08] px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white/42">
               Preserve selected exceptions
+              <span className="ml-2 normal-case tracking-normal text-white/38">All rows are selected by default. Check only exceptions to leave unchanged.</span>
             </div>
             <div className="max-h-56 overflow-y-auto">
               {rows.map((row) => (
@@ -2139,18 +2262,29 @@ function buildReviewDecisionChanges({ group, businessUsePercent, dedicatedPremis
       taxTreatment: dedicatedPremises ? "dedicated_business_premises" : "business_use_allocation",
     };
   }
+  const category = row.taxCategory || "other";
+  const isMeal = String(category).toLowerCase().includes("meal");
+  const currentStatus = String(row.deductibilityStatus || "").toLowerCase();
+  const currentPercent = Number(row.deductiblePercent);
+  const hasCompletedCurrentTreatment = ["fully_deductible", "partially_deductible", "nondeductible", "capitalizable", "balance_sheet"].includes(currentStatus);
+  const deductiblePercent = hasCompletedCurrentTreatment && Number.isFinite(currentPercent)
+    ? currentPercent
+    : isMeal ? 50 : 100;
+  const deductibilityStatus = hasCompletedCurrentTreatment
+    ? currentStatus
+    : deductionStatusForPercent(deductiblePercent);
   return {
-    taxCategory: row.taxCategory,
-    deductibilityStatus: row.deductibilityStatus || row.taxTreatment || "needs_review",
-    deductiblePercent: row.deductiblePercent,
+    taxCategory: category,
+    deductibilityStatus,
+    deductiblePercent,
     taxTreatment: typeof row.taxTreatment === "string" && row.taxTreatment !== "not_determined"
       ? row.taxTreatment
-      : row.deductibilityStatus || "needs_review",
+      : isMeal ? "business_meals_business_purpose_confirmed" : "business_purpose_confirmed",
   };
 }
 
-function reviewDecisionReason({ group, scope, businessUsePercent, dedicatedPremises }) {
-  const scopeLabel = scope === "one_transaction" ? "one transaction" : "matching QBO GL account for this tax year";
+function reviewDecisionReason({ group, businessUsePercent, dedicatedPremises }) {
+  const scopeLabel = "matching QBO GL account for this tax year";
   if (group.decision.kind === "business_use_percent") {
     return `User supplied ${businessUsePercent}% business use for ${scopeLabel}.`;
   }
@@ -2329,6 +2463,7 @@ function DeductionMonthDetailModal({
   onBulkUpdateClassifications,
   onSendToTaxReview,
   onSetTaxProfileMemory,
+  onSaveDeductionDecisionRule,
   onRefresh,
   readOnly = false,
 }) {
@@ -2630,6 +2765,13 @@ function DeductionMonthDetailModal({
             },
           });
         }
+      }
+      if (!holdingResolution && changes && typeof onSaveDeductionDecisionRule === "function") {
+        await onSaveDeductionDecisionRule({
+          transactionId: transactionIds[0],
+          changes,
+          decisionType: reviewContext.kind,
+        });
       }
       const reason = detailResolutionReason(reviewContext, "selected_transactions", selectedCount);
       if (!holdingResolution && changes && typeof onBulkUpdateClassifications === "function") {

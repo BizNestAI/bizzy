@@ -15,6 +15,12 @@ import {
   getTaxReviewQueueSummary,
   listTaxClassificationReviewQueue,
 } from "../../services/tax/taxClassificationReview.service.js";
+import {
+  listTaxDeductionDecisionRules,
+  saveTaxDeductionDecisionRule,
+  updateTaxDeductionDecisionRule,
+} from "../../services/tax/taxDeductionDecisionRule.service.js";
+import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../services/tax/taxChangeEvents.js";
 import { validationError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
 import {
@@ -67,6 +73,57 @@ router.get("/classifications/review/summary", async (req, res) => {
     return sendTaxSuccess(res, data);
   } catch (err) {
     return sendTaxError(res, err, "tax_review_summary_failed");
+  }
+});
+
+// These rules are deliberately a distinct resource from classification history.
+// A user-confirmed row is not automatically promoted to a forward-looking rule.
+router.get("/deduction-decision-rules", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const ctx = await routeContext(req);
+    const data = await listTaxDeductionDecisionRules(ctx);
+    return sendTaxSuccess(res, { rows: data });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_deduction_decision_rules_failed");
+  }
+});
+
+router.post("/deduction-decision-rules", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const ctx = await routeContext(req);
+    const transactionId = String(req.body?.transactionId ?? req.body?.transaction_id ?? "").trim();
+    if (!transactionId) throw validationError("missing_transaction_id", "transactionId is required.", { field: "transactionId" });
+    const payload = validateDecisionRulePayload(req, ctx.businessId);
+    const data = await saveTaxDeductionDecisionRule({
+      ...ctx,
+      transactionId,
+      input: { ...payload, decisionType: req.body?.decisionType ?? req.body?.decision_type },
+      actor: actorFromRequest(req),
+    });
+    emitTaxDataChanged({ businessId: ctx.businessId, taxYear: ctx.taxYear, changeType: TAX_CHANGE_TYPES.BUSINESS_RULE_CREATED, entityId: data.id, userId: actorFromRequest(req).userId });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    return sendTaxError(res, err, "tax_deduction_decision_rule_save_failed");
+  }
+});
+
+router.patch("/deduction-decision-rules/:ruleId", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const ctx = await routeContext(req);
+    const payload = validateDecisionRulePayload(req, ctx.businessId);
+    const data = await updateTaxDeductionDecisionRule({
+      ...ctx,
+      ruleId: req.params.ruleId,
+      input: { ...payload, decisionType: req.body?.decisionType ?? req.body?.decision_type },
+      actor: actorFromRequest(req),
+    });
+    emitTaxDataChanged({ businessId: ctx.businessId, taxYear: ctx.taxYear, changeType: TAX_CHANGE_TYPES.BUSINESS_RULE_CREATED, entityId: data.id, userId: actorFromRequest(req).userId });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    return sendTaxError(res, err, "tax_deduction_decision_rule_update_failed");
   }
 });
 
@@ -221,6 +278,15 @@ function actorFromRequest(req) {
     };
   }
   return { userId: req.user?.id || req.user?.sub || null, role: "user", source: "user" };
+}
+
+function validateDecisionRulePayload(req, businessId) {
+  const fakeReq = { ...req, body: { ...(req.body?.changes || req.body || {}), businessId } };
+  const payload = validateTaxClassificationOverridePayload(fakeReq);
+  if (!payload.taxCategory || !payload.deductibilityStatus || payload.deductiblePercent == null || !payload.taxTreatment) {
+    throw validationError("incomplete_deduction_decision_rule", "Tax category, deductibility, percentage, and treatment are required for a deduction rule.");
+  }
+  return payload;
 }
 
 function requireReason(value, field) {

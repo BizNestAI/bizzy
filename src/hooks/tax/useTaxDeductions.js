@@ -12,6 +12,7 @@ import {
   getTaxClassificationStatus,
   getTaxClassificationReviewSummary,
   getTaxClassifications,
+  getTaxDeductionDecisionRules,
   getTaxDeductionCategoryDetail,
   getTaxDeductionTransactionDetail,
   getTaxDeductionTransactions,
@@ -23,8 +24,10 @@ import {
   rejectTaxClassification,
   restoreTaxClassification,
   runTaxClassification,
+  saveTaxDeductionDecisionRule,
   sendTaxClassificationsToReview,
   setTaxProfileMemory,
+  updateTaxDeductionDecisionRule,
 } from "../../services/tax/taxApiClient.js";
 
 export function useTaxDeductions({
@@ -51,6 +54,7 @@ export function useTaxDeductions({
   const [classificationJobStatus, setClassificationJobStatus] = useState(null);
   const [classificationRows, setClassificationRows] = useState(null);
   const [classificationReviewSummary, setClassificationReviewSummary] = useState(null);
+  const [decisionRules, setDecisionRules] = useState([]);
   // The overview cache does not contain the transaction rows used by the matrix.
   // Enter loading during render even when that cache exists so empty row DTOs do
   // not briefly look like authoritative zero-value deduction totals.
@@ -91,6 +95,7 @@ export function useTaxDeductions({
     setClassificationJobStatus(null);
     setClassificationRows(null);
     setClassificationReviewSummary(null);
+    setDecisionRules([]);
     setRequestStatus({
       scopeKey,
       overview: enabled && businessId ? "loading" : "idle",
@@ -113,6 +118,7 @@ export function useTaxDeductions({
       setClassificationJobStatus(fixture.deductions?.coverage?.jobStatus || null);
       setClassificationRows(fixture.deductionTransactions);
       setClassificationReviewSummary(null);
+      setDecisionRules([]);
       setRequestStatus({ scopeKey, overview: "success", matrix: "success", classification: "success" });
       setLoading(false);
       setError(null);
@@ -129,11 +135,12 @@ export function useTaxDeductions({
     setResourceErrors({});
     try {
       const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
-      const [overviewResult, allTransactionsResult, coverageResult, reviewSummaryResult] = await Promise.allSettled([
+      const [overviewResult, allTransactionsResult, coverageResult, reviewSummaryResult, decisionRulesResult] = await Promise.allSettled([
         getTaxDeductionsOverview({ businessId, year, asOfDate, refresh, signal }),
         fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, refresh, signal }),
         getTaxClassificationCoverage({ businessId, year, refresh, signal }),
         getTaxClassificationReviewSummary({ businessId, year, refresh, signal }),
+        getTaxDeductionDecisionRules({ businessId, year, refresh, signal }),
       ]);
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") setOverview(overviewResult.value);
@@ -143,11 +150,13 @@ export function useTaxDeductions({
           setClassificationJobStatus(coverageResult.value?.jobStatus || null);
         }
         if (reviewSummaryResult.status === "fulfilled") setClassificationReviewSummary(reviewSummaryResult.value);
+        if (decisionRulesResult.status === "fulfilled") setDecisionRules(decisionRulesResult.value || []);
         const errors = collectResourceErrors({
           overview: overviewResult,
           allTransactions: allTransactionsResult,
           classificationCoverage: coverageResult,
           classificationReviewSummary: reviewSummaryResult,
+          decisionRules: decisionRulesResult,
         });
         setResourceErrors(errors);
         setRequestStatus({
@@ -178,6 +187,7 @@ export function useTaxDeductions({
         classificationCoverage: valueOrNull(coverageResult),
         classificationRows: null,
         classificationReviewSummary: valueOrNull(reviewSummaryResult),
+        decisionRules: valueOrNull(decisionRulesResult),
       };
     } catch (err) {
       if (err?.code !== "request_aborted" && request === seq.current) setError(err);
@@ -289,6 +299,7 @@ export function useTaxDeductions({
     classificationJobStatus,
     classificationRows,
     classificationReviewSummary,
+    decisionRules,
     loading,
     error,
     resourceErrors,
@@ -332,6 +343,16 @@ export function useTaxDeductions({
     },
     overrideClassification: async (transactionId, changes = {}, options = {}) => {
       const result = await overrideTaxClassification({ businessId, year, transactionId, changes, ...options });
+      await load();
+      return result;
+    },
+    saveDeductionDecisionRule: async ({ transactionId, changes = {}, decisionType, ...options } = {}) => {
+      const result = await saveTaxDeductionDecisionRule({ businessId, year, transactionId, changes, decisionType, ...options });
+      await load();
+      return result;
+    },
+    updateDeductionDecisionRule: async ({ ruleId, changes = {}, decisionType, ...options } = {}) => {
+      const result = await updateTaxDeductionDecisionRule({ businessId, year, ruleId, changes, decisionType, ...options });
       await load();
       return result;
     },

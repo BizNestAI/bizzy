@@ -482,11 +482,12 @@ test("deductions hook stages cold loading and keeps cached data visible during r
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
 
-  const primaryLoad = hook.match(/const \[overviewResult, allTransactionsResult, coverageResult, reviewSummaryResult\][\s\S]*?Promise\.allSettled\(\[[\s\S]*?\]\);/)?.[0] || "";
+  const primaryLoad = hook.match(/const \[overviewResult, allTransactionsResult, coverageResult, reviewSummaryResult(?:, decisionRulesResult)?\][\s\S]*?Promise\.allSettled\(\[[\s\S]*?\]\);/)?.[0] || "";
   assert.match(primaryLoad, /getTaxDeductionsOverview/);
   assert.match(primaryLoad, /fetchAllDeductionTransactions/);
   assert.match(primaryLoad, /getTaxClassificationCoverage/);
   assert.match(primaryLoad, /getTaxClassificationReviewSummary/);
+  assert.match(primaryLoad, /getTaxDeductionDecisionRules/);
   assert.doesNotMatch(primaryLoad, /fetchAllPostedTransactions|getTaxClassifications|getTaxDeductionTransactionDetail/);
 
   assert.match(hook, /const loadSecondaryDetails = useCallback/);
@@ -938,9 +939,11 @@ test("Tax Dashboard groups Questions for You by a stable annual decision identit
   assert.match(dashboard, /function buildAttentionReviewGroups/);
   assert.match(dashboard, /buildTaxDeductionsLifecycleProjection/);
   assert.match(dashboard, /function toDecisionActionGroup/);
-  assert.match(dashboard, /Review individual transactions/);
-  assert.match(dashboard, /You will confirm before any annual change is saved/);
-  assert.match(dashboard, /Reviewed decisions/);
+  assert.doesNotMatch(dashboard, /Review individual transactions|one_transaction/);
+  assert.match(dashboard, /Confirming saves this choice as the automatic treatment for future posted transactions/);
+  assert.doesNotMatch(dashboard, /Reviewed decisions/);
+  assert.match(dashboard, /Your deduction rules/);
+  assert.match(dashboard, /DeductionDecisionRulesPanel[\s\S]*?<WorkspaceViewTabs/);
   assert.match(dashboard, /Preserve selected exceptions/);
   assert.match(dashboard, /ids\.slice\(index, index \+ 100\)/);
 });
