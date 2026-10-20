@@ -351,6 +351,31 @@ export function useTaxDeductions({
       await load();
       return result;
     },
+    // A deduction default can intentionally cover more than one QBO GL account
+    // (for example Electric, Internet, and Water/Sewer under Utilities). Keep
+    // the persisted rules GL-scoped so the rule engine remains precise, but
+    // reload once after the grouped setup flow completes.
+    saveDeductionDecisionRules: async ({ rules = [], ...options } = {}) => {
+      const requestedRules = Array.isArray(rules)
+        ? rules.filter((rule) => rule?.transactionId)
+        : [];
+      const attempts = await Promise.allSettled(requestedRules.map((rule) => saveTaxDeductionDecisionRule({
+        businessId,
+        year,
+        transactionId: rule.transactionId,
+        changes: rule.changes || {},
+        decisionType: rule.decisionType,
+        ...options,
+      })));
+      await load();
+      const saved = attempts
+        .filter((attempt) => attempt.status === "fulfilled")
+        .map((attempt) => attempt.value);
+      const failed = attempts
+        .filter((attempt) => attempt.status === "rejected")
+        .map((attempt) => attempt.reason);
+      return { requested: requestedRules.length, saved, failed };
+    },
     updateDeductionDecisionRule: async ({ ruleId, changes = {}, decisionType, ...options } = {}) => {
       const result = await updateTaxDeductionDecisionRule({ businessId, year, ruleId, changes, decisionType, ...options });
       await load();

@@ -1585,3 +1585,67 @@ test("Tax Dashboard does not combine mismatched refresh snapshots or crash on nu
     readOnly: true,
   })));
 });
+
+test("built-in deduction defaults stay GL-scoped while grouping related Gas, Rent, and Utilities accounts", async () => {
+  const { buildDeductionDefaultSetupOptions, DeductionDefaultSetupEditor } = await loadTaxDashboardInternals();
+  const setups = buildDeductionDefaultSetupOptions({
+    year: 2026,
+    workspaceRows: [
+      { id: "gas-transaction", qboAccountName: "Gas", taxCategory: "vehicle" },
+      { id: "rent-transaction", qboAccountName: "Office Rent", taxCategory: "rent" },
+      { id: "electric-transaction", qboAccountName: "Electric", taxCategory: "utilities" },
+      { id: "internet-transaction", qboAccountName: "Internet & Wi-Fi", taxCategory: "utilities" },
+      { id: "water-transaction", qboAccountName: "Water/Sewer", taxCategory: "utilities" },
+      { id: "meals-transaction", qboAccountName: "Meals", taxCategory: "business_meals" },
+    ],
+    rules: [
+      {
+        id: "gas-rule",
+        accountName: "Gas",
+        accountKey: "gas",
+        taxCategory: "vehicle",
+        taxTreatment: "vehicle_standard_mileage_no_separate_gas",
+        deductiblePercent: 0,
+      },
+      {
+        id: "electric-rule",
+        accountName: "Electric",
+        accountKey: "electric",
+        taxCategory: "utilities",
+        taxTreatment: "utilities_business_use_percentage",
+        deductiblePercent: 100,
+      },
+    ],
+  });
+
+  const gas = setups.find((setup) => setup.id === "vehicle");
+  const rent = setups.find((setup) => setup.id === "rent");
+  const utilities = setups.find((setup) => setup.id === "utilities");
+  assert.equal(gas.status, "configured");
+  assert.equal(gas.initialVehicleMethod, "standard_mileage");
+  assert.deepEqual(gas.accountOptions.map((account) => account.accountName), ["Gas"]);
+  assert.equal(rent.status, "not_started");
+  assert.deepEqual(rent.accountOptions.map((account) => account.accountName), ["Office Rent"]);
+  assert.equal(utilities.status, "partial");
+  assert.deepEqual(utilities.accountOptions.map((account) => account.accountName), ["Electric", "Internet & Wi-Fi", "Water/Sewer"]);
+  assert.equal(utilities.accountOptions.find((account) => account.accountName === "Electric").hasSavedRule, true);
+  assert.equal(utilities.accountOptions.find((account) => account.accountName === "Water/Sewer").hasSavedRule, false);
+
+  assert.doesNotThrow(() => renderToStaticMarkup(React.createElement(DeductionDefaultSetupEditor, {
+    setup: null,
+    readOnly: true,
+    onClose: () => {},
+    onSave: async () => {},
+  })));
+});
+
+test("Tax deductions place editable company defaults above the workspace tabs", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const defaultsIndex = dashboard.indexOf("<DeductionDecisionRulesPanel");
+  const tabsIndex = dashboard.indexOf("<WorkspaceViewTabs");
+  assert.ok(defaultsIndex > -1, "built-in deduction defaults should be rendered");
+  assert.ok(defaultsIndex < tabsIndex, "deduction defaults should appear above the workspace tabs");
+  assert.match(dashboard, /Set up deduction defaults/);
+  assert.match(dashboard, /future posted transactions only/);
+  assert.match(dashboard, /transaction-specific exception can still be reviewed separately/);
+});

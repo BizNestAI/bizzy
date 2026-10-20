@@ -522,6 +522,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const [classificationTab, setClassificationTab] = useState("all");
   const [reviewDecision, setReviewDecision] = useState(null);
   const [decisionRuleEditor, setDecisionRuleEditor] = useState(null);
+  const [deductionDefaultSetup, setDeductionDefaultSetup] = useState(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
   const refreshDeductions = deductions.refresh;
   const populationBridge = deductions.overview?.populationBridge || null;
@@ -546,6 +547,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const deductionDecisionRules = useMemo(
     () => enrichDeductionDecisionRules(deductions.decisionRules, workspaceRows),
     [deductions.decisionRules, workspaceRows]
+  );
+  const deductionDefaultSetupOptions = useMemo(
+    () => buildDeductionDefaultSetupOptions({ workspaceRows, rules: deductionDecisionRules, year }),
+    [deductionDecisionRules, workspaceRows, year]
   );
   const legacyCoverageReconciliation = useMemo(
     () => reconcileLegacyTaxCoverage({
@@ -720,8 +725,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
 
       <DeductionDecisionRulesPanel
         rules={deductionDecisionRules}
+        setupOptions={deductionDefaultSetupOptions}
         readOnly={readOnly}
         onChangeRule={setDecisionRuleEditor}
+        onSetUpRule={setDeductionDefaultSetup}
       />
 
       <WorkspaceViewTabs value={workspaceView} onChange={setWorkspaceView} />
@@ -816,6 +823,30 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         }}
       />
 
+      <DeductionDefaultSetupEditor
+        setup={deductionDefaultSetup}
+        readOnly={readOnly}
+        onClose={() => setDeductionDefaultSetup(null)}
+        onSave={async ({ accountOptions, changes, decisionType }) => {
+          const result = await deductions.saveDeductionDecisionRules({
+            rules: accountOptions.map((account) => ({
+              transactionId: account.transactionId,
+              changes,
+              decisionType,
+            })),
+          });
+          if (result.failed.length) {
+            const error = new Error(
+              `${result.saved.length} of ${result.requested} QuickBooks GL account default${result.requested === 1 ? "" : "s"} saved. Try the remaining ${result.failed.length} account${result.failed.length === 1 ? "" : "s"} again.`
+            );
+            error.code = "deduction_default_partial_save";
+            throw error;
+          }
+          setDeductionDefaultSetup(null);
+          return result;
+        }}
+      />
+
       <div className="mt-3 flex flex-col gap-2 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">
         <span>{workspaceView === "overview" ? "Estimated totals include supported standard rules; reviewed totals remain separately identified." : "No deduction total is shown until classification authority exists."}</span>
         <span>{formatLifecycleSummaryLine(lifecycleProjection)}</span>
@@ -888,19 +919,59 @@ function WorkspaceViewTabs({ value, onChange }) {
   );
 }
 
-function DeductionDecisionRulesPanel({ rules = [], readOnly, onChangeRule }) {
+function DeductionDecisionRulesPanel({ rules = [], setupOptions = [], readOnly, onChangeRule, onSetUpRule }) {
   const visibleRules = normalizeDecisionRules(rules);
   return (
     <section className="mt-4 rounded-2xl border border-emerald-300/14 bg-emerald-300/[0.035] px-3 py-3 sm:px-4" aria-labelledby="deduction-rules-heading">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div id="deduction-rules-heading" className="text-sm font-semibold text-emerald-50">Your deduction rules</div>
-          <p className="mt-0.5 max-w-3xl text-xs leading-relaxed text-white/50">Choices you save here apply automatically to future posted transactions in the matching QuickBooks GL account. They do not silently change prior transactions.</p>
+          <p className="mt-0.5 max-w-3xl text-xs leading-relaxed text-white/50">Set company-specific defaults for the QBO GL accounts you use most. They apply to future posted transactions only; existing transaction decisions and one-off exceptions stay intact.</p>
         </div>
         <div className="text-[11px] font-medium text-emerald-100/58">Company-specific</div>
       </div>
+      <div className="mt-3 border-t border-emerald-100/[0.08] pt-3">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs font-semibold text-white/78">Set up deduction defaults</div>
+          <div className="text-[11px] text-white/42">Review or change them here at any time</div>
+        </div>
+        <div className="mt-2 grid gap-2 lg:grid-cols-3">
+          {setupOptions.map((setup) => {
+            const configuredLabel = setup.status === "configured"
+              ? "Configured"
+              : setup.status === "partial"
+                ? "Partly configured"
+                : "Set up";
+            const accountLabel = setup.accountOptions.length
+              ? `${setup.accountOptions.length} matching QBO GL account${setup.accountOptions.length === 1 ? "" : "s"}`
+              : "No matching posted QBO GL account yet";
+            return (
+              <div key={setup.id} className="rounded-xl border border-white/[0.08] bg-black/[0.14] px-3 py-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-white/86">{setup.label}</div>
+                    <p className="mt-0.5 text-xs leading-relaxed text-white/48">{setup.summary}</p>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${setup.status === "configured" ? "bg-emerald-300/[0.14] text-emerald-50" : setup.status === "partial" ? "bg-amber-200/[0.12] text-amber-100" : "bg-white/[0.06] text-white/55"}`}>{configuredLabel}</span>
+                </div>
+                <div className="mt-2 text-[11px] text-white/42">{accountLabel}</div>
+                <button
+                  type="button"
+                  disabled={readOnly || !setup.accountOptions.length}
+                  onClick={() => onSetUpRule?.(setup)}
+                  className="mt-2 rounded-full border border-emerald-300/20 bg-emerald-300/[0.08] px-2.5 py-1.5 text-[11px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-emerald-300/30"
+                >
+                  {setup.status === "configured" ? "Review default" : setup.status === "partial" ? "Finish setup" : "Set up default"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
       {visibleRules.length ? (
-        <div className="mt-3 grid gap-2 xl:grid-cols-2">
+        <div className="mt-3 border-t border-emerald-100/[0.08] pt-3">
+          <div className="mb-2 text-xs font-semibold text-white/68">Saved GL-account defaults</div>
+          <div className="grid gap-2 xl:grid-cols-2">
           {visibleRules.map((rule) => (
             <div key={rule.id || rule.accountKey} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-emerald-200/10 bg-black/15 px-3 py-2.5">
               <div className="min-w-0">
@@ -917,9 +988,10 @@ function DeductionDecisionRulesPanel({ rules = [], readOnly, onChangeRule }) {
               </button>
             </div>
           ))}
+          </div>
         </div>
       ) : (
-        <div className="mt-2 text-xs text-white/48">No company deduction rules have been saved yet. Confirm a tax question below to save its treatment for future transactions.</div>
+        <div className="mt-3 border-t border-emerald-100/[0.08] pt-3 text-xs text-white/48">No company deduction rules have been saved yet. Use a setup card above to create a future default for the matching QBO GL accounts.</div>
       )}
     </section>
   );
@@ -1001,6 +1073,114 @@ function DeductionDecisionRuleEditor({ rule, readOnly, onClose, onSave }) {
   );
 }
 
+function DeductionDefaultSetupEditor({ setup, readOnly, onClose, onSave }) {
+  const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
+  const [percent, setPercent] = useState("");
+  const [vehicleMethod, setVehicleMethod] = useState("actual_expense");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const accountOptions = Array.isArray(setup?.accountOptions) ? setup.accountOptions : [];
+  const accountOptionKeys = accountOptions.map((account) => account.accountKey).join("|");
+  const selectedAccounts = accountOptions.filter((account) => selectedAccountKeys.includes(account.accountKey));
+  const isVehicle = setup?.kind === "vehicle_method";
+
+  useEffect(() => {
+    setSelectedAccountKeys(accountOptions.map((account) => account.accountKey));
+    setPercent(setup?.initialDeductiblePercent == null ? "" : String(setup.initialDeductiblePercent));
+    setVehicleMethod(setup?.initialVehicleMethod || "actual_expense");
+    setSaving(false);
+    setError("");
+  }, [setup?.id, setup?.initialDeductiblePercent, setup?.initialVehicleMethod, accountOptionKeys]);
+
+  if (!setup || typeof document === "undefined") return null;
+  const numericPercent = Number(percent);
+  const percentValid = Number.isFinite(numericPercent) && numericPercent >= 0 && numericPercent <= 100;
+  const canSave = !readOnly && selectedAccounts.length > 0 && (vehicleMethod === "standard_mileage" || percentValid);
+  const toggleAccount = (accountKey) => {
+    setSelectedAccountKeys((current) => current.includes(accountKey)
+      ? current.filter((key) => key !== accountKey)
+      : [...current, accountKey]);
+  };
+  const save = async () => {
+    if (!canSave) return;
+    const normalizedPercent = vehicleMethod === "standard_mileage" ? 0 : numericPercent;
+    const changes = {
+      taxCategory: setup.taxCategory,
+      deductibilityStatus: deductionStatusForPercent(normalizedPercent),
+      deductiblePercent: normalizedPercent,
+      taxTreatment: vehicleMethod === "standard_mileage"
+        ? "vehicle_standard_mileage_no_separate_gas"
+        : isVehicle
+          ? "vehicle_actual_expense_business_use"
+          : setup.taxTreatment,
+    };
+    setSaving(true);
+    setError("");
+    try {
+      await onSave?.({ accountOptions: selectedAccounts, changes, decisionType: setup.decisionType });
+    } catch (err) {
+      setError(err?.message || "Could not save this deduction default.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return createPortal(
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[200000] flex items-center justify-center overflow-y-auto px-3 py-5" role="presentation" onMouseDown={onClose}>
+      <section role="dialog" aria-modal="true" aria-labelledby="deduction-default-setup-title" className="my-auto w-full max-w-xl rounded-[22px] border border-white/10 bg-[#080b0f] p-5 text-white shadow-[0_28px_100px_rgba(0,0,0,0.72)]" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-100/62">Deduction default</div>
+            <h2 id="deduction-default-setup-title" className="mt-1 text-xl font-semibold">{setup.label}</h2>
+            <p className="mt-1 text-sm text-white/55">{setup.prompt}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/70 transition hover:bg-white/10" aria-label="Close deduction default setup"><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-emerald-200/10 bg-emerald-300/[0.035] p-3 text-xs leading-relaxed text-white/56">
+          This creates or updates a company-specific default for future posted transactions in the selected QuickBooks GL accounts. It does not reclassify earlier transactions, and a transaction-specific exception can still be reviewed separately.
+        </div>
+
+        {isVehicle ? (
+          <fieldset className="mt-4 space-y-2">
+            <legend className="text-sm font-semibold text-white/82">Vehicle method for {setup.year}</legend>
+            <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-white/10 px-3 py-2.5 text-sm text-white/72"><input type="radio" name="deduction-default-vehicle-method" checked={vehicleMethod === "standard_mileage"} onChange={() => setVehicleMethod("standard_mileage")} /><span><span className="font-semibold text-white/86">Standard mileage</span><span className="mt-0.5 block text-xs text-white/46">Gas is not deducted separately under this method.</span></span></label>
+            <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-white/10 px-3 py-2.5 text-sm text-white/72"><input type="radio" name="deduction-default-vehicle-method" checked={vehicleMethod === "actual_expense"} onChange={() => setVehicleMethod("actual_expense")} /><span><span className="font-semibold text-white/86">Actual expenses</span><span className="mt-0.5 block text-xs text-white/46">Set the business-use percentage for the selected Gas GL account.</span></span></label>
+          </fieldset>
+        ) : null}
+
+        {vehicleMethod !== "standard_mileage" ? (
+          <label className="mt-4 block text-sm font-semibold text-white/82">Business-use percentage<input type="number" min="0" max="100" step="0.01" placeholder="For example, 100" value={percent} onChange={(event) => setPercent(event.target.value)} className="mt-2 block w-full rounded-xl border border-white/12 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-emerald-300/45" /></label>
+        ) : null}
+
+        <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-black/[0.14]">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] px-3 py-2.5">
+            <div>
+              <div className="text-sm font-semibold text-white/80">Apply to matching QBO GL accounts</div>
+              <div className="mt-0.5 text-xs text-white/44">{selectedAccounts.length} of {accountOptions.length} account{accountOptions.length === 1 ? "" : "s"} selected</div>
+            </div>
+            <button type="button" onClick={() => setSelectedAccountKeys(selectedAccounts.length === accountOptions.length ? [] : accountOptions.map((account) => account.accountKey))} className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] font-semibold text-white/66 transition hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
+              {selectedAccounts.length === accountOptions.length ? "Clear all" : "Select all"}
+            </button>
+          </div>
+          <div className="divide-y divide-white/[0.07]">
+            {accountOptions.map((account) => (
+              <label key={account.accountKey} className="flex cursor-pointer items-center gap-2 px-3 py-2.5 text-sm text-white/72">
+                <input type="checkbox" checked={selectedAccountKeys.includes(account.accountKey)} onChange={() => toggleAccount(account.accountKey)} />
+                <span className="min-w-0 flex-1 truncate font-semibold text-white/82">{account.accountName}</span>
+                {account.hasSavedRule ? <span className="shrink-0 text-[11px] text-emerald-100/62">Existing default</span> : null}
+              </label>
+            ))}
+          </div>
+        </div>
+        {error ? <div className="mt-3 rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-xs text-rose-100">{error}</div> : null}
+        <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-full border border-white/12 px-3 py-2 text-sm font-semibold text-white/70 transition hover:bg-white/[0.06]">Cancel</button><button type="button" disabled={!canSave || saving} onClick={save} className="rounded-full bg-emerald-300 px-3.5 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-45">{saving ? "Saving…" : "Save default"}</button></div>
+      </section>
+    </div>,
+    document.body
+  );
+}
+
 function enrichDeductionDecisionRules(rules = [], workspaceRows = []) {
   const accountNames = new Map(normalizeRows(workspaceRows)
     .filter(isTaxRecord)
@@ -1026,6 +1206,137 @@ function normalizeDecisionRules(rules) {
       taxDataReasonCode: "null_grouped_decision",
     };
   });
+}
+
+const DEDUCTION_DEFAULT_SETUP_SPECS = Object.freeze([
+  {
+    id: "vehicle",
+    label: "Gas & vehicle",
+    kind: "vehicle_method",
+    taxCategory: "vehicle",
+    taxTreatment: "vehicle_actual_expense_business_use",
+    decisionType: "vehicle_method",
+    summary: "Choose standard mileage or actual expenses for your Gas-related GL accounts.",
+    prompt: "Choose the annual vehicle method before Bizzi applies a future default to Gas-related posted transactions.",
+    matches: isVehicleDefaultAccount,
+  },
+  {
+    id: "rent",
+    label: "Rent",
+    kind: "business_use_percent",
+    taxCategory: "rent",
+    taxTreatment: "rent_business_use_percentage",
+    decisionType: "rent_business_use_percent",
+    summary: "Set the business-use percentage for Rent or Lease GL accounts.",
+    prompt: "Set the default business-use percentage for your selected Rent or Lease QBO GL accounts.",
+    matches: isRentDefaultAccount,
+  },
+  {
+    id: "utilities",
+    label: "Utilities",
+    kind: "business_use_percent",
+    taxCategory: "utilities",
+    taxTreatment: "utilities_business_use_percentage",
+    decisionType: "utilities_business_use_percent",
+    summary: "Apply one default across Electric, Internet, Water/Sewer, Phone, and other utility GL accounts you select.",
+    prompt: "Set a default business-use percentage for the selected utility QBO GL accounts. You can leave an account out for a different treatment.",
+    matches: isUtilitiesDefaultAccount,
+  },
+]);
+
+function buildDeductionDefaultSetupOptions({ workspaceRows = [], rules = [], year = CURRENT_YEAR } = {}) {
+  const savedRulesByAccountKey = new Map(normalizeDecisionRules(rules)
+    .filter((rule) => rule.id && !rule.taxDataUnavailable)
+    .map((rule) => [deductionRuleAccountKey(rule.accountKey || rule.accountName), rule]));
+  const rows = normalizeRows(workspaceRows).filter((row) => isTaxRecord(row) && (row.id || row.transactionId));
+  return DEDUCTION_DEFAULT_SETUP_SPECS.map((spec) => {
+    const accountMap = new Map();
+    for (const row of rows) {
+      const accountName = String(row.qboAccountName || row.bookAccount || "").trim();
+      const transactionId = String(row.id || row.transactionId || "").trim();
+      const accountKey = deductionRuleAccountKey(accountName);
+      if (!accountName || !transactionId || !accountKey || !spec.matches(row, accountName)) continue;
+      if (!accountMap.has(accountKey)) accountMap.set(accountKey, {
+        accountKey,
+        accountName,
+        transactionId,
+        taxCategory: row.taxCategory || null,
+      });
+    }
+    const accountOptions = [...accountMap.values()]
+      .sort((a, b) => a.accountName.localeCompare(b.accountName))
+      .map((account) => ({
+        ...account,
+        savedRule: savedRulesByAccountKey.get(account.accountKey) || null,
+        hasSavedRule: Boolean(savedRulesByAccountKey.get(account.accountKey)),
+      }));
+    const matchingRules = accountOptions.map((account) => account.savedRule).filter((rule) => rule && savedRuleMatchesDefault(rule, spec));
+    const allConfigured = accountOptions.length > 0 && matchingRules.length === accountOptions.length;
+    const initial = initialDefaultTreatment({ spec, rules: matchingRules, allConfigured });
+    return {
+      ...spec,
+      taxCategory: resolveDefaultTaxCategory(spec, accountOptions),
+      year,
+      accountOptions,
+      status: allConfigured ? "configured" : matchingRules.length ? "partial" : "not_started",
+      initialDeductiblePercent: initial.deductiblePercent,
+      initialVehicleMethod: initial.vehicleMethod,
+    };
+  });
+}
+
+function resolveDefaultTaxCategory(spec, accountOptions) {
+  const categories = new Set(accountOptions
+    .map((account) => String(account.taxCategory || "").trim())
+    .filter(Boolean));
+  return categories.size === 1 ? [...categories][0] : spec.taxCategory;
+}
+
+function initialDefaultTreatment({ spec, rules = [], allConfigured }) {
+  if (!allConfigured || !rules.length) return { deductiblePercent: null, vehicleMethod: "actual_expense" };
+  const treatments = new Set(rules.map((rule) => String(rule.taxTreatment || "")));
+  const percentages = new Set(rules.map((rule) => Number(rule.deductiblePercent)).filter(Number.isFinite));
+  const standardMileage = [...treatments].every((treatment) => treatment.includes("standard_mileage"));
+  if (spec.kind === "vehicle_method") {
+    return {
+      vehicleMethod: standardMileage ? "standard_mileage" : "actual_expense",
+      deductiblePercent: standardMileage || percentages.size !== 1 ? null : [...percentages][0],
+    };
+  }
+  return { vehicleMethod: "actual_expense", deductiblePercent: percentages.size === 1 ? [...percentages][0] : null };
+}
+
+function savedRuleMatchesDefault(rule, spec) {
+  const category = String(rule?.taxCategory || "").toLowerCase();
+  if (spec.id === "vehicle") return category.includes("vehicle") || String(rule?.taxTreatment || "").startsWith("vehicle_");
+  if (spec.id === "rent") return category.includes("rent") || category.includes("lease");
+  return category.includes("utilit");
+}
+
+function isVehicleDefaultAccount(row, accountName) {
+  const category = String(row?.taxCategory || "").toLowerCase();
+  return category.includes("vehicle") || /\b(gas|fuel|auto|vehicle)\b/i.test(accountName);
+}
+
+function isRentDefaultAccount(row, accountName) {
+  const category = String(row?.taxCategory || "").toLowerCase();
+  return category.includes("rent") || /\b(rent|lease)\b/i.test(accountName);
+}
+
+function isUtilitiesDefaultAccount(row, accountName) {
+  const category = String(row?.taxCategory || "").toLowerCase();
+  return category.includes("utilit") || /\b(utility|utilities|electric|electricity|water|sewer|internet|wifi|wi fi|phone|telecom)\b/i.test(accountName);
+}
+
+function deductionRuleAccountKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isVehicleDeductionRule(rule) {
@@ -4586,10 +4897,12 @@ function parseLocalDate(value) {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const __TaxDashboardTestInternals = {
+  DeductionDefaultSetupEditor,
   DeductionDecisionRuleEditor,
   DeductionDecisionRulesPanel,
   DeductionMonthDetailModal,
   TaxDashboardDeductions,
+  buildDeductionDefaultSetupOptions,
   buildDeductionAccountMatrix,
   buildClassificationWorkspaceRows,
   buildCustomerDeductionsWorkflow,
