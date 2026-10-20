@@ -416,22 +416,20 @@ test("fallback-only production state is presented as bookkeeping evidence, not a
   assert.doesNotMatch(dashboard, /Run processed/);
 });
 
-test("unresolved fallback rows remain a distinct controlled repair eligibility signal", () => {
+test("unresolved fallback rows remain visible as bookkeeping follow-up without a manual job trigger", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
-  assert.match(dashboard, /function buildPrepareDeductionsEligibility/);
-  assert.match(dashboard, /hasUnresolvedFallbackRows = Number\(summary\.unresolvedTotal \|\| 0\) > 0/);
-  assert.match(dashboard, /canRepairUnresolved = hasUnresolvedFallbackRows/);
-  assert.match(dashboard, /hasApprovedApplicableRules === false/);
-  assert.match(dashboard, /Accountant-approved GL rules must be activated before preparation can improve them/);
+  assert.match(dashboard, /Bookkeeping follow-up/);
+  assert.match(dashboard, /These transactions need bookkeeping information before Bizzi can estimate their tax treatment/);
+  assert.match(dashboard, /buildTaxDeductionsLifecycleProjection/);
+  assert.doesNotMatch(dashboard, /onClick=\{openBackfillPreview\}/);
 });
 
-test("active classification run disables Prepare and terminal fallback-only run does not permanently disable repair", () => {
+test("classification activity remains automatic while the deductions surface offers only Refresh", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
-  assert.match(dashboard, /if \(hasActiveRun\) return disabled\("Deductions preparation is already running\."\)/);
-  assert.match(dashboard, /retryingTechnicalFailure/);
-  assert.match(dashboard, /Bizzi is retrying a technical update automatically/);
-  assert.match(dashboard, /const enabled = canPrepareInitial \|\| canRepairUnresolved/);
-  assert.doesNotMatch(dashboard, /completed_with_review[\s\S]{0,80}hasActiveRun/);
+  assert.match(dashboard, /ClassificationProgressSummary/);
+  assert.match(dashboard, /Bizzi will retry automatically/);
+  assert.match(dashboard, /deductions\.refreshing \? "Updating" : "Refresh"/);
+  assert.doesNotMatch(dashboard, />Update deductions</);
 });
 
 test("manual Refresh bypasses cached read-only tax resources and exposes result state", () => {
@@ -592,7 +590,8 @@ test("Tax Dashboard embeds classification workspace controls in Deductions", () 
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   assert.match(dashboard, /Classification status/);
-  assert.match(dashboard, /Prepare deductions/);
+  assert.doesNotMatch(dashboard, />Update deductions</);
+  assert.match(dashboard, /deductions\.refreshing \? "Updating" : "Refresh"/);
   assert.match(dashboard, /Auto-classified/);
   assert.match(dashboard, /Needs review/);
   assert.match(dashboard, /Unclassified/);
@@ -620,7 +619,7 @@ test("Tax Dashboard uses hydrated posted transactions and keeps matrix layout se
 test("Tax Dashboard renders matrix-first Deductions workspace views with separate authority totals", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /Deductions overview/);
-  assert.match(dashboard, /Needs attention/);
+  assert.match(dashboard, /Questions for you/);
   assert.match(dashboard, /All transactions/);
   assert.match(dashboard, /workspaceView === "overview"/);
   assert.match(dashboard, /workspaceView === "needs_attention"/);
@@ -628,7 +627,8 @@ test("Tax Dashboard renders matrix-first Deductions workspace views with separat
   assert.match(dashboard, /DeductionAccountMatrix/);
   assert.match(dashboard, /Estimated deductible expenses/);
   assert.match(dashboard, /Using standard rules/);
-  assert.match(dashboard, /Needs your input/);
+  assert.match(dashboard, /Questions for you/);
+  assert.match(dashboard, /Your answers will update/);
   assert.match(dashboard, /posted transactions evaluated/);
 });
 
@@ -648,7 +648,7 @@ test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and auth
   assert.match(dashboard, /cell\.customerInputTransactionCount > 0/);
   assert.doesNotMatch(dashboard, /const hasRenderableState = cell\.authoritativeDeductibleTotal > 0/);
   assert.doesNotMatch(dashboard, /cell\.autoTransactionCount > 0/);
-  assert.match(dashboard, /return <span className="block px-2 py-1\.5 text-\[12px\] text-white\/22">—<\/span>/);
+  assert.match(dashboard, /return <span className="block px-2 py-1\.5 text-\[12px\] text-white\/22">No activity<\/span>/);
 });
 
 test("Deduction matrix keeps user-confirmed May Meals in the May confirmed cell", async () => {
@@ -803,7 +803,11 @@ test("standard-rule estimates stay in the matrix while factual questions, techni
   assert.equal(classificationBucket(rows[3]), "technical_evidence_incomplete");
 
   const workflow = buildCustomerDeductionsWorkflow(rows);
-  assert.deepEqual(workflow, { reviewedCount: 0, standardRuleCount: 1, customerInputCount: 1, technicalCount: 1 });
+  assert.equal(workflow.reviewedCount, 0);
+  assert.equal(workflow.standardRuleCount, 1);
+  assert.equal(workflow.customerInputCount, 1);
+  assert.equal(workflow.customerDecisionCount, 1);
+  assert.equal(workflow.technicalCount, 1);
   const workspaceRows = rows.map((row) => ({ ...row, classificationBucket: classificationBucket(row) }));
   assert.deepEqual(filterAttentionWorkspaceRows(workspaceRows, "needs_review").map((row) => row.id), ["meal-question"]);
   assert.deepEqual(filterAttentionWorkspaceRows(workspaceRows, "unclassified").map((row) => row.id), ["missing-evidence"]);
@@ -838,7 +842,7 @@ test("Tax Dashboard row semantics distinguish auto-classified and review-require
   assert.match(dashboard, /Review required/);
 });
 
-test("Tax Dashboard uses a deductions loading skeleton and keeps disabled Prepare reason in the button tooltip", () => {
+test("Tax Dashboard uses a deductions loading skeleton and keeps the single Refresh action truthful", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /function DeductionsLoadingState/);
   assert.match(dashboard, /function LoadingEllipsis/);
@@ -846,8 +850,8 @@ test("Tax Dashboard uses a deductions loading skeleton and keeps disabled Prepar
   assert.match(dashboard, /animate-dot-bounce/);
   assert.match(dashboard, /initialDeductionsLoading \? \(/);
   assert.match(dashboard, /role="status" aria-busy="true" aria-live="polite"/);
-  assert.match(dashboard, /title=\{!canPrepareDeductions \? prepareEligibility\.reason : undefined\}/);
-  assert.doesNotMatch(dashboard, /!\s*canPrepareDeductions && prepareEligibility\.reason \? \(/);
+  assert.match(dashboard, /\{deductions\.refreshing \? "Updating" : "Refresh"\}/);
+  assert.doesNotMatch(dashboard, />Update deductions</);
 });
 
 test("Tax Dashboard counts meaningful needs-review coverage and labels QBO GL rule sources", () => {
@@ -888,32 +892,25 @@ test("Tax Dashboard does not let processed job count masquerade as classified co
   assert.doesNotMatch(dashboard, /activeJob && jobFailed/);
 });
 
-test("Prepare deductions accepts quickly and refreshes via polling, not a blocking full reload", () => {
+test("automatic deduction updates are observable without a customer-started job", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   assert.doesNotMatch(hook, /const result = await prepareTaxClassifications[\s\S]{0,120}await load\(\)/);
   assert.match(hook, /setClassificationJobStatus\(job \|\| null\)/);
-  assert.match(dashboard, /Updating deduction estimates\./);
-  assert.match(dashboard, /Updating deductions/);
-  assert.match(dashboard, /setTrackedPrepareRun/);
-  assert.match(dashboard, /String\(job\.jobId\) !== trackedPrepareRun\.jobId/);
-  assert.match(dashboard, /setPrepareCompletionNotice\("Deductions preparation complete\."\)/);
   assert.match(dashboard, /Updating deduction estimates/);
-  assert.match(dashboard, /Dismiss/);
-  assert.doesNotMatch(dashboard, /onNotice\?\.\("Deductions preparation complete\."\)/);
+  assert.doesNotMatch(dashboard, /setTrackedPrepareRun/);
+  assert.doesNotMatch(dashboard, /setPrepareCompletionNotice/);
+  assert.doesNotMatch(dashboard, /onClick=\{openBackfillPreview\}/);
   assert.doesNotMatch(dashboard, /lastTerminalJobRef/);
   assert.doesNotMatch(dashboard, /dispatchBizziToast/);
   assert.doesNotMatch(dashboard, /bizzy:toast/);
 });
 
-test("Prepare completion banner is scoped to the current mounted user run only", () => {
+test("no customer-visible manual preparation run is tracked in Deductions", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
-  assert.match(dashboard, /const \[trackedPrepareRun, setTrackedPrepareRun\] = useState\(null\)/);
-  assert.match(dashboard, /const \[prepareCompletionNotice, setPrepareCompletionNotice\] = useState\(""\)/);
-  assert.match(dashboard, /const runId = job\?\.jobId \|\| job\?\.id \|\| job\?\.runId \|\| job\?\.run_id/);
-  assert.match(dashboard, /if \(!trackedPrepareRun\?\.jobId \|\| !job\?\.jobId\) return/);
-  assert.match(dashboard, /setTrackedPrepareRun\(null\)/);
-  assert.match(dashboard, /completionNoticeTimerRef/);
+  assert.doesNotMatch(dashboard, /trackedPrepareRun/);
+  assert.doesNotMatch(dashboard, /prepareCompletionNotice/);
+  assert.doesNotMatch(dashboard, /openBackfillPreview/);
   assert.doesNotMatch(dashboard, /localStorage\.setItem\([^)]*trackedPrepareRun/);
 });
 
@@ -936,26 +933,28 @@ test("Tax Dashboard does not present missing classification authority as zero de
   assert.match(dashboard, /classificationBucket\(row\) === "unclassified"/);
 });
 
-test("Tax Dashboard groups Needs Attention decisions by QBO GL account and missing action", () => {
+test("Tax Dashboard groups Questions for You by a stable annual decision identity", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /function buildAttentionReviewGroups/);
-  assert.match(dashboard, /const key = `\$\{qboAccountId\}:\$\{decision\.kind\}`/);
+  assert.match(dashboard, /buildTaxDeductionsLifecycleProjection/);
+  assert.match(dashboard, /function toDecisionActionGroup/);
   assert.match(dashboard, /Review individual transactions/);
-  assert.match(dashboard, /Use this treatment for all \$\{year\} \$\{group\.qboAccountName\}/);
-  assert.match(dashboard, /Use for future transactions/);
-  assert.match(dashboard, /Going-forward business-use confirmations require a schema-backed account-level authority record/);
+  assert.match(dashboard, /You will confirm before any annual change is saved/);
+  assert.match(dashboard, /Reviewed decisions/);
   assert.match(dashboard, /Preserve selected exceptions/);
   assert.match(dashboard, /ids\.slice\(index, index \+ 100\)/);
 });
 
-test("Tax Dashboard displays specific missing tax-review actions instead of generic zero-dollar conclusions", () => {
+test("Tax Dashboard displays explicit decision actions instead of generic zero-dollar conclusions", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
-  assert.match(dashboard, /Set business use %/);
+  assert.match(dashboard, /Set business-use percentage/);
+  assert.match(dashboard, /Edit business-use percentage/);
   assert.match(dashboard, /Confirm business use/);
-  assert.match(dashboard, /Set vehicle method/);
-  assert.match(dashboard, /Vehicle expenses need a vehicle-method workflow before they can become authoritative/);
+  assert.match(dashboard, /Choose vehicle method/);
+  assert.match(dashboard, /Review vehicle transactions/);
   assert.match(dashboard, /reviewDecisionForRow\(row\)\.actionLabel/);
-  assert.match(dashboard, /cell\.needsInputDeductibleTotal > 0 \? `\$\{formatCurrencyLocal\(cell\.needsInputDeductibleTotal\)\} needs input`/);
+  assert.match(dashboard, /Needs input/);
+  assert.match(dashboard, /Standard estimate/);
 });
 
 test("Tax Dashboard recomputes review-required proposed amounts from percent instead of trusting gross stored totals", () => {
@@ -965,13 +964,13 @@ test("Tax Dashboard recomputes review-required proposed amounts from percent ins
   assert.doesNotMatch(dashboard, /const proposedAmount = bucket === "needs_review" \? row\.deductibleAmount/);
 });
 
-test("Tax Dashboard review decisions reuse existing override authority and avoid going-forward persistence", () => {
+test("Tax Dashboard review decisions reuse existing override authority and preserve audit history", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   const service = fs.readFileSync("src/services/tax/taxClassificationOverride.service.js", "utf8");
   assert.match(dashboard, /deductions\.overrideClassification/);
   assert.match(dashboard, /deductions\.bulkUpdateClassifications/);
-  assert.match(dashboard, /This confirmation affects only the selected current classifications and writes through the existing override audit mechanism/);
+  assert.match(dashboard, /existing classification override audit trail/);
   assert.match(dashboard, /hasManualClassificationAuthority\(row\)/);
   assert.match(dashboard, /status === "user_confirmed"/);
   assert.match(dashboard, /status === "cpa_confirmed"/);
