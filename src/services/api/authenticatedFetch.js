@@ -123,7 +123,16 @@ async function parseResponse(response, responseType) {
   if (!response.ok || payload?.ok === false) {
     throw buildRequestError({ response, payload, text, requestId });
   }
-  return payload;
+  // Preserve the server correlation id on successful JSON responses so a
+  // downstream contract fallback can log a sanitized diagnostic without
+  // copying customer or financial data into the log line.
+  return attachResponseRequestId(payload, requestId);
+}
+
+function attachResponseRequestId(payload, requestId) {
+  if (!requestId || !payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  if (payload.requestId != null || payload.request_id != null) return payload;
+  return { ...payload, requestId };
 }
 
 function buildRequestError({ response, payload, text, requestId }) {
@@ -178,7 +187,8 @@ function mergeHeaders(defaults = {}, provided = {}) {
 
 function parseMaybeJson(text, contentType) {
   if (!text) return null;
-  if (contentType.includes("application/json") || /^[\[{]/.test(text.trim())) {
+  const trimmed = text.trim();
+  if (contentType.includes("application/json") || trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       return JSON.parse(text);
     } catch {

@@ -144,7 +144,7 @@ export function useTaxDeductions({
       ]);
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") setOverview(overviewResult.value);
-        if (allTransactionsResult.status === "fulfilled") setAllTransactions(allTransactionsResult.value);
+        if (allTransactionsResult.status === "fulfilled") setAllTransactions(withTaxSnapshot(allTransactionsResult.value, request));
         if (coverageResult.status === "fulfilled") {
           setClassificationCoverage(coverageResult.value);
           setClassificationJobStatus(coverageResult.value?.jobStatus || null);
@@ -218,9 +218,9 @@ export function useTaxDeductions({
       getTaxClassifications({ businessId, year, limit: 200, offset: 0, refresh, signal }),
     ]);
     if (request !== seq.current) return null;
-    if (transactionsResult.status === "fulfilled") setTransactions(transactionsResult.value);
-    if (postedTransactionsResult.status === "fulfilled") setPostedTransactions(postedTransactionsResult.value);
-    if (classificationRowsResult.status === "fulfilled") setClassificationRows(classificationRowsResult.value);
+    if (transactionsResult.status === "fulfilled") setTransactions(withTaxSnapshot(transactionsResult.value, request));
+    if (postedTransactionsResult.status === "fulfilled") setPostedTransactions(withTaxSnapshot(postedTransactionsResult.value, request));
+    if (classificationRowsResult.status === "fulfilled") setClassificationRows(withTaxSnapshot(classificationRowsResult.value, request));
     const errors = collectResourceErrors({
       transactions: transactionsResult,
       postedTransactions: postedTransactionsResult,
@@ -552,6 +552,14 @@ function stableObject(value) {
     acc[key] = value[key];
     return acc;
   }, {});
+}
+
+// Primary classifications and posted-source rows are fetched independently.
+// Tag both with the same request sequence so a background refresh cannot join
+// fresh classifications to stale posted rows in the matrix.
+function withTaxSnapshot(value, snapshotId) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return { ...value, taxSnapshotId: snapshotId };
 }
 
 function updateDemoDeductionPage(page, transactionId, changes = {}) {

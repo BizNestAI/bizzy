@@ -22,6 +22,7 @@ export const TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES = Object.freeze({
 const OUTCOME_ORDER = Object.freeze(Object.values(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES));
 
 export function stableTaxTransactionIdentity(row = {}) {
+  row = taxRow(row);
   const value = firstValue(
     row.transactionId,
     row.transaction_id,
@@ -34,6 +35,7 @@ export function stableTaxTransactionIdentity(row = {}) {
 }
 
 export function taxScopeForDeductionsRow(row = {}) {
+  row = taxRow(row);
   return firstValue(
     row.taxScopeDisposition,
     row.tax_scope_disposition,
@@ -43,11 +45,13 @@ export function taxScopeForDeductionsRow(row = {}) {
 }
 
 export function isOutsideDeductionsScope(row = {}) {
+  row = taxRow(row);
   const scope = taxScopeForDeductionsRow(row);
   return Boolean(scope && scope !== "expense_cogs_in_matrix" && scope !== "incomplete_or_unresolved");
 }
 
 export function taxClassificationBucketForDeductions(row = {}) {
+  row = taxRow(row);
   const status = String(firstValue(row.status, row.classificationStatus, row.classification_status) || "").trim().toLowerCase();
   const treatment = String(firstValue(row.taxTreatment, row.deductibilityStatus) || "").trim().toLowerCase();
   const category = String(firstValue(row.taxCategory, row.tax_category, row.raw?.taxCategory, row.raw?.tax_category) || "").trim().toLowerCase();
@@ -66,6 +70,7 @@ export function taxClassificationBucketForDeductions(row = {}) {
 }
 
 export function hasStableTaxRuleEvidence(row = {}) {
+  row = taxRow(row);
   const source = String(firstValue(
     row.classificationSource,
     row.classification_source,
@@ -85,6 +90,7 @@ export function hasStableTaxRuleEvidence(row = {}) {
 }
 
 export function taxDecisionTypeForRow(row = {}) {
+  row = taxRow(row);
   if (isOutsideDeductionsScope(row) || taxScopeForDeductionsRow(row) !== "expense_cogs_in_matrix") return null;
   const category = String(firstValue(row.taxCategory, row.tax_category) || "").toLowerCase();
   const account = String(firstValue(row.qboAccountName, row.bookAccount, row.raw?.qboAccountName, row.raw?.source_qbo_account_name) || "").toLowerCase();
@@ -108,6 +114,7 @@ export function requiresCustomerTaxDecision(row = {}) {
 }
 
 export function isSupportedStandardRuleEstimate(row = {}) {
+  row = taxRow(row);
   if (taxClassificationBucketForDeductions(row) !== "needs_review") return false;
   if (taxScopeForDeductionsRow(row) !== "expense_cogs_in_matrix") return false;
   if (!hasStableTaxRuleEvidence(row) || requiresCustomerTaxDecision(row)) return false;
@@ -133,6 +140,7 @@ export function taxDeductionsLifecycleOutcomeForRow(row = {}) {
 }
 
 export function buildTaxDecisionIdentity({ businessId, taxYear, row = {}, decisionType = taxDecisionTypeForRow(row) } = {}) {
+  row = taxRow(row);
   const qboAccountId = firstValue(row.qboAccountId, row.raw?.qboAccountId, row.raw?.source_qbo_account_id, "unmapped");
   const ruleVersion = firstValue(row.ruleVersion, row.raw?.rule_version, row.raw?.classification?.rule_version, row.matchedRuleCode, row.ruleCode, row.taxTreatment, "unversioned");
   // Vehicle identity is conservatively the authoritative GL account until a
@@ -153,10 +161,11 @@ export function buildTaxDeductionsLifecycleProjection({ rows = [], businessId = 
   const canonical = new Map();
   const missingIdentityRows = [];
   const duplicateIdentityRows = [];
-  for (const row of rows || []) {
+  for (const rawRow of rows || []) {
+    const row = taxRow(rawRow);
     const id = stableTaxTransactionIdentity(row);
     if (!id) {
-      missingIdentityRows.push(row);
+      missingIdentityRows.push(rawRow);
       continue;
     }
     if (canonical.has(id)) {
@@ -206,6 +215,10 @@ export function buildTaxDeductionsLifecycleProjection({ rows = [], businessId = 
       isConserved: missingIdentityRows.length === 0 && duplicateIdentityRows.length === 0 && counted === entries.length,
     },
   };
+}
+
+function taxRow(row) {
+  return row != null && typeof row === "object" && !Array.isArray(row) ? row : {};
 }
 
 // The former dashboard combined coverage counters with source-snapshot

@@ -82,6 +82,7 @@ export function buildDeductionsWorkspaceViewModel({ overview, filters = {}, curr
 }
 
 export function mapDeductionTransactionRow(row = {}) {
+  row = normalizeDeductionTransactionInput(row);
   const transactionId = firstValue(row.transactionId, row.transaction_id, row.id);
   const classificationStatus = firstValue(row.classificationStatus, row.classification_status);
   const taxCategoryValue = firstValue(row.taxCategory, row.tax_category);
@@ -98,8 +99,13 @@ export function mapDeductionTransactionRow(row = {}) {
     !["unclassified", "unsupported"].includes(String(classificationStatus));
   const normalizedStatus = String(classificationStatus || "").toLowerCase();
   const hasManualOverrideAuthority = hasManualTaxOverrideAuthority(row);
-  const taxCategory = isTaxReviewHolding ? "tax_review_holding" : isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? taxCategoryValue || "unclassified" : "pending";
-  const taxTreatment = isTaxReviewHolding ? "not_yet_determined" : isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? deductibilityStatus || row.taxTreatment || row.tax_treatment || null : "pending_classification";
+  const treatmentUnavailable = row.taxDataUnavailable === true;
+  const taxCategory = treatmentUnavailable
+    ? null
+    : isTaxReviewHolding ? "tax_review_holding" : isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? taxCategoryValue || "unclassified" : "pending";
+  const taxTreatment = treatmentUnavailable
+    ? null
+    : isTaxReviewHolding ? "not_yet_determined" : isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? deductibilityStatus || row.taxTreatment || row.tax_treatment || null : "pending_classification";
   const authorityStatus = hasClassificationAuthority
     ? normalizedStatus
     : hasManualOverrideAuthority
@@ -118,9 +124,11 @@ export function mapDeductionTransactionRow(row = {}) {
     amount: absoluteAmount,
     signedAmount,
     taxCategory,
-    taxCategoryLabel: isTaxReviewHolding ? "Needs Tax Review" : isUnresolvedFallback ? "Unresolved" : hasClassificationAuthority ? labelizeTaxCategory(taxCategoryValue || "unclassified") : "Pending",
+    taxCategoryLabel: treatmentUnavailable ? "Tax treatment unavailable" : isTaxReviewHolding ? "Needs Tax Review" : isUnresolvedFallback ? "Unresolved" : hasClassificationAuthority ? labelizeTaxCategory(taxCategoryValue || "unclassified") : "Pending",
     taxTreatment,
-    taxTreatmentLabel: hasClassificationAuthority
+    taxTreatmentLabel: treatmentUnavailable
+      ? "Bookkeeping follow-up"
+      : hasClassificationAuthority
       ? TREATMENT_LABELS[deductibilityStatus] || TREATMENT_LABELS[row.taxTreatment] || labelize(deductibilityStatus || row.taxTreatment)
       : isUnresolvedFallback
         ? "Not determined"
@@ -136,6 +144,8 @@ export function mapDeductionTransactionRow(row = {}) {
     statusLabel: isTaxReviewHolding ? "Needs tax review" : isUnresolvedFallback ? "Needs classification" : authorityStatus ? STATUS_LABELS[authorityStatus] || labelize(authorityStatus) : "Unclassified",
     requiresReview: hasClassificationAuthority && (row.requiresReview === true || row.requires_review === true),
     warnings: normalizeList(row.warnings),
+    taxDataUnavailable: treatmentUnavailable,
+    taxDataReasonCode: row.taxDataReasonCode || null,
     raw: row,
   };
 }
@@ -147,7 +157,7 @@ function hasManualTaxOverrideAuthority(row = {}) {
 }
 
 function normalizeCategories(categories) {
-  return normalizeList(categories).map((category) => {
+  return normalizeList(categories).filter(isRecord).map((category) => {
     const needsReviewAmount = nullableNumber(category.needsReviewAmount);
     const estimated = nullableNumber(category.estimatedDeductibleAmount);
     const confirmed = nullableNumber(category.confirmedDeductibleAmount);
@@ -251,6 +261,36 @@ function nullableNumber(value) {
 
 function normalizeList(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function normalizeDeductionTransactionInput(row) {
+  if (!isRecord(row)) return unavailableTransactionRow("null_tax_record");
+  if (row.classification === null) return unavailableTransactionRow("null_transaction_tax_classification", row);
+  if (isRecord(row.classification)) {
+    const hasCategory = firstValue(row.taxCategory, row.tax_category, row.classification.taxCategory, row.classification.tax_category) != null;
+    const hasTreatment = firstValue(row.taxTreatment, row.tax_treatment, row.classification.taxTreatment, row.classification.tax_treatment) != null;
+    if (!hasCategory || !hasTreatment) return unavailableTransactionRow(hasCategory ? "missing_tax_treatment" : "missing_tax_category", row);
+  }
+  return row;
+}
+
+function unavailableTransactionRow(reasonCode, row = null) {
+  const source = isRecord(row) ? row : {};
+  return {
+    ...source,
+    taxCategory: source.taxCategory ?? source.tax_category ?? null,
+    taxTreatment: source.taxTreatment ?? source.tax_treatment ?? null,
+    deductibilityStatus: source.deductibilityStatus ?? source.deductibility_status ?? null,
+    classificationStatus: source.classificationStatus ?? source.classification_status ?? "unclassified",
+    status: source.status ?? "unclassified",
+    taxScopeDisposition: source.taxScopeDisposition ?? source.tax_scope_disposition ?? "incomplete_or_unresolved",
+    taxDataUnavailable: true,
+    taxDataReasonCode: source.taxDataReasonCode || reasonCode,
+  };
+}
+
+function isRecord(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function labelize(value) {

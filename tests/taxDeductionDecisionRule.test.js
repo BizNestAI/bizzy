@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import process from "node:process";
 import { test } from "node:test";
 import {
   TAX_DEDUCTION_DECISION_RULE_VERSION,
@@ -58,4 +60,21 @@ test("decision-rule DTO preserves its forward-looking tax treatment", () => {
   assert.equal(dto.accountName, "Gas");
   assert.equal(dto.taxTreatment, "vehicle_standard_mileage_no_separate_gas");
   assert.equal(dto.deductiblePercent, 0);
+});
+
+test("Tax backend route modules import with inert local configuration", () => {
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", [
+    'await import("./src/services/tax/taxDeductionsApi.service.js");',
+    'await import("./src/api/tax/taxClassificationReview.routes.js");',
+  ].join(" ")], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      SUPABASE_URL: "http://127.0.0.1:54321",
+      SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
+    },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });

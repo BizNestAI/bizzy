@@ -74,6 +74,8 @@ export async function updateTaxDeductionDecisionRule({ supabase, businessId, tax
 }
 
 export function buildTaxDeductionDecisionRule({ businessId, taxYear, accountName, classification = {}, input = {}, actor = {}, current = null } = {}) {
+  classification = classification && typeof classification === "object" ? classification : {};
+  input = input && typeof input === "object" ? input : {};
   const year = normalizeTaxYear(taxYear);
   const normalizedAccountName = String(accountName || "").trim();
   const accountKey = normalizeQboGlAccountKey(normalizedAccountName);
@@ -122,6 +124,7 @@ export function buildTaxDeductionDecisionRule({ businessId, taxYear, accountName
 }
 
 export function toTaxDeductionDecisionRule(row = {}) {
+  row = row && typeof row === "object" ? row : {};
   const accountName = String(row.bookkeeping_category || row.match_conditions?.qbo_account_name_keys?.[0] || "QuickBooks GL account");
   const treatment = normalizeTreatmentType(row.treatment) || "ordinary_expense";
   return {
@@ -139,6 +142,7 @@ export function toTaxDeductionDecisionRule(row = {}) {
 }
 
 function isExplicitTaxDeductionDecisionRule(row = {}) {
+  if (!row || typeof row !== "object") return false;
   if (row.version === TAX_DEDUCTION_DECISION_RULE_VERSION) return true;
   // Preserve real decisions written by the prior explicit-override workflow,
   // but never infer a decision from a classification status alone.

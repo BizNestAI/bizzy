@@ -259,12 +259,20 @@ export async function prefetchTaxDeductionTransactionPages({ businessId, year, a
 
 export async function getTaxDeductionTransactions({ businessId, year, asOfDate, filters = {}, limit, offset, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/deductions/transactions?${query({ businessId, year, asOfDate, limit: clampTaxDetailLimit(limit), offset, ...filters })}`, { signal, bypassCache: refresh }));
+  const payload = await cachedGet(`/api/tax/deductions/transactions?${query({ businessId, year, asOfDate, limit: clampTaxDetailLimit(limit), offset, ...filters })}`, { signal, bypassCache: refresh });
+  return normalizeTaxRowPage(unwrap(payload), {
+    source: "deduction_transactions",
+    requestId: taxRequestId(payload),
+  });
 }
 
 export async function getTaxPostedTransactions({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit, offset, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/transactions/posted?${query({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit: clampTaxDetailLimit(limit), offset })}`, { signal, bypassCache: refresh }));
+  const payload = await cachedGet(`/api/tax/transactions/posted?${query({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit: clampTaxDetailLimit(limit), offset })}`, { signal, bypassCache: refresh });
+  return normalizeTaxRowPage(unwrap(payload), {
+    source: "posted_transactions",
+    requestId: taxRequestId(payload),
+  });
 }
 
 export async function getTaxDeductionTransactionDetail({ businessId, year, transactionId, signal } = {}) {
@@ -312,7 +320,7 @@ export async function getTaxClassifications({
   signal,
 } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/classifications?${query({
+  const payload = await cachedGet(`/api/tax/classifications?${query({
     businessId,
     year,
     status,
@@ -322,7 +330,11 @@ export async function getTaxClassifications({
     search,
     limit: clampTaxDetailLimit(limit),
     offset,
-  })}`, { signal, bypassCache: refresh }));
+  })}`, { signal, bypassCache: refresh });
+  return normalizeTaxRowPage(unwrap(payload), {
+    source: "classifications",
+    requestId: taxRequestId(payload),
+  });
 }
 
 export async function getTaxClassificationReviewSummary({ businessId, year, refresh = false, signal } = {}) {
@@ -400,12 +412,15 @@ export async function overrideTaxClassification({ businessId, year, transactionI
 export async function getTaxDeductionDecisionRules({ businessId, year, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
   const params = query({ businessId, year });
-  const payload = unwrap(await cachedGet(`/api/tax/deduction-decision-rules?${params}`, {
+  const response = await cachedGet(`/api/tax/deduction-decision-rules?${params}`, {
     signal,
     cacheKey: key("deduction-decision-rules", params),
     bypassCache: refresh,
-  }));
-  return Array.isArray(payload?.rows) ? payload.rows : [];
+  });
+  const payload = unwrap(response);
+  return normalizeTaxDecisionRules(payload?.rows, {
+    requestId: taxRequestId(response) || taxRequestId(payload),
+  });
 }
 
 export async function saveTaxDeductionDecisionRule({ businessId, year, transactionId, changes = {}, decisionType, signal } = {}) {
@@ -808,6 +823,139 @@ function key(prefix, serializedParams) {
 
 function unwrap(payload) {
   return payload?.ok === true && "data" in payload ? payload.data : payload;
+}
+
+// These Tax endpoints deliberately return incomplete bookkeeping evidence while
+// a posted source row is waiting for classification. Keep that state visible to
+// the UI instead of treating it as a valid tax treatment or dropping the row.
+// This is also the single frontend boundary for malformed nullable list members.
+const reportedTaxContractFallbacks = new Set();
+
+export function normalizeTaxRowPage(payload, { source = "tax_rows", requestId = null } = {}) {
+  const page = isTaxRecord(payload) ? payload : {};
+  const rows = Array.isArray(page.rows) ? page.rows : [];
+  const normalizedRows = rows.map((row, index) => normalizeTaxRecord(row, {
+    source,
+    requestId: requestId || taxRequestId(page),
+    index,
+  }));
+  const unavailableRowCount = normalizedRows.filter((row) => row.taxDataUnavailable === true).length;
+  return {
+    ...page,
+    rows: normalizedRows,
+    pagination: isTaxRecord(page.pagination) ? { ...page.pagination } : page.pagination || null,
+    taxDataQuality: unavailableRowCount > 0
+      ? {
+        ...(isTaxRecord(page.taxDataQuality) ? page.taxDataQuality : {}),
+        unavailableRowCount,
+      }
+      : page.taxDataQuality,
+  };
+}
+
+export function normalizeTaxDecisionRules(rows, { requestId = null } = {}) {
+  return (Array.isArray(rows) ? rows : []).map((row, index) => {
+    if (isTaxRecord(row)) return row;
+    const reasonCode = "null_grouped_decision";
+    logTaxContractFallback(reasonCode, { requestId, source: "deduction_decision_rules" });
+    return {
+      id: null,
+      accountKey: `tax-rule-unavailable-${index}`,
+      accountName: "Tax treatment unavailable",
+      taxCategory: null,
+      deductibilityStatus: null,
+      deductiblePercent: null,
+      taxTreatment: null,
+      taxDataUnavailable: true,
+      taxDataReasonCode: reasonCode,
+      autoApplies: false,
+    };
+  });
+}
+
+export function normalizeTaxRecord(row, { source = "tax_rows", requestId = null, index = 0 } = {}) {
+  if (!isTaxRecord(row)) {
+    const reasonCode = "null_tax_record";
+    logTaxContractFallback(reasonCode, { requestId, source });
+    return unavailableTaxRecord({ reasonCode, source, index });
+  }
+
+  const classification = row.classification;
+  if (classification === null) {
+    const reasonCode = "null_transaction_tax_classification";
+    logTaxContractFallback(reasonCode, { requestId, source });
+    return unavailableTaxRecord({ row, reasonCode, source, index });
+  }
+
+  if (row.taxDataUnavailable === true) {
+    logTaxContractFallback(row.taxDataReasonCode || "tax_treatment_unavailable", { requestId, source });
+    return row;
+  }
+
+  if (isTaxRecord(classification)) {
+    const hasCategory = firstDefined(row.taxCategory, row.tax_category, classification.taxCategory, classification.tax_category) != null;
+    const hasTreatment = firstDefined(row.taxTreatment, row.tax_treatment, classification.taxTreatment, classification.tax_treatment) != null;
+    if (!hasCategory || !hasTreatment) {
+      const reasonCode = !hasCategory ? "missing_tax_category" : "missing_tax_treatment";
+      logTaxContractFallback(reasonCode, { requestId, source });
+      return unavailableTaxRecord({ row, reasonCode, source, index });
+    }
+  }
+
+  return row;
+}
+
+function unavailableTaxRecord({ row = null, reasonCode, source, index }) {
+  const sourceRow = isTaxRecord(row) ? row : {};
+  return {
+    ...sourceRow,
+    // Keep nullable treatment fields null: a UI fallback must never invent a
+    // tax category, percentage, or deduction amount.
+    taxCategory: sourceRow.taxCategory ?? sourceRow.tax_category ?? null,
+    taxTreatment: sourceRow.taxTreatment ?? sourceRow.tax_treatment ?? null,
+    deductibilityStatus: sourceRow.deductibilityStatus ?? sourceRow.deductibility_status ?? null,
+    classificationStatus: sourceRow.classificationStatus ?? sourceRow.classification_status ?? "unclassified",
+    status: sourceRow.status ?? "unclassified",
+    taxScopeDisposition: sourceRow.taxScopeDisposition ?? sourceRow.tax_scope_disposition ?? "incomplete_or_unresolved",
+    taxDataUnavailable: true,
+    taxDataReasonCode: reasonCode,
+    taxDataSource: source,
+    taxDataIndex: index,
+  };
+}
+
+function taxRequestId(payload) {
+  return sanitizeTaxRequestId(
+    payload?.requestId
+      ?? payload?.request_id
+      ?? payload?.meta?.requestId
+      ?? payload?.meta?.request_id
+      ?? payload?.data?.requestId
+      ?? payload?.data?.request_id
+      ?? null
+  );
+}
+
+function sanitizeTaxRequestId(value) {
+  const text = String(value || "").trim();
+  return text && /^[A-Za-z0-9._:-]{1,128}$/.test(text) ? text : null;
+}
+
+function logTaxContractFallback(reasonCode, { requestId = null, source = "tax_rows" } = {}) {
+  const safeRequestId = sanitizeTaxRequestId(requestId);
+  const key = `${reasonCode}:${source}:${safeRequestId || "none"}`;
+  if (reportedTaxContractFallbacks.has(key)) return;
+  reportedTaxContractFallbacks.add(key);
+  // Do not include a transaction, amount, business, or provider payload here.
+  console.warn("[TaxDataFallback]", { reasonCode, requestId: safeRequestId, source });
+}
+
+function firstDefined(...values) {
+  return values.find((value) => value != null);
+}
+
+function isTaxRecord(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function valueOrNull(result) {

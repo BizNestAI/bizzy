@@ -53,6 +53,16 @@ async function loadTaxDashboardInternals() {
             if (id !== "\0supabase-client-ssr-mock") return null;
             return "export const supabase = { auth: { getSession: async () => ({ data: { session: null }, error: null }) } }; export default supabase;";
           },
+        }, {
+          name: "deductions-workspace-demo-client-ssr-mock",
+          enforce: "pre",
+          resolveId(id) {
+            return /services\/demo\/demoClient(\.js)?$/.test(id) ? "\0demo-client-ssr-mock" : null;
+          },
+          load(id) {
+            if (id !== "\0demo-client-ssr-mock") return null;
+            return "export function shouldUseDemoData() { return false; }";
+          },
         }],
       });
       try {
@@ -1476,4 +1486,102 @@ test("annual deductions bank lookups stay below proxy request-line limits", () =
   assert.match(engine, /BANK_TRANSACTION_CHUNK_SIZE = 100/);
   assert.match(engine, /transactionIds\.slice\(i, i \+ BANK_TRANSACTION_CHUNK_SIZE\)/);
   assert.doesNotMatch(engine, /transactionIds\.slice\(i, i \+ 500\)/);
+});
+
+test("Tax workspace keeps null classification and missing treatment evidence visible", () => {
+  const nullClassification = mapDeductionTransactionRow({
+    transactionId: "null-classification",
+    classification: null,
+    date: "2026-10-01",
+    qboAccountId: "expense-1",
+    qboAccountName: "Meals",
+    absoluteAmount: 17,
+  });
+  const missingCategory = mapDeductionTransactionRow({
+    transactionId: "missing-category",
+    classification: { taxTreatment: "ordinary_expense" },
+    date: "2026-10-02",
+    qboAccountId: "expense-2",
+    qboAccountName: "Meals",
+    absoluteAmount: 18,
+  });
+  const missingTreatment = mapDeductionTransactionRow({
+    transactionId: "missing-treatment",
+    classification: { taxCategory: "business_meals" },
+    date: "2026-10-03",
+    qboAccountId: "expense-3",
+    qboAccountName: "Meals",
+    absoluteAmount: 19,
+  });
+  const unresolved = mapDeductionTransactionRow({
+    transactionId: "valid-unresolved",
+    classificationStatus: "needs_review",
+    taxCategory: "unclassified",
+    taxTreatment: "not_determined",
+    date: "2026-10-04",
+    qboAccountId: "expense-4",
+    qboAccountName: "Meals",
+    absoluteAmount: 20,
+  });
+
+  for (const row of [nullClassification, missingCategory, missingTreatment]) {
+    assert.equal(row.taxDataUnavailable, true);
+    assert.equal(row.taxCategory, null);
+    assert.equal(row.taxTreatment, null);
+    assert.equal(row.taxCategoryLabel, "Tax treatment unavailable");
+    assert.equal(row.taxTreatmentLabel, "Bookkeeping follow-up");
+  }
+  assert.equal(unresolved.taxDataUnavailable, false);
+  assert.equal(unresolved.taxCategory, "unresolved");
+  assert.equal(unresolved.taxTreatmentLabel, "Not determined");
+});
+
+test("Tax Dashboard does not combine mismatched refresh snapshots or crash on nullable rule state", async () => {
+  const {
+    DeductionDecisionRuleEditor,
+    DeductionDecisionRulesPanel,
+    TaxDashboardDeductions,
+    buildClassificationWorkspaceRows,
+  } = await loadTaxDashboardInternals();
+  const workspaceRows = buildClassificationWorkspaceRows({
+    allTransactions: {
+      taxSnapshotId: 2,
+      rows: [{
+        transactionId: "fresh-classification",
+        date: "2026-10-12",
+        qboAccountId: "meals-id",
+        qboAccountName: "Meals",
+        absoluteAmount: 24,
+        taxCategory: "business_meals",
+        taxTreatment: "ordinary_expense",
+        classificationStatus: "auto_classified",
+        taxScopeDisposition: "expense_cogs_in_matrix",
+      }],
+    },
+    postedTransactions: {
+      taxSnapshotId: 1,
+      rows: [{ transactionId: "stale-posted", transactionDate: "2026-10-12", qboAccountId: "meals-id", qboAccountName: "Meals", absoluteAmount: 99 }],
+    },
+    isDemo: false,
+  });
+  assert.equal(workspaceRows.length, 1);
+  assert.equal(workspaceRows[0].id, "fresh-classification");
+
+  assert.doesNotThrow(() => renderToStaticMarkup(React.createElement(DeductionDecisionRuleEditor, {
+    rule: null,
+    readOnly: true,
+    onClose: () => {},
+    onSave: async () => {},
+  })));
+  const rulesHtml = renderToStaticMarkup(React.createElement(DeductionDecisionRulesPanel, {
+    rules: [null],
+    readOnly: true,
+    onChangeRule: () => {},
+  }));
+  assert.match(rulesHtml, /Tax treatment unavailable/);
+  assert.doesNotThrow(() => renderToStaticMarkup(React.createElement(TaxDashboardDeductions, {
+    businessId: null,
+    year: 2026,
+    readOnly: true,
+  })));
 });

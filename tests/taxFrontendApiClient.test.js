@@ -84,6 +84,17 @@ test("authenticatedFetch parses canonical and transitional errors without token 
   );
 });
 
+test("authenticatedFetch retains a successful server request id for safe client diagnostics", async () => {
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: null } }) } },
+    fetchImpl: async () => jsonResponse({ ok: true, data: { rows: [] } }, { headers: { "x-request-id": "tax-request-42" } }),
+  });
+  const result = await authMod.authenticatedFetch("/api/tax/deductions/transactions");
+  assert.equal(result.requestId, "tax-request-42");
+  assert.deepEqual(result.data, { rows: [] });
+});
+
 test("authenticatedFetch supports AbortSignal and blob exports", async () => {
   authMod.__setAuthenticatedFetchTestDeps({
     getApiBase: () => "https://api.example.test",
@@ -245,6 +256,67 @@ test("normalizeTaxOverview preserves nulls, zeros, unavailable, arrays, and part
   assert.equal(data.reserve.reserveBalance, null);
   assert.deepEqual(data.warnings, []);
   assert.deepEqual(data.assumptions, []);
+});
+
+test("Tax API boundary preserves nullable classification evidence with bounded states", () => {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const page = taxClient.normalizeTaxRowPage({
+      requestId: "request-tax-null-safe-1",
+      rows: [
+        { transactionId: "null-classification", amount: 17, classification: null },
+        { transactionId: "missing-category", amount: 18, classification: { taxTreatment: "ordinary_expense" } },
+        { transactionId: "missing-treatment", amount: 19, classification: { taxCategory: "business_meals" } },
+        { transactionId: "valid-unresolved", amount: 20, classificationStatus: "needs_review", taxCategory: "unclassified", taxTreatment: "not_determined" },
+      ],
+    }, { source: "deduction_transactions" });
+
+    assert.equal(page.rows.length, 4);
+    assert.equal(page.rows[0].transactionId, "null-classification");
+    assert.equal(page.rows[0].taxCategory, null);
+    assert.equal(page.rows[0].taxTreatment, null);
+    assert.equal(page.rows[0].taxDataReasonCode, "null_transaction_tax_classification");
+    assert.equal(page.rows[1].taxDataReasonCode, "missing_tax_category");
+    assert.equal(page.rows[2].taxDataReasonCode, "missing_tax_treatment");
+    assert.equal(page.rows[3].taxDataUnavailable, undefined);
+    assert.equal(page.taxDataQuality.unavailableRowCount, 3);
+    assert.deepEqual(warnings[0], ["[TaxDataFallback]", {
+      reasonCode: "null_transaction_tax_classification",
+      requestId: "request-tax-null-safe-1",
+      source: "deduction_transactions",
+    }]);
+
+    const rules = taxClient.normalizeTaxDecisionRules([null, {
+      id: "real-rule",
+      accountKey: "meals",
+      accountName: "Meals",
+      taxCategory: "business_meals",
+    }], { requestId: "request-tax-null-safe-1" });
+    assert.equal(rules.length, 2);
+    assert.equal(rules[0].taxDataReasonCode, "null_grouped_decision");
+    assert.equal(rules[0].accountName, "Tax treatment unavailable");
+    assert.equal(rules[1].id, "real-rule");
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("Tax API boundary preserves a malformed member among hundreds", () => {
+  const rows = Array.from({ length: 300 }, (_, index) => ({
+    transactionId: `row-${index}`,
+    taxCategory: "office_expense",
+    taxTreatment: "ordinary_expense",
+    classificationStatus: "auto_classified",
+  }));
+  rows[157] = null;
+  const page = taxClient.normalizeTaxRowPage({ rows }, { source: "classifications" });
+  assert.equal(page.rows.length, 300);
+  assert.equal(page.rows[156].transactionId, "row-156");
+  assert.equal(page.rows[157].taxDataReasonCode, "null_tax_record");
+  assert.equal(page.rows[158].transactionId, "row-158");
+  assert.equal(page.taxDataQuality.unavailableRowCount, 1);
 });
 
 test("active Tax compatibility hooks do not scan tokens or write tax tables directly", () => {

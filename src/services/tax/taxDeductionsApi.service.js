@@ -198,21 +198,36 @@ function normalizeRpcDrilldownPayload(data, { limit, offset }) {
 }
 
 function normalizeRpcTransactionRow(row) {
-  const holding = row.classificationStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW || row.taxCategory === "tax_review_holding";
+  const sourceRow = row && typeof row === "object" && !Array.isArray(row) ? row : {};
+  // RPC drilldowns are an integration boundary. Preserve a malformed member as
+  // a visible, incomplete-evidence row rather than allowing a single member to
+  // make the Tax client crash while it renders the rest of the response.
+  const isUnavailable = sourceRow !== row;
+  const holding = sourceRow.classificationStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW || sourceRow.taxCategory === "tax_review_holding";
   return {
-    ...row,
-    date: normalizeDateOnly(row.date) || row.date,
-    signedAmount: Number(row.signedAmount || 0),
-    absoluteAmount: Number(row.absoluteAmount || Math.abs(Number(row.signedAmount || 0))),
-    deductiblePercent: holding ? null : nullableNumber(row.deductiblePercent),
-    deductibleAmount: holding ? null : nullableNumber(row.deductibleAmount),
-    nondeductibleAmount: holding ? null : nullableNumber(row.nondeductibleAmount),
-    capitalizableAmount: holding ? null : nullableNumber(row.capitalizableAmount),
-    confidenceScore: row.confidenceScore == null ? null : Number(row.confidenceScore),
-    warnings: Array.isArray(row.warnings) ? row.warnings : [],
-    requiresReview: row.requiresReview === true,
-    override: row.override || { hasOverride: false, source: null, lastChangedAt: null },
-    rule: row.rule || { id: null, code: null, explanation: null, supportLevel: null },
+    ...sourceRow,
+    date: normalizeDateOnly(sourceRow.date) || sourceRow.date || null,
+    signedAmount: Number(sourceRow.signedAmount || 0),
+    absoluteAmount: Number(sourceRow.absoluteAmount || Math.abs(Number(sourceRow.signedAmount || 0))),
+    deductiblePercent: holding || isUnavailable ? null : nullableNumber(sourceRow.deductiblePercent),
+    deductibleAmount: holding || isUnavailable ? null : nullableNumber(sourceRow.deductibleAmount),
+    nondeductibleAmount: holding || isUnavailable ? null : nullableNumber(sourceRow.nondeductibleAmount),
+    capitalizableAmount: holding || isUnavailable ? null : nullableNumber(sourceRow.capitalizableAmount),
+    confidenceScore: sourceRow.confidenceScore == null ? null : Number(sourceRow.confidenceScore),
+    warnings: Array.isArray(sourceRow.warnings) ? sourceRow.warnings : [],
+    requiresReview: sourceRow.requiresReview === true,
+    override: sourceRow.override || { hasOverride: false, source: null, lastChangedAt: null },
+    rule: sourceRow.rule || { id: null, code: null, explanation: null, supportLevel: null },
+    ...(isUnavailable
+      ? {
+          taxCategory: null,
+          taxTreatment: null,
+          classificationStatus: "unclassified",
+          taxScopeDisposition: "incomplete_or_unresolved",
+          taxDataUnavailable: true,
+          taxDataReasonCode: "null_tax_record",
+        }
+      : {}),
   };
 }
 

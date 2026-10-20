@@ -889,6 +889,7 @@ function WorkspaceViewTabs({ value, onChange }) {
 }
 
 function DeductionDecisionRulesPanel({ rules = [], readOnly, onChangeRule }) {
+  const visibleRules = normalizeDecisionRules(rules);
   return (
     <section className="mt-4 rounded-2xl border border-emerald-300/14 bg-emerald-300/[0.035] px-3 py-3 sm:px-4" aria-labelledby="deduction-rules-heading">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
@@ -898,9 +899,9 @@ function DeductionDecisionRulesPanel({ rules = [], readOnly, onChangeRule }) {
         </div>
         <div className="text-[11px] font-medium text-emerald-100/58">Company-specific</div>
       </div>
-      {rules.length ? (
+      {visibleRules.length ? (
         <div className="mt-3 grid gap-2 xl:grid-cols-2">
-          {rules.map((rule) => (
+          {visibleRules.map((rule) => (
             <div key={rule.id || rule.accountKey} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-emerald-200/10 bg-black/15 px-3 py-2.5">
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-white/86">{rule.accountName}</div>
@@ -929,7 +930,6 @@ function DeductionDecisionRuleEditor({ rule, readOnly, onClose, onSave }) {
   const [vehicleMethod, setVehicleMethod] = useState("actual_expense");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const isVehicle = isVehicleDeductionRule(rule);
 
   useEffect(() => {
     setPercent(rule?.deductiblePercent == null ? "" : String(rule.deductiblePercent));
@@ -940,6 +940,7 @@ function DeductionDecisionRuleEditor({ rule, readOnly, onClose, onSave }) {
 
   if (!rule) return null;
   if (typeof document === "undefined") return null;
+  const isVehicle = isVehicleDeductionRule(rule);
   const numericPercent = Number(percent);
   const percentValid = Number.isFinite(numericPercent) && numericPercent >= 0 && numericPercent <= 100;
   const canSave = !readOnly && (vehicleMethod === "standard_mileage" || percentValid);
@@ -1001,25 +1002,47 @@ function DeductionDecisionRuleEditor({ rule, readOnly, onClose, onSave }) {
 }
 
 function enrichDeductionDecisionRules(rules = [], workspaceRows = []) {
-  const accountNames = new Map(workspaceRows.map((row) => [String(row.qboAccountName || "").toLowerCase(), row.qboAccountName]).filter(([key]) => key));
-  return (Array.isArray(rules) ? rules : []).map((rule) => ({
+  const accountNames = new Map(normalizeRows(workspaceRows)
+    .filter(isTaxRecord)
+    .map((row) => [String(row.qboAccountName || "").toLowerCase(), row.qboAccountName])
+    .filter(([key]) => key));
+  return normalizeDecisionRules(rules).map((rule) => ({
     ...rule,
     accountName: accountNames.get(String(rule.accountName || "").toLowerCase()) || rule.accountName,
   }));
 }
 
-function isVehicleDeductionRule(rule = {}) {
-  return String(rule.taxCategory || "").includes("vehicle") || String(rule.taxTreatment || "").startsWith("vehicle_");
+function normalizeDecisionRules(rules) {
+  return normalizeRows(rules).map((rule, index) => {
+    if (isTaxRecord(rule)) return rule;
+    return {
+      id: null,
+      accountKey: `tax-rule-unavailable-${index}`,
+      accountName: "Tax treatment unavailable",
+      taxCategory: null,
+      taxTreatment: null,
+      deductiblePercent: null,
+      taxDataUnavailable: true,
+      taxDataReasonCode: "null_grouped_decision",
+    };
+  });
+}
+
+function isVehicleDeductionRule(rule) {
+  const safeRule = isTaxRecord(rule) ? rule : {};
+  return String(safeRule.taxCategory || "").includes("vehicle") || String(safeRule.taxTreatment || "").startsWith("vehicle_");
 }
 
 function deductionStatusForPercent(percent) {
   return Number(percent) >= 100 ? "fully_deductible" : Number(percent) <= 0 ? "nondeductible" : "partially_deductible";
 }
 
-function deductionRuleSummary(rule = {}) {
-  if (String(rule.taxTreatment || "").includes("standard_mileage")) return "Standard mileage · gas not deducted separately";
-  if (String(rule.taxTreatment || "").includes("actual_expense")) return `${formatDeductiblePercent(rule.deductiblePercent)} business use · actual vehicle expenses`;
-  return `${formatDeductiblePercent(rule.deductiblePercent)} deductible · ${formatTaxCategoryLabel(rule.taxCategory)}`;
+function deductionRuleSummary(rule) {
+  const safeRule = isTaxRecord(rule) ? rule : {};
+  if (safeRule.taxDataUnavailable) return "Tax treatment unavailable · bookkeeping follow-up";
+  if (String(safeRule.taxTreatment || "").includes("standard_mileage")) return "Standard mileage · gas not deducted separately";
+  if (String(safeRule.taxTreatment || "").includes("actual_expense")) return `${formatDeductiblePercent(safeRule.deductiblePercent)} business use · actual vehicle expenses`;
+  return `${formatDeductiblePercent(safeRule.deductiblePercent)} deductible · ${formatTaxCategoryLabel(safeRule.taxCategory)}`;
 }
 
 function FilterTabButton({ tab, selected, count = null, onClick }) {
@@ -1350,12 +1373,13 @@ function matrixZeroTreatmentLabel(row) {
 }
 
 function AttentionReviewGroups({ groups, year, readOnly, onOpenDecision }) {
-  if (!groups.length) return null;
+  const visibleGroups = normalizeRows(groups).filter(isTaxRecord);
+  if (!visibleGroups.length) return null;
   return (
     <div className="border-b border-white/[0.08] px-3 py-3">
-      {groups.length ? (
+      {visibleGroups.length ? (
         <div className="grid gap-2 xl:grid-cols-2">
-          {groups.map((group) => (
+          {visibleGroups.map((group) => (
           <div key={group.key} className="rounded-2xl border border-amber-300/12 bg-amber-300/[0.035] p-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
@@ -1409,9 +1433,9 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
 
   if (!decision?.group) return null;
   const { group } = decision;
-  const rows = group.rows;
+  const rows = normalizeRows(group.rows).filter(isTaxRecord);
   const selectedRows = rows.filter((row) => !exceptionIds.includes(row.id));
-  const action = group.decision;
+  const action = isTaxRecord(group.decision) ? group.decision : reviewDecisionForType(group.decisionType);
   const requiresPercent = action.kind === "business_use_percent" || (action.kind === "utility_allocation" && !dedicatedPremises);
   const hasPercentInput = dedicatedPremises || String(businessUsePercent).trim() !== "";
   const percentValue = dedicatedPremises ? 100 : Number(businessUsePercent);
@@ -2018,7 +2042,10 @@ function buildClassificationWorkspaceRows(deductions) {
     if (rowId) classifiedById.set(String(rowId), row);
   }
   const postedRows = normalizeRows(deductions.postedTransactions?.rows);
-  const rows = postedRows.length
+  const primarySnapshotId = deductions.allTransactions?.taxSnapshotId ?? deductions.transactions?.taxSnapshotId ?? null;
+  const postedSnapshotId = deductions.postedTransactions?.taxSnapshotId ?? null;
+  const canJoinPostedRows = postedRows.length > 0 && (deductions.isDemo === true || (primarySnapshotId != null && primarySnapshotId === postedSnapshotId));
+  const rows = canJoinPostedRows
     ? postedRows.map((row) => mapPostedTransactionForDeductionPreview(row, classifiedById.get(String(row.transactionId || row.id))))
     : classifiedRows;
   return rows.map(normalizeClassificationWorkspaceRow).filter(Boolean);
@@ -2091,12 +2118,15 @@ function customerDeductionsStatusMessage(summary = {}, workflow = {}) {
 function normalizeClassificationWorkspaceRow(row) {
   if (!row) return null;
   const bucket = classificationBucket(row);
+  const treatmentUnavailable = row.taxDataUnavailable === true;
   return {
     ...row,
     vendor: safeText(row.vendor || row.description, "Unknown vendor"),
     description: safeText(row.description, ""),
     qboAccountName: safeText(row.qboAccountName || row.bookAccount, "Unmapped QuickBooks account"),
-    taxCategoryLabel: safeText(row.taxCategoryLabel || formatTaxCategoryLabel(row.taxCategory), bucket === "unclassified" ? "Unclassified" : "Tax category pending"),
+    taxCategoryLabel: treatmentUnavailable
+      ? "Tax treatment unavailable"
+      : safeText(row.taxCategoryLabel || formatTaxCategoryLabel(row.taxCategory), bucket === "unclassified" ? "Unclassified" : "Tax category pending"),
     deductibilityLabel: deductibilityLabel(row),
     deductiblePercentLabel: deductiblePercentLabel(row),
     classificationSourceLabel: classificationSourceLabel(row),
@@ -2120,9 +2150,9 @@ function filterAttentionWorkspaceRows(rows, tab) {
 }
 
 function buildAttentionReviewGroups(rows = [], { lifecycleProjection = null } = {}) {
-  if (lifecycleProjection) return lifecycleProjection.activeDecisionGroups.map(toDecisionActionGroup);
+  if (lifecycleProjection) return normalizeRows(lifecycleProjection.activeDecisionGroups).filter(isTaxRecord).map(toDecisionActionGroup);
   const groups = new Map();
-  for (const row of rows) {
+  for (const row of normalizeRows(rows).filter(isTaxRecord)) {
     if (!requiresCustomerTaxInput(row) || hasManualClassificationAuthority(row)) continue;
     const decision = reviewDecisionForRow(row);
     const qboAccountName = safeText(row.qboAccountName || row.bookAccount, "Unmapped QuickBooks account");
@@ -2154,26 +2184,30 @@ function buildAttentionReviewGroups(rows = [], { lifecycleProjection = null } = 
     .sort((a, b) => b.transactionCount - a.transactionCount || a.qboAccountName.localeCompare(b.qboAccountName));
 }
 
-function toDecisionActionGroup(group = {}) {
-  const rows = group.pendingRows?.length ? group.pendingRows : (group.reviewedRows?.length ? group.reviewedRows : group.rows || []);
+function toDecisionActionGroup(group) {
+  const safeGroup = isTaxRecord(group) ? group : {};
+  const pendingRows = normalizeRows(safeGroup.pendingRows).filter(isTaxRecord);
+  const reviewedRows = normalizeRows(safeGroup.reviewedRows).filter(isTaxRecord);
+  const allRows = normalizeRows(safeGroup.rows).filter(isTaxRecord);
+  const rows = pendingRows.length ? pendingRows : (reviewedRows.length ? reviewedRows : allRows);
   const row = rows[0] || {};
-  const decision = reviewDecisionForType(group.decisionType, { completed: group.pendingCount === 0 });
-  const deductiblePercent = group.currentDeductiblePercent ?? row.deductiblePercent ?? null;
+  const decision = reviewDecisionForType(safeGroup.decisionType, { completed: safeGroup.pendingCount === 0 });
+  const deductiblePercent = safeGroup.currentDeductiblePercent ?? row.deductiblePercent ?? null;
   return {
-    ...group,
-    key: group.id,
+    ...safeGroup,
+    key: safeGroup.id,
     rows,
-    allRows: group.rows || rows,
+    allRows: allRows.length ? allRows : rows,
     decision,
     actionLabel: decision.actionLabel,
     blockedReason: decision.blockedReason,
     canApply: decision.canApply,
     taxCategoryLabel: row.taxCategoryLabel || formatTaxCategoryLabel(row.taxCategory),
-    grossTotal: group.grossAmount ?? rows.reduce((sum, item) => sum + normalizeMoney(item.amount), 0),
-    proposedDeductibleTotal: group.estimatedDeductibleAmount ?? rows.reduce((sum, item) => sum + normalizeMoney(resolveDeductibleAmount(item)), 0),
+    grossTotal: safeGroup.grossAmount ?? rows.reduce((sum, item) => sum + normalizeMoney(item.amount), 0),
+    proposedDeductibleTotal: safeGroup.estimatedDeductibleAmount ?? rows.reduce((sum, item) => sum + normalizeMoney(resolveDeductibleAmount(item)), 0),
     deductiblePercent,
-    transactionCount: group.transactionCount ?? rows.length,
-    completed: group.pendingCount === 0 && group.reviewedCount > 0,
+    transactionCount: safeGroup.transactionCount ?? rows.length,
+    completed: safeGroup.pendingCount === 0 && safeGroup.reviewedCount > 0,
   };
 }
 
@@ -2246,11 +2280,12 @@ function hasManualClassificationAuthority(row) {
 }
 
 function buildReviewDecisionChanges({ group, businessUsePercent, dedicatedPremises }) {
-  const row = group.rows[0] || {};
-  if (group.decision.kind === "vehicle_method") {
+  const safeGroup = isTaxRecord(group) ? group : {};
+  const row = isTaxRecord(safeGroup.rows?.[0]) ? safeGroup.rows[0] : {};
+  if (safeGroup.decision?.kind === "vehicle_method") {
     throw new Error("Vehicle expenses require a vehicle-method workflow.");
   }
-  if (group.decision.kind === "business_use_percent" || group.decision.kind === "utility_allocation") {
+  if (safeGroup.decision?.kind === "business_use_percent" || safeGroup.decision?.kind === "utility_allocation") {
     const percent = dedicatedPremises ? 100 : Number(businessUsePercent);
     if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
       throw new Error("Business-use percentage must be between 0 and 100.");
@@ -2305,6 +2340,10 @@ function formatRelativeRefreshTime(value) {
 
 function normalizeRows(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function isTaxRecord(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function classificationBucket(row) {
@@ -2370,6 +2409,7 @@ function isStandardMileageGasRow(row) {
 }
 
 function deductibilityLabel(row) {
+  if (row?.taxDataUnavailable === true) return "Bookkeeping follow-up";
   if (classificationBucket(row) === "outside_deductions") return "Not a deduction";
   if (classificationBucket(row) === "technical_evidence_incomplete") return "Bookkeeping evidence needed";
   if (classificationBucket(row) === "unclassified") {
@@ -2403,6 +2443,7 @@ function deductiblePercentLabel(row) {
 }
 
 function classificationSourceLabel(row) {
+  row = isTaxRecord(row) ? row : {};
   const source = safeText(firstValue(
     row.classificationSource,
     row.classification_source,
@@ -2476,7 +2517,7 @@ function DeductionMonthDetailModal({
   const account = useMemo(() => selection?.account || {}, [selection?.account]);
   const month = useMemo(() => selection?.month || {}, [selection?.month]);
   const cell = useMemo(() => selection?.cell || { transactions: [] }, [selection?.cell]);
-  const transactions = useMemo(() => Array.isArray(cell.transactions) ? cell.transactions : [], [cell]);
+  const transactions = useMemo(() => normalizeRows(cell.transactions).filter(isTaxRecord), [cell]);
   const aggregateStatus = useMemo(() => aggregateClassificationStatus(transactions), [transactions]);
   const reviewContext = useMemo(() => detailReviewContextForSelection(selection), [selection]);
   const hasSelection = Boolean(selection);
@@ -4098,8 +4139,10 @@ function DeductionDetailAmount({ label, value, tone = "neutral", fallback = null
 }
 
 function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
+  row = isTaxRecord(row) ? row : {};
   const signedAmount = normalizeMoney(row.signedAmount);
   const absoluteAmount = normalizeMoney(row.absoluteAmount ?? Math.abs(signedAmount || normalizeMoney(row.amount)));
+  const treatmentUnavailable = classified?.taxDataUnavailable === true || row.taxDataUnavailable === true;
   return {
     id: row.transactionId,
     date: row.transactionDate || row.date || null,
@@ -4117,10 +4160,10 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
     amount: absoluteAmount,
     signedAmount,
     direction: row.direction || (signedAmount < 0 ? "OUTFLOW" : "INFLOW"),
-    taxCategory: classified?.taxCategory || "pending",
-    taxCategoryLabel: classified?.taxCategoryLabel || "Pending",
-    taxTreatment: classified?.taxTreatment || "pending_classification",
-    taxTreatmentLabel: classified?.taxTreatmentLabel || "Pending classification",
+    taxCategory: treatmentUnavailable ? null : (classified?.taxCategory || "pending"),
+    taxCategoryLabel: treatmentUnavailable ? "Tax treatment unavailable" : (classified?.taxCategoryLabel || "Pending"),
+    taxTreatment: treatmentUnavailable ? null : (classified?.taxTreatment || "pending_classification"),
+    taxTreatmentLabel: treatmentUnavailable ? "Bookkeeping follow-up" : (classified?.taxTreatmentLabel || "Pending classification"),
     deductiblePercent: classified?.deductiblePercent ?? null,
     deductibleAmount: classified?.deductibleAmount ?? null,
     confidenceScore: classified?.confidenceScore ?? null,
@@ -4132,6 +4175,8 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
     statusLabel: classified?.statusLabel || "Unclassified",
     requiresReview: classified ? classified.requiresReview === true : false,
     warnings: classified?.warnings || row.sourceWarnings || [],
+    taxDataUnavailable: treatmentUnavailable,
+    taxDataReasonCode: classified?.taxDataReasonCode || row.taxDataReasonCode || null,
     raw: { ...row, classification: classified?.raw || null },
   };
 }
@@ -4172,7 +4217,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
   }]));
   const accountMap = new Map();
 
-  for (const row of rows) {
+  for (const row of normalizeRows(rows).filter(isTaxRecord)) {
     const monthKey = getTransactionMonthKey(row.date, year);
     if (!monthKey) continue;
     if (!isDemo && row.taxScopeDisposition && row.taxScopeDisposition !== "expense_cogs_in_matrix") continue;
@@ -4541,8 +4586,12 @@ function parseLocalDate(value) {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const __TaxDashboardTestInternals = {
+  DeductionDecisionRuleEditor,
+  DeductionDecisionRulesPanel,
   DeductionMonthDetailModal,
+  TaxDashboardDeductions,
   buildDeductionAccountMatrix,
+  buildClassificationWorkspaceRows,
   buildCustomerDeductionsWorkflow,
   buildAttentionReviewGroups,
   findDecisionGroupForRows,
