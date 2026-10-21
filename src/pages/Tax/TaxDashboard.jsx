@@ -1433,8 +1433,15 @@ function formatMonthKey(monthKey) {
 }
 
 function DeductionAccountMatrix({ matrix, onSelectCell, onOpenDecision, decisionGroups = [] }) {
+  const includedTransactionCount = Number(matrix?.transactionCount || 0);
   return (
     <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] px-3 py-2 text-xs">
+        <span className="font-semibold text-white/62">Monthly deductions</span>
+        <span className="text-white/52" aria-live="polite">
+          {includedTransactionCount} expense transaction{includedTransactionCount === 1 ? "" : "s"} included
+        </span>
+      </div>
       {matrix.accounts.length ? (
         <div className="max-w-full overflow-x-auto">
           <table className="min-w-[1120px] border-collapse text-sm">

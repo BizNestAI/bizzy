@@ -703,6 +703,9 @@ test("Tax matrix launch labels retain accessible details and grouped decision na
   assert.match(dashboard, /Blue: Estimated/);
   assert.match(dashboard, /Green: Reviewed/);
   assert.match(dashboard, /Yellow: Needs input/);
+  assert.match(dashboard, /const includedTransactionCount = Number\(matrix\?\.transactionCount \|\| 0\);/);
+  assert.match(dashboard, /Monthly deductions/);
+  assert.match(dashboard, /expense transaction\{includedTransactionCount === 1 \? "" : "s"\} included/);
   assert.match(dashboard, /<th[^>]*>Expense category<\/th>/);
   assert.match(dashboard, /role="img" aria-label="No activity">—<\/span>/);
   assert.match(dashboard, /const groupedCustomerInput = isSingleDecisionGroupForRows/);
@@ -760,6 +763,7 @@ test("Deduction matrix keeps user-confirmed May Meals in the May confirmed cell"
   assert.equal(meals.authoritativeDeductibleTotal, 173);
   assert.equal(meals.proposedDeductibleTotal, 0);
   assert.equal(meals.userConfirmedTransactionCount, 1);
+  assert.equal(confirmedMatrix.transactionCount, 1);
   assert.equal(meals.months["2026-06"].authoritativeDeductibleTotal, 0);
 });
 
