@@ -3,6 +3,7 @@ import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { buildMockTaxFixture } from "../../services/demo/mockTaxFixture.js";
 import { resolveScopedDeductionsRequestStatus } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import {
+  applyGroupedTaxDeductionDecision,
   bulkUpdateTaxClassifications,
   confirmTaxClassification,
   excludeTaxClassification,
@@ -14,6 +15,7 @@ import {
   getTaxClassifications,
   getTaxDeductionDecisionRules,
   getTaxDeductionCategoryDetail,
+  getGroupedTaxDeductionDecisionOperation,
   getTaxDeductionTransactionDetail,
   getTaxDeductionTransactions,
   getTaxDeductionsOverview,
@@ -80,6 +82,30 @@ export function useTaxDeductions({
   const shouldPollClassification = isActiveClassificationStatus(
     classificationJobStatus?.status || classificationCoverage?.jobStatus?.status || classificationCoverage?.classificationStatus
   );
+
+  // A completed grouped decision changes one bounded category/account scope,
+  // but the question summary is a cross-workspace authority. Refresh just that
+  // summary after the command is confirmed; do not optimistically clear other
+  // question groups or replace the annual matrix with mixed-age resources.
+  const refreshAuthoritativeQuestionSummary = useCallback(async ({ signal } = {}) => {
+    if (isDemo || !businessId) return { status: "not_applicable", summary: null };
+    const request = seq.current;
+    try {
+      const summary = await getTaxClassificationReviewSummary({ businessId, year, refresh: true, signal });
+      if (request !== seq.current) return { status: "superseded", summary: null };
+      setClassificationReviewSummary(summary);
+      setResourceErrors((current) => ({ ...(current || {}), classificationReviewSummary: null }));
+      return { status: "updated", summary };
+    } catch (summaryError) {
+      // The committed command remains authoritative even when this read-only
+      // refresh is unavailable. Keep the prior summary visible and clearly
+      // mark it stale instead of hiding unrelated questions.
+      if (request === seq.current) {
+        setResourceErrors((current) => ({ ...(current || {}), classificationReviewSummary: summaryError }));
+      }
+      return { status: "stale", summary: null };
+    }
+  }, [businessId, isDemo, year]);
 
   useEffect(() => {
     if (isDemo) return;
@@ -418,6 +444,56 @@ export function useTaxDeductions({
       if (options.skipReload !== true) await load();
       return result;
     },
+    // A grouped customer decision is committed by one idempotent server command.
+    // Patch only the returned scoped rows locally: a full-year reload here can
+    // combine a fresh rule response with an older workspace projection and
+    // incorrectly hide unrelated questions.
+    applyGroupedDeductionDecision: async ({
+      idempotencyKey,
+      scope,
+      scopeFingerprint,
+      targetTransactionIds,
+      expectedPopulationTransactionIds,
+      changes = {},
+      reason,
+      signal,
+    } = {}) => {
+      const result = await applyGroupedTaxDeductionDecision({
+        businessId,
+        year,
+        idempotencyKey,
+        scope,
+        scopeFingerprint,
+        targetTransactionIds,
+        expectedPopulationTransactionIds,
+        changes,
+        reason,
+        signal,
+      });
+      applyGroupedDecisionResult({
+        result,
+        setTransactions,
+        setAllTransactions,
+        setClassificationRows,
+        setDecisionRules,
+      });
+      const questionSummary = await refreshAuthoritativeQuestionSummary({ signal });
+      return { ...result, questionSummary };
+    },
+    getGroupedDeductionDecisionOperation: async ({ idempotencyKey, signal } = {}) => {
+      const operation = await getGroupedTaxDeductionDecisionOperation({ businessId, year, idempotencyKey, signal });
+      if (operation?.status === "completed" && operation?.result) {
+        applyGroupedDecisionResult({
+          result: operation.result,
+          setTransactions,
+          setAllTransactions,
+          setClassificationRows,
+          setDecisionRules,
+        });
+        await refreshAuthoritativeQuestionSummary({ signal });
+      }
+      return operation;
+    },
     sendClassificationsToTaxReview: async (transactionIds, options = {}) => {
       const result = await sendTaxClassificationsToReview({ businessId, year, transactionIds, ...options });
       if (options.skipReload !== true) await load();
@@ -456,6 +532,117 @@ export function useTaxDeductions({
     },
     exportDeductions: (options = {}) => exportTaxDeductions({ businessId, year, asOfDate, filters: filterKey ? JSON.parse(filterKey) : {}, ...options }),
   };
+}
+
+// This intentionally accepts both the normal deductions DTO and the
+// classification-list DTO. Both represent the same stable transaction ID, but
+// their casing differs at the API boundary.
+export function patchTaxPageWithGroupedDecision(page, classifications = []) {
+  if (!page || !Array.isArray(page.rows) || !Array.isArray(classifications) || !classifications.length) return page;
+  const byTransactionId = new Map(
+    classifications
+      .filter((classification) => classification && typeof classification === "object")
+      .map((classification) => [String(classification.transaction_id || classification.transactionId || ""), classification])
+      .filter(([transactionId]) => transactionId)
+  );
+  if (!byTransactionId.size) return page;
+  return {
+    ...page,
+    rows: page.rows.map((row) => {
+      const transactionId = stableTaxRowId(row);
+      const classification = transactionId ? byTransactionId.get(transactionId) : null;
+      return classification ? patchTaxRowWithClassification(row, classification) : row;
+    }),
+  };
+}
+
+function applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules }) {
+  const classifications = Array.isArray(result?.classifications) ? result.classifications : [];
+  if (!classifications.length) return;
+  const patchPage = (page) => patchTaxPageWithGroupedDecision(page, classifications);
+  setTransactions(patchPage);
+  setAllTransactions(patchPage);
+  setClassificationRows(patchPage);
+  if (result?.rule && typeof result.rule === "object") {
+    setDecisionRules((current) => upsertGroupedDecisionRule(current, result.rule));
+  }
+}
+
+function patchTaxRowWithClassification(row = {}, classification = {}) {
+  const metadata = {
+    ...(row?.metadata && typeof row.metadata === "object" ? row.metadata : {}),
+    ...(classification.metadata && typeof classification.metadata === "object" ? classification.metadata : {}),
+  };
+  const taxTreatment = classification.tax_treatment ?? classification.taxTreatment ?? row.taxTreatment ?? row.tax_treatment ?? null;
+  const classificationStatus = classification.classification_status ?? classification.classificationStatus ?? row.classificationStatus ?? row.classification_status ?? null;
+  const source = classification.source ?? row.source ?? row.source_type ?? null;
+  const updatedAt = classification.updated_at ?? classification.updatedAt ?? row.updatedAt ?? row.updated_at ?? null;
+  const taxCategory = classification.tax_category ?? classification.taxCategory ?? row.taxCategory ?? row.tax_category ?? null;
+  const deductibilityStatus = classification.deductibility_status ?? classification.deductibilityStatus ?? row.deductibilityStatus ?? row.deductibility_status ?? null;
+  const deductiblePercent = classification.deductible_percent ?? classification.deductiblePercent ?? row.deductiblePercent ?? row.deductible_percent ?? null;
+  const deductibleAmount = classification.deductible_amount ?? classification.deductibleAmount ?? row.deductibleAmount ?? row.deductible_amount ?? null;
+  const nondeductibleAmount = classification.nondeductible_amount ?? classification.nondeductibleAmount ?? row.nondeductibleAmount ?? row.nondeductible_amount ?? null;
+  const capitalizableAmount = classification.capitalizable_amount ?? classification.capitalizableAmount ?? row.capitalizableAmount ?? row.capitalizable_amount ?? null;
+  const requiresReview = classification.requires_review ?? classification.requiresReview ?? row.requiresReview ?? row.requires_review ?? false;
+  const userOverride = classification.user_override ?? classification.userOverride ?? row.userOverride ?? row.user_override ?? false;
+  const cpaOverride = classification.cpa_override ?? classification.cpaOverride ?? row.cpaOverride ?? row.cpa_override ?? false;
+  return {
+    ...row,
+    taxCategory,
+    tax_category: taxCategory,
+    taxTreatment,
+    tax_treatment: taxTreatment,
+    deductibilityStatus,
+    deductibility_status: deductibilityStatus,
+    deductiblePercent,
+    deductible_percent: deductiblePercent,
+    deductibleAmount,
+    deductible_amount: deductibleAmount,
+    nondeductibleAmount,
+    nondeductible_amount: nondeductibleAmount,
+    capitalizableAmount,
+    capitalizable_amount: capitalizableAmount,
+    classificationStatus,
+    classification_status: classificationStatus,
+    status: classificationStatus || row.status,
+    confidenceScore: classification.confidence_score ?? classification.confidenceScore ?? row.confidenceScore ?? row.confidence_score ?? null,
+    confidence_score: classification.confidence_score ?? classification.confidenceScore ?? row.confidence_score ?? row.confidenceScore ?? null,
+    confidenceLevel: classification.confidence_level ?? classification.confidenceLevel ?? row.confidenceLevel ?? row.confidence_level ?? null,
+    confidence_level: classification.confidence_level ?? classification.confidenceLevel ?? row.confidence_level ?? row.confidenceLevel ?? null,
+    requiresReview: requiresReview === true,
+    requires_review: requiresReview === true,
+    userOverride: userOverride === true,
+    user_override: userOverride === true,
+    cpaOverride: cpaOverride === true,
+    cpa_override: cpaOverride === true,
+    source,
+    source_type: source,
+    reason: classification.reason ?? row.reason ?? null,
+    updatedAt,
+    updated_at: updatedAt,
+    metadata,
+    override: {
+      ...(row?.override && typeof row.override === "object" ? row.override : {}),
+      hasOverride: userOverride === true || cpaOverride === true,
+      source,
+      lastChangedAt: updatedAt,
+    },
+  };
+}
+
+function stableTaxRowId(row = {}) {
+  const value = row?.transactionId ?? row?.transaction_id ?? row?.id ?? row?.raw?.transactionId ?? row?.raw?.transaction_id ?? row?.raw?.id;
+  return value == null || value === "" ? null : String(value);
+}
+
+function upsertGroupedDecisionRule(rules, rule) {
+  const current = Array.isArray(rules) ? rules : [];
+  const accountKey = String(rule.accountKey || rule.accountName || "").trim().toLowerCase();
+  const withoutPrevious = current.filter((currentRule) => {
+    const currentKey = String(currentRule?.accountKey || currentRule?.accountName || "").trim().toLowerCase();
+    return currentKey !== accountKey;
+  });
+  return [...withoutPrevious, rule].sort((a, b) => String(a?.accountName || "").localeCompare(String(b?.accountName || "")));
 }
 
 function isActiveClassificationStatus(status) {

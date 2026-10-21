@@ -20,8 +20,12 @@ import {
   saveTaxDeductionDecisionRule,
   updateTaxDeductionDecisionRule,
 } from "../../services/tax/taxDeductionDecisionRule.service.js";
+import {
+  applyGroupedTaxDeductionDecision,
+  getGroupedTaxDeductionDecisionOperation,
+} from "../../services/tax/taxGroupedDeductionDecision.service.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../services/tax/taxChangeEvents.js";
-import { validationError } from "../../services/tax/taxErrors.js";
+import { forbiddenBusinessError, validationError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
 import {
   optionalMoney,
@@ -124,6 +128,59 @@ router.patch("/deduction-decision-rules/:ruleId", async (req, res) => {
     return sendTaxSuccess(res, data);
   } catch (err) {
     return sendTaxError(res, err, "tax_deduction_decision_rule_update_failed");
+  }
+});
+
+// One customer answer may apply to hundreds of rows. This command is separate
+// from the legacy 100-row bulk endpoint so the rule, override history, and all
+// scoped classifications are committed (or rolled back) together.
+router.post("/deduction-decisions/apply", async (req, res) => {
+  setTaxNoStore(res);
+  let ctx = null;
+  try {
+    ctx = await routeContext(req, { requireServerBusinessContext: true });
+    assertTaxMutationAllowed(req);
+    const payload = validateGroupedDecisionPayload(req, ctx.businessId);
+    const data = await applyGroupedTaxDeductionDecision({
+      ...ctx,
+      input: payload,
+      actor: actorFromRequest(req),
+    });
+    // Deliberately emit a classification change rather than BUSINESS_RULE_CREATED:
+    // the saved GL rule is forward-looking and this completed command must not
+    // enqueue an unrelated full-year classifier pass.
+    emitTaxDataChanged({
+      businessId: ctx.businessId,
+      taxYear: ctx.taxYear,
+      changeType: TAX_CHANGE_TYPES.CLASSIFICATION_OVERRIDDEN,
+      entityId: data.operationId || null,
+      userId: actorFromRequest(req).userId,
+      metadata: {
+        correlationId: data.operationId || null,
+        transactionCount: Number(data.appliedCount || 0),
+        groupedDecision: true,
+      },
+    });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    logGroupedDecisionFailure({ req, ctx, err });
+    return sendTaxError(res, err, "tax_grouped_deduction_decision_failed");
+  }
+});
+
+router.get("/deduction-decisions/operations/:idempotencyKey", async (req, res) => {
+  setTaxNoStore(res);
+  let ctx = null;
+  try {
+    ctx = await routeContext(req);
+    const data = await getGroupedTaxDeductionDecisionOperation({
+      ...ctx,
+      idempotencyKey: req.params.idempotencyKey,
+    });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    logGroupedDecisionFailure({ req, ctx, err });
+    return sendTaxError(res, err, "tax_grouped_deduction_decision_status_failed");
   }
 });
 
@@ -259,9 +316,11 @@ async function handleOverride(req, res) {
   }
 }
 
-async function routeContext(req) {
+async function routeContext(req, { requireServerBusinessContext = false } = {}) {
   const supabase = req.app?.locals?.supabase || defaultSupabase;
-  const businessId = validateBusinessIdInput(req);
+  const businessId = requireServerBusinessContext
+    ? canonicalMutationBusinessId(req)
+    : validateBusinessIdInput(req);
   await assertTaxBusinessAccess({ req, businessId, supabase });
   const taxYear = optionalTaxYear(req.body?.year ?? req.body?.taxYear ?? req.query?.year ?? req.query?.taxYear, new Date().getFullYear());
   return { supabase, businessId, taxYear };
@@ -287,6 +346,66 @@ function validateDecisionRulePayload(req, businessId) {
     throw validationError("incomplete_deduction_decision_rule", "Tax category, deductibility, percentage, and treatment are required for a deduction rule.");
   }
   return payload;
+}
+
+function validateGroupedDecisionPayload(req, businessId) {
+  const body = req.body || {};
+  const changes = validateDecisionRulePayload({
+    ...req,
+    body: { ...(body.changes || {}), businessId },
+  }, businessId);
+  return {
+    idempotencyKey: req.get?.("Idempotency-Key") || req.headers?.["idempotency-key"] || body.idempotencyKey,
+    scope: body.scope,
+    scopeFingerprint: body.scopeFingerprint,
+    targetTransactionIds: body.targetTransactionIds,
+    expectedPopulationTransactionIds: body.expectedPopulationTransactionIds,
+    changes,
+    reason: body.reason,
+  };
+}
+
+function canonicalMutationBusinessId(req) {
+  // `requireBusinessAccess` attaches this context only after it has resolved
+  // the authenticated user's company. Mutable grouped commands intentionally
+  // do not fall back to a browser-provided body/query businessId.
+  const canonical = req?.tenantContext?.businessId || req?.business?.id || req?.auth?.businessId || null;
+  if (!canonical) {
+    throw forbiddenBusinessError("A server-selected business context is required for this decision.", {
+      code: "canonical_business_context_required",
+    });
+  }
+  const supplied = [
+    req?.body?.businessId,
+    req?.body?.business_id,
+    req?.query?.businessId,
+    req?.query?.business_id,
+  ].filter((value) => value != null && String(value).trim() !== "");
+  if (supplied.some((value) => String(value) !== String(canonical))) {
+    throw forbiddenBusinessError("The business selected by this request does not match its server-authorized context.", {
+      code: "canonical_business_context_mismatch",
+    });
+  }
+  return validateBusinessIdInput({ tenantContext: { businessId: canonical } });
+}
+
+function logGroupedDecisionFailure({ req, ctx, err }) {
+  // Keep production diagnostics useful without logging vendor names, amounts,
+  // credentials, or the full request body.
+  console.warn("[tax-grouped-deduction-decision]", {
+    requestId: req?.id || req?.headers?.["x-request-id"] || null,
+    businessId: ctx?.businessId || null,
+    taxYear: ctx?.taxYear || null,
+    reasonCode: err?.code || "tax_grouped_deduction_decision_failed",
+  });
+}
+
+function assertTaxMutationAllowed(req) {
+  if (req?.tenantContext?.mode === "admin_view") {
+    throw forbiddenBusinessError("Tax classification decisions are unavailable in Admin View.", {
+      code: "admin_view_read_only",
+    });
+  }
 }
 
 function requireReason(value, field) {

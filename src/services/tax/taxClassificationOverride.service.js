@@ -161,25 +161,12 @@ export async function bulkApplyClassificationOverrides({ supabase, businessId, t
     allowUserConfirmedEdit: input.allowUserConfirmedEdit === true,
   };
   const currentRows = await requireBatchClassifications({ supabase, businessId, taxYear: year, transactionIds: ids });
-  const byTransactionId = new Map(currentRows.map((row) => [String(row.transaction_id), row]));
-  const missing = ids.filter((id) => !byTransactionId.has(String(id)));
-  if (missing.length) {
-    throw notFoundError("classification_not_found", "One or more tax classifications were not found.", { transactionIds: missing, taxYear: year });
-  }
-  const roleStatus = statusForActor(actor);
-  const items = ids.map((transactionId) => {
-    const current = byTransactionId.get(String(transactionId));
-    const expectedUpdatedAt = inputForBatch.expectedUpdatedAtByTransactionId?.[transactionId] || inputForBatch.expectedUpdatedAtByTransactionId?.[String(transactionId)] || inputForBatch.expectedUpdatedAt || null;
-    if (expectedUpdatedAt) assertNoStaleWrite(current, expectedUpdatedAt);
-    if (inputForBatch.protectConfirmedAuthority && hasProtectedConfirmedAuthority(current, inputForBatch)) {
-      throw conflictError("confirmed_authority_protected", "Confirmed tax classification authority is protected.", { transactionId, taxYear: year });
-    }
-    if (isConfirmed(current) && !inputForBatch.reason) {
-      throw validationError("override_reason_required", "A reason is required to override a confirmed classification.", { field: "reason" });
-    }
-    const transaction = transactionFromClassification(current);
-    const next = buildUpdatedClassification({ current, input: inputForBatch, actor, transaction, status: roleStatus });
-    return buildBatchOverrideItem({ transactionId, current, next });
+  const { items, currentByTransactionId } = buildClassificationOverrideBatchItems({
+    transactionIds: ids,
+    currentRows,
+    input: inputForBatch,
+    actor,
+    taxYear: year,
   });
   const updated = await applyBatchOverrideAtomically({
     supabase,
@@ -192,7 +179,7 @@ export async function bulkApplyClassificationOverrides({ supabase, businessId, t
   result.updated = updated.length;
   result.classifications = updated;
   for (const row of updated) {
-    const before = byTransactionId.get(String(row.transaction_id));
+    const before = currentByTransactionId.get(String(row.transaction_id));
     emitTaxDataChanged({ businessId, taxYear: year, changeType: TAX_CHANGE_TYPES.CLASSIFICATION_OVERRIDDEN, entityId: row.transaction_id, userId: actor.userId, metadata: classificationEventMetadata(before, row, inputForBatch.reason) });
   }
   if (inputForBatch.classificationStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW) {
@@ -215,6 +202,35 @@ export async function bulkApplyClassificationOverrides({ supabase, businessId, t
     });
   }
   return result;
+}
+
+// Shared preparation path for the legacy 100-row endpoint and the atomic
+// grouped-decision command. The latter must build all override rows before it
+// enters its single database transaction; keeping this logic here guarantees
+// both paths preserve the same authority, amount, and stale-write rules.
+export function buildClassificationOverrideBatchItems({ transactionIds = [], currentRows = [], input = {}, actor = {}, taxYear } = {}) {
+  const ids = Array.from(new Set(transactionIds.map(String).filter(Boolean)));
+  const currentByTransactionId = new Map((currentRows || []).map((row) => [String(row.transaction_id), row]));
+  const missing = ids.filter((id) => !currentByTransactionId.has(id));
+  if (missing.length) {
+    throw notFoundError("classification_not_found", "One or more tax classifications were not found.", { transactionIds: missing, taxYear });
+  }
+  const roleStatus = statusForActor(actor);
+  const items = ids.map((transactionId) => {
+    const current = currentByTransactionId.get(transactionId);
+    const expectedUpdatedAt = input.expectedUpdatedAtByTransactionId?.[transactionId] || input.expectedUpdatedAtByTransactionId?.[String(transactionId)] || input.expectedUpdatedAt || null;
+    if (expectedUpdatedAt) assertNoStaleWrite(current, expectedUpdatedAt);
+    if (input.protectConfirmedAuthority && hasProtectedConfirmedAuthority(current, input)) {
+      throw conflictError("confirmed_authority_protected", "Confirmed tax classification authority is protected.", { transactionId, taxYear });
+    }
+    if (isConfirmed(current) && !input.reason) {
+      throw validationError("override_reason_required", "A reason is required to override a confirmed classification.", { field: "reason" });
+    }
+    const transaction = transactionFromClassification(current);
+    const next = buildUpdatedClassification({ current, input, actor, transaction, status: roleStatus });
+    return buildBatchOverrideItem({ transactionId, current, next });
+  });
+  return { items, currentByTransactionId };
 }
 
 export async function moveClassificationsToTaxReview({ supabase, businessId, taxYear, transactionIds = [], reasonCode = null, reasonNote = null, expectedUpdatedAtByTransactionId = {}, bookkeepingIssue = false, actor = {} } = {}) {

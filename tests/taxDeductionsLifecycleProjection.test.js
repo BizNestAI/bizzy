@@ -130,6 +130,22 @@ test("5. one annual GL decision covers multiple monthly cells", () => {
   assert.deepEqual(result.activeDecisionGroups[0].months, ["2026-09", "2026-10"]);
 });
 
+test("5a. an annual decision conserves category, actionable, reviewed, and excluded stable identities", () => {
+  const pendingOne = row("meal-pending-1", { status: "needs_review", requiresReview: true, taxCategory: "business_meals", qboAccountId: "meals", qboAccountName: "Meals", matchedRuleCode: "meals_review_gl_v3" });
+  const pendingTwo = { ...pendingOne, id: "meal-pending-2", transactionId: "meal-pending-2", raw: { transactionId: "meal-pending-2" } };
+  const reviewed = { ...pendingOne, id: "meal-reviewed", transactionId: "meal-reviewed", status: "user_confirmed", requiresReview: false, raw: { transactionId: "meal-reviewed", updated_at: "2026-10-19" } };
+  const result = projection([pendingOne, pendingTwo, reviewed]);
+  const group = result.activeDecisionGroups[0];
+
+  assert.equal(group.categoryTransactionCount, 3);
+  assert.equal(group.actionableTransactionCount, 2);
+  assert.equal(group.alreadyResolvedCount, 1);
+  assert.equal(group.explicitlyExcludedCount, 0);
+  assert.deepEqual(group.stableTransactionIds.actionable.sort(), ["meal-pending-1", "meal-pending-2"]);
+  assert.deepEqual(group.stableTransactionIds.alreadyResolved, ["meal-reviewed"]);
+  assert.equal(group.populationConservation.isConserved, true);
+});
+
 test("6. completed business-use decisions remain discoverable", () => {
   const result = projection([row("reviewed-meal", { status: "user_confirmed", taxCategory: "business_meals", qboAccountId: "meals", qboAccountName: "Meals", raw: { transactionId: "reviewed-meal", updated_at: "2026-10-18" } })]);
   assert.equal(result.completedDecisionGroups.length, 1);

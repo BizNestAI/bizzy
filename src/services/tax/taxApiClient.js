@@ -435,6 +435,78 @@ export async function saveTaxDeductionDecisionRule({ businessId, year, transacti
   return result;
 }
 
+export async function applyGroupedTaxDeductionDecision({
+  businessId,
+  year,
+  idempotencyKey,
+  scope,
+  scopeFingerprint,
+  targetTransactionIds = [],
+  expectedPopulationTransactionIds = [],
+  changes = {},
+  reason,
+  signal,
+} = {}) {
+  requireBusinessId(businessId);
+  requireValue(idempotencyKey, "idempotencyKey");
+  if (!Array.isArray(targetTransactionIds) || !targetTransactionIds.length) throw new Error("targetTransactionIds are required");
+  if (!Array.isArray(expectedPopulationTransactionIds) || !expectedPopulationTransactionIds.length) throw new Error("expectedPopulationTransactionIds are required");
+  const path = `/api/tax/deduction-decisions/apply?${query({ businessId, year })}`;
+  const requestOptions = {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: { businessId, year, idempotencyKey, scope, scopeFingerprint, targetTransactionIds, expectedPopulationTransactionIds, changes, reason },
+    signal,
+  };
+  const commandRequest = withBoundedCommandSignal(signal, { timeoutMs: 20_000 });
+  try {
+    const result = unwrap(await request(path, { ...requestOptions, signal: commandRequest.signal }));
+    clearBusinessCache(businessId);
+    return result;
+  } catch (caughtError) {
+    const error = commandRequest.timedOut()
+      ? Object.assign(new Error("The save is taking longer than expected."), {
+        code: "command_timeout",
+        status: null,
+        requestId: caughtError?.requestId || null,
+      })
+      : caughtError;
+    if (!isAmbiguousCommandFailure(error)) throw error;
+    // Do not replay an unsafe mutation after a timeout/5xx. Its idempotency
+    // record is the only authority for whether the prior request committed.
+    const statusRequest = withBoundedCommandSignal(signal, { timeoutMs: 8_000 });
+    try {
+      const operation = await getGroupedTaxDeductionDecisionOperation({ businessId, year, idempotencyKey, signal: statusRequest.signal });
+      if (operation?.status === "completed" && operation?.result) {
+        clearBusinessCache(businessId);
+        return operation.result;
+      }
+    } catch {
+      // The dialog will present the bounded unknown-outcome state below.
+    } finally {
+      statusRequest.cleanup();
+    }
+    const unknown = new Error("We’re checking whether your decision was saved. Don’t submit it again yet.");
+    unknown.code = "grouped_decision_outcome_unknown";
+    unknown.status = error?.status || null;
+    unknown.requestId = error?.requestId || null;
+    unknown.idempotencyKey = idempotencyKey;
+    unknown.outcomeUnknown = true;
+    throw unknown;
+  } finally {
+    commandRequest.cleanup();
+  }
+}
+
+export async function getGroupedTaxDeductionDecisionOperation({ businessId, year, idempotencyKey, signal } = {}) {
+  requireBusinessId(businessId);
+  requireValue(idempotencyKey, "idempotencyKey");
+  return unwrap(await request(`/api/tax/deduction-decisions/operations/${encodeURIComponent(idempotencyKey)}?${query({ businessId, year })}`, {
+    method: "GET",
+    signal,
+  }));
+}
+
 export async function updateTaxDeductionDecisionRule({ businessId, year, ruleId, changes = {}, decisionType, signal } = {}) {
   requireBusinessId(businessId);
   requireValue(ruleId, "ruleId");
@@ -763,6 +835,36 @@ function request(path, options) {
   });
 }
 
+function isAmbiguousCommandFailure(error) {
+  const status = Number(error?.status || 0);
+  return error?.code === "network_error" || error?.code === "command_timeout" || status >= 500 || status === 408 || status === 429;
+}
+
+// A timeout is only a cue to reconcile the idempotency record. It never means
+// the write failed and this client must never replay the command automatically.
+function withBoundedCommandSignal(parentSignal, { timeoutMs = 20_000 } = {}) {
+  if (typeof AbortController === "undefined") {
+    return { signal: parentSignal, timedOut: () => false, cleanup: () => {} };
+  }
+  const controller = new AbortController();
+  let didTimeOut = false;
+  const abortForParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) abortForParent();
+  else parentSignal?.addEventListener?.("abort", abortForParent, { once: true });
+  const timer = setTimeout(() => {
+    didTimeOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    timedOut: () => didTimeOut,
+    cleanup: () => {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener?.("abort", abortForParent);
+    },
+  };
+}
+
 function taxQuery(values) {
   const next = { ...values };
   next.include = normalizeInclude(values.include);
@@ -1026,6 +1128,8 @@ export default {
   overrideTaxClassification,
   getTaxDeductionDecisionRules,
   saveTaxDeductionDecisionRule,
+  applyGroupedTaxDeductionDecision,
+  getGroupedTaxDeductionDecisionOperation,
   updateTaxDeductionDecisionRule,
   sendTaxClassificationsToReview,
   excludeTaxClassification,

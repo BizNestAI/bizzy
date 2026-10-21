@@ -280,17 +280,47 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
     groups.set(entry.decisionId, existing);
   }
   return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      pendingCount: group.pendingRows.length,
-      reviewedCount: group.reviewedRows.length,
-      transactionCount: group.rows.length,
-      months: [...group.months].sort(),
-      grossAmount: roundMoney(group.grossAmount),
-      estimatedDeductibleAmount: roundMoney(group.estimatedDeductibleAmount),
-      state: group.pendingRows.length > 0 ? "needs_input" : "reviewed",
-    }))
+    .map((group) => {
+      const actionableTransactionIds = uniqueStableTaxTransactionIds(group.pendingRows);
+      const alreadyResolvedTransactionIds = uniqueStableTaxTransactionIds(group.reviewedRows);
+      const categoryTransactionIds = uniqueStableTaxTransactionIds(group.rows);
+      const actionableTransactionCount = actionableTransactionIds.length;
+      const alreadyResolvedCount = alreadyResolvedTransactionIds.length;
+      const categoryTransactionCount = categoryTransactionIds.length;
+      const explicitlyExcludedCount = 0;
+      return {
+        ...group,
+        pendingCount: actionableTransactionCount,
+        reviewedCount: alreadyResolvedCount,
+        transactionCount: categoryTransactionCount,
+        categoryTransactionCount,
+        actionableTransactionCount,
+        alreadyResolvedCount,
+        explicitlyExcludedCount,
+        stableTransactionIds: {
+          category: categoryTransactionIds,
+          actionable: actionableTransactionIds,
+          alreadyResolved: alreadyResolvedTransactionIds,
+          explicitlyExcluded: [],
+        },
+        populationConservation: {
+          categoryTransactionCount,
+          actionableTransactionCount,
+          alreadyResolvedCount,
+          explicitlyExcludedCount,
+          isConserved: categoryTransactionCount === actionableTransactionCount + alreadyResolvedCount + explicitlyExcludedCount,
+        },
+        months: [...group.months].sort(),
+        grossAmount: roundMoney(group.grossAmount),
+        estimatedDeductibleAmount: roundMoney(group.estimatedDeductibleAmount),
+        state: actionableTransactionCount > 0 ? "needs_input" : "reviewed",
+      };
+    })
     .sort((a, b) => b.pendingCount - a.pendingCount || b.transactionCount - a.transactionCount || String(a.qboAccountName).localeCompare(String(b.qboAccountName)));
+}
+
+function uniqueStableTaxTransactionIds(rows = []) {
+  return [...new Set(rows.map(stableTaxTransactionIdentity).filter(Boolean))];
 }
 
 function firstValue(...values) {
