@@ -28,7 +28,7 @@ test("Tax dashboard shows the active loading shell before unresolved data can re
   assert.ok(initialBranchIndex > -1, "TaxDashboard should branch on initialLoading");
   assert.ok(failedBranchIndex > initialBranchIndex, "request failure should be handled after pending loading");
   assert.ok(trendIndex > failedBranchIndex, "dashboard content should render after loading and initial failure branches");
-  assert.match(dashboardSource, /const initialLoading = taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData;/);
+  assert.match(dashboardSource, /const initialLoading = contextPending \|\| \(taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData\);/);
   assert.match(dashboardSource, /const initialRequestFailed = taxLiabilityEstimateEnabled && Boolean\(tax\.error && !hasPreviousData && !tax\.loading\);/);
 });
 
@@ -56,7 +56,7 @@ test("Tax loading shell preserves dashboard geometry for low-jump replacement", 
 
 test("Tax dashboard keeps cached content visible during background refresh", () => {
   assert.match(dashboardSource, /const hasPreviousData = !!tax\.data;/);
-  assert.match(dashboardSource, /const initialLoading = taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData;/);
+  assert.match(dashboardSource, /const initialLoading = contextPending \|\| \(taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData\);/);
   assert.match(dashboardSource, /loading=\{tax\.refreshing\}/);
   assert.match(dashboardSource, /tax\.error && hasPreviousData/);
   assert.match(dashboardSource, /Keeping the last Tax view on screen\./);
@@ -66,12 +66,14 @@ test("Deductions enter a loading state before their first live request can paint
   assert.match(deductionsHookSource, /const startsWithLiveRequest = enabled && Boolean\(businessId\) && !shouldUseDemoData\(\);/);
   assert.match(deductionsHookSource, /const \[loading, setLoading\] = useState\(startsWithLiveRequest\);/);
   assert.match(dashboardSource, /const hasUsableDeductionsData = Boolean\([\s\S]*workspaceRows\.length[\s\S]*deductions\.allTransactions[\s\S]*deductions\.postedTransactions[\s\S]*\);/);
-  assert.doesNotMatch(sourceBetween(dashboardSource, "const hasUsableDeductionsData", "const initialDeductionsLoading"), /deductions\.overview|deductions\.classificationCoverage/);
-  assert.match(dashboardSource, /const initialDeductionsLoading = deductions\.loading && !hasUsableDeductionsData;/);
+  assert.match(dashboardSource, /const deductionsRenderState = resolveDeductionsRenderState\(/);
+  assert.match(dashboardSource, /hasData: hasUsableDeductionsData/);
+  assert.match(dashboardSource, /hasSummaryData: Boolean\(deductions\.overview\)/);
+  assert.match(dashboardSource, /const initialDeductionsLoading = deductionsRenderState\.showInitialLoading;/);
 });
 
 test("Deductions first-load treatment is accessible, animated, and contains no false metrics", () => {
-  const skeleton = sourceBetween(dashboardSource, "function DeductionsLoadingState", "function LoadingEllipsis");
+  const skeleton = sourceBetween(dashboardSource, "function DeductionsLoadingState", "function ClassificationStat");
   assert.match(skeleton, /role="status"/);
   assert.match(skeleton, /aria-live="polite"/);
   assert.match(skeleton, /aria-busy="true"/);

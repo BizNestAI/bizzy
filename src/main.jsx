@@ -15,7 +15,6 @@ import AccountingDashboard from "./pages/accounting/AccountingDashboard";
 import MarketingDashboard from "./pages/Marketing/MarketingDashboard";
 import TaxDashboard from "./pages/Tax/TaxDashboard";
 import TaxCalculationWorkpaper from "./pages/Tax/TaxCalculationWorkpaper.jsx";
-import TaxLiabilityComingSoonCard from "./components/Tax/TaxLiabilityComingSoonCard.jsx";
 import BizzyPanel from "./pages/Bizzy/BizzyPanel";
 import ChatHome from "./pages/Bizzy/ChatHome.jsx";
 
@@ -193,13 +192,7 @@ function TaxCalculationRouteBoundary() {
   if (isTaxLiabilityEstimateEnabled()) {
     return <TaxCalculationWorkpaper />;
   }
-  return (
-    <div className="min-h-screen bg-app text-primary">
-      <div className="bizzy-page-width bizzy-page-width--workspace flex min-h-screen items-center py-10">
-        <TaxLiabilityComingSoonCard className="w-full" />
-      </div>
-    </div>
-  );
+  return <Navigate to="/dashboard/tax" replace />;
 }
 
 function DashboardTaxPrefetcher() {

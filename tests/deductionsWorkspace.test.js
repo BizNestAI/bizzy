@@ -421,15 +421,15 @@ test("persisted review-required fallback rows display as unresolved items", () =
 test("fallback-only production state is presented as bookkeeping evidence, not a customer approval queue", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /technical_evidence_incomplete/);
-  assert.match(dashboard, /Some transactions need bookkeeping evidence/);
+  assert.match(dashboard, /Needs bookkeeping details/);
   assert.match(dashboard, /Bookkeeping evidence/);
   assert.doesNotMatch(dashboard, /Run processed/);
 });
 
-test("unresolved fallback rows remain visible as bookkeeping follow-up without a manual job trigger", () => {
+test("unresolved fallback rows remain visible as bookkeeping details without a manual job trigger", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
-  assert.match(dashboard, /Bookkeeping follow-up/);
-  assert.match(dashboard, /These transactions need bookkeeping information before Bizzi can estimate their tax treatment/);
+  assert.match(dashboard, /isBookkeepingDetailsRow/);
+  assert.match(dashboard, /Needs bookkeeping details/);
   assert.match(dashboard, /buildTaxDeductionsLifecycleProjection/);
   assert.doesNotMatch(dashboard, /onClick=\{openBackfillPreview\}/);
 });
@@ -450,7 +450,8 @@ test("manual Refresh bypasses cached read-only tax resources and exposes result 
   assert.match(dashboard, /onClick=\{refreshDeductions\}/);
   assert.match(dashboard, /deductions\.refreshing \? "Updating" : "Refresh"/);
   assert.match(dashboard, /deductions\.refreshError/);
-  assert.match(dashboard, /Updated \{formatRelativeRefreshTime\(deductions\.lastRefreshedAt\)\}/);
+  assert.match(dashboard, /const updatedAt = deductions\.lastRefreshedAt \|\| classificationSummary\.lastRunAt \|\| null/);
+  assert.match(dashboard, /Updated \{formatDateLocal\(updatedAt\)\}/);
   assert.match(hook, /load\(\{ \.\.\.options, refresh: true \}\)/);
   assert.match(hook, /setLastRefreshedAt\(new Date\(\)\.toISOString\(\)\)/);
   assert.match(client, /getTaxClassificationCoverage\(\{ businessId, year, refresh = false, signal \}/);
@@ -600,12 +601,12 @@ test("Tax Dashboard no longer embeds the legacy deductions matrix", () => {
 test("Tax Dashboard embeds classification workspace controls in Deductions", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
-  assert.match(dashboard, /Classification status/);
+  assert.match(dashboard, /At a glance/);
   assert.doesNotMatch(dashboard, />Update deductions</);
   assert.match(dashboard, /deductions\.refreshing \? "Updating" : "Refresh"/);
-  assert.match(dashboard, /Auto-classified/);
+  assert.match(dashboard, /Estimated/);
   assert.match(dashboard, /Needs review/);
-  assert.match(dashboard, /Unclassified/);
+  assert.match(dashboard, /Needs bookkeeping details/);
   assert.match(dashboard, /Estimated payment amount pending/);
   assert.match(hook, /getTaxClassificationCoverage/);
   assert.match(hook, /previewClassificationBackfill/);
@@ -619,7 +620,7 @@ test("Tax Dashboard uses hydrated posted transactions and keeps matrix layout se
   assert.match(dashboard, /buildDeductionAccountMatrix\(workspaceRows, year, \{ isDemo: deductions\.isDemo, scope: "overview" \}\)/);
   assert.doesNotMatch(dashboard, /const rows = classificationTab === "all" \? workspaceRows : filteredWorkspaceRows/);
   assert.doesNotMatch(dashboard, /buildDeductionAccountMatrix\(rows, year, \{ isDemo: deductions\.isDemo, scope: classificationTab \}\)/);
-  assert.match(dashboard, /QBO GL account/);
+  assert.match(dashboard, /Expense category/);
   assert.match(dashboard, /authoritativeDeductibleTotal/);
   assert.match(dashboard, /proposedDeductibleTotal/);
   assert.match(dashboard, /standardRuleDeductibleTotal/);
@@ -634,13 +635,13 @@ test("Tax Dashboard renders matrix-first Deductions workspace views with separat
   assert.match(dashboard, /All transactions/);
   assert.match(dashboard, /workspaceView === "overview"/);
   assert.match(dashboard, /workspaceView === "needs_attention"/);
-  assert.match(dashboard, /MatrixAuthoritySummary/);
+  assert.match(dashboard, /DeductionsIncludedDisclosure/);
   assert.match(dashboard, /DeductionAccountMatrix/);
   assert.match(dashboard, /Estimated deductible expenses/);
-  assert.match(dashboard, /Using standard rules/);
+  assert.match(dashboard, /Standard estimates/);
   assert.match(dashboard, /Questions for you/);
   assert.match(dashboard, /Your answers will update/);
-  assert.match(dashboard, /posted transactions evaluated/);
+  assert.match(dashboard, /posted transaction.*reviewed for this estimate/);
 });
 
 test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and authority", () => {
@@ -659,7 +660,66 @@ test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and auth
   assert.match(dashboard, /cell\.customerInputTransactionCount > 0/);
   assert.doesNotMatch(dashboard, /const hasRenderableState = cell\.authoritativeDeductibleTotal > 0/);
   assert.doesNotMatch(dashboard, /cell\.autoTransactionCount > 0/);
-  assert.match(dashboard, /return <span className="block px-2 py-1\.5 text-\[12px\] text-white\/22">No activity<\/span>/);
+  assert.match(dashboard, /return <span className="block px-2 py-1\.5 text-\[12px\] text-white\/22" role="img" aria-label="No activity">—<\/span>/);
+});
+
+test("Tax launch overview keeps customer copy concise and puts the matrix before rules", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const customerShell = dashboard.slice(
+    dashboard.indexOf("function TaxDashboardDeductions"),
+    dashboard.indexOf("const CLASSIFICATION_TABS")
+  );
+  const questionCopyMatches = customerShell.match(/Your answers will update/g) || [];
+  const summaryIndex = customerShell.indexOf("At a glance");
+  const tabsIndex = customerShell.indexOf("<WorkspaceViewTabs");
+  const disclosureIndex = customerShell.indexOf("<DeductionsIncludedDisclosure");
+  const matrixIndex = customerShell.indexOf("<DeductionAccountMatrix");
+  const rulesIndex = customerShell.indexOf("<DeductionDecisionRulesPanel");
+
+  assert.equal(questionCopyMatches.length, 1);
+  assert.match(customerShell, /Preliminary bookkeeping estimate—not a tax return\./);
+  assert.match(customerShell, /Estimates are based on expenses posted to QuickBooks\. Items that need more information are excluded until reviewed\./);
+  assert.match(customerShell, /Updated \{formatDateLocal\(updatedAt\)\}/);
+  assert.match(customerShell, /customerWorkflow\.technicalCount/);
+  assert.match(customerShell, /bookkeeping details/);
+  assert.doesNotMatch(customerShell, /deterministic tax rules|stable transaction identities|QBO GL account|Classification status|How the displayed states reconcile/);
+  assert.ok(summaryIndex > -1 && tabsIndex > summaryIndex);
+  assert.ok(disclosureIndex > tabsIndex && matrixIndex > disclosureIndex);
+  assert.ok(rulesIndex > matrixIndex, "Rules must appear after the monthly matrix.");
+
+  assert.match(dashboard, /<details className="group mt-4 rounded-2xl[^>]*data-tax-rules-defaults>/);
+  assert.match(dashboard, /Rules and defaults/);
+  assert.match(dashboard, /Set defaults for vehicle, rent, and utility expenses\. You can change them anytime\./);
+  assert.match(dashboard, /Choose how vehicle expenses are calculated\./);
+  assert.match(dashboard, /Set the business-use percentage for rent or lease expenses\./);
+  assert.match(dashboard, /Set a business-use percentage for selected utility expenses\./);
+  assert.match(dashboard, /No defaults set yet\./);
+  assert.doesNotMatch(dashboard, /Your deduction rules|Company-specific|No company deduction rules have been saved yet/);
+});
+
+test("Tax matrix launch labels retain accessible details and grouped decision navigation", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+
+  assert.match(dashboard, /Blue: Estimated/);
+  assert.match(dashboard, /Green: Reviewed/);
+  assert.match(dashboard, /Yellow: Needs input/);
+  assert.match(dashboard, /<th[^>]*>Expense category<\/th>/);
+  assert.match(dashboard, /role="img" aria-label="No activity">—<\/span>/);
+  assert.match(dashboard, /const groupedCustomerInput = isSingleDecisionGroupForRows/);
+  assert.match(dashboard, /\? \(cell\.needsInputDeductibleTotal > 0 \? `\$\{formatCurrencyLocal\(cell\.needsInputDeductibleTotal\)\} Needs input` : "Needs input"\)/);
+  assert.match(dashboard, /customerInputCountLabel/);
+  assert.match(dashboard, /onClick=\{\(\) => openCell\("needs_input"\)\}/);
+  assert.match(dashboard, /onOpenDecision\(\{ group, scope: "account_year", selectedMonth: month\.key \}\)/);
+});
+
+test("Tax customer summary keeps identity reconciliation internal and protects the chat composer clearance", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+
+  assert.match(dashboard, /function TaxLifecycleConservationSummary/);
+  assert.match(dashboard, /stable transaction identities =/);
+  assert.match(dashboard, /\{readOnly \? <TaxLifecycleConservationSummary/);
+  assert.match(dashboard, /pb-\[calc\(var\(--chat-clearance,156px\)\+24px\)\]/);
+  assert.match(dashboard, /sticky left-0/);
 });
 
 test("Deduction matrix keeps user-confirmed May Meals in the May confirmed cell", async () => {
@@ -848,7 +908,7 @@ test("Tax Dashboard row semantics distinguish auto-classified and review-require
   assert.doesNotMatch(dashboard, /Treatment pending/);
   assert.match(dashboard, /Fully deductible/);
   assert.match(dashboard, /% deductible/);
-  assert.match(dashboard, /QBO GL rule/);
+  assert.match(dashboard, /Expense-category rule/);
   assert.match(dashboard, /Depends on business use/);
   assert.match(dashboard, /Review required/);
 });
@@ -856,21 +916,21 @@ test("Tax Dashboard row semantics distinguish auto-classified and review-require
 test("Tax Dashboard uses a deductions loading skeleton and keeps the single Refresh action truthful", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /function DeductionsLoadingState/);
-  assert.match(dashboard, /function LoadingEllipsis/);
-  assert.match(dashboard, /Loading posted QuickBooks transactions, GL mappings, and classification status/);
-  assert.match(dashboard, /animate-dot-bounce/);
+  assert.match(dashboard, /Preparing your deductions overview/);
+  assert.match(dashboard, /Loading your latest saved totals and transaction details/);
+  assert.match(dashboard, /motion-safe:animate-spin/);
   assert.match(dashboard, /initialDeductionsLoading \? \(/);
   assert.match(dashboard, /role="status" aria-busy="true" aria-live="polite"/);
   assert.match(dashboard, /\{deductions\.refreshing \? "Updating" : "Refresh"\}/);
   assert.doesNotMatch(dashboard, />Update deductions</);
 });
 
-test("Tax Dashboard counts meaningful needs-review coverage and labels QBO GL rule sources", () => {
+test("Tax Dashboard counts meaningful needs-review coverage and labels expense-category rule sources", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /coverage\.needsReviewCount/);
   assert.match(dashboard, /coverage\.needs_review_count/);
   assert.match(dashboard, /source === "rule_engine" \|\| hasRuleIdentity/);
-  assert.match(dashboard, /QBO GL rule/);
+  assert.match(dashboard, /Expense-category rule/);
 });
 
 test("Tax Dashboard uses authoritative classification job progress instead of inferred processing", () => {
@@ -939,8 +999,8 @@ test("Prepare deductions modal uses Bizzi loading treatment instead of native wa
 
 test("Tax Dashboard does not present missing classification authority as zero deductible", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
-  assert.match(dashboard, /No deduction total is shown until classification authority exists/);
-  assert.match(dashboard, /\$0 deductible/);
+  assert.match(dashboard, /Tax treatment unavailable/);
+  assert.match(dashboard, /taxDataUnavailable/);
   assert.match(dashboard, /classificationBucket\(row\) === "unclassified"/);
 });
 
@@ -952,8 +1012,8 @@ test("Tax Dashboard groups Questions for You by a stable annual decision identit
   assert.doesNotMatch(dashboard, /Review individual transactions|one_transaction/);
   assert.match(dashboard, /Confirming saves this choice as the automatic treatment for future posted transactions/);
   assert.doesNotMatch(dashboard, /Reviewed decisions/);
-  assert.match(dashboard, /Your deduction rules/);
-  assert.match(dashboard, /DeductionDecisionRulesPanel[\s\S]*?<WorkspaceViewTabs/);
+  assert.match(dashboard, /Rules and defaults/);
+  assert.match(dashboard, /<WorkspaceViewTabs[\s\S]*?<DeductionDecisionRulesPanel/);
   assert.match(dashboard, /Preserve selected exceptions/);
   assert.match(dashboard, /ids\.slice\(index, index \+ 100\)/);
 });
@@ -1025,7 +1085,7 @@ test("Deduction detail modal explains proposed treatment and avoids automatic co
   assert.match(dashboard, /Not calculated/);
   assert.doesNotMatch(dashboard, /cell\.selectedAuthority === "proposed" \? "Proposed needs-review amounts" : "Automatic deductions"/);
   assert.doesNotMatch(dashboard, /Why this needs review/);
-  assert.match(dashboard, /Bizzi categorized these transactions using their posted QuickBooks GL account and an active verified deduction rule/);
+  assert.match(dashboard, /Bizzi categorized these transactions using their posted expense category and an active verified deduction rule/);
   assert.match(dashboard, /No additional information is currently required/);
   assert.doesNotMatch(dashboard, /QuickBooks categorized/);
   assert.doesNotMatch(dashboard, /Sourced from posted QuickBooks/);
@@ -1034,13 +1094,13 @@ test("Deduction detail modal explains proposed treatment and avoids automatic co
 
 test("Deduction detail modal renders specific review explanations and resolution workflows", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
-  assert.match(dashboard, /Bizzi categorized these transactions as Business Meals based on their posted QuickBooks GL account/);
-  assert.match(dashboard, /Bizzi categorized these transactions as Utilities based on their posted QuickBooks GL account/);
-  assert.match(dashboard, /Tell us how much of this account is used for business so Bizzi can calculate the deductible amount/);
-  assert.match(dashboard, /Bizzi categorized these transactions as Business Transportation based on their posted QuickBooks GL account/);
-  assert.match(dashboard, /Bizzi categorized these transactions as Vehicle Expenses based on their posted QuickBooks GL account/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Business Meals based on their posted expense category/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Utilities based on their posted expense category/);
+  assert.match(dashboard, /Tell us how much of this category is used for business so Bizzi can calculate the deductible amount/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Business Transportation based on their posted expense category/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Vehicle Expenses based on their posted expense category/);
   assert.match(dashboard, /Choose your vehicle deduction method before Bizzi calculates the deductible amount/);
-  assert.match(dashboard, /Bizzi categorized these transactions as Supplies based on their posted QuickBooks GL account/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Supplies based on their posted expense category/);
   assert.match(dashboard, /Review needed/);
   assert.match(dashboard, /selected · \{formatCurrencyLocal\(selectedGrossTotal\)\} in expenses/);
   assert.doesNotMatch(dashboard, /id="deduction-review-scope-select"/);
@@ -1133,8 +1193,8 @@ test("Deduction detail modal actually renders Electric business-use controls in 
   assert.doesNotMatch(html, /All matching QBO GL transactions for 2026/);
   assert.match(html, /Save and confirm/);
   assert.match(html, /Not sure yet/);
-  assert.match(html, /Bizzi categorized these transactions as Utilities based on their posted QuickBooks GL account/);
-  assert.match(html, /Tell us how much of this account is used for business so Bizzi can calculate the deductible amount/);
+  assert.match(html, /Bizzi categorized these transactions as Utilities based on their posted expense category/);
+  assert.match(html, /Tell us how much of this category is used for business so Bizzi can calculate the deductible amount/);
   assert.doesNotMatch(html, /calculated the confirmed deduction/);
   assert.doesNotMatch(html, /QuickBooks categorized/);
   assert.doesNotMatch(html, /Why this needs review/);
@@ -1166,7 +1226,7 @@ test("Deduction detail modal actually renders Gas vehicle controls in the modal 
   assert.match(html, /Actual vehicle expenses/);
   assert.match(html, /I(?:&#x27;|')m not sure/);
   assert.match(html, /Save vehicle method/);
-  assert.match(html, /Bizzi categorized these transactions as Vehicle Expenses based on their posted QuickBooks GL account/);
+  assert.match(html, /Bizzi categorized these transactions as Vehicle Expenses based on their posted expense category/);
   assert.match(html, /Choose your vehicle deduction method before Bizzi calculates the deductible amount/);
   assert.doesNotMatch(html, /QuickBooks categorized/);
   assert.doesNotMatch(html, /This row already has confirmed rule-engine treatment/);
@@ -1639,13 +1699,14 @@ test("built-in deduction defaults stay GL-scoped while grouping related Gas, Ren
   })));
 });
 
-test("Tax deductions place editable company defaults above the workspace tabs", () => {
+test("Tax deductions keep editable defaults collapsed below the monthly workspace", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const defaultsIndex = dashboard.indexOf("<DeductionDecisionRulesPanel");
   const tabsIndex = dashboard.indexOf("<WorkspaceViewTabs");
+  const matrixIndex = dashboard.indexOf("<DeductionAccountMatrix");
   assert.ok(defaultsIndex > -1, "built-in deduction defaults should be rendered");
-  assert.ok(defaultsIndex < tabsIndex, "deduction defaults should appear above the workspace tabs");
-  assert.match(dashboard, /Set up deduction defaults/);
-  assert.match(dashboard, /future posted transactions only/);
+  assert.ok(defaultsIndex > matrixIndex && matrixIndex > tabsIndex, "deduction defaults should appear after the matrix");
+  assert.match(dashboard, /Rules and defaults/);
+  assert.match(dashboard, /future posted transactions/);
   assert.match(dashboard, /transaction-specific exception can still be reviewed separately/);
 });

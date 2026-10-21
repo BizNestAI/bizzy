@@ -6,7 +6,6 @@ import { AnimatePresence, motion as Motion, useReducedMotion } from "framer-moti
 import { useNavigate } from "react-router-dom";
 
 import TaxTrendCard from "../../components/Tax/TaxTrendCard";
-import TaxLiabilityComingSoonCard from "../../components/Tax/TaxLiabilityComingSoonCard.jsx";
 import TaxProfileModal from "../../components/Tax/TaxProfileModal.jsx";
 import TaxSetupWorkflow from "../../components/Tax/Setup/TaxSetupWorkflow.jsx";
 import RecordTaxPaymentModal from "../../components/Tax/Planning/RecordTaxPaymentModal.jsx";
@@ -156,12 +155,12 @@ export default function TaxDashboard() {
         <ModuleHeader
           module="tax"
           title="Tax deductions"
-          subtitle="Review QBO GL-driven deductions now. Quarterly tax estimates are coming soon."
+          subtitle="Deductions from posted expenses."
           className="flex-1"
         />
       </div>
 
-      <main className="bizzy-page-width bizzy-page-width--workspace relative z-0 flex min-w-0 flex-col gap-7 overflow-x-hidden pt-1 pb-40">
+      <main className="bizzy-page-width bizzy-page-width--workspace relative z-0 flex min-w-0 flex-col gap-7 overflow-x-hidden pt-1 pb-[calc(var(--chat-clearance,156px)+24px)]">
         {initialLoading ? (
           <DashboardSkeleton slow={slowInitialLoad} />
         ) : initialRequestFailed ? (
@@ -214,9 +213,7 @@ export default function TaxDashboard() {
                 />
                 <CalculationPreview workpaper={tax.data?.workpaper} onViewCalculation={() => viewCalculation("total_tax_components")} />
               </>
-            ) : (
-              <TaxLiabilityComingSoonCard />
-            )}
+            ) : null}
           </>
         )}
       </main>
@@ -560,10 +557,14 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     }),
     [classificationSummary.primaryUnresolvedTotal, classificationSummary.reviewRequiredTotal, lifecycleProjection]
   );
-  const customerStatusMessage = useMemo(
-    () => customerDeductionsStatusMessage(classificationSummary, customerWorkflow),
-    [classificationSummary, customerWorkflow]
-  );
+  const customerQuestionMessage = customerWorkflow.customerDecisionCount > 0
+    ? `${customerWorkflow.customerDecisionCount} question${customerWorkflow.customerDecisionCount === 1 ? " needs" : "s need"} your input. Your answers will update ${customerWorkflow.customerInputCount} transaction${customerWorkflow.customerInputCount === 1 ? "" : "s"}.`
+    : null;
+  const updatedAt = deductions.lastRefreshedAt || classificationSummary.lastRunAt || null;
+  const openBookkeepingDetails = () => {
+    setClassificationTab("bookkeeping_details");
+    setWorkspaceView("all_transactions");
+  };
   const hasUsableDeductionsData = Boolean(
     deductions.overview ||
     workspaceRows.length ||
@@ -609,15 +610,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
       cell: { ...cell, transactions: cell.transactions.filter((row) => String(row.id || row.transactionId) === String(target.id || target.transactionId)), selectedAuthority: "vehicle_method" },
     });
   };
-  const deductionsMessage = initialDeductionsLoading
-    ? (
-      <span className="inline-flex items-baseline gap-1">
-        <span>Loading posted QuickBooks transactions, GL mappings, and classification status</span>
-        <LoadingEllipsis />
-      </span>
-    )
-    : customerStatusMessage;
-
   useEffect(() => {
     setSelectedCell((current) => {
       if (!current) return current;
@@ -636,14 +628,15 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           <div className="text-[12px] uppercase tracking-[0.14em] text-white/65">Deductions</div>
           <div className="text-xl font-semibold leading-tight">{year} deductions overview</div>
           <p className="mt-1 max-w-2xl text-sm text-white/55">
-            Preliminary bookkeeping estimate—not a tax return. {deductionsMessage}
+            Preliminary bookkeeping estimate—not a tax return.{customerQuestionMessage ? ` ${customerQuestionMessage}` : ""}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 whitespace-nowrap">
+          {updatedAt ? <span className="text-xs text-white/42">Updated {formatDateLocal(updatedAt)}</span> : null}
           <button
             type="button"
-              onClick={refreshDeductions}
+            onClick={refreshDeductions}
             disabled={deductions.refreshing || !hasUsableDeductionsData}
             className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-[12px] text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           >
@@ -671,10 +664,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           <span className="font-semibold">Refresh failed.</span>{" "}
           Existing deduction data remains on screen and may be stale. {deductions.refreshError.message || "Try again when ready."}
         </div>
-      ) : deductions.lastRefreshedAt ? (
-        <div className="mt-3 text-xs text-white/42">
-          Updated {formatRelativeRefreshTime(deductions.lastRefreshedAt)}
-        </div>
       ) : null}
       {initialDeductionsLoading ? (
         <DeductionsLoadingState />
@@ -693,49 +682,36 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
       ) : (
         <>
       <div className="mt-5 rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-3">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/62">Classification status</div>
-            <p className="mt-1 text-sm font-semibold text-emerald-50">{customerStatusMessage}</p>
-            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/50">
-              Bizzi uses deterministic tax rules and QBO-confirmed posted transaction evidence. Ambiguous items stay in review and no tax estimate is generated from this section.
-            </p>
-          </div>
-          <div className="text-xs text-white/45">
-            {classificationSummary.lastRunAt ? `Last run ${formatDateLocal(classificationSummary.lastRunAt)}` : "No classification run yet"}
-          </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/62">At a glance</div>
+          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/50">
+            Estimates are based on expenses posted to QuickBooks. Items that need more information are excluded until reviewed.
+          </p>
         </div>
         <ClassificationProgressSummary summary={classificationSummary} />
         <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
           <ClassificationStat label="Estimated deductible expenses" value={formatCurrencyLocal(matrixTotals.authoritativeDeductibleTotal + matrixTotals.proposedDeductibleTotal)} />
           <ClassificationStat label="Reviewed" value={customerWorkflow.reviewedCount} />
-          <ClassificationStat label="Using standard rules" value={customerWorkflow.standardRuleCount} />
+          <ClassificationStat label="Standard estimates" value={customerWorkflow.standardRuleCount} />
           <ClassificationStat label="Questions for you" value={customerWorkflow.customerDecisionCount} tone={customerWorkflow.customerDecisionCount ? "amber" : "default"} />
         </div>
-        <p className="mt-2 text-xs text-white/58">
-          {customerWorkflow.customerDecisionCount > 0
-            ? `${customerWorkflow.customerDecisionCount} question${customerWorkflow.customerDecisionCount === 1 ? " needs" : "s need"} your input. Your answers will update ${customerWorkflow.customerInputCount} transaction${customerWorkflow.customerInputCount === 1 ? "" : "s"}.`
-            : "No customer tax questions are waiting for an answer."}
-        </p>
         {customerWorkflow.technicalCount > 0 ? (
-          <p className="mt-1 text-xs text-white/45">{customerWorkflow.technicalCount} transaction{customerWorkflow.technicalCount === 1 ? " needs" : "s need"} bookkeeping follow-up and are not included in customer tax questions. These transactions need bookkeeping information before Bizzi can estimate their tax treatment.</p>
+          <button
+            type="button"
+            onClick={openBookkeepingDetails}
+            className="mt-3 text-xs font-semibold text-emerald-100/72 underline decoration-emerald-200/25 underline-offset-4 transition hover:text-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+          >
+            {customerWorkflow.technicalCount} transaction{customerWorkflow.technicalCount === 1 ? " needs" : "s need"} bookkeeping details
+          </button>
         ) : null}
-        <TaxLifecycleConservationSummary projection={lifecycleProjection} legacy={legacyCoverageReconciliation} />
       </div>
-
-      <DeductionDecisionRulesPanel
-        rules={deductionDecisionRules}
-        setupOptions={deductionDefaultSetupOptions}
-        readOnly={readOnly}
-        onChangeRule={setDecisionRuleEditor}
-        onSetUpRule={setDeductionDefaultSetup}
-      />
 
       <WorkspaceViewTabs value={workspaceView} onChange={setWorkspaceView} />
 
       {workspaceView === "overview" ? (
         <>
-          <MatrixAuthoritySummary transactionCount={matrix.transactionCount} populationBridge={populationBridge} />
+          <DeductionsIncludedDisclosure transactionCount={matrix.transactionCount} populationBridge={populationBridge} projection={lifecycleProjection} />
+          <DeductionMatrixLegend />
           <DeductionAccountMatrix
             matrix={matrix}
             onSelectCell={setSelectedCell}
@@ -748,7 +724,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <div className="text-sm font-semibold text-white/84">Questions for you</div>
-              <div className="mt-0.5 text-xs text-white/45">Only factual decisions Bizzi cannot determine from the posted QBO evidence.</div>
+              <div className="mt-0.5 text-xs text-white/45">Only factual decisions Bizzi cannot determine from the posted expense information.</div>
             </div>
             <div className="text-xs text-white/40">{customerWorkflow.customerDecisionCount} grouped question{customerWorkflow.customerDecisionCount === 1 ? "" : "s"} · {customerWorkflow.customerInputCount} affected transactions</div>
           </div>
@@ -779,6 +755,16 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           <ClassificationWorkspaceTable rows={filteredWorkspaceRows} loading={deductions.loading} />
         </div>
       )}
+
+      <DeductionDecisionRulesPanel
+        rules={deductionDecisionRules}
+        setupOptions={deductionDefaultSetupOptions}
+        readOnly={readOnly}
+        onChangeRule={setDecisionRuleEditor}
+        onSetUpRule={setDeductionDefaultSetup}
+      />
+
+      {readOnly ? <TaxLifecycleConservationSummary projection={lifecycleProjection} legacy={legacyCoverageReconciliation} /> : null}
 
       <ReviewDecisionModal
         decision={reviewDecision}
@@ -837,7 +823,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           });
           if (result.failed.length) {
             const error = new Error(
-              `${result.saved.length} of ${result.requested} QuickBooks GL account default${result.requested === 1 ? "" : "s"} saved. Try the remaining ${result.failed.length} account${result.failed.length === 1 ? "" : "s"} again.`
+              `${result.saved.length} of ${result.requested} expense-category default${result.requested === 1 ? "" : "s"} saved. Try the remaining ${result.failed.length} categor${result.failed.length === 1 ? "y" : "ies"} again.`
             );
             error.code = "deduction_default_partial_save";
             throw error;
@@ -846,11 +832,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           return result;
         }}
       />
-
-      <div className="mt-3 flex flex-col gap-2 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">
-        <span>{workspaceView === "overview" ? "Estimated totals include supported standard rules; reviewed totals remain separately identified." : "No deduction total is shown until classification authority exists."}</span>
-        <span>{formatLifecycleSummaryLine(lifecycleProjection)}</span>
-      </div>
 
       <AnimatePresence>
         {selectedCell ? (
@@ -877,11 +858,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
 
 const CLASSIFICATION_TABS = [
   { value: "all", label: "All" },
-  { value: "auto_classified", label: "Auto-classified" },
+  { value: "auto_classified", label: "Estimated" },
   { value: "needs_review", label: "Needs review" },
   { value: "outside_deductions", label: "Outside deductions" },
   { value: "excluded", label: "Excluded" },
-  { value: "unclassified", label: "Unclassified" },
+  { value: "bookkeeping_details", label: "Needs bookkeeping details" },
 ];
 
 const WORKSPACE_VIEW_TABS = [
@@ -922,37 +903,25 @@ function WorkspaceViewTabs({ value, onChange }) {
 function DeductionDecisionRulesPanel({ rules = [], setupOptions = [], readOnly, onChangeRule, onSetUpRule }) {
   const visibleRules = normalizeDecisionRules(rules);
   return (
-    <section className="mt-4 rounded-2xl border border-emerald-300/14 bg-emerald-300/[0.035] px-3 py-3 sm:px-4" aria-labelledby="deduction-rules-heading">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+    <details className="group mt-4 rounded-2xl border border-emerald-300/14 bg-emerald-300/[0.035] px-3 py-3 sm:px-4" data-tax-rules-defaults>
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 text-left focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
         <div>
-          <div id="deduction-rules-heading" className="text-sm font-semibold text-emerald-50">Your deduction rules</div>
-          <p className="mt-0.5 max-w-3xl text-xs leading-relaxed text-white/50">Set company-specific defaults for the QBO GL accounts you use most. They apply to future posted transactions only; existing transaction decisions and one-off exceptions stay intact.</p>
+          <div className="text-sm font-semibold text-emerald-50">Rules and defaults</div>
+          <p className="mt-0.5 max-w-3xl text-xs leading-relaxed text-white/50">Set defaults for vehicle, rent, and utility expenses. You can change them anytime.</p>
         </div>
-        <div className="text-[11px] font-medium text-emerald-100/58">Company-specific</div>
-      </div>
+        <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-emerald-100/60 transition group-open:rotate-180" aria-hidden="true" />
+      </summary>
       <div className="mt-3 border-t border-emerald-100/[0.08] pt-3">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs font-semibold text-white/78">Set up deduction defaults</div>
-          <div className="text-[11px] text-white/42">Review or change them here at any time</div>
-        </div>
-        <div className="mt-2 grid gap-2 lg:grid-cols-3">
+        <div className="grid gap-2 lg:grid-cols-3">
           {setupOptions.map((setup) => {
-            const configuredLabel = setup.status === "configured"
-              ? "Configured"
-              : setup.status === "partial"
-                ? "Partly configured"
-                : "Set up";
             const accountLabel = setup.accountOptions.length
-              ? `${setup.accountOptions.length} matching QBO GL account${setup.accountOptions.length === 1 ? "" : "s"}`
-              : "No matching posted QBO GL account yet";
+              ? `${setup.accountOptions.length} matching expense categor${setup.accountOptions.length === 1 ? "y" : "ies"}`
+              : "No matching posted expense category yet";
             return (
               <div key={setup.id} className="rounded-xl border border-white/[0.08] bg-black/[0.14] px-3 py-2.5">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-white/86">{setup.label}</div>
-                    <p className="mt-0.5 text-xs leading-relaxed text-white/48">{setup.summary}</p>
-                  </div>
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${setup.status === "configured" ? "bg-emerald-300/[0.14] text-emerald-50" : setup.status === "partial" ? "bg-amber-200/[0.12] text-amber-100" : "bg-white/[0.06] text-white/55"}`}>{configuredLabel}</span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-white/86">{setup.label}</div>
+                  <p className="mt-0.5 text-xs leading-relaxed text-white/48">{setup.summary}</p>
                 </div>
                 <div className="mt-2 text-[11px] text-white/42">{accountLabel}</div>
                 <button
@@ -961,39 +930,37 @@ function DeductionDecisionRulesPanel({ rules = [], setupOptions = [], readOnly, 
                   onClick={() => onSetUpRule?.(setup)}
                   className="mt-2 rounded-full border border-emerald-300/20 bg-emerald-300/[0.08] px-2.5 py-1.5 text-[11px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-emerald-300/30"
                 >
-                  {setup.status === "configured" ? "Review default" : setup.status === "partial" ? "Finish setup" : "Set up default"}
+                  {setup.status === "configured" ? "Review" : setup.status === "partial" ? "Edit" : "Set up"}
                 </button>
               </div>
             );
           })}
         </div>
-      </div>
-      {visibleRules.length ? (
-        <div className="mt-3 border-t border-emerald-100/[0.08] pt-3">
-          <div className="mb-2 text-xs font-semibold text-white/68">Saved GL-account defaults</div>
-          <div className="grid gap-2 xl:grid-cols-2">
-          {visibleRules.map((rule) => (
-            <div key={rule.id || rule.accountKey} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-emerald-200/10 bg-black/15 px-3 py-2.5">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-white/86">{rule.accountName}</div>
-                <div className="mt-0.5 text-xs text-white/52">{deductionRuleSummary(rule)}</div>
-              </div>
-              <button
-                type="button"
-                disabled={readOnly || !rule.id}
-                onClick={() => onChangeRule?.(rule)}
-                className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300/[0.08] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-emerald-300/30"
-              >
-                Change
-              </button>
+        {visibleRules.length ? (
+          <div className="mt-3 border-t border-emerald-100/[0.08] pt-3">
+            <div className="mb-2 text-xs font-semibold text-white/68">Saved defaults</div>
+            <div className="grid gap-2 xl:grid-cols-2">
+              {visibleRules.map((rule) => (
+                <div key={rule.id || rule.accountKey} className="flex min-w-0 items-center justify-between gap-3 rounded-xl border border-emerald-200/10 bg-black/15 px-3 py-2.5">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-white/86">{rule.accountName}</div>
+                    <div className="mt-0.5 text-xs text-white/52">{deductionRuleSummary(rule)}</div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={readOnly || !rule.id}
+                    onClick={() => onChangeRule?.(rule)}
+                    className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300/[0.08] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-emerald-300/30"
+                  >
+                    Edit
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
           </div>
-        </div>
-      ) : (
-        <div className="mt-3 border-t border-emerald-100/[0.08] pt-3 text-xs text-white/48">No company deduction rules have been saved yet. Use a setup card above to create a future default for the matching QBO GL accounts.</div>
-      )}
-    </section>
+        ) : <div className="mt-3 border-t border-emerald-100/[0.08] pt-3 text-xs text-white/48">No defaults set yet.</div>}
+      </div>
+    </details>
   );
 }
 
@@ -1047,7 +1014,7 @@ function DeductionDecisionRuleEditor({ rule, readOnly, onClose, onSave }) {
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-100/62">Deduction rule</div>
             <h2 id="deduction-rule-editor-title" className="mt-1 text-xl font-semibold">{rule.accountName}</h2>
-            <p className="mt-1 text-sm text-white/55">This updates the automatic treatment for future posted transactions in this QuickBooks GL account.</p>
+            <p className="mt-1 text-sm text-white/55">This updates the automatic treatment for future posted transactions in this expense category.</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/70 transition hover:bg-white/10" aria-label="Close deduction rule editor"><X className="h-4 w-4" /></button>
         </div>
@@ -1079,8 +1046,10 @@ function DeductionDefaultSetupEditor({ setup, readOnly, onClose, onSave }) {
   const [vehicleMethod, setVehicleMethod] = useState("actual_expense");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const accountOptions = Array.isArray(setup?.accountOptions) ? setup.accountOptions : [];
-  const accountOptionKeys = accountOptions.map((account) => account.accountKey).join("|");
+  const accountOptions = useMemo(
+    () => (Array.isArray(setup?.accountOptions) ? setup.accountOptions : []),
+    [setup?.accountOptions]
+  );
   const selectedAccounts = accountOptions.filter((account) => selectedAccountKeys.includes(account.accountKey));
   const isVehicle = setup?.kind === "vehicle_method";
 
@@ -1090,7 +1059,7 @@ function DeductionDefaultSetupEditor({ setup, readOnly, onClose, onSave }) {
     setVehicleMethod(setup?.initialVehicleMethod || "actual_expense");
     setSaving(false);
     setError("");
-  }, [setup?.id, setup?.initialDeductiblePercent, setup?.initialVehicleMethod, accountOptionKeys]);
+  }, [setup?.id, setup?.initialDeductiblePercent, setup?.initialVehicleMethod, accountOptions]);
 
   if (!setup || typeof document === "undefined") return null;
   const numericPercent = Number(percent);
@@ -1138,14 +1107,14 @@ function DeductionDefaultSetupEditor({ setup, readOnly, onClose, onSave }) {
         </div>
 
         <div className="mt-4 rounded-xl border border-emerald-200/10 bg-emerald-300/[0.035] p-3 text-xs leading-relaxed text-white/56">
-          This creates or updates a company-specific default for future posted transactions in the selected QuickBooks GL accounts. It does not reclassify earlier transactions, and a transaction-specific exception can still be reviewed separately.
+          This creates or updates a default for future posted transactions in the selected expense categories. It does not reclassify earlier transactions, and a transaction-specific exception can still be reviewed separately.
         </div>
 
         {isVehicle ? (
           <fieldset className="mt-4 space-y-2">
             <legend className="text-sm font-semibold text-white/82">Vehicle method for {setup.year}</legend>
             <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-white/10 px-3 py-2.5 text-sm text-white/72"><input type="radio" name="deduction-default-vehicle-method" checked={vehicleMethod === "standard_mileage"} onChange={() => setVehicleMethod("standard_mileage")} /><span><span className="font-semibold text-white/86">Standard mileage</span><span className="mt-0.5 block text-xs text-white/46">Gas is not deducted separately under this method.</span></span></label>
-            <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-white/10 px-3 py-2.5 text-sm text-white/72"><input type="radio" name="deduction-default-vehicle-method" checked={vehicleMethod === "actual_expense"} onChange={() => setVehicleMethod("actual_expense")} /><span><span className="font-semibold text-white/86">Actual expenses</span><span className="mt-0.5 block text-xs text-white/46">Set the business-use percentage for the selected Gas GL account.</span></span></label>
+            <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-white/10 px-3 py-2.5 text-sm text-white/72"><input type="radio" name="deduction-default-vehicle-method" checked={vehicleMethod === "actual_expense"} onChange={() => setVehicleMethod("actual_expense")} /><span><span className="font-semibold text-white/86">Actual expenses</span><span className="mt-0.5 block text-xs text-white/46">Set the business-use percentage for the selected gas expense category.</span></span></label>
           </fieldset>
         ) : null}
 
@@ -1156,8 +1125,8 @@ function DeductionDefaultSetupEditor({ setup, readOnly, onClose, onSave }) {
         <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-black/[0.14]">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] px-3 py-2.5">
             <div>
-              <div className="text-sm font-semibold text-white/80">Apply to matching QBO GL accounts</div>
-              <div className="mt-0.5 text-xs text-white/44">{selectedAccounts.length} of {accountOptions.length} account{accountOptions.length === 1 ? "" : "s"} selected</div>
+              <div className="text-sm font-semibold text-white/80">Apply to matching expense categories</div>
+              <div className="mt-0.5 text-xs text-white/44">{selectedAccounts.length} of {accountOptions.length} categor{accountOptions.length === 1 ? "y" : "ies"} selected</div>
             </div>
             <button type="button" onClick={() => setSelectedAccountKeys(selectedAccounts.length === accountOptions.length ? [] : accountOptions.map((account) => account.accountKey))} className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] font-semibold text-white/66 transition hover:bg-white/[0.06] focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
               {selectedAccounts.length === accountOptions.length ? "Clear all" : "Select all"}
@@ -1216,7 +1185,7 @@ const DEDUCTION_DEFAULT_SETUP_SPECS = Object.freeze([
     taxCategory: "vehicle",
     taxTreatment: "vehicle_actual_expense_business_use",
     decisionType: "vehicle_method",
-    summary: "Choose standard mileage or actual expenses for your Gas-related GL accounts.",
+    summary: "Choose how vehicle expenses are calculated.",
     prompt: "Choose the annual vehicle method before Bizzi applies a future default to Gas-related posted transactions.",
     matches: isVehicleDefaultAccount,
   },
@@ -1227,8 +1196,8 @@ const DEDUCTION_DEFAULT_SETUP_SPECS = Object.freeze([
     taxCategory: "rent",
     taxTreatment: "rent_business_use_percentage",
     decisionType: "rent_business_use_percent",
-    summary: "Set the business-use percentage for Rent or Lease GL accounts.",
-    prompt: "Set the default business-use percentage for your selected Rent or Lease QBO GL accounts.",
+    summary: "Set the business-use percentage for rent or lease expenses.",
+    prompt: "Set the default business-use percentage for your selected rent or lease expense categories.",
     matches: isRentDefaultAccount,
   },
   {
@@ -1238,8 +1207,8 @@ const DEDUCTION_DEFAULT_SETUP_SPECS = Object.freeze([
     taxCategory: "utilities",
     taxTreatment: "utilities_business_use_percentage",
     decisionType: "utilities_business_use_percent",
-    summary: "Apply one default across Electric, Internet, Water/Sewer, Phone, and other utility GL accounts you select.",
-    prompt: "Set a default business-use percentage for the selected utility QBO GL accounts. You can leave an account out for a different treatment.",
+    summary: "Set a business-use percentage for selected utility expenses.",
+    prompt: "Set a default business-use percentage for the selected utility expense categories. You can leave a category out for a different treatment.",
     matches: isUtilitiesDefaultAccount,
   },
 ]);
@@ -1350,7 +1319,7 @@ function deductionStatusForPercent(percent) {
 
 function deductionRuleSummary(rule) {
   const safeRule = isTaxRecord(rule) ? rule : {};
-  if (safeRule.taxDataUnavailable) return "Tax treatment unavailable · bookkeeping follow-up";
+  if (safeRule.taxDataUnavailable) return "Tax treatment unavailable · needs bookkeeping details";
   if (String(safeRule.taxTreatment || "").includes("standard_mileage")) return "Standard mileage · gas not deducted separately";
   if (String(safeRule.taxTreatment || "").includes("actual_expense")) return `${formatDeductiblePercent(safeRule.deductiblePercent)} business use · actual vehicle expenses`;
   return `${formatDeductiblePercent(safeRule.deductiblePercent)} deductible · ${formatTaxCategoryLabel(safeRule.taxCategory)}`;
@@ -1374,44 +1343,34 @@ function FilterTabButton({ tab, selected, count = null, onClick }) {
   );
 }
 
-function MatrixAuthoritySummary({ transactionCount, populationBridge = null }) {
+function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null }) {
   const bridgeScope = populationBridge?.tax_scope || null;
-  const bridgeIdentity = populationBridge?.identity_comparison || null;
-  const matrixCount = bridgeScope?.deductions_matrix_expense_count ?? transactionCount;
-  const evaluatedCount = bridgeScope?.posted_transactions_evaluated_count ?? null;
-  const outsideCount = bridgeScope?.posted_non_expense_outside_deductions_count ?? null;
-  const dispositionLabels = {
-    income_outside_deductions: "income / other income",
-    transfer_or_card_payment_not_deduction: "transfers / card payments",
-    owner_or_equity_not_deduction: "owner / equity activity",
-    refund_credit_or_asset_not_deduction: "refunds, credits, assets, or balance-sheet activity",
-    incomplete_or_unresolved: "incomplete QBO evidence",
-  };
-  const outsideBreakdown = Object.entries(bridgeScope?.dispositions || {})
-    .filter(([key, count]) => key !== "expense_cogs_in_matrix" && Number(count || 0) > 0)
-    .map(([key, count]) => `${count} ${dispositionLabels[key] || key.replace(/_/g, " ")}`);
+  const counts = projection?.counts || {};
+  const outcomeCount = (outcome) => Number(counts[outcome] || 0);
+  const matrixCount = Number(bridgeScope?.deductions_matrix_expense_count ?? transactionCount ?? 0);
+  const evaluatedCount = Number(bridgeScope?.posted_transactions_evaluated_count ?? projection?.canonicalCount ?? transactionCount ?? 0);
+  const outsideCount = Number(bridgeScope?.posted_non_expense_outside_deductions_count ?? outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.OUTSIDE_DEDUCTIONS));
+  const reviewedCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED);
+  const standardEstimateCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_APPLIED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_ESTIMATED_NO_ACTION);
+  const needsInputCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED);
+  const bookkeepingDetailCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.BOOKKEEPING_EVIDENCE_REQUIRED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.TECHNICAL_UPDATE_PENDING) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.TAX_REVIEW_REQUIRED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.AMBIGUOUS);
+  const excludedCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.EXCLUDED);
   return (
-    <div className="mt-4 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58">
-      <p>
-        <span className="font-semibold text-white/82">{evaluatedCount ?? "—"}</span> posted transactions evaluated · <span className="font-semibold text-white/82">{matrixCount}</span> expense / COGS transactions included · <span className="font-semibold text-white/82">{outsideCount ?? "—"}</span> non-expense transactions handled separately.
-      </p>
-      {bridgeScope ? (
-        <details className="mt-2 border-t border-white/[0.08] pt-2">
-          <summary className="cursor-pointer font-semibold text-white/74 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
-            How this total is calculated
-          </summary>
-          <div className="mt-2 space-y-1 leading-relaxed">
-            {outsideBreakdown.length ? <p>Outside deductions: {outsideBreakdown.join("; ")}.</p> : null}
-            <p>Pending Plaid items, transfers, card payments, and incomplete QBO links are never added to deductions merely to make counts match.</p>
-            {bridgeIdentity?.identity_match ? (
-              <p className="text-emerald-100/72">Reconciliations and Tax use the same {bridgeIdentity.tax_eligible_count} stable transaction IDs for this posted population.</p>
-            ) : (
-              <p className="text-amber-100/78">Reconciliations and Tax identities differ: {bridgeIdentity?.only_reconciliations_count || 0} only in Reconciliations and {bridgeIdentity?.only_tax_eligible_count || 0} only in Tax. Counts are not treated as reconciled.</p>
-            )}
-          </div>
-        </details>
-      ) : null}
-    </div>
+    <details className="group mt-4 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58" data-tax-included-disclosure>
+      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 font-semibold text-white/74 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
+        <span>What’s included</span>
+        <span className="font-normal text-white/52">{evaluatedCount} posted transaction{evaluatedCount === 1 ? "" : "s"} reviewed for this estimate.</span>
+      </summary>
+      <div className="mt-3 grid gap-x-5 gap-y-2 border-t border-white/[0.08] pt-3 leading-relaxed sm:grid-cols-2">
+        <p><span className="font-semibold text-white/76">Expense and COGS:</span> {matrixCount} included in the monthly deductions matrix.</p>
+        <p><span className="font-semibold text-white/76">Handled separately:</span> {outsideCount} non-expense transaction{outsideCount === 1 ? "" : "s"}.</p>
+        <p><span className="font-semibold text-white/76">Reviewed:</span> {reviewedCount}.</p>
+        <p><span className="font-semibold text-white/76">Standard estimates:</span> {standardEstimateCount}.</p>
+        <p><span className="font-semibold text-white/76">Needs your input:</span> {needsInputCount}.</p>
+        <p><span className="font-semibold text-white/76">Needs bookkeeping details:</span> {bookkeepingDetailCount}, including ambiguous items that cannot be estimated yet.</p>
+        {excludedCount > 0 ? <p><span className="font-semibold text-white/76">Other supported states:</span> {excludedCount} excluded item{excludedCount === 1 ? "" : "s"} kept outside the estimate.</p> : null}
+      </div>
+    </details>
   );
 }
 
@@ -1420,12 +1379,22 @@ function TaxLifecycleConservationSummary({ projection, legacy }) {
   if (!summary) return null;
   return (
     <details className="mt-3 border-t border-white/[0.08] pt-2 text-xs text-white/48">
-      <summary className="cursor-pointer font-semibold text-white/68 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">How the displayed states reconcile</summary>
+      <summary className="cursor-pointer font-semibold text-white/68 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">Reconciliation diagnostics</summary>
       <p className="mt-2 leading-relaxed">{summary}.</p>
       {legacy?.reviewDifference || legacy?.unresolvedDifference ? (
-        <p className="mt-1 leading-relaxed">Older operational counters are not used as customer states: {legacy.reviewDifference || 0} supported standard estimates were included in the prior review-required aggregate, and {legacy.unresolvedDifference || 0} source-snapshot candidate was included in its unresolved aggregate. Each stable transaction above is counted once.</p>
+        <p className="mt-1 leading-relaxed">Older operational counters are not used as customer states: {legacy.reviewDifference || 0} supported standard estimates were included in the prior review-required aggregate, and {legacy.unresolvedDifference || 0} source-snapshot candidate was included in its unresolved aggregate. Each transaction above is counted once.</p>
       ) : null}
     </details>
+  );
+}
+
+function DeductionMatrixLegend() {
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-white/54" aria-label="Monthly deductions matrix legend">
+      <span><span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-sky-200" aria-hidden="true" />Blue: Estimated</span>
+      <span><span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-emerald-200" aria-hidden="true" />Green: Reviewed</span>
+      <span><span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-amber-200" aria-hidden="true" />Yellow: Needs input</span>
+    </div>
   );
 }
 
@@ -1471,7 +1440,7 @@ function DeductionAccountMatrix({ matrix, onSelectCell, onOpenDecision, decision
           <table className="min-w-[1120px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
-                <th className="sticky left-0 z-10 w-[282px] bg-[#111614] px-3 py-3 text-left font-semibold">QBO GL account</th>
+                <th className="sticky left-0 z-10 w-[282px] bg-[#111614] px-3 py-3 text-left font-semibold">Expense category</th>
                 {matrix.months.map((month) => (
                   <th key={month.key} className="w-[68px] px-2 py-3 text-right font-semibold">{month.shortLabel}</th>
                 ))}
@@ -1500,7 +1469,7 @@ function DeductionAccountMatrix({ matrix, onSelectCell, onOpenDecision, decision
                   <td className="px-3 py-3 text-right align-middle text-sm tabular-nums">
                     <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.authoritativeDeductibleTotal + account.proposedDeductibleTotal)}</div>
                     {account.reviewedTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-emerald-100/76">{formatCurrencyLocal(account.reviewedDeductibleTotal)} reviewed</div> : null}
-                    {account.standardRuleTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-sky-100/76">{formatCurrencyLocal(account.standardRuleDeductibleTotal)} standard rule</div> : null}
+                    {account.standardRuleTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-sky-100/76">{formatCurrencyLocal(account.standardRuleDeductibleTotal)} estimated</div> : null}
                     {account.customerInputTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-amber-100/76">{formatCurrencyLocal(account.needsInputDeductibleTotal)} needs input</div> : null}
                   </td>
                 </tr>
@@ -1519,7 +1488,7 @@ function DeductionAccountMatrix({ matrix, onSelectCell, onOpenDecision, decision
 
 function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisionGroups = [] }) {
   if (!cell?.transactions?.length) {
-    return <span className="block px-2 py-1.5 text-[12px] text-white/22">No activity</span>;
+    return <span className="block px-2 py-1.5 text-[12px] text-white/22" role="img" aria-label="No activity">—</span>;
   }
   const openCell = (authority) => {
     const transactions = authority === "reviewed"
@@ -1562,6 +1531,15 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
   };
   const resolvedZeroLabel = matrixResolvedZeroLabel(cell);
   const residualReviewCount = Math.max(0, cell.reviewTransactionCount - cell.standardRuleTransactionCount - cell.customerInputTransactionCount);
+  const customerInputRows = cell.transactions.filter(requiresCustomerTaxInput);
+  const groupedCustomerInput = isSingleDecisionGroupForRows(decisionGroups, customerInputRows);
+  const customerInputCount = cell.customerInputTransactionCount;
+  const customerInputCountLabel = `${customerInputCount} item${customerInputCount === 1 ? "" : "s"}`;
+  const needsInputLabel = groupedCustomerInput
+    ? (cell.needsInputDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.needsInputDeductibleTotal)} Needs input` : "Needs input")
+    : cell.needsInputDeductibleTotal > 0
+      ? `${formatCurrencyLocal(cell.needsInputDeductibleTotal)} · ${customerInputCountLabel} ${customerInputCount === 1 ? "needs" : "need"} input`
+      : `${customerInputCountLabel} ${customerInputCount === 1 ? "needs" : "need"} input`;
   return (
     <div className="flex flex-col items-stretch gap-1">
       {cell.reviewedTransactionCount > 0 ? (
@@ -1579,9 +1557,9 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
           type="button"
           onClick={() => openCell("standard_rule")}
           className="w-full rounded-lg border border-sky-300/10 bg-sky-300/[0.05] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-sky-100 transition hover:border-sky-200/30 hover:bg-sky-300/[0.10] focus:outline-none focus:ring-2 focus:ring-sky-300/30"
-          title={`${account.name}, ${month.longLabel}, ${cell.standardRuleTransactionCount} standard-rule transaction${cell.standardRuleTransactionCount === 1 ? "" : "s"}`}
+          title={`${account.name}, ${month.longLabel}, ${cell.standardRuleTransactionCount} estimated transaction${cell.standardRuleTransactionCount === 1 ? "" : "s"}`}
         >
-          {`${formatCurrencyLocal(cell.standardRuleDeductibleTotal)} Standard estimate`}
+          {`${formatCurrencyLocal(cell.standardRuleDeductibleTotal)} Estimated`}
         </button>
       ) : null}
       {cell.resolvedZeroTransactionCount > 0 && !cell.reviewedTransactionCount && !cell.standardRuleTransactionCount ? (
@@ -1611,17 +1589,17 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
           className="w-full rounded-lg border border-amber-300/10 bg-amber-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-amber-100 transition hover:border-amber-200/30 hover:bg-amber-300/[0.11] focus:outline-none focus:ring-2 focus:ring-amber-300/30"
           title={`${account.name}, ${month.longLabel}, ${cell.customerInputTransactionCount} transaction${cell.customerInputTransactionCount === 1 ? " needs" : "s need"} customer input`}
         >
-          {cell.needsInputDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.needsInputDeductibleTotal)} Needs input` : `${cell.customerInputTransactionCount} need${cell.customerInputTransactionCount === 1 ? "s" : ""} input`}
+          {needsInputLabel}
         </button>
       ) : null}
       {residualReviewCount > 0 ? (
         <button
           type="button"
           onClick={() => openCell("proposed")}
-          className="w-full rounded-lg border border-amber-300/10 bg-amber-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-amber-100 transition hover:border-amber-200/30 hover:bg-amber-300/[0.11] focus:outline-none focus:ring-2 focus:ring-amber-300/30"
-          title={`${account.name}, ${month.longLabel}, supported standard estimate`}
+          className="w-full rounded-lg border border-sky-300/10 bg-sky-300/[0.05] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-sky-100 transition hover:border-sky-200/30 hover:bg-sky-300/[0.10] focus:outline-none focus:ring-2 focus:ring-sky-300/30"
+          title={`${account.name}, ${month.longLabel}, estimated deduction`}
         >
-          {cell.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.proposedDeductibleTotal)} Standard estimate` : "Standard estimate"}
+          {cell.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.proposedDeductibleTotal)} Estimated` : "Estimated"}
         </button>
       ) : null}
       {cell.needsTaxReviewTransactionCount > 0 ? (
@@ -1631,7 +1609,7 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
           className="w-full rounded-lg border border-amber-300/14 bg-amber-300/[0.045] px-2 py-1.5 text-right text-[12px] font-semibold text-amber-50 transition hover:border-amber-200/30 hover:bg-amber-300/[0.10] focus:outline-none focus:ring-2 focus:ring-amber-300/30"
           title={`${account.name}, ${month.longLabel}, needs tax review`}
         >
-          {cell.needsTaxReviewTransactionCount === 1 ? "Bookkeeping follow-up" : `${cell.needsTaxReviewTransactionCount} bookkeeping follow-up`}
+          {cell.needsTaxReviewTransactionCount === 1 ? "Needs bookkeeping details" : `${cell.needsTaxReviewTransactionCount} items need bookkeeping details`}
           {cell.needsTaxReviewGrossExpense > 0 ? <span className="block text-[10px] font-medium text-white/42">{formatCurrencyLocal(cell.needsTaxReviewGrossExpense)} expenses</span> : null}
         </button>
       ) : null}
@@ -1652,7 +1630,7 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
           className="w-full rounded-lg border border-rose-300/12 bg-rose-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold text-rose-100 transition hover:border-rose-200/30 hover:bg-rose-300/[0.11] focus:outline-none focus:ring-2 focus:ring-rose-300/30"
           title={`${account.name}, ${month.longLabel}, failed classifications`}
         >
-          Bookkeeping follow-up
+          Needs bookkeeping details
         </button>
       ) : null}
     </div>
@@ -1702,7 +1680,7 @@ function AttentionReviewGroups({ groups, year, readOnly, onOpenDecision }) {
                 <div className="mt-0.5 text-xs text-white/42">{group.transactionCount} transactions · {formatCurrencyLocal(group.grossTotal)} gross · {formatDeductiblePercent(group.deductiblePercent)}</div>
               </div>
             </div>
-            <div className="mt-2 text-xs text-white/46">Applies to this QBO GL account for {year} across {formatDecisionMonths(group.months)}. Confirming saves this choice as the automatic treatment for future posted transactions in this account.</div>
+            <div className="mt-2 text-xs text-white/46">Applies to this expense category for {year} across {formatDecisionMonths(group.months)}. Confirming saves this choice as the automatic treatment for future posted transactions in this category.</div>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1958,7 +1936,7 @@ function DeductionsLoadingState() {
           <table className="min-w-[1040px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
-                <th className="w-[260px] px-3 py-3 text-left font-semibold">QBO GL account</th>
+                <th className="w-[260px] px-3 py-3 text-left font-semibold">Expense category</th>
                 {months.map((month) => (
                   <th key={month} className="w-[68px] px-2 py-3 text-right font-semibold">{month}</th>
                 ))}
@@ -2012,16 +1990,6 @@ function DeductionsLoadingState() {
         </div>
       </div>
     </div>
-  );
-}
-
-function LoadingEllipsis() {
-  return (
-    <span className="inline-flex w-5 items-baseline justify-start gap-[1px] text-emerald-200" aria-hidden="true">
-      <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "0ms" }}>.</span>
-      <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "120ms" }}>.</span>
-      <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "240ms" }}>.</span>
-    </span>
   );
 }
 
@@ -2098,7 +2066,7 @@ function ClassificationWorkspaceTable({ rows, loading, emptyMessage = "No transa
           <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
             <th className="px-3 py-3 text-left font-semibold">Date</th>
             <th className="px-3 py-3 text-left font-semibold">Vendor / Description</th>
-            <th className="px-3 py-3 text-left font-semibold">QBO GL Account</th>
+            <th className="px-3 py-3 text-left font-semibold">Expense category</th>
             <th className="px-3 py-3 text-right font-semibold">Amount</th>
             <th className="px-3 py-3 text-left font-semibold">Tax category</th>
             <th className="px-3 py-3 text-left font-semibold">Deductibility</th>
@@ -2112,7 +2080,7 @@ function ClassificationWorkspaceTable({ rows, loading, emptyMessage = "No transa
               <td className="whitespace-nowrap px-3 py-3 text-white/58">{formatDateLocal(row.date)}</td>
               <td className="max-w-[230px] px-3 py-3">
                 <div className="truncate font-semibold text-white/82">{row.vendor}</div>
-                <div className="truncate text-[11px] text-white/38">{row.description || "QBO-posted transaction"}</div>
+                <div className="truncate text-[11px] text-white/38">{row.description || "Posted transaction"}</div>
               </td>
               <td className="max-w-[190px] px-3 py-3">
                 <div className="truncate text-white/68">{row.qboAccountName}</div>
@@ -2403,29 +2371,6 @@ function buildCustomerDeductionsWorkflow(rows = [], projection = null) {
   };
 }
 
-function customerDeductionsStatusMessage(summary = {}, workflow = {}) {
-  const job = summary.jobStatus || {};
-  const total = Number(job.total || job.remaining || 0);
-  if (["queued", "processing", "delayed", "stalled"].includes(job.status)) {
-    return total > 0
-      ? `Updating deduction estimates for ${total} recently posted transaction${total === 1 ? "" : "s"}. Existing results remain available.`
-      : "Updating deduction estimates. Existing results remain available.";
-  }
-  if (job.status === "failed") {
-    const retryMessage = job.canRetry === true
-      ? "Bizzi will retry automatically."
-      : "Bizzi is investigating the technical update.";
-    return total > 0
-      ? `${total} transaction${total === 1 ? " could" : "s could"} not be evaluated yet. Existing deduction totals remain available. ${retryMessage}`
-      : `Some transactions could not be evaluated yet. Existing deduction totals remain available. ${retryMessage}`;
-  }
-  if (workflow.customerInputCount > 0) {
-    return `${workflow.customerDecisionCount} question${workflow.customerDecisionCount === 1 ? " needs" : "s need"} your input. Your answers will update ${workflow.customerInputCount} transaction${workflow.customerInputCount === 1 ? "" : "s"}.`;
-  }
-  if (workflow.technicalCount > 0) return "Some transactions need bookkeeping evidence. Existing deduction estimates remain available.";
-  return "Deductions are estimated from final QuickBooks categories and supported tax rules.";
-}
-
 function normalizeClassificationWorkspaceRow(row) {
   if (!row) return null;
   const bucket = classificationBucket(row);
@@ -2451,7 +2396,14 @@ function normalizeClassificationWorkspaceRow(row) {
 
 function filterClassificationWorkspaceRows(rows, tab) {
   if (tab === "all") return rows;
+  if (tab === "bookkeeping_details") return rows.filter(isBookkeepingDetailsRow);
   return rows.filter((row) => row.classificationBucket === tab);
+}
+
+function isBookkeepingDetailsRow(row) {
+  const bucket = classificationBucket(row);
+  if (["unclassified", "technical_evidence_incomplete", "failed", "needs_tax_review"].includes(bucket)) return true;
+  return bucket === "needs_review" && !requiresCustomerTaxInput(row) && !isSupportedStandardRuleEstimate(row);
 }
 
 function filterAttentionWorkspaceRows(rows, tab) {
@@ -2552,6 +2504,17 @@ function findDecisionGroupForRows(groups = [], rows = []) {
     .find((group) => group.rows.some((row) => ids.has(String(row.id || row.transactionId || "")))) || null;
 }
 
+function isSingleDecisionGroupForRows(groups = [], rows = []) {
+  const ids = new Set(rows.map((row) => String(row.id || row.transactionId || "")).filter(Boolean));
+  if (!ids.size) return false;
+  return groups
+    .map(toDecisionActionGroup)
+    .some((group) => {
+      const groupIds = new Set(group.rows.map((row) => String(row.id || row.transactionId || "")).filter(Boolean));
+      return [...ids].every((id) => groupIds.has(id));
+    });
+}
+
 function reviewDecisionForRow(row) {
   const category = String(row?.taxCategory || row?.tax_category || "").toLowerCase();
   const glAccount = String(row?.qboAccountName || row?.bookAccount || row?.raw?.qboAccountName || row?.raw?.source_qbo_account_name || "").toLowerCase();
@@ -2630,7 +2593,7 @@ function buildReviewDecisionChanges({ group, businessUsePercent, dedicatedPremis
 }
 
 function reviewDecisionReason({ group, businessUsePercent, dedicatedPremises }) {
-  const scopeLabel = "matching QBO GL account for this tax year";
+  const scopeLabel = "matching expense category for this tax year";
   if (group.decision.kind === "business_use_percent") {
     return `User supplied ${businessUsePercent}% business use for ${scopeLabel}.`;
   }
@@ -2640,13 +2603,6 @@ function reviewDecisionReason({ group, businessUsePercent, dedicatedPremises }) 
       : `User supplied ${businessUsePercent}% utility business allocation for ${scopeLabel}.`;
   }
   return `User confirmed business purpose for ${scopeLabel}.`;
-}
-
-function formatRelativeRefreshTime(value) {
-  const ms = Date.now() - Date.parse(value || "");
-  if (!Number.isFinite(ms) || ms < 60_000) return "just now";
-  const minutes = Math.max(1, Math.round(ms / 60_000));
-  return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
 }
 
 function normalizeRows(value) {
@@ -2720,7 +2676,7 @@ function isStandardMileageGasRow(row) {
 }
 
 function deductibilityLabel(row) {
-  if (row?.taxDataUnavailable === true) return "Bookkeeping follow-up";
+  if (row?.taxDataUnavailable === true) return "Needs bookkeeping details";
   if (classificationBucket(row) === "outside_deductions") return "Not a deduction";
   if (classificationBucket(row) === "technical_evidence_incomplete") return "Bookkeeping evidence needed";
   if (classificationBucket(row) === "unclassified") {
@@ -2776,7 +2732,7 @@ function classificationSourceLabel(row) {
     row.raw?.classification?.rule_code
   ));
   if (row.taxTreatment === "not_determined" || row.taxCategory === "unresolved") return "No matching rule";
-  if (source === "rule_engine" || hasRuleIdentity) return "QBO GL rule";
+  if (source === "rule_engine" || hasRuleIdentity) return "Expense-category rule";
   if (!source) return classificationBucket(row) === "unclassified" ? "Not classified" : "Rule";
   return formatTaxCategoryLabel(source);
 }
@@ -3186,10 +3142,10 @@ function DeductionMonthDetailModal({
               </DetailPill>
             </div>
             <p id="deduction-detail-description" className="mt-2 max-w-2xl text-sm leading-relaxed text-white/56">
-              {month.longLabel} · {transactions.length} {transactions.length === 1 ? "transaction" : "transactions"} · QBO GL rule evidence
+              {month.longLabel} · {transactions.length} {transactions.length === 1 ? "transaction" : "transactions"} · expense-category rule evidence
             </p>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/46">
-              Bizzi used the posted QuickBooks GL account and available transaction details to determine this tax treatment.
+              Bizzi used the posted expense category and available transaction details to determine this tax treatment.
             </p>
           </div>
           <button
@@ -3425,7 +3381,7 @@ function DetailContextCard({ confirmationSummary, canEditConfirmation = false, p
             {confirmationSummary ? confirmationSummary.heading : "Classification evidence"}
           </div>
           <p className="mt-1 text-sm leading-relaxed text-white/76">
-            {confirmationSummary?.copy || "Bizzi categorized these transactions using their posted QuickBooks GL account and an active verified deduction rule."}
+            {confirmationSummary?.copy || "Bizzi categorized these transactions using their posted expense category and an active verified deduction rule."}
           </p>
           {confirmationSummary ? (
             <p className="mt-2 text-xs leading-relaxed text-white/52">
@@ -4047,7 +4003,7 @@ function detailReviewContextForSelection(selection) {
       confirmationPercent: 50,
       deductibilityStatus: "partially_deductible",
       taxTreatment: "business_meals_business_purpose_confirmed",
-      explanation: "Bizzi categorized these transactions as Business Meals based on their posted QuickBooks GL account. Bizzi estimates that 50% may be deductible, but you must confirm they had a business purpose.",
+      explanation: "Bizzi categorized these transactions as Business Meals based on their posted expense category. Bizzi estimates that 50% may be deductible, but you must confirm they had a business purpose.",
       actionHelp: "Confirm selected transactions as business meals. Personal meals and undocumented exceptions should stay unchecked.",
       businessLabel: "Confirm selected as business meals",
       personalLabel: "Mark selected as personal meals",
@@ -4058,7 +4014,7 @@ function detailReviewContextForSelection(selection) {
       kind: "vehicle_method",
       supported: true,
       defaultTaxCategory: taxCategorySelectValue(row) || "vehicle",
-      explanation: "Bizzi categorized these transactions as Vehicle Expenses based on their posted QuickBooks GL account. Choose your vehicle deduction method before Bizzi calculates the deductible amount.",
+      explanation: "Bizzi categorized these transactions as Vehicle Expenses based on their posted expense category. Choose your vehicle deduction method before Bizzi calculates the deductible amount.",
       actionHelp: "Choose a vehicle method for the selected gas transactions before Bizzi treats them as confirmed.",
     };
   }
@@ -4068,7 +4024,7 @@ function detailReviewContextForSelection(selection) {
       supported: true,
       requiresBusinessUsePercent: true,
       defaultTaxCategory: taxCategorySelectValue(row) || "utilities",
-      explanation: "Bizzi categorized these transactions as Utilities based on their posted QuickBooks GL account. Tell us how much of this account is used for business so Bizzi can calculate the deductible amount.",
+      explanation: "Bizzi categorized these transactions as Utilities based on their posted expense category. Tell us how much of this category is used for business so Bizzi can calculate the deductible amount.",
       actionHelp: "Enter the factual business-use percentage for selected phone or utility expenses.",
     };
   }
@@ -4080,7 +4036,7 @@ function detailReviewContextForSelection(selection) {
       confirmationPercent: 100,
       deductibilityStatus: "fully_deductible",
       taxTreatment: "travel_transportation_business_purpose_confirmed",
-      explanation: "Bizzi categorized these transactions as Business Transportation based on their posted QuickBooks GL account. Confirm which trips had a business purpose and exclude personal travel or commuting.",
+      explanation: "Bizzi categorized these transactions as Business Transportation based on their posted expense category. Confirm which trips had a business purpose and exclude personal travel or commuting.",
       actionHelp: "Confirm selected trips as business transportation and leave personal or commuting exceptions unchecked.",
       businessLabel: "Confirm selected as business trips",
       personalLabel: "Mark selected as personal or commuting",
@@ -4094,7 +4050,7 @@ function detailReviewContextForSelection(selection) {
       confirmationPercent: 100,
       deductibilityStatus: "fully_deductible",
       taxTreatment: "supplies_business_purchase_confirmed",
-      explanation: "Bizzi categorized these transactions as Supplies based on their posted QuickBooks GL account. Confirm whether each selected purchase was for your business.",
+      explanation: "Bizzi categorized these transactions as Supplies based on their posted expense category. Confirm whether each selected purchase was for your business.",
       actionHelp: "Confirm selected supplies as business purchases. Personal purchases should stay unchecked or be marked personal.",
       question: "Was this purchase for your business?",
       businessLabel: "Business purchase - 100% deductible",
@@ -4241,7 +4197,7 @@ function buildDetailResolutionChanges(context, rows, options = {}) {
 }
 
 function detailResolutionReason(context, scope, count) {
-  const scopeLabel = scope === "account_year" ? "QBO GL account tax-year scope" : "selected transaction scope";
+  const scopeLabel = scope === "account_year" ? "expense-category tax-year scope" : "selected transaction scope";
   return `User confirmed ${count} deduction review ${count === 1 ? "item" : "items"} from the detail modal (${context.kind}, ${scopeLabel}).`;
 }
 
@@ -4474,7 +4430,7 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
     taxCategory: treatmentUnavailable ? null : (classified?.taxCategory || "pending"),
     taxCategoryLabel: treatmentUnavailable ? "Tax treatment unavailable" : (classified?.taxCategoryLabel || "Pending"),
     taxTreatment: treatmentUnavailable ? null : (classified?.taxTreatment || "pending_classification"),
-    taxTreatmentLabel: treatmentUnavailable ? "Bookkeeping follow-up" : (classified?.taxTreatmentLabel || "Pending classification"),
+    taxTreatmentLabel: treatmentUnavailable ? "Needs bookkeeping details" : (classified?.taxTreatmentLabel || "Pending classification"),
     deductiblePercent: classified?.deductiblePercent ?? null,
     deductibleAmount: classified?.deductibleAmount ?? null,
     confidenceScore: classified?.confidenceScore ?? null,
@@ -4680,7 +4636,7 @@ function buildMatrixAuthorityTotals(matrix) {
 function deductionTransactionSubtext(row) {
   const parts = [
     row?.description,
-    row?.qboAccountName ? `GL: ${row.qboAccountName}` : null,
+    row?.qboAccountName ? `Expense category: ${row.qboAccountName}` : null,
   ].filter(Boolean);
   return parts.join(" · ");
 }
