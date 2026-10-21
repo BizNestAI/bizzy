@@ -601,7 +601,8 @@ test("Tax Dashboard no longer embeds the legacy deductions matrix", () => {
 test("Tax Dashboard embeds classification workspace controls in Deductions", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
-  assert.match(dashboard, /At a glance/);
+  assert.match(dashboard, /Deduction estimate summary/);
+  assert.match(dashboard, /Based on \{populationCounts\.matrixIncludedCount\} expense transaction/);
   assert.doesNotMatch(dashboard, />Update deductions</);
   assert.match(dashboard, /deductions\.refreshing \? "Updating" : "Refresh"/);
   assert.match(dashboard, /Estimated/);
@@ -628,8 +629,12 @@ test("Tax Dashboard uses hydrated posted transactions and keeps matrix layout se
   assert.doesNotMatch(dashboard, /cell\.deductibleTotal/);
 });
 
-test("Tax Dashboard renders matrix-first Deductions workspace views with separate authority totals", () => {
+test("Tax Dashboard renders a single estimate summary before the matrix-first Deductions workspace", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const summaryShell = dashboard.slice(
+    dashboard.indexOf('<section className="mt-5 rounded-2xl border border-emerald-300/10'),
+    dashboard.indexOf("<WorkspaceViewTabs")
+  );
   assert.match(dashboard, /Deductions overview/);
   assert.match(dashboard, /Questions for you/);
   assert.match(dashboard, /All transactions/);
@@ -637,11 +642,12 @@ test("Tax Dashboard renders matrix-first Deductions workspace views with separat
   assert.match(dashboard, /workspaceView === "needs_attention"/);
   assert.match(dashboard, /DeductionsIncludedDisclosure/);
   assert.match(dashboard, /DeductionAccountMatrix/);
-  assert.match(dashboard, /Estimated deductible expenses/);
-  assert.match(dashboard, /Standard estimates/);
-  assert.match(dashboard, /Questions for you/);
-  assert.match(dashboard, /Your answers will update/);
-  assert.match(dashboard, /posted transaction.*reviewed for this estimate/);
+  assert.match(summaryShell, /Estimated deductible expenses/);
+  assert.match(summaryShell, /formatCurrencyLocal\(estimatedDeductibleExpenses\)/);
+  assert.match(summaryShell, /populationCounts\.matrixIncludedCount/);
+  assert.match(summaryShell, /customerWorkflow\.technicalCount/);
+  assert.doesNotMatch(summaryShell, /Reviewed|Standard estimates|Questions for you/);
+  assert.match(dashboard, /posted transaction\{evaluatedCount === 1 \? "" : "s"\} evaluated/);
 });
 
 test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and authority", () => {
@@ -669,19 +675,18 @@ test("Tax launch overview keeps customer copy concise and puts the matrix before
     dashboard.indexOf("function TaxDashboardDeductions"),
     dashboard.indexOf("const CLASSIFICATION_TABS")
   );
-  const questionCopyMatches = customerShell.match(/Your answers will update/g) || [];
-  const summaryIndex = customerShell.indexOf("At a glance");
+  const summaryIndex = customerShell.indexOf("Deduction estimate summary");
   const tabsIndex = customerShell.indexOf("<WorkspaceViewTabs");
   const disclosureIndex = customerShell.indexOf("<DeductionsIncludedDisclosure");
   const matrixIndex = customerShell.indexOf("<DeductionAccountMatrix");
   const rulesIndex = customerShell.indexOf("<DeductionDecisionRulesPanel");
 
-  assert.equal(questionCopyMatches.length, 1);
   assert.match(customerShell, /Preliminary bookkeeping estimate—not a tax return\./);
   assert.match(customerShell, /Estimates are based on expenses posted to QuickBooks\. Items that need more information are excluded until reviewed\./);
   assert.match(customerShell, /Updated \{formatDateLocal\(updatedAt\)\}/);
   assert.match(customerShell, /customerWorkflow\.technicalCount/);
   assert.match(customerShell, /bookkeeping details/);
+  assert.match(customerShell, /These are not questions for you\./);
   assert.doesNotMatch(customerShell, /deterministic tax rules|stable transaction identities|QBO GL account|Classification status|How the displayed states reconcile/);
   assert.ok(summaryIndex > -1 && tabsIndex > summaryIndex);
   assert.ok(disclosureIndex > tabsIndex && matrixIndex > disclosureIndex);
@@ -695,6 +700,86 @@ test("Tax launch overview keeps customer copy concise and puts the matrix before
   assert.match(dashboard, /Set a business-use percentage for selected utility expenses\./);
   assert.match(dashboard, /No defaults set yet\./);
   assert.doesNotMatch(dashboard, /Your deduction rules|Company-specific|No company deduction rules have been saved yet/);
+});
+
+test("Tax deduction summary uses the bridge population, keeps workflow counts secondary, and labels question tabs accessibly", async () => {
+  const {
+    DeductionsIncludedDisclosure,
+    WorkspaceViewTabs,
+    describeOutsideMatrixActivity,
+    resolveDeductionsPopulationCounts,
+  } = await loadTaxDashboardInternals();
+  const populationBridge = {
+    tax_scope: {
+      posted_transactions_evaluated_count: 709,
+      deductions_matrix_expense_count: 685,
+      posted_non_expense_outside_deductions_count: 24,
+      dispositions: {
+        expense_cogs_in_matrix: 685,
+        income_outside_deductions: 8,
+        transfer_or_card_payment_not_deduction: 6,
+        owner_or_equity_not_deduction: 3,
+        refund_credit_or_asset_not_deduction: 5,
+        incomplete_or_unresolved: 2,
+      },
+    },
+  };
+  const projection = {
+    canonicalCount: 709,
+    counts: {
+      reviewed: 43,
+      standard_rule_applied: 145,
+      standard_rule_estimated_no_action: 0,
+      customer_input_required: 435,
+      bookkeeping_evidence_required: 50,
+      technical_update_pending: 0,
+      tax_review_required: 0,
+      ambiguous: 12,
+    },
+  };
+  const counts = resolveDeductionsPopulationCounts({
+    transactionCount: 999,
+    populationBridge,
+    projection,
+  });
+
+  assert.equal(counts.evaluatedCount, 709);
+  assert.equal(counts.matrixIncludedCount, 685, "The server bridge takes precedence over a local matrix fallback.");
+  assert.equal(counts.outsideMatrixCount, 24);
+  assert.equal(counts.evaluatedCount, counts.matrixIncludedCount + counts.outsideMatrixCount);
+  assert.equal(
+    describeOutsideMatrixActivity({ income_outside_deductions: 8, incomplete_or_unresolved: 2 }),
+    "Outside the matrix includes income, and records without sufficient bookkeeping evidence."
+  );
+
+  const disclosure = renderToStaticMarkup(React.createElement(DeductionsIncludedDisclosure, {
+    transactionCount: 999,
+    populationBridge,
+    projection,
+  }));
+  assert.match(disclosure, /709 posted transactions evaluated/);
+  assert.match(disclosure, /Expense and COGS in the matrix:<\/span> 685\./);
+  assert.match(disclosure, /Outside the deductions matrix:<\/span> 24\./);
+  assert.match(disclosure, /income, transfers or credit-card payments, owner or equity activity, refunds, credits, or asset activity, and records without sufficient bookkeeping evidence/);
+  assert.match(disclosure, /Supporting workflow details/);
+  assert.match(disclosure, /These counts may overlap with the transaction populations above and are not added together\./);
+
+  const tabs = renderToStaticMarkup(React.createElement(WorkspaceViewTabs, {
+    value: "overview",
+    onChange: () => {},
+    questionGroupCount: 9,
+  }));
+  assert.match(tabs, /Questions for you · 9/);
+  assert.match(tabs, /aria-label="Questions for you, 9 questions requiring an answer"/);
+  assert.match(tabs, /type="button"/);
+
+  const zeroQuestionTabs = renderToStaticMarkup(React.createElement(WorkspaceViewTabs, {
+    value: "overview",
+    onChange: () => {},
+    questionGroupCount: 0,
+  }));
+  assert.match(zeroQuestionTabs, /Questions for you · 0/);
+  assert.match(zeroQuestionTabs, /aria-label="Questions for you, no questions requiring an answer"/);
 });
 
 test("Tax matrix launch labels retain accessible details and grouped decision navigation", () => {

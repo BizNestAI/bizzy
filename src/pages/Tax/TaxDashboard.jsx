@@ -557,9 +557,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     }),
     [classificationSummary.primaryUnresolvedTotal, classificationSummary.reviewRequiredTotal, lifecycleProjection]
   );
-  const customerQuestionMessage = customerWorkflow.customerDecisionCount > 0
-    ? `${customerWorkflow.customerDecisionCount} question${customerWorkflow.customerDecisionCount === 1 ? " needs" : "s need"} your input. Your answers will update ${customerWorkflow.customerInputCount} transaction${customerWorkflow.customerInputCount === 1 ? "" : "s"}.`
-    : null;
   const updatedAt = deductions.lastRefreshedAt || classificationSummary.lastRunAt || null;
   const openBookkeepingDetails = () => {
     setClassificationTab("bookkeeping_details");
@@ -592,6 +589,16 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     [deductions.isDemo, initialDeductionsLoading, workspaceRows, year]
   );
   const matrixTotals = useMemo(() => buildMatrixAuthorityTotals(matrix), [matrix]);
+  const populationCounts = useMemo(
+    () => resolveDeductionsPopulationCounts({
+      transactionCount: matrix.transactionCount,
+      populationBridge,
+      projection: lifecycleProjection,
+    }),
+    [lifecycleProjection, matrix.transactionCount, populationBridge]
+  );
+  const estimatedDeductibleExpenses = matrixTotals.authoritativeDeductibleTotal + matrixTotals.proposedDeductibleTotal;
+  const evidenceThroughAt = classificationSummary.lastRunAt || null;
   const openVehicleWorkflow = (decision) => {
     const target = decision?.group?.rows?.find((row) => {
       const monthKey = getTransactionMonthKey(row.date, year);
@@ -628,7 +635,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           <div className="text-[12px] uppercase tracking-[0.14em] text-white/65">Deductions</div>
           <div className="text-xl font-semibold leading-tight">{year} deductions overview</div>
           <p className="mt-1 max-w-2xl text-sm text-white/55">
-            Preliminary bookkeeping estimate—not a tax return.{customerQuestionMessage ? ` ${customerQuestionMessage}` : ""}
+            Preliminary bookkeeping estimate—not a tax return.
           </p>
         </div>
 
@@ -681,20 +688,21 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         </div>
       ) : (
         <>
-      <div className="mt-5 rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-3">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/62">At a glance</div>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/50">
+      <section className="mt-5 rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-4" aria-label="Deduction estimate summary">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/62">Estimated deductible expenses</div>
+          <div className="mt-1 break-words text-2xl font-semibold tabular-nums text-white sm:text-3xl">
+            {formatCurrencyLocal(estimatedDeductibleExpenses)}
+          </div>
+          <p className="mt-1 text-sm text-white/68">
+            Based on {populationCounts.matrixIncludedCount} expense transaction{populationCounts.matrixIncludedCount === 1 ? "" : "s"}{evidenceThroughAt ? ` through ${formatLongDateLocal(evidenceThroughAt)}` : ""}.
+          </p>
+          <p className="mt-3 max-w-2xl text-xs leading-relaxed text-white/50">
             Estimates are based on expenses posted to QuickBooks. Items that need more information are excluded until reviewed.
           </p>
         </div>
         <ClassificationProgressSummary summary={classificationSummary} />
-        <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
-          <ClassificationStat label="Estimated deductible expenses" value={formatCurrencyLocal(matrixTotals.authoritativeDeductibleTotal + matrixTotals.proposedDeductibleTotal)} />
-          <ClassificationStat label="Reviewed" value={customerWorkflow.reviewedCount} />
-          <ClassificationStat label="Standard estimates" value={customerWorkflow.standardRuleCount} />
-          <ClassificationStat label="Questions for you" value={customerWorkflow.customerDecisionCount} tone={customerWorkflow.customerDecisionCount ? "amber" : "default"} />
-        </div>
+        {/* This remains prominent because it is bookkeeping follow-up, not a customer tax question. */}
         {customerWorkflow.technicalCount > 0 ? (
           <button
             type="button"
@@ -704,9 +712,13 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
             {customerWorkflow.technicalCount} transaction{customerWorkflow.technicalCount === 1 ? " needs" : "s need"} bookkeeping details
           </button>
         ) : null}
-      </div>
+      </section>
 
-      <WorkspaceViewTabs value={workspaceView} onChange={setWorkspaceView} />
+      <WorkspaceViewTabs
+        value={workspaceView}
+        onChange={setWorkspaceView}
+        questionGroupCount={customerWorkflow.customerDecisionCount}
+      />
 
       {workspaceView === "overview" ? (
         <>
@@ -752,6 +764,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
               {filteredWorkspaceRows.length} of {workspaceRows.length} transaction rows shown
             </div>
           </div>
+          {classificationTab === "bookkeeping_details" && customerWorkflow.technicalCount > 0 ? (
+            <div className="border-b border-amber-300/[0.12] bg-amber-300/[0.05] px-3 py-2 text-xs leading-relaxed text-amber-50/85" role="status">
+              {customerWorkflow.technicalCount} transaction{customerWorkflow.technicalCount === 1 ? " needs" : "s need"} bookkeeping details before Bizzi can estimate their tax treatment. These are not questions for you.
+            </div>
+          ) : null}
           <ClassificationWorkspaceTable rows={filteredWorkspaceRows} loading={deductions.loading} />
         </div>
       )}
@@ -877,25 +894,37 @@ const ATTENTION_TABS = [
   { value: "failed", label: "Technical updates" },
 ];
 
-function WorkspaceViewTabs({ value, onChange }) {
+function WorkspaceViewTabs({ value, onChange, questionGroupCount = 0 }) {
+  const parsedQuestionCount = Number(questionGroupCount);
+  const questionCount = Number.isFinite(parsedQuestionCount) ? Math.max(0, parsedQuestionCount) : 0;
   return (
     <div className="mt-5 flex flex-wrap gap-1.5" role="tablist" aria-label="Deductions workspace views">
-      {WORKSPACE_VIEW_TABS.map((tab) => (
-        <button
-          key={tab.value}
-          type="button"
-          role="tab"
-          aria-selected={value === tab.value}
-          onClick={() => onChange(tab.value)}
-          className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-emerald-300/35 ${
-            value === tab.value
-              ? "border-emerald-300/28 bg-emerald-300/[0.13] text-emerald-50"
-              : "border-white/10 bg-white/[0.035] text-white/58 hover:bg-white/[0.07] hover:text-white/78"
-          }`}
-        >
-          {tab.label}
-        </button>
-      ))}
+      {WORKSPACE_VIEW_TABS.map((tab) => {
+        const isQuestions = tab.value === "needs_attention";
+        const visibleLabel = isQuestions ? `Questions for you · ${questionCount}` : tab.label;
+        const accessibleLabel = isQuestions
+          ? questionCount === 0
+            ? "Questions for you, no questions requiring an answer"
+            : `Questions for you, ${questionCount} question${questionCount === 1 ? "" : "s"} requiring an answer`
+          : tab.label;
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            role="tab"
+            aria-selected={value === tab.value}
+            aria-label={accessibleLabel}
+            onClick={() => onChange(tab.value)}
+            className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-emerald-300/35 ${
+              value === tab.value
+                ? "border-emerald-300/28 bg-emerald-300/[0.13] text-emerald-50"
+                : "border-white/10 bg-white/[0.035] text-white/58 hover:bg-white/[0.07] hover:text-white/78"
+            }`}
+          >
+            {visibleLabel}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1343,32 +1372,75 @@ function FilterTabButton({ tab, selected, count = null, onClick }) {
   );
 }
 
-function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null }) {
+function resolveDeductionsPopulationCounts({ transactionCount = 0, populationBridge = null, projection = null } = {}) {
   const bridgeScope = populationBridge?.tax_scope || null;
   const counts = projection?.counts || {};
   const outcomeCount = (outcome) => Number(counts[outcome] || 0);
-  const matrixCount = Number(bridgeScope?.deductions_matrix_expense_count ?? transactionCount ?? 0);
-  const evaluatedCount = Number(bridgeScope?.posted_transactions_evaluated_count ?? projection?.canonicalCount ?? transactionCount ?? 0);
-  const outsideCount = Number(bridgeScope?.posted_non_expense_outside_deductions_count ?? outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.OUTSIDE_DEDUCTIONS));
-  const reviewedCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED);
-  const standardEstimateCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_APPLIED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_ESTIMATED_NO_ACTION);
-  const needsInputCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED);
-  const bookkeepingDetailCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.BOOKKEEPING_EVIDENCE_REQUIRED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.TECHNICAL_UPDATE_PENDING) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.TAX_REVIEW_REQUIRED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.AMBIGUOUS);
-  const excludedCount = outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.EXCLUDED);
+  return {
+    bridgeScope,
+    matrixIncludedCount: Number(bridgeScope?.deductions_matrix_expense_count ?? transactionCount ?? 0),
+    evaluatedCount: Number(bridgeScope?.posted_transactions_evaluated_count ?? projection?.canonicalCount ?? transactionCount ?? 0),
+    outsideMatrixCount: Number(bridgeScope?.posted_non_expense_outside_deductions_count ?? outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.OUTSIDE_DEDUCTIONS)),
+    reviewedCount: outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED),
+    standardEstimateCount: outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_APPLIED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_ESTIMATED_NO_ACTION),
+    needsInputCount: outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED),
+    bookkeepingDetailCount: outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.BOOKKEEPING_EVIDENCE_REQUIRED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.TECHNICAL_UPDATE_PENDING) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.TAX_REVIEW_REQUIRED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.AMBIGUOUS),
+  };
+}
+
+function describeOutsideMatrixActivity(dispositions = {}) {
+  const present = (key) => Number(dispositions?.[key] || 0) > 0;
+  const categories = [
+    present("income_outside_deductions") ? "income" : null,
+    present("transfer_or_card_payment_not_deduction") ? "transfers or credit-card payments" : null,
+    present("owner_or_equity_not_deduction") ? "owner or equity activity" : null,
+    present("refund_credit_or_asset_not_deduction") ? "refunds, credits, or asset activity" : null,
+    present("incomplete_or_unresolved") ? "records without sufficient bookkeeping evidence" : null,
+  ].filter(Boolean);
+  if (!categories.length) return "Outside the matrix is handled separately from deductible expenses.";
+  if (categories.length === 1) return `Outside the matrix includes ${categories[0]}.`;
+  return `Outside the matrix includes ${categories.slice(0, -1).join(", ")}, and ${categories[categories.length - 1]}.`;
+}
+
+function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null }) {
+  const {
+    bridgeScope,
+    matrixIncludedCount,
+    evaluatedCount,
+    outsideMatrixCount,
+    reviewedCount,
+    standardEstimateCount,
+    needsInputCount,
+    bookkeepingDetailCount,
+  } = resolveDeductionsPopulationCounts({ transactionCount, populationBridge, projection });
+  const workflowDetails = [
+    ["Customer-reviewed decisions", reviewedCount],
+    ["Standard estimates", standardEstimateCount],
+    ["Needs your input", needsInputCount],
+    ["Needs bookkeeping details", bookkeepingDetailCount],
+  ].filter(([, count]) => count > 0);
   return (
-    <details className="group mt-4 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58" data-tax-included-disclosure>
+    <details className="group mt-4 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58" data-tax-included-disclosure aria-label="What’s included in this deduction estimate">
       <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 font-semibold text-white/74 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
         <span>What’s included</span>
-        <span className="font-normal text-white/52">{evaluatedCount} posted transaction{evaluatedCount === 1 ? "" : "s"} reviewed for this estimate.</span>
+        <span className="font-normal text-white/52">{evaluatedCount} posted transaction{evaluatedCount === 1 ? "" : "s"} evaluated</span>
       </summary>
-      <div className="mt-3 grid gap-x-5 gap-y-2 border-t border-white/[0.08] pt-3 leading-relaxed sm:grid-cols-2">
-        <p><span className="font-semibold text-white/76">Expense and COGS:</span> {matrixCount} included in the monthly deductions matrix.</p>
-        <p><span className="font-semibold text-white/76">Handled separately:</span> {outsideCount} non-expense transaction{outsideCount === 1 ? "" : "s"}.</p>
-        <p><span className="font-semibold text-white/76">Reviewed:</span> {reviewedCount}.</p>
-        <p><span className="font-semibold text-white/76">Standard estimates:</span> {standardEstimateCount}.</p>
-        <p><span className="font-semibold text-white/76">Needs your input:</span> {needsInputCount}.</p>
-        <p><span className="font-semibold text-white/76">Needs bookkeeping details:</span> {bookkeepingDetailCount}, including ambiguous items that cannot be estimated yet.</p>
-        {excludedCount > 0 ? <p><span className="font-semibold text-white/76">Other supported states:</span> {excludedCount} excluded item{excludedCount === 1 ? "" : "s"} kept outside the estimate.</p> : null}
+      <div className="mt-3 border-t border-white/[0.08] pt-3 leading-relaxed">
+        <div className="grid gap-x-5 gap-y-2 sm:grid-cols-3">
+          <p><span className="font-semibold text-white/76">Posted transactions evaluated:</span> {evaluatedCount}.</p>
+          <p><span className="font-semibold text-white/76">Expense and COGS in the matrix:</span> {matrixIncludedCount}.</p>
+          <p><span className="font-semibold text-white/76">Outside the deductions matrix:</span> {outsideMatrixCount}.</p>
+        </div>
+        {outsideMatrixCount > 0 ? <p className="mt-2 text-white/52">{describeOutsideMatrixActivity(bridgeScope?.dispositions)}</p> : null}
+        {workflowDetails.length ? (
+          <div className="mt-3 border-t border-white/[0.08] pt-3">
+            <p className="font-semibold text-white/68">Supporting workflow details</p>
+            <p className="mt-1 text-white/48">These counts may overlap with the transaction populations above and are not added together.</p>
+            <div className="mt-2 grid gap-x-5 gap-y-1 sm:grid-cols-2">
+              {workflowDetails.map(([label, count]) => <p key={label}><span className="font-semibold text-white/76">{label}:</span> {count}.</p>)}
+            </div>
+          </div>
+        ) : null}
       </div>
     </details>
   );
@@ -4850,6 +4922,12 @@ function formatDateLocal(value) {
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function formatLongDateLocal(value) {
+  const parsed = parseLocalDate(value);
+  if (Number.isNaN(parsed.getTime())) return "the latest available information";
+  return parsed.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
 function parseLocalDate(value) {
   if (typeof value === "string") {
     const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -4863,17 +4941,21 @@ export const __TaxDashboardTestInternals = {
   DeductionDefaultSetupEditor,
   DeductionDecisionRuleEditor,
   DeductionDecisionRulesPanel,
+  DeductionsIncludedDisclosure,
   DeductionMonthDetailModal,
   TaxDashboardDeductions,
+  WorkspaceViewTabs,
   buildDeductionDefaultSetupOptions,
   buildDeductionAccountMatrix,
   buildClassificationWorkspaceRows,
   buildCustomerDeductionsWorkflow,
   buildAttentionReviewGroups,
+  describeOutsideMatrixActivity,
   findDecisionGroupForRows,
   formatLifecycleSummaryLine,
   classificationBucket,
   filterAttentionWorkspaceRows,
   isStandardRuleProposal,
   requiresCustomerTaxInput,
+  resolveDeductionsPopulationCounts,
 };
