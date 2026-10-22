@@ -97,10 +97,16 @@ export function taxDecisionTypeForRow(row = {}) {
   const ruleCode = String(firstValue(row.matchedRuleCode, row.ruleCode, row.raw?.matched_rule_code, row.raw?.rule_code, row.raw?.classification?.rule_code) || "").toLowerCase();
   const treatment = String(firstValue(row.taxTreatment, row.raw?.tax_treatment?.type, row.raw?.classification?.tax_treatment?.type) || "").toLowerCase();
 
+  // Generic Rent needs a dedicated commercial-premises/home-office authority.
+  // Account or merchant text alone must never create an allocation question.
+  if (category.includes("rent") || ruleCode.includes("rent_review") || treatment.includes("rent_review") || /\b(rent|lease)\b/.test(account)) {
+    return null;
+  }
+
   if (category.includes("vehicle") || ruleCode.includes("vehicle") || treatment.includes("vehicle") || /\b(gas|fuel|auto|vehicle)\b/.test(account)) {
     return "vehicle_method";
   }
-  if (category.includes("utilities") || ruleCode.includes("utilities") || ruleCode.includes("rent_review") || treatment.includes("utilities_review") || treatment.includes("rent_review") || /\b(phone|telephone|cell|mobile|electric|electricity|internet|utility|rent|lease)\b/.test(account)) {
+  if (category.includes("utilities") || ruleCode.includes("utilities") || treatment.includes("utilities_review") || /\b(phone|telephone|cell|mobile|electric|electricity|internet|utility)\b/.test(account)) {
     return "business_use_percent";
   }
   if (category.includes("business_meals") || category.includes("travel_transportation") || category.includes("business_travel") || ruleCode.includes("meals") || ruleCode.includes("transportation") || ruleCode.includes("travel")) {
@@ -122,7 +128,10 @@ export function isSupportedStandardRuleEstimate(row = {}) {
   const contradictory = warnings.some((warning) => ["qbo_id_mismatch", "conflicting_post_status", "source_conflict", "missing_qbo_account"].includes(String(warning || "").toLowerCase()));
   const category = String(firstValue(row.taxCategory, row.tax_category) || "").toLowerCase();
   const treatment = String(firstValue(row.taxTreatment, row.raw?.tax_treatment?.type, row.raw?.classification?.tax_treatment?.type) || "").toLowerCase();
-  return !contradictory && category !== "tax_review_holding" && !treatment.includes("holding");
+  const ruleCode = String(firstValue(row.matchedRuleCode, row.ruleCode, row.raw?.matched_rule_code, row.raw?.rule_code, row.raw?.classification?.rule_code) || "").toLowerCase();
+  const account = String(firstValue(row.qboAccountName, row.bookAccount, row.raw?.qboAccountName, row.raw?.source_qbo_account_name) || "").toLowerCase();
+  const unresolvedRent = category.includes("rent") || ruleCode.includes("rent_review") || treatment.includes("rent_review") || /\b(rent|lease)\b/.test(account);
+  return !contradictory && !unresolvedRent && category !== "tax_review_holding" && !treatment.includes("holding");
 }
 
 export function taxDeductionsLifecycleOutcomeForRow(row = {}) {
@@ -263,11 +272,19 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
       months: new Set(),
       grossAmount: 0,
       estimatedDeductibleAmount: 0,
+      actionableGrossAmountCents: 0,
+      actionableEstimatedDeductibleAmountCents: 0,
       latestDecisionAt: null,
       currentDeductiblePercent: null,
     };
     existing.rows.push(row);
-    if (entry.outcome === TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED) existing.pendingRows.push(row);
+    if (entry.outcome === TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED) {
+      existing.pendingRows.push(row);
+      const amountCents = moneyToCents(row.amount ?? row.absoluteAmount ?? row.signedAmount);
+      existing.actionableGrossAmountCents += Math.abs(amountCents);
+      const pendingPercent = numberOrNull(row.deductiblePercent);
+      if (pendingPercent != null) existing.actionableEstimatedDeductibleAmountCents += Math.round(Math.abs(amountCents) * (pendingPercent / 100));
+    }
     if (entry.outcome === TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED) existing.reviewedRows.push(row);
     const month = String(firstValue(row.date, row.transactionDate, row.transaction_date) || "").slice(0, 7);
     if (/^\d{4}-\d{2}$/.test(month)) existing.months.add(month);
@@ -313,6 +330,8 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
         months: [...group.months].sort(),
         grossAmount: roundMoney(group.grossAmount),
         estimatedDeductibleAmount: roundMoney(group.estimatedDeductibleAmount),
+        actionableGrossAmountCents: group.actionableGrossAmountCents,
+        actionableEstimatedDeductibleAmountCents: group.actionableEstimatedDeductibleAmountCents,
         state: actionableTransactionCount > 0 ? "needs_input" : "reviewed",
       };
     })
@@ -340,4 +359,9 @@ function numberOrNull(value) {
 
 function roundMoney(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function moneyToCents(value) {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? Math.round(normalized * 100) : 0;
 }

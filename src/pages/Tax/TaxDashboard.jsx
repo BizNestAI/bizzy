@@ -604,7 +604,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     }),
     [lifecycleProjection, matrix.transactionCount, populationBridge]
   );
-  const estimatedDeductibleExpenses = matrixTotals.authoritativeDeductibleTotal + matrixTotals.proposedDeductibleTotal;
+  // Customer-input rows remain gross expenses until the missing fact is supplied.
+  const estimatedDeductibleExpenses = matrixTotals.reviewedDeductibleTotal + matrixTotals.standardRuleDeductibleTotal;
   const evidenceThroughAt = classificationSummary.lastRunAt || null;
   const openVehicleWorkflow = (decision) => {
     const decisionRows = decisionActionRows(decision?.group);
@@ -739,7 +740,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
 
       {workspaceView === "overview" ? (
         <>
-          <DeductionsIncludedDisclosure transactionCount={matrix.transactionCount} populationBridge={populationBridge} projection={lifecycleProjection} />
+          <DeductionsIncludedDisclosure
+            transactionCount={matrix.transactionCount}
+            populationBridge={populationBridge}
+            projection={lifecycleProjection}
+            awaitingEvaluationCount={classificationSummary.missingEvaluationTotal}
+          />
           <DeductionMatrixLegend />
           <DeductionAccountMatrix
             matrix={matrix}
@@ -1426,11 +1432,18 @@ function resolveDeductionsPopulationCounts({ transactionCount = 0, populationBri
   const bridgeScope = populationBridge?.tax_scope || null;
   const counts = projection?.counts || {};
   const outcomeCount = (outcome) => Number(counts[outcome] || 0);
+  const matrixIncludedCount = Number(bridgeScope?.deductions_matrix_expense_count ?? transactionCount ?? 0);
+  const evaluatedCount = Number(bridgeScope?.posted_transactions_evaluated_count ?? projection?.canonicalCount ?? transactionCount ?? 0);
+  const outsideMatrixCount = Number(bridgeScope?.posted_non_expense_outside_deductions_count ?? outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.OUTSIDE_DEDUCTIONS));
+  const conservationOk = populationBridge?.identity_comparison?.identity_match === true
+    && bridgeScope?.conservation_ok === true
+    && evaluatedCount === matrixIncludedCount + outsideMatrixCount;
   return {
     bridgeScope,
-    matrixIncludedCount: Number(bridgeScope?.deductions_matrix_expense_count ?? transactionCount ?? 0),
-    evaluatedCount: Number(bridgeScope?.posted_transactions_evaluated_count ?? projection?.canonicalCount ?? transactionCount ?? 0),
-    outsideMatrixCount: Number(bridgeScope?.posted_non_expense_outside_deductions_count ?? outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.OUTSIDE_DEDUCTIONS)),
+    matrixIncludedCount,
+    evaluatedCount,
+    outsideMatrixCount,
+    conservationOk,
     reviewedCount: outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED),
     standardEstimateCount: outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_APPLIED) + outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_ESTIMATED_NO_ACTION),
     needsInputCount: outcomeCount(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED),
@@ -1452,7 +1465,7 @@ function describeOutsideMatrixActivity(dispositions = {}) {
   return `Outside the matrix includes ${categories.slice(0, -1).join(", ")}, and ${categories[categories.length - 1]}.`;
 }
 
-function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null }) {
+function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null, awaitingEvaluationCount = null }) {
   const {
     bridgeScope,
     matrixIncludedCount,
@@ -1462,6 +1475,7 @@ function DeductionsIncludedDisclosure({ transactionCount, populationBridge = nul
     standardEstimateCount,
     needsInputCount,
     bookkeepingDetailCount,
+    conservationOk,
   } = resolveDeductionsPopulationCounts({ transactionCount, populationBridge, projection });
   const workflowDetails = [
     ["Customer-reviewed decisions", reviewedCount],
@@ -1470,10 +1484,20 @@ function DeductionsIncludedDisclosure({ transactionCount, populationBridge = nul
     ["Needs bookkeeping details", bookkeepingDetailCount],
   ].filter(([, count]) => count > 0);
   return (
-    <details className="group mt-4 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58" data-tax-included-disclosure aria-label="What’s included in this deduction estimate">
+    <div className="mt-4 rounded-xl border border-white/[0.08] bg-black/[0.12] px-3 py-2 text-xs text-white/58" data-tax-included-disclosure>
+      <p className="font-semibold leading-relaxed text-white/74" role="status">
+        {conservationOk
+          ? `${evaluatedCount} posted transactions evaluated · ${matrixIncludedCount} expense transactions included in the deductions matrix · ${outsideMatrixCount} outside deductions`
+          : "Transaction totals are updating."}
+      </p>
+      <p className="sr-only" id="deductions-reconciliation-description">
+        Outside deductions means the transaction was evaluated but does not belong in the expense-deduction matrix. Transactions awaiting evaluation are reported separately and are not included in this equation.
+        {Number(awaitingEvaluationCount) > 0 ? ` ${awaitingEvaluationCount} transactions are awaiting evaluation.` : ""}
+      </p>
+      <details className="group mt-2 border-t border-white/[0.08] pt-2" aria-describedby="deductions-reconciliation-description" aria-label="Detailed deductions population breakdown">
       <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2 font-semibold text-white/74 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
         <span>What’s included</span>
-        <span className="font-normal text-white/52">{evaluatedCount} posted transaction{evaluatedCount === 1 ? "" : "s"} evaluated</span>
+        <span className="font-normal text-white/52">View details</span>
       </summary>
       <div className="mt-3 border-t border-white/[0.08] pt-3 leading-relaxed">
         <div className="grid gap-x-5 gap-y-2 sm:grid-cols-3">
@@ -1492,7 +1516,8 @@ function DeductionsIncludedDisclosure({ transactionCount, populationBridge = nul
           </div>
         ) : null}
       </div>
-    </details>
+      </details>
+    </div>
   );
 }
 
@@ -1583,10 +1608,10 @@ function DeductionAccountMatrix({ matrix, onSelectCell, onOpenDecision, decision
                     </td>
                   ))}
                   <td className="px-3 py-3 text-right align-middle text-sm tabular-nums">
-                    <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.authoritativeDeductibleTotal + account.proposedDeductibleTotal)}</div>
+                    <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.reviewedDeductibleTotal + account.standardRuleDeductibleTotal)}</div>
                     {account.reviewedTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-emerald-100/76">{formatCurrencyLocal(account.reviewedDeductibleTotal)} reviewed</div> : null}
                     {account.standardRuleTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-sky-100/76">{formatCurrencyLocal(account.standardRuleDeductibleTotal)} estimated</div> : null}
-                    {account.customerInputTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-amber-100/76">{formatCurrencyLocal(account.needsInputDeductibleTotal)} needs input</div> : null}
+                    {account.customerInputTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-amber-100/76">{formatCurrencyLocal(account.needsInputGrossExpense)} expenses to review</div> : null}
                   </td>
                 </tr>
               ))}
@@ -1647,15 +1672,11 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
   };
   const resolvedZeroLabel = matrixResolvedZeroLabel(cell);
   const residualReviewCount = Math.max(0, cell.reviewTransactionCount - cell.standardRuleTransactionCount - cell.customerInputTransactionCount);
-  const customerInputRows = cell.transactions.filter(requiresCustomerTaxInput);
-  const groupedCustomerInput = isSingleDecisionGroupForRows(decisionGroups, customerInputRows);
-  const customerInputCount = cell.customerInputTransactionCount;
-  const customerInputCountLabel = `${customerInputCount} item${customerInputCount === 1 ? "" : "s"}`;
-  const needsInputLabel = groupedCustomerInput
-    ? (cell.needsInputDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.needsInputDeductibleTotal)} Needs input` : "Needs input")
-    : cell.needsInputDeductibleTotal > 0
-      ? `${formatCurrencyLocal(cell.needsInputDeductibleTotal)} · ${customerInputCountLabel} ${customerInputCount === 1 ? "needs" : "need"} input`
-      : `${customerInputCountLabel} ${customerInputCount === 1 ? "needs" : "need"} input`;
+  const amountProjection = buildMatrixCellAmountProjection(cell);
+  const needsInputProjection = amountProjection.needs_input;
+  const needsInputLabel = needsInputProjection.display_amount_cents == null
+    ? "Needs input"
+    : `${formatCurrencyLocal(needsInputProjection.display_amount_cents / 100)} Expenses to review · Needs input`;
   return (
     <div className="flex flex-col items-stretch gap-1">
       {cell.reviewedTransactionCount > 0 ? (
@@ -1665,7 +1686,8 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
           className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           title={`${account.name}, ${month.longLabel}, ${cell.reviewedTransactionCount} reviewed transaction${cell.reviewedTransactionCount === 1 ? "" : "s"}`}
         >
-          {`${formatCurrencyLocal(cell.reviewedDeductibleTotal)} Reviewed`}
+          <span className="block">{formatCurrencyLocal(amountProjection.reviewed.display_amount_cents / 100)}</span>
+          <span className="block text-[10px] font-medium">Reviewed deduction</span>
         </button>
       ) : null}
       {cell.standardRuleTransactionCount > 0 ? (
@@ -1675,7 +1697,8 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
           className="w-full rounded-lg border border-sky-300/10 bg-sky-300/[0.05] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-sky-100 transition hover:border-sky-200/30 hover:bg-sky-300/[0.10] focus:outline-none focus:ring-2 focus:ring-sky-300/30"
           title={`${account.name}, ${month.longLabel}, ${cell.standardRuleTransactionCount} estimated transaction${cell.standardRuleTransactionCount === 1 ? "" : "s"}`}
         >
-          {`${formatCurrencyLocal(cell.standardRuleDeductibleTotal)} Estimated`}
+          <span className="block">{formatCurrencyLocal(amountProjection.estimated.display_amount_cents / 100)}</span>
+          <span className="block text-[10px] font-medium">Estimated deduction</span>
         </button>
       ) : null}
       {cell.resolvedZeroTransactionCount > 0 && !cell.reviewedTransactionCount && !cell.standardRuleTransactionCount ? (
@@ -1935,7 +1958,7 @@ function decisionTransactionIds(rows = [], answer = "all_business", exceptionIds
 
 function decisionActionLabel(action, answer, accountName = "") {
   if (answer === "unsure") return "Leave unresolved";
-  if (action?.kind === "vehicle_method") return "Continue to vehicle setup";
+  if (action?.kind === "vehicle_method") return "Vehicle setup unavailable";
   if (action?.kind === "business_use_percent" || action?.kind === "utility_allocation") return "Apply business-use percentage";
   if (answer === "some_personal") return "Save business-use decision";
   if (/meal/i.test(String(accountName))) return "Confirm business meals";
@@ -1962,7 +1985,7 @@ function decisionIntro(action, accountName, population, taxYear) {
 
 function ReviewDecisionTransactionList({ rows, accountName, action, showExceptions, exceptionIds, onToggleException }) {
   const [query, setQuery] = useState("");
-  const [showAll, setShowAll] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const normalizedQuery = query.trim().toLowerCase();
   const matchingRows = rows.filter((row) => {
     if (!normalizedQuery) return true;
@@ -1972,7 +1995,7 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
       .toLowerCase()
       .includes(normalizedQuery);
   });
-  const visibleRows = showAll ? matchingRows : matchingRows.slice(0, 8);
+  const visibleRows = expanded ? matchingRows.slice(0, 100) : [];
   const canSearch = rows.length > 8 || showExceptions;
   const treatment = action?.kind === "vehicle_method"
     ? "Vehicle method pending"
@@ -1982,21 +2005,15 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
 
   return (
     <section className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18" aria-label={`${accountName} transactions`}>
-      <div className="flex flex-col gap-2 border-b border-white/[0.08] px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <button type="button" onClick={() => setExpanded((current) => !current)} aria-expanded={expanded} className="flex w-full flex-col gap-2 px-3 py-3 text-left hover:bg-white/[0.025] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-emerald-300/35 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div className="text-sm font-semibold text-white/82">Transactions ({rows.length})</div>
+          <div className="text-sm font-semibold text-white/82">{expanded ? "Hide" : "View"} {rows.length} affected transaction{rows.length === 1 ? "" : "s"}</div>
           <p className="mt-0.5 text-xs text-white/46">
             {showExceptions ? "Mark only personal expenses. Those stay unchanged." : "A preview of the expenses included in this decision."}
           </p>
         </div>
-        {canSearch ? (
-          <label className="sr-only">
-            Search transactions
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search transactions" />
-          </label>
-        ) : null}
-      </div>
-      {canSearch ? (
+      </button>
+      {expanded && canSearch ? (
         <div className="border-b border-white/[0.06] px-3 py-2">
           <input
             value={query}
@@ -2007,7 +2024,7 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
           />
         </div>
       ) : null}
-      <div className="max-h-64 overflow-y-auto">
+      {expanded ? <div className="max-h-64 overflow-y-auto">
         {visibleRows.map((row, index) => {
           const id = taxRowId(row);
           const isException = exceptionIds.includes(id);
@@ -2035,23 +2052,12 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
             : <div key={id || `${row.date}-${index}`} className={className}>{content}</div>;
         })}
         {!visibleRows.length ? <div className="px-3 py-5 text-center text-xs text-white/48">No matching transactions.</div> : null}
-      </div>
-      {matchingRows.length > 8 ? (
-        <div className="border-t border-white/[0.06] px-3 py-2">
-          <button
-            type="button"
-            onClick={() => setShowAll((current) => !current)}
-            className="text-xs font-semibold text-emerald-100/78 underline decoration-emerald-300/30 underline-offset-4 hover:text-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
-          >
-            {showAll ? "Show fewer transactions" : `View all ${matchingRows.length} transactions`}
-          </button>
-        </div>
-      ) : null}
+      </div> : null}
     </section>
   );
 }
 
-function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose, onApply, onCheckOutcome, onOpenVehicleWorkflow }) {
+function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose, onApply, onCheckOutcome }) {
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [dedicatedPremises, setDedicatedPremises] = useState(false);
   const [businessUseAnswer, setBusinessUseAnswer] = useState("all_business");
@@ -2122,8 +2128,8 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
   const hasPercentInput = dedicatedPremises || String(businessUsePercent).trim() !== "";
   const percentValue = dedicatedPremises ? 100 : Number(businessUsePercent);
   const changingReviewedEstimate = Boolean(group.completed && (action.kind === "business_use_percent" || action.kind === "utility_allocation"));
-  const actionGrossTotal = rows.reduce((sum, row) => sum + normalizeMoney(row.amount), 0);
-  const actionEstimatedTotal = rows.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0);
+  const actionGrossTotal = Number(group.actionableGrossAmountCents || 0) / 100;
+  const actionEstimatedTotal = Number(group.actionableEstimatedDeductibleAmountCents || 0) / 100;
   const actionButtonLabel = decisionActionLabel(action, businessUseAnswer, group.qboAccountName);
   const currentEstimate = action.kind === "vehicle_method"
     ? "Not estimated yet"
@@ -2135,6 +2141,11 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
 
   const selectedTransactionIds = decisionTransactionIds(rows, businessUseAnswer, exceptionIds);
   const expectedPopulationTransactionIds = decisionTransactionIds(rows, "all_business", []);
+  const hasCanonicalScopeAmounts = Number.isInteger(group.actionableGrossAmountCents)
+    && Number.isInteger(group.actionableEstimatedDeductibleAmountCents);
+  const scopeIdentityConserved = population.isConserved
+    && expectedPopulationTransactionIds.length === population.actionableTransactionCount
+    && new Set(expectedPopulationTransactionIds).size === expectedPopulationTransactionIds.length;
   const firstSelectedRow = selectedRows[0] || rows[0] || {};
   const commandScope = {
     taxCategory: firstSelectedRow.taxCategory || firstSelectedRow.raw?.tax_category || "",
@@ -2142,12 +2153,16 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
     decisionType: action.kind,
   };
   const hasCommandScope = Boolean(commandScope.taxCategory && commandScope.qboAccountId && commandScope.decisionType && businessId);
-  const canSubmit = !readOnly && action.kind !== "vehicle_method" && group.canApply && businessUseAnswer !== "unsure" && selectedRows.length > 0 && hasCommandScope && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
+  const canSubmit = !readOnly && action.kind !== "vehicle_method" && group.canApply && businessUseAnswer !== "unsure" && selectedRows.length > 0 && hasCommandScope && hasCanonicalScopeAmounts && scopeIdentityConserved && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
 
   const submit = async () => {
     if (!canSubmit) return;
     if (!hasCommandScope) {
       setError("This decision no longer has a complete tax scope. Refresh the deductions workspace before trying again.");
+      return;
+    }
+    if (!scopeIdentityConserved || !hasCanonicalScopeAmounts) {
+      setError("These transactions changed while you were reviewing them. Close and reopen this question to review the current amounts.");
       return;
     }
     setSaving(true);
@@ -2182,6 +2197,8 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
       if (saveError?.outcomeUnknown || saveError?.code === "grouped_decision_outcome_unknown") {
         setOutcomeUnknown(true);
         setError("We’re checking whether your decision was saved. Don’t submit it again yet.");
+      } else if (saveError?.code === "grouped_decision_scope_changed" || saveError?.code === "grouped_decision_target_not_found") {
+        setError("These transactions changed while you were reviewing them. Close and reopen this question to review the current amounts.");
       } else {
         setError(saveError?.message || "We couldn’t save this decision. Please try again.");
       }
@@ -2224,9 +2241,9 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {error ? <div className="mb-3 rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-sm text-rose-100">{error}</div> : null}
           <div className="grid gap-2 sm:grid-cols-3" aria-label="Decision summary">
-            <DecisionSummaryCard label="Expenses in scope" value={`${population.actionableTransactionCount} transaction${population.actionableTransactionCount === 1 ? "" : "s"}`} />
-            <DecisionSummaryCard label="Current expense total" value={formatCurrencyLocal(actionGrossTotal)} />
-            <DecisionSummaryCard label="Current tax treatment" value={currentEstimate} />
+            <DecisionSummaryCard label="Expenses being updated" value={`${population.actionableTransactionCount} transaction${population.actionableTransactionCount === 1 ? "" : "s"}`} />
+            <DecisionSummaryCard label="Gross expense total" value={formatCurrencyLocal(actionGrossTotal)} />
+            <DecisionSummaryCard label="Estimated deduction if confirmed" value={currentEstimate} />
           </div>
           {population.alreadyResolvedCount > 0 ? <p className="mt-3 text-xs leading-relaxed text-white/46">{population.alreadyResolvedCount} transaction{population.alreadyResolvedCount === 1 ? " already has" : "s already have"} a reviewed treatment and will not be changed here.</p> : null}
           {action.kind === "confirm_business_purpose" ? (
@@ -2249,7 +2266,7 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
             </div>
           ) : (
             <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm text-white/58">
-              <p>Choose standard mileage or actual expenses, then enter the business-use details needed for the selected expenses.</p>
+              <p>Vehicle setup is temporarily unavailable because these expenses are not linked to a verified vehicle for this tax year. They will remain in Needs input and no treatment will be saved.</p>
             </div>
           )}
 
@@ -2307,8 +2324,8 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
             ) : null}
             <button
               type="button"
-              onClick={action.kind === "vehicle_method" ? () => onOpenVehicleWorkflow?.(decision) : businessUseAnswer === "unsure" ? onClose : submit}
-              disabled={action.kind === "vehicle_method" ? readOnly : businessUseAnswer === "unsure" ? outcomeUnknown : !canSubmit || saving || outcomeUnknown}
+              onClick={businessUseAnswer === "unsure" ? onClose : submit}
+              disabled={action.kind === "vehicle_method" || (businessUseAnswer === "unsure" ? outcomeUnknown : !canSubmit || saving || outcomeUnknown)}
               className="rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-[#120f04] hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? `Saving your ${group.qboAccountName || "tax"} decision…` : actionButtonLabel}
@@ -3020,17 +3037,6 @@ function findDecisionGroupForRows(groups = [], rows = []) {
     .find((group) => group.rows.some((row) => ids.has(String(row.id || row.transactionId || "")))) || null;
 }
 
-function isSingleDecisionGroupForRows(groups = [], rows = []) {
-  const ids = new Set(rows.map((row) => String(row.id || row.transactionId || "")).filter(Boolean));
-  if (!ids.size) return false;
-  return groups
-    .map(toDecisionActionGroup)
-    .some((group) => {
-      const groupIds = new Set(group.rows.map((row) => String(row.id || row.transactionId || "")).filter(Boolean));
-      return [...ids].every((id) => groupIds.has(id));
-    });
-}
-
 function reviewDecisionForRow(row) {
   const category = String(row?.taxCategory || row?.tax_category || "").toLowerCase();
   const glAccount = String(row?.qboAccountName || row?.bookAccount || row?.raw?.qboAccountName || row?.raw?.source_qbo_account_name || "").toLowerCase();
@@ -3427,10 +3433,10 @@ function DeductionMonthDetailModal({
     resolutionCategory,
     resolutionMode: reviewResolutionMode,
   });
-  const canResolve = !readOnly && selectedCount > 0 && reviewContext.supported &&
+  const canResolve = !readOnly && reviewContext.kind !== "vehicle_method" && selectedCount > 0 && reviewContext.supported &&
     (isTaxReviewResolution({ resolutionMode: reviewResolutionMode, businessUseMode, vehicleMethod, resolutionCategory }) ||
       ((reviewContext.kind !== "business_use_percent" || businessUseSelectionValid) &&
-      (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid) || (editingConfirmation && vehicleMethod === "unsure"))));
+      (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid))));
 
   const enterEditConfirmation = () => {
     if (!canEditConfirmation) return;
@@ -4038,7 +4044,7 @@ function detailResolutionHeading(context = {}) {
 
 function detailResolutionSaveLabel(context = {}, selectedCount = 0, resolutionMode = "business") {
   if (context.kind === "business_use_percent") return "Save and confirm";
-  if (context.kind === "vehicle_method") return "Save vehicle method";
+  if (context.kind === "vehicle_method") return "Vehicle setup unavailable";
   if (context.kind === "business_purpose" && resolutionMode === "personal") {
     return context.personalLabel || "Mark selected as personal";
   }
@@ -4060,9 +4066,6 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   businessUseMode,
   businessUsePercentValid,
   vehicleMethod,
-  standardMileageMiles,
-  standardMileageBasis,
-  monthKey,
   resolutionMode,
   resolutionCategory,
   taxReviewReasonNote,
@@ -4077,9 +4080,6 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   onSelectAll,
   onBusinessUseModeChange,
   onBusinessUsePercentChange,
-  onVehicleMethodChange,
-  onStandardMileageMilesChange,
-  onStandardMileageBasisChange,
   onResolutionModeChange,
   onResolutionCategoryChange,
   onTaxReviewReasonNoteChange,
@@ -4127,18 +4127,9 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
             />
           ) : null}
           {context.kind === "vehicle_method" ? (
-            <VehicleMethodControls
-              vehicleMethod={vehicleMethod}
-              standardMileageMiles={standardMileageMiles}
-              standardMileageBasis={standardMileageBasis}
-              monthKey={monthKey}
-              businessUsePercent={businessUsePercent}
-              businessUsePercentValid={businessUsePercentValid}
-              onVehicleMethodChange={onVehicleMethodChange}
-              onStandardMileageMilesChange={onStandardMileageMilesChange}
-              onStandardMileageBasisChange={onStandardMileageBasisChange}
-              onBusinessUsePercentChange={onBusinessUsePercentChange}
-            />
+            <div className="rounded-[12px] border border-amber-300/18 bg-amber-300/[0.06] px-3 py-3 text-sm leading-relaxed text-amber-50/82" role="status">
+              Vehicle setup is temporarily unavailable because these expenses are not linked to a verified vehicle for this tax year. They will remain in Needs input and no treatment will be saved.
+            </div>
           ) : null}
           {context.kind === "category_confirmation" ? (
             <div>
@@ -4256,7 +4247,7 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
             disabled={saving}
             className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-white/64 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {editingConfirmation ? "Cancel" : "Not sure yet"}
+            {editingConfirmation ? "Cancel" : context.kind === "vehicle_method" ? "Decide later" : "Not sure yet"}
           </button>
           <button
             type="button"
@@ -4438,8 +4429,6 @@ function VehicleMethodControls({
         <div className="mt-2 flex flex-wrap gap-2">
           <ReviewChoiceButton groupName="deduction-vehicle-method" value="standard_mileage" current={vehicleMethod} onChange={onVehicleMethodChange} label="Standard mileage" />
           <ReviewChoiceButton groupName="deduction-vehicle-method" value="actual_expense" current={vehicleMethod} onChange={onVehicleMethodChange} label="Actual vehicle expenses" />
-          <ReviewChoiceButton groupName="deduction-vehicle-method" value="unsure" current={vehicleMethod} onChange={onVehicleMethodChange} label="I'm not sure" />
-          <ReviewChoiceButton groupName="deduction-vehicle-method" value="needs_tax_review" current={vehicleMethod} onChange={onVehicleMethodChange} label="Keep in Needs input" />
         </div>
       </div>
       {vehicleMethod === "standard_mileage" ? (
@@ -4470,10 +4459,12 @@ function VehicleMethodControls({
               <select
                 value={standardMileageBasis}
                 onChange={(event) => onStandardMileageBasisChange?.(event.target.value)}
-                className="mt-1 h-9 w-full rounded-[11px] border border-white/10 bg-black/22 px-3 text-sm font-semibold text-white outline-none focus:ring-2 focus:ring-emerald-300/22"
+                className="dark-dropdown mt-1 h-9 w-full rounded-[11px] border border-white/10 bg-[#0f1312] px-3 text-sm font-semibold text-white outline-none [color-scheme:dark] focus:ring-2 focus:ring-emerald-300/22"
+                style={{ colorScheme: "dark" }}
+                data-deduction-modal-select
               >
-                <option value="records">Based on mileage records</option>
-                <option value="estimate">Estimate</option>
+                <option className="bg-[#0f1312] text-white" value="records">Based on mileage records</option>
+                <option className="bg-[#0f1312] text-white" value="estimate">Estimate</option>
               </select>
             </label>
             <div className="rounded-[11px] border border-sky-300/12 bg-sky-300/[0.06] px-3 py-2 text-xs text-sky-50">
@@ -4488,11 +4479,8 @@ function VehicleMethodControls({
           <p className="text-xs leading-relaxed text-white/46">Bizzi will estimate the eligible expense from the selected gas transactions and your business-use percentage.</p>
         </>
       ) : null}
-      {vehicleMethod === "unsure" ? (
-        <p className="text-xs leading-relaxed text-white/46">No vehicle method will be saved, and these gas transactions will remain in Needs input.</p>
-      ) : null}
-      {vehicleMethod === "needs_tax_review" ? (
-        <p className="text-xs leading-relaxed text-white/46">This transaction will remain visible and will not affect deduction totals until it is reviewed.</p>
+      {!vehicleMethod ? (
+        <p className="text-xs leading-relaxed text-white/46">Choose a vehicle method to continue. Until then, these expenses stay in Needs input.</p>
       ) : null}
     </div>
   );
@@ -4618,9 +4606,6 @@ function estimateResolutionDeduction(rows, context, options = {}) {
   if (context.kind === "vehicle_method" && options.vehicleMethod === "standard_mileage") {
     return { amount: 0, label: "Gas not deducted separately" };
   }
-  if (context.kind === "vehicle_method" && options.vehicleMethod === "unsure") {
-    return { amount: 0, label: "Stays in review" };
-  }
   const percent = context.kind === "business_use_percent" || (context.kind === "vehicle_method" && options.vehicleMethod === "actual_expense")
     ? options.businessUsePercent
     : context.confirmationPercent;
@@ -4641,7 +4626,6 @@ function estimateResolutionDeduction(rows, context, options = {}) {
 function isTaxReviewResolution(options = {}) {
   return options.resolutionMode === "needs_tax_review" ||
     options.businessUseMode === "needs_tax_review" ||
-    options.vehicleMethod === "needs_tax_review" ||
     options.resolutionCategory === "tax_review_holding";
 }
 
@@ -4682,19 +4666,6 @@ function buildDetailResolutionChanges(context, rows, options = {}) {
       metadata: {
         vehicle_deduction_method: "standard_mileage",
         direct_vehicle_expense_deduction: false,
-      },
-    };
-  }
-  if (context.kind === "vehicle_method" && options.vehicleMethod === "unsure") {
-    return {
-      taxCategory: category,
-      deductibilityStatus: "needs_review",
-      deductiblePercent: 0,
-      taxTreatment: "needs_review",
-      classificationStatus: "needs_review",
-      clearUserOverride: true,
-      metadata: {
-        vehicle_method_returned_to_review_at: new Date().toISOString(),
       },
     };
   }
@@ -4991,6 +4962,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     standardRuleDeductibleTotal: 0,
     reviewedDeductibleTotal: 0,
     needsInputDeductibleTotal: 0,
+    needsInputGrossExpense: 0,
     displayDeductibleTotal: 0,
     autoTransactionCount: 0,
     userConfirmedTransactionCount: 0,
@@ -5038,6 +5010,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         standardRuleDeductibleTotal: 0,
         reviewedDeductibleTotal: 0,
         needsInputDeductibleTotal: 0,
+        needsInputGrossExpense: 0,
         displayDeductibleTotal: 0,
         transactionCount: 0,
         autoTransactionCount: 0,
@@ -5068,6 +5041,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     const standardRuleAmount = hasStandardRuleTaxTreatment(row) && !standardMileageGas ? deductibleAmount : 0;
     const reviewedAmount = hasReviewedTaxTreatment(row) && !standardMileageGas ? deductibleAmount : 0;
     const needsInputAmount = requiresCustomerTaxInput(row) ? deductibleAmount : 0;
+    const needsInputGrossExpense = requiresCustomerTaxInput(row) ? expenseAmount : 0;
     const needsTaxReviewAmount = bucket === "needs_tax_review" ? expenseAmount : 0;
     const displayAmount = scope === "needs_review" ? proposedAmount : scope === "all" ? authoritativeAmount + proposedAmount : authoritativeAmount;
     month.expenseTotal += expenseAmount;
@@ -5076,6 +5050,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     month.standardRuleDeductibleTotal += standardRuleAmount;
     month.reviewedDeductibleTotal += reviewedAmount;
     month.needsInputDeductibleTotal += needsInputAmount;
+    month.needsInputGrossExpense += needsInputGrossExpense;
     month.displayDeductibleTotal += displayAmount;
     if (bucket === "auto_classified") month.autoTransactionCount += 1;
     if (bucket === "user_confirmed") month.userConfirmedTransactionCount += 1;
@@ -5103,6 +5078,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     account.standardRuleDeductibleTotal += standardRuleAmount;
     account.reviewedDeductibleTotal += reviewedAmount;
     account.needsInputDeductibleTotal += needsInputAmount;
+    account.needsInputGrossExpense += needsInputGrossExpense;
     account.displayDeductibleTotal += displayAmount;
     account.transactionCount += 1;
     if (bucket === "auto_classified") account.autoTransactionCount += 1;
@@ -5138,10 +5114,45 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
   };
 }
 
+function toDisplayCents(value) {
+  if (value == null || !Number.isFinite(Number(value))) return null;
+  return Math.round(Number(value) * 100);
+}
+
+function buildMatrixCellAmountProjection(cell = {}) {
+  const customerInputCount = Number(cell.customerInputTransactionCount || 0);
+  const grossExpenseCents = toDisplayCents(cell.needsInputGrossExpense);
+  return {
+    reviewed: {
+      status: "reviewed",
+      display_amount_cents: toDisplayCents(cell.reviewedDeductibleTotal || 0),
+      amount_kind: "reviewed_deduction",
+      transaction_count: Number(cell.reviewedTransactionCount || 0),
+      label: "Reviewed deduction",
+    },
+    estimated: {
+      status: "estimated",
+      display_amount_cents: toDisplayCents(cell.standardRuleDeductibleTotal || 0),
+      amount_kind: "deductible_estimate",
+      transaction_count: Number(cell.standardRuleTransactionCount || 0),
+      label: "Estimated deduction",
+    },
+    needs_input: {
+      status: "needs_input",
+      display_amount_cents: customerInputCount > 0 ? grossExpenseCents : null,
+      amount_kind: customerInputCount > 0 && grossExpenseCents != null ? "gross_expense" : "unavailable",
+      transaction_count: customerInputCount,
+      label: customerInputCount > 0 && grossExpenseCents != null ? "Expenses to review" : "Needs input",
+    },
+  };
+}
+
 function buildMatrixAuthorityTotals(matrix) {
   return matrix.accounts.reduce((totals, account) => ({
     authoritativeDeductibleTotal: totals.authoritativeDeductibleTotal + normalizeMoney(account.authoritativeDeductibleTotal),
     proposedDeductibleTotal: totals.proposedDeductibleTotal + normalizeMoney(account.proposedDeductibleTotal),
+    reviewedDeductibleTotal: totals.reviewedDeductibleTotal + normalizeMoney(account.reviewedDeductibleTotal),
+    standardRuleDeductibleTotal: totals.standardRuleDeductibleTotal + normalizeMoney(account.standardRuleDeductibleTotal),
     autoTransactionCount: totals.autoTransactionCount + Number(account.autoTransactionCount || 0),
     userConfirmedTransactionCount: totals.userConfirmedTransactionCount + Number(account.userConfirmedTransactionCount || 0),
     accountantConfirmedTransactionCount: totals.accountantConfirmedTransactionCount + Number(account.accountantConfirmedTransactionCount || 0),
@@ -5151,6 +5162,8 @@ function buildMatrixAuthorityTotals(matrix) {
   }), {
     authoritativeDeductibleTotal: 0,
     proposedDeductibleTotal: 0,
+    reviewedDeductibleTotal: 0,
+    standardRuleDeductibleTotal: 0,
     autoTransactionCount: 0,
     userConfirmedTransactionCount: 0,
     accountantConfirmedTransactionCount: 0,
@@ -5397,6 +5410,8 @@ export const __TaxDashboardTestInternals = {
   WorkspaceViewTabs,
   buildDeductionDefaultSetupOptions,
   buildDeductionAccountMatrix,
+  buildMatrixAuthorityTotals,
+  buildMatrixCellAmountProjection,
   buildClassificationWorkspaceRows,
   buildCustomerQuestionSections,
   buildCustomerDeductionsWorkflow,

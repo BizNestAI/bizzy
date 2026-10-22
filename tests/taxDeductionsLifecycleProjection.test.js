@@ -106,20 +106,21 @@ test("2. expense and outside-deduction identities reconcile to the 685/24 scope 
   assert.equal(result.canonicalCount - outside, 685);
 });
 
-test("3. legacy 471/51 counters disclose the 41 and one-row differences without changing identities", () => {
+test("3. generic Rent leaves the customer decision population without changing identities", () => {
   const result = projection();
   const legacy = reconcileLegacyTaxCoverage({ legacyReviewRequired: 471, legacyUnresolved: 51, projection: result });
-  assert.equal(legacy.customerInput, 430);
+  assert.equal(legacy.customerInput, 425);
   assert.equal(legacy.supportedRuleEstimateNoAction, 41);
-  assert.equal(legacy.reviewDifference, 41);
+  assert.equal(legacy.reviewDifference, 46);
   assert.equal(legacy.bookkeepingEvidence, 50);
   assert.equal(legacy.unresolvedDifference, 1);
 });
 
-test("4. six annual decisions remain distinct from 430 affected transactions", () => {
+test("4. five launch-safe annual decisions remain distinct from 425 affected transactions", () => {
   const result = projection();
-  assert.equal(result.counts[TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED], 430);
-  assert.equal(result.activeDecisionGroups.length, 6);
+  assert.equal(result.counts[TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED], 425);
+  assert.equal(result.activeDecisionGroups.length, 5);
+  assert.equal(result.entries.filter((entry) => /rent/i.test(entry.row.qboAccountName || "")).every((entry) => entry.decisionId == null), true);
 });
 
 test("5. one annual GL decision covers multiple monthly cells", () => {
@@ -154,7 +155,7 @@ test("6. completed business-use decisions remain discoverable", () => {
 });
 
 test("7. completed business-use percentage decisions retain their percentage and scope", () => {
-  const result = projection([row("reviewed-rent", { status: "user_confirmed", taxCategory: "utilities", qboAccountId: "rent", qboAccountName: "Rent", deductiblePercent: 65, raw: { transactionId: "reviewed-rent", updated_at: "2026-10-18" } })]);
+  const result = projection([row("reviewed-phone", { status: "user_confirmed", taxCategory: "utilities", qboAccountId: "phone", qboAccountName: "Phone Bill", deductiblePercent: 65, raw: { transactionId: "reviewed-phone", updated_at: "2026-10-18" } })]);
   assert.equal(result.completedDecisionGroups[0].decisionType, "business_use_percent");
   assert.equal(result.completedDecisionGroups[0].currentDeductiblePercent, 65);
 });

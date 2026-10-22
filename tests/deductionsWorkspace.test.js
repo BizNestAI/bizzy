@@ -647,7 +647,7 @@ test("Tax Dashboard renders a single estimate summary before the matrix-first De
   assert.match(summaryShell, /populationCounts\.matrixIncludedCount/);
   assert.doesNotMatch(summaryShell, /customerWorkflow\.technicalCount/);
   assert.doesNotMatch(summaryShell, /Reviewed|Standard estimates|Questions for you/);
-  assert.match(dashboard, /posted transaction\{evaluatedCount === 1 \? "" : "s"\} evaluated/);
+  assert.match(dashboard, /posted transactions evaluated · \$\{matrixIncludedCount\} expense transactions included in the deductions matrix/);
 });
 
 test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and authority", () => {
@@ -710,10 +710,12 @@ test("Tax deduction summary uses the bridge population, keeps workflow counts se
     resolveDeductionsPopulationCounts,
   } = await loadTaxDashboardInternals();
   const populationBridge = {
+    identity_comparison: { identity_match: true },
     tax_scope: {
       posted_transactions_evaluated_count: 709,
       deductions_matrix_expense_count: 685,
       posted_non_expense_outside_deductions_count: 24,
+      conservation_ok: true,
       dispositions: {
         expense_cogs_in_matrix: 685,
         income_outside_deductions: 8,
@@ -746,6 +748,7 @@ test("Tax deduction summary uses the bridge population, keeps workflow counts se
   assert.equal(counts.evaluatedCount, 709);
   assert.equal(counts.matrixIncludedCount, 685, "The server bridge takes precedence over a local matrix fallback.");
   assert.equal(counts.outsideMatrixCount, 24);
+  assert.equal(counts.conservationOk, true);
   assert.equal(counts.evaluatedCount, counts.matrixIncludedCount + counts.outsideMatrixCount);
   assert.equal(
     describeOutsideMatrixActivity({ income_outside_deductions: 8, incomplete_or_unresolved: 2 }),
@@ -757,12 +760,21 @@ test("Tax deduction summary uses the bridge population, keeps workflow counts se
     populationBridge,
     projection,
   }));
-  assert.match(disclosure, /709 posted transactions evaluated/);
+  assert.match(disclosure, /709 posted transactions evaluated · 685 expense transactions included in the deductions matrix · 24 outside deductions/);
   assert.match(disclosure, /Expense and COGS in the matrix:<\/span> 685\./);
   assert.match(disclosure, /Outside the deductions matrix:<\/span> 24\./);
   assert.match(disclosure, /income, transfers or credit-card payments, owner or equity activity, refunds, credits, or asset activity, and records without sufficient bookkeeping evidence/);
   assert.match(disclosure, /Supporting workflow details/);
   assert.match(disclosure, /These counts may overlap with the transaction populations above and are not added together\./);
+  assert.match(disclosure, /Outside deductions means the transaction was evaluated but does not belong in the expense-deduction matrix/);
+
+  const mismatched = renderToStaticMarkup(React.createElement(DeductionsIncludedDisclosure, {
+    transactionCount: 685,
+    populationBridge: { ...populationBridge, identity_comparison: { identity_match: false } },
+    projection,
+  }));
+  assert.match(mismatched, /Transaction totals are updating\./);
+  assert.doesNotMatch(mismatched, /709 posted transactions evaluated ·/);
 
   const tabs = renderToStaticMarkup(React.createElement(WorkspaceViewTabs, {
     value: "overview",
@@ -793,11 +805,25 @@ test("Tax matrix launch labels retain accessible details and grouped decision na
   assert.match(dashboard, /expense transaction\{includedTransactionCount === 1 \? "" : "s"\} included/);
   assert.match(dashboard, /<th[^>]*>Expense category<\/th>/);
   assert.match(dashboard, /role="img" aria-label="No activity">—<\/span>/);
-  assert.match(dashboard, /const groupedCustomerInput = isSingleDecisionGroupForRows/);
-  assert.match(dashboard, /\? \(cell\.needsInputDeductibleTotal > 0 \? `\$\{formatCurrencyLocal\(cell\.needsInputDeductibleTotal\)\} Needs input` : "Needs input"\)/);
-  assert.match(dashboard, /customerInputCountLabel/);
+  assert.match(dashboard, /Reviewed deduction/);
+  assert.match(dashboard, /Estimated deduction/);
+  assert.match(dashboard, /Expenses to review · Needs input/);
   assert.match(dashboard, /onClick=\{\(\) => openCell\("needs_input"\)\}/);
   assert.match(dashboard, /onOpenDecision\(\{ group, scope: "account_year", selectedMonth: month\.key \}\)/);
+});
+
+test("deduction modal native selects explicitly request a dark popup palette", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const deductionSelects = [...dashboard.matchAll(/<select[\s\S]*?<\/select>/g)].map((match) => match[0]);
+
+  assert.ok(deductionSelects.length > 0);
+  for (const select of deductionSelects) {
+    assert.match(select, /data-deduction-modal-select/);
+    assert.match(select, /dark-dropdown/);
+    assert.match(select, /\[color-scheme:dark\]/);
+    assert.match(select, /style=\{\{ colorScheme: "dark" \}\}/);
+    assert.match(select, /option className="bg-\[#0f1312\] text-white"/);
+  }
 });
 
 test("Tax customer summary keeps identity reconciliation internal and protects the chat composer clearance", () => {
@@ -898,6 +924,52 @@ test("Deduction matrix renders mixed confirmed and proposed monthly authority se
   assert.equal(may.transactions.length, 2);
   assert.equal(matrix.accounts[0].authoritativeDeductibleTotal, 173);
   assert.equal(matrix.accounts[0].proposedDeductibleTotal, 24);
+});
+
+test("matrix amount contract separates reviewed deductions, estimates, and gross expenses awaiting input", async () => {
+  const {
+    buildDeductionAccountMatrix,
+    buildMatrixAuthorityTotals,
+    buildMatrixCellAmountProjection,
+  } = await loadTaxDashboardInternals();
+  const common = {
+    date: "2026-05-12",
+    qboAccountId: "meals",
+    qboAccountName: "Meals",
+    amount: 100,
+    signedAmount: -100,
+    direction: "OUTFLOW",
+    taxCategory: "business_meals",
+    taxCategoryLabel: "Business Meals",
+    deductiblePercent: 50,
+    deductibleAmount: 50,
+    classificationSource: "rule_engine",
+    matchedRuleCode: "meals_gl_v3",
+    taxScopeDisposition: "expense_cogs_in_matrix",
+  };
+  const matrix = buildDeductionAccountMatrix([
+    { ...common, id: "reviewed", status: "user_confirmed", requiresReview: false },
+    { ...common, id: "estimated", status: "auto_classified", requiresReview: false },
+    { ...common, id: "needs-input", status: "needs_review", requiresReview: true },
+  ], 2026, { scope: "overview" });
+  const may = matrix.accounts[0].months["2026-05"];
+  const contract = buildMatrixCellAmountProjection(may);
+
+  assert.deepEqual(contract.reviewed, {
+    status: "reviewed", display_amount_cents: 5000, amount_kind: "reviewed_deduction", transaction_count: 1, label: "Reviewed deduction",
+  });
+  assert.deepEqual(contract.estimated, {
+    status: "estimated", display_amount_cents: 5000, amount_kind: "deductible_estimate", transaction_count: 1, label: "Estimated deduction",
+  });
+  assert.deepEqual(contract.needs_input, {
+    status: "needs_input", display_amount_cents: 10000, amount_kind: "gross_expense", transaction_count: 1, label: "Expenses to review",
+  });
+  assert.equal(buildMatrixAuthorityTotals(matrix).authoritativeDeductibleTotal, 100);
+  assert.equal(buildMatrixAuthorityTotals(matrix).proposedDeductibleTotal, 50, "The legacy proposed field remains drill-down-only and is excluded from the headline total.");
+
+  assert.deepEqual(buildMatrixCellAmountProjection({ customerInputTransactionCount: 1 }).needs_input, {
+    status: "needs_input", display_amount_cents: null, amount_kind: "unavailable", transaction_count: 1, label: "Needs input",
+  });
 });
 
 test("standard-rule estimates stay in the matrix while factual questions, technical evidence, and income stay correctly partitioned", async () => {
@@ -1124,7 +1196,8 @@ test("Tax Dashboard groups Questions for You by a stable annual decision identit
   );
   assert.doesNotMatch(questionsBranch, /DeductionDecisionRulesPanel/);
   assert.match(dashboard, /Some were personal expenses/);
-  assert.match(dashboard, /View all \$\{matchingRows\.length\} transactions/);
+  assert.match(dashboard, /View"\} \{rows\.length\} affected transaction/);
+  assert.match(dashboard, /const visibleRows = expanded \? matchingRows\.slice\(0, 100\) : \[\]/);
   assert.match(dashboard, /applyGroupedDeductionDecision/);
   assert.match(dashboard, /idempotencyKey/);
   assert.doesNotMatch(dashboard, /ids\.slice\(index, index \+ 100\)/);
@@ -1300,13 +1373,14 @@ test("auto-classified deduction detail uses estimated, customer-facing evidence 
   assert.doesNotMatch(html, /expense-category rule evidence|Classification evidence|transactions loaded/);
 });
 
-test("review dialogs trap focus, close with Escape, and route vehicle questions into the completion flow", () => {
+test("review dialogs trap focus, close with Escape, and fail vehicle questions closed", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /function ReviewDecisionModal/);
   assert.match(dashboard, /event\.key === "Escape"/);
   assert.match(dashboard, /const focusable = getFocusableElements\(modalRef\.current\)/);
-  assert.match(dashboard, /Continue to vehicle setup/);
-  assert.match(dashboard, /selectedAuthority: "vehicle_method_group"/);
+  assert.match(dashboard, /Vehicle setup unavailable/);
+  assert.match(dashboard, /not linked to a verified vehicle for this tax year/);
+  assert.doesNotMatch(dashboard, /Continue to vehicle setup/);
   assert.doesNotMatch(dashboard, /Review vehicle transactions/);
 });
 
@@ -1316,7 +1390,7 @@ test("Tax Dashboard displays explicit decision actions instead of generic zero-d
   assert.match(dashboard, /Edit business-use percentage/);
   assert.match(dashboard, /Confirm business use/);
   assert.match(dashboard, /Choose vehicle method/);
-  assert.match(dashboard, /Continue to vehicle setup/);
+  assert.match(dashboard, /Vehicle setup unavailable/);
   assert.match(dashboard, /reviewDecisionForRow\(row\)\.actionLabel/);
   assert.match(dashboard, /Needs input/);
   assert.match(dashboard, /Standard estimate/);
@@ -1410,8 +1484,9 @@ test("Deduction detail modal validates business-use and vehicle method resolutio
   assert.match(dashboard, /Gas not deducted separately/);
   assert.match(dashboard, /vehicleMethod === "actual_expense"/);
   assert.match(dashboard, /vehicle_actual_expense_business_use/);
-  assert.match(dashboard, /vehicleMethod === "unsure"/);
-  assert.match(dashboard, /Stays in review/);
+  assert.doesNotMatch(dashboard, /value="unsure" current=\{vehicleMethod\}/);
+  assert.doesNotMatch(dashboard, /value="needs_tax_review" current=\{vehicleMethod\}/);
+  assert.match(dashboard, /Until then, these expenses stay in Needs input/);
   assert.match(dashboard, /Gas not deducted separately/);
   assert.match(dashboard, /computeClassificationAmounts/);
   assert.match(dashboard, /deductiblePercent: Number\(percent\)/);
@@ -1429,7 +1504,8 @@ test("Deduction detail modal exposes concrete utility and business-purpose contr
   assert.match(dashboard, /How do you deduct vehicle expenses/);
   assert.match(dashboard, /Standard mileage/);
   assert.match(dashboard, /Actual vehicle expenses/);
-  assert.match(dashboard, /Save vehicle method/);
+  assert.match(dashboard, /context\.kind === "vehicle_method" \? "Decide later"/);
+  assert.match(dashboard, /Vehicle setup unavailable/);
   assert.match(dashboard, /Confirm selected as business meals/);
   assert.match(dashboard, /Mark selected as personal meals/);
   assert.match(dashboard, /Confirm selected as business trips/);
@@ -1495,7 +1571,7 @@ test("Deduction detail modal actually renders Electric business-use controls in 
   assert.doesNotMatch(html, /This GL account going forward/);
 });
 
-test("Deduction detail modal actually renders Gas vehicle controls in the modal path", async () => {
+test("Deduction detail modal keeps Gas unresolved when verified vehicle identity is unavailable", async () => {
   const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
   const html = renderToStaticMarkup(React.createElement(DeductionMonthDetailModal, {
     selection: makeReviewSelection({
@@ -1515,13 +1591,13 @@ test("Deduction detail modal actually renders Gas vehicle controls in the modal 
 
   assert.match(html, /Needs input/);
   assert.match(html, /Choose vehicle deduction method/);
-  assert.match(html, /How do you deduct vehicle expenses/);
-  assert.match(html, /Standard mileage/);
-  assert.match(html, /Actual vehicle expenses/);
-  assert.match(html, /I(?:&#x27;|')m not sure/);
-  assert.match(html, /Save vehicle method/);
-  assert.match(html, /These expenses are in a vehicle expense category in QuickBooks/);
-  assert.match(html, /Choose how you track this vehicle’s business use before Bizzi estimates the deduction/);
+  assert.match(html, /not linked to a verified vehicle for this tax year/);
+  assert.match(html, /remain in Needs input/);
+  assert.doesNotMatch(html, /name="deduction-vehicle-method"/);
+  assert.doesNotMatch(html, /Standard mileage/);
+  assert.doesNotMatch(html, /Actual vehicle expenses/);
+  assert.match(html, /Vehicle setup unavailable/);
+  assert.match(html, /disabled/);
   assert.doesNotMatch(html, /QuickBooks categorized/);
   assert.doesNotMatch(html, /This row already has confirmed rule-engine treatment/);
 });

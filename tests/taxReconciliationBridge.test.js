@@ -40,14 +40,14 @@ function taxRow(id, {
   };
 }
 
-test("Tax/Reconciliations bridge proves the 709 = 685 + 24 population contract by stable identity", () => {
+test("Tax/Reconciliations bridge proves the 713 = 689 + 24 population contract by stable identity", () => {
   const monthlyCounts = [
     ["2026-05", 66],
     ["2026-06", 152],
     ["2026-07", 154],
     ["2026-08", 126],
     ["2026-09", 136],
-    ["2026-10", 75],
+    ["2026-10", 79],
   ];
   const rows = [];
   let sequence = 0;
@@ -74,23 +74,23 @@ test("Tax/Reconciliations bridge proves the 709 = 685 + 24 population contract b
   const bridge = buildTaxReconciliationBridge({ sourceRows });
   const { identity_comparison: identity, tax_scope: scope } = bridge;
 
-  assert.equal(identity.reconciliations_posted_by_bizzi_count, 709);
-  assert.equal(identity.tax_eligible_count, 709);
+  assert.equal(identity.reconciliations_posted_by_bizzi_count, 713);
+  assert.equal(identity.tax_eligible_count, 713);
   assert.equal(identity.identity_match, true);
-  assert.equal(scope.posted_transactions_evaluated_count, 709);
-  assert.equal(scope.deductions_matrix_expense_count, 685);
+  assert.equal(scope.posted_transactions_evaluated_count, 713);
+  assert.equal(scope.deductions_matrix_expense_count, 689);
   assert.equal(scope.posted_non_expense_outside_deductions_count, 24);
   assert.equal(scope.conservation_ok, true);
   assert.deepEqual(scope.dispositions, {
-    expense_cogs_in_matrix: 685,
+    expense_cogs_in_matrix: 689,
     income_outside_deductions: 8,
     transfer_or_card_payment_not_deduction: 6,
     owner_or_equity_not_deduction: 3,
     refund_credit_or_asset_not_deduction: 5,
     incomplete_or_unresolved: 2,
   });
-  assert.equal(scope.months.reduce((sum, month) => sum + month.tax_evaluated_count, 0), 709);
-  assert.equal(scope.months.reduce((sum, month) => sum + month.deductions_matrix_expense_count + month.posted_non_expense_outside_deductions_count, 0), 709);
+  assert.equal(scope.months.reduce((sum, month) => sum + month.tax_evaluated_count, 0), 713);
+  assert.equal(scope.months.reduce((sum, month) => sum + month.deductions_matrix_expense_count + month.posted_non_expense_outside_deductions_count, 0), 713);
 });
 
 test("Tax/Reconciliations bridge rejects equal aggregate counts with different stable transaction IDs", () => {
