@@ -645,7 +645,7 @@ test("Tax Dashboard renders a single estimate summary before the matrix-first De
   assert.match(summaryShell, /Estimated deductible expenses/);
   assert.match(summaryShell, /formatCurrencyLocal\(estimatedDeductibleExpenses\)/);
   assert.match(summaryShell, /populationCounts\.matrixIncludedCount/);
-  assert.match(summaryShell, /customerWorkflow\.technicalCount/);
+  assert.doesNotMatch(summaryShell, /customerWorkflow\.technicalCount/);
   assert.doesNotMatch(summaryShell, /Reviewed|Standard estimates|Questions for you/);
   assert.match(dashboard, /posted transaction\{evaluatedCount === 1 \? "" : "s"\} evaluated/);
 });
@@ -1095,19 +1095,105 @@ test("Tax Dashboard does not present missing classification authority as zero de
 
 test("Tax Dashboard groups Questions for You by a stable annual decision identity", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const attentionReviewGroups = dashboard.slice(
+    dashboard.indexOf("function AttentionReviewGroups"),
+    dashboard.indexOf("function taxRowId")
+  );
   assert.match(dashboard, /function buildAttentionReviewGroups/);
   assert.match(dashboard, /buildTaxDeductionsLifecycleProjection/);
   assert.match(dashboard, /function toDecisionActionGroup/);
+  assert.match(dashboard, /CUSTOMER_QUESTION_SECTIONS/);
+  assert.match(dashboard, /function buildCustomerQuestionSections/);
+  assert.match(dashboard, /customerQuestionSummaryText\(customerWorkflow\.customerDecisionCount, customerWorkflow\.customerInputCount\)/);
+  assert.match(dashboard, /Answer these to finish your \{year\} deduction estimates\./);
+  assert.match(dashboard, /Manage deduction defaults/);
   assert.doesNotMatch(dashboard, /Review individual transactions|one_transaction/);
-  assert.match(dashboard, /This choice can also guide future posted transactions/);
+  assert.doesNotMatch(attentionReviewGroups, /need your answer|total transactions in this category|future posted transactions|grouped questions|affected transactions/);
+  assert.match(attentionReviewGroups, /total<\/p>/);
+  assert.match(attentionReviewGroups, /Estimated deduction if confirmed:/);
+  assert.match(attentionReviewGroups, /Deduction not estimated yet/);
+  assert.match(attentionReviewGroups, /lg:grid-cols-2/);
+  assert.match(attentionReviewGroups, /pb-\[calc\(var\(--chat-clearance,156px\)\+16px\)\]/);
   assert.doesNotMatch(dashboard, /Reviewed decisions/);
   assert.match(dashboard, /Rules and defaults/);
-  assert.match(dashboard, /<WorkspaceViewTabs[\s\S]*?<DeductionDecisionRulesPanel/);
+  assert.match(dashboard, /workspaceView === "overview"[\s\S]*?<DeductionDecisionRulesPanel/);
+  const questionsBranchStart = dashboard.indexOf('workspaceView === "needs_attention"');
+  const questionsBranch = dashboard.slice(
+    questionsBranchStart,
+    dashboard.indexOf('      ) : (', questionsBranchStart)
+  );
+  assert.doesNotMatch(questionsBranch, /DeductionDecisionRulesPanel/);
   assert.match(dashboard, /Some were personal expenses/);
   assert.match(dashboard, /View all \$\{matchingRows\.length\} transactions/);
   assert.match(dashboard, /applyGroupedDeductionDecision/);
   assert.match(dashboard, /idempotencyKey/);
   assert.doesNotMatch(dashboard, /ids\.slice\(index, index \+ 100\)/);
+});
+
+test("Tax Dashboard presents all customer questions by authoritative decision type without changing their stable IDs", async () => {
+  const {
+    AttentionReviewGroups,
+    buildCustomerQuestionSections,
+    customerQuestionPreview,
+    customerQuestionSummaryText,
+  } = await loadTaxDashboardInternals();
+  const makeGroup = ({ name, kind, count, total, preview, ids }) => ({
+    key: `${name}:${kind}`,
+    qboAccountName: name,
+    decision: { kind },
+    actionableTransactionCount: count,
+    grossTotal: total,
+    proposedDeductibleTotal: preview,
+    canApply: true,
+    stableTransactionIds: { actionable: ids },
+  });
+  const groups = [
+    makeGroup({ name: "Meals", kind: "confirm_business_purpose", count: 171, total: 4463, preview: 2232, ids: ["meals-1", "meals-2"] }),
+    makeGroup({ name: "Parking", kind: "confirm_business_purpose", count: 61, total: 371, preview: 0, ids: ["parking-1"] }),
+    makeGroup({ name: "Lyft/Uber", kind: "confirm_business_purpose", count: 8, total: 94, preview: 0, ids: ["rideshare-1"] }),
+    makeGroup({ name: "Transportation", kind: "confirm_business_purpose", count: 3, total: 82, preview: 0, ids: ["transport-1"] }),
+    makeGroup({ name: "Phone Bill", kind: "business_use_percent", count: 5, total: 252, preview: 0, ids: ["phone-1"] }),
+    makeGroup({ name: "Rent", kind: "business_use_percent", count: 5, total: 8923, preview: 0, ids: ["rent-1"] }),
+    makeGroup({ name: "Electric", kind: "utility_allocation", count: 4, total: 244, preview: 0, ids: ["electric-1"] }),
+    makeGroup({ name: "Utilities", kind: "utility_allocation", count: 2, total: 115, preview: 0, ids: ["utilities-1"] }),
+    makeGroup({ name: "Gas", kind: "vehicle_method", count: 61, total: 3483, preview: 0, ids: ["gas-1"] }),
+  ];
+  const sections = buildCustomerQuestionSections(groups);
+
+  assert.equal(groups.reduce((total, group) => total + group.actionableTransactionCount, 0), 320);
+  assert.equal(customerQuestionSummaryText(sections.reduce((total, section) => total + section.groups.length, 0), 320), "9 questions covering 320 transactions");
+  assert.deepEqual(sections.map(({ title, groups: sectionGroups }) => [title, sectionGroups.length]), [
+    ["Confirm business use", 4],
+    ["Set business-use percentage", 4],
+    ["Choose vehicle method", 1],
+  ]);
+  assert.deepEqual(
+    sections.flatMap((section) => section.groups.flatMap((group) => group.stableTransactionIds.actionable)).sort(),
+    groups.flatMap((group) => group.stableTransactionIds.actionable).sort(),
+    "presentation grouping must not alter the authoritative stable-ID population"
+  );
+  assert.equal(customerQuestionPreview(groups[0]), "$2,232");
+  assert.equal(customerQuestionPreview(groups[1]), null);
+  assert.doesNotMatch(String(customerQuestionPreview), /[*/]/, "question cards display server projections without calculating deductions");
+
+  const html = renderToStaticMarkup(React.createElement(AttentionReviewGroups, {
+    groups,
+    readOnly: false,
+    onOpenDecision: () => {},
+  }));
+  assert.match(html, /Confirm business use[^]*?· 4/);
+  assert.match(html, /Set business-use percentage[^]*?· 4/);
+  assert.match(html, /Choose vehicle method[^]*?· 1/);
+  assert.match(html, /171 transactions · \$4,463 total/);
+  assert.match(html, /Were these business meals\?/);
+  assert.match(html, /Estimated deduction if confirmed: \$2,232/);
+  assert.match(html, /How do you track vehicle expenses\?/);
+  assert.match(html, /What percentage was used for business\?/);
+  assert.match(html, /Deduction not estimated yet/);
+  assert.match(html, /Review meals/);
+  assert.match(html, /Choose vehicle method/);
+  assert.match(html, /Set percentage/);
+  assert.doesNotMatch(html, /gross|need your answer|total transactions in this category|future posted transactions/);
 });
 
 test("Tax review dialog distinguishes the full category population from expenses that still need an answer", async () => {
@@ -1172,6 +1258,8 @@ test("Tax review dialog distinguishes the full category population from expenses
   assert.match(html, /All were business expenses/);
   assert.match(html, /Some were personal expenses/);
   assert.match(html, /I&#x27;m not sure yet|I’m not sure yet/);
+  assert.match(html, /Updates the currently listed 2026 transactions/);
+  assert.match(html, /This also saves a default for future Meals transactions\. You can change it later\./);
   assert.doesNotMatch(html, /Preserve selected exceptions|rows selected|Proposed treatment/);
   assert.deepEqual(decisionTransactionIds(group.rows, "all_business"), ["meal-1", "meal-2"]);
   assert.deepEqual(decisionTransactionIds(group.rows, "some_personal", ["meal-2"]), ["meal-1"]);

@@ -12,6 +12,7 @@
     "check:bookkeeping": "node scripts/manual/checkBookkeeping.js",
     "bookkeeping:audit-posting": "node scripts/manual/bookkeepingProductionReadinessInspect.js",
     "bookkeeping:repair-posting": "node scripts/manual/repairHandledPostingBacklog.js",
+    "plaid:rotate-token-key": "node scripts/migratePlaidTokens.js",
     "tax:audit-legacy": "node scripts/tax/legacyTaxMigrationCli.js audit",
     "tax:migrate-legacy-snapshots": "node scripts/tax/legacyTaxMigrationCli.js migrate-snapshots",
     "tax:migrate-legacy-payments": "node scripts/tax/legacyTaxMigrationCli.js migrate-payments",
