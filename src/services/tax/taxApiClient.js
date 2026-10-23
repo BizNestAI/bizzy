@@ -17,8 +17,17 @@ const ALLOWED_INCLUDES = new Set([
 const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_ENTRIES = 50;
 const TAX_DETAIL_PAGE_LIMIT = 200;
+const TAX_DEDUCTIONS_OVERVIEW_PROJECTION_VERSION = "tax-deductions-overview-v1";
+const TAX_READ_TIMEOUT_MS = 20_000;
 const cache = new Map();
 const inflight = new Map();
+
+if (typeof window !== "undefined" && !window.__bizziTaxCacheInvalidationInstalled) {
+  window.__bizziTaxCacheInvalidationInstalled = true;
+  for (const eventName of ["bizzy:auth-principal-changed", "bizzy:business-changed", "bizzy:admin-view-cleared"]) {
+    window.addEventListener(eventName, () => clearTaxApiCache());
+  }
+}
 
 export function clearTaxApiCache(predicate = null) {
   if (!predicate) {
@@ -216,15 +225,12 @@ export async function prefetchTaxDeductionsOverviewBundle({ businessId, year, as
   requireBusinessId(businessId);
   const results = await Promise.allSettled([
     getTaxDeductionsOverview({ businessId, year, asOfDate }),
-    prefetchTaxDeductionTransactionPages({ businessId, year, asOfDate }),
-    getTaxClassificationCoverage({ businessId, year }),
-    getTaxClassificationReviewSummary({ businessId, year }),
   ]);
   return {
     overview: valueOrNull(results[0]),
-    transactionRows: valueOrNull(results[1]),
-    classificationCoverage: valueOrNull(results[2]),
-    classificationReviewSummary: valueOrNull(results[3]),
+    transactionRows: null,
+    classificationCoverage: null,
+    classificationReviewSummary: null,
     errors: results
       .filter((result) => result.status === "rejected")
       .map((result) => result.reason),
@@ -793,15 +799,49 @@ async function cachedGet(path, { signal, cacheKey = path, bypassCache = false } 
   if (!bypassCache) {
     const hit = cache.get(cacheKey);
     if (hit && now - hit.ts < CACHE_TTL_MS) return hit.value;
-    if (inflight.has(cacheKey)) return inflight.get(cacheKey);
+    if (inflight.has(cacheKey)) return waitForCaller(inflight.get(cacheKey), signal);
   }
-  const promise = request(path, { method: "GET", signal }).then((value) => {
+  // The shared read owns its timeout. A component unmount only stops that
+  // caller from observing the result; it cannot cancel the same-business/year
+  // request being awaited by a prefetcher or a newly mounted route.
+  const promise = requestWithReadTimeout(path).then((value) => {
     cache.set(cacheKey, { ts: Date.now(), value });
     trimCache();
     return value;
   }).finally(() => inflight.delete(cacheKey));
   inflight.set(cacheKey, promise);
-  return promise;
+  return waitForCaller(promise, signal);
+}
+
+async function requestWithReadTimeout(path) {
+  if (typeof AbortController === "undefined") return request(path, { method: "GET" });
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, TAX_READ_TIMEOUT_MS);
+  try {
+    return await request(path, { method: "GET", signal: controller.signal });
+  } catch (error) {
+    if (!timedOut) throw error;
+    throw Object.assign(new Error("Tax data request timed out."), {
+      code: "detail_timeout",
+      retryable: true,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function waitForCaller(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(Object.assign(new Error("Request aborted."), { code: "request_aborted" }));
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(Object.assign(new Error("Request aborted."), { code: "request_aborted" }));
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }
 
 function getCachedValue(cacheKey, { allowStale = false } = {}) {
@@ -821,7 +861,7 @@ function taxDeductionsOverviewPath({ businessId, year, asOfDate } = {}) {
   const params = query({ businessId, year, asOfDate });
   return {
     path: `/api/tax/deductions/overview?${params}`,
-    cacheKey: key("deductionsOverview", params),
+    cacheKey: key(`deductionsOverview:${TAX_DEDUCTIONS_OVERVIEW_PROJECTION_VERSION}`, params),
   };
 }
 

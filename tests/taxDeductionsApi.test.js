@@ -28,6 +28,12 @@ test("canonical overview returns setup state and totals without fake data", asyn
   assert.equal(overview.totals.estimatedDeductibleAmount, 100);
   assert.equal(overview.coverage.classifiedCount, 2);
   assert.equal(overview.setupState.state, "needs_review");
+  assert.equal(overview.projection.projectionVersion, "tax-deductions-overview-v1");
+  assert.equal(overview.projection.canonicalBusinessId, BUSINESS_ID);
+  assert.equal(overview.projection.taxYear, 2026);
+  assert.equal(overview.projection.estimatedDeductibleAmount, overview.totals.estimatedDeductibleAmount);
+  assert.equal(overview.projection.evaluatedTransactionCount, overview.populationBridge.tax_scope.posted_transactions_evaluated_count);
+  assert.match(overview.projection.projectionId, /^[a-f0-9]{24}$/);
 });
 
 test("transaction drill-down filters by month, category, and status with pagination metadata", async () => {

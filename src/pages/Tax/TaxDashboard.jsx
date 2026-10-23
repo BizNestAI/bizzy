@@ -569,7 +569,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     }),
     [classificationSummary.primaryUnresolvedTotal, classificationSummary.reviewRequiredTotal, lifecycleProjection]
   );
-  const updatedAt = deductions.lastRefreshedAt || classificationSummary.lastRunAt || null;
+  const overviewProjection = deductions.overview?.projection || null;
+  const updatedAt = overviewProjection?.refreshedAt || deductions.overview?.meta?.generatedAt || deductions.lastRefreshedAt || null;
   const openDeductionDefaults = () => {
     setWorkspaceView("overview");
     const focusRulesPanel = () => {
@@ -604,7 +605,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     },
     [deductions.isDemo, initialDeductionsLoading, workspaceRows, year]
   );
-  const matrixTotals = useMemo(() => buildMatrixAuthorityTotals(matrix), [matrix]);
   const populationCounts = useMemo(
     () => resolveDeductionsPopulationCounts({
       transactionCount: matrix.transactionCount,
@@ -613,8 +613,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     }),
     [lifecycleProjection, matrix.transactionCount, populationBridge]
   );
-  // Customer-input rows remain gross expenses until the missing fact is supplied.
-  const estimatedDeductibleExpenses = matrixTotals.reviewedDeductibleTotal + matrixTotals.standardRuleDeductibleTotal;
+  // Headline values are an atomic overview projection. Detail rows can enrich
+  // the matrix, but may never recalculate or replace the persisted summary.
+  const estimatedDeductibleExpenses = Number(
+    overviewProjection?.estimatedDeductibleAmount ?? deductions.overview?.totals?.estimatedDeductibleAmount
+  );
+  const authoritativeQuestionCount = overviewProjection?.questionsForYouGroupCount;
   const evidenceThroughAt = classificationSummary.lastRunAt || null;
   const openVehicleWorkflow = (decision) => {
     const decisionRows = decisionActionRows(decision?.group);
@@ -687,8 +691,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         </div>
       ) : null}
       {matrixRequestStatus === "error" && deductions.overview ? (
-        <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-sm text-amber-50" role="status">
-          Transaction details are temporarily unavailable. The persisted deduction summary remains available.
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-sm text-amber-50" role="status">
+          <span>Transaction details are temporarily unavailable. Your last updated deductions summary is still shown.</span>
+          <button type="button" onClick={() => deductions.retryTransactionDetails()} className="rounded-full border border-amber-100/20 px-3 py-1 text-xs font-semibold hover:bg-amber-100/10">Retry transaction details</button>
         </div>
       ) : null}
       {deductions.refreshError ? (
@@ -713,7 +718,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         <DeductionsLoadingState />
       ) : initialDeductionsError ? (
         <div className="mt-5 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-5 text-sm text-rose-100" role="alert">
-          <div className="font-semibold">Deductions failed to load.</div>
+          <div className="font-semibold">Your deductions summary could not be loaded. No totals have been changed.</div>
           <p className="mt-1 text-rose-100/75">{deductions.error?.message || "The deduction summary is unavailable."}</p>
           <button
             type="button"
@@ -748,7 +753,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
       <WorkspaceViewTabs
         value={workspaceView}
         onChange={setWorkspaceView}
-        questionGroupCount={customerWorkflow.customerDecisionCount}
+        questionGroupCount={authoritativeQuestionCount}
       />
 
       {workspaceView === "overview" ? (
@@ -964,16 +969,18 @@ const ATTENTION_TABS = [
   { value: "failed", label: "Technical updates" },
 ];
 
-function WorkspaceViewTabs({ value, onChange, questionGroupCount = 0 }) {
+function WorkspaceViewTabs({ value, onChange, questionGroupCount = null }) {
   const parsedQuestionCount = Number(questionGroupCount);
-  const questionCount = Number.isFinite(parsedQuestionCount) ? Math.max(0, parsedQuestionCount) : 0;
+  const questionCount = questionGroupCount == null || !Number.isFinite(parsedQuestionCount) ? null : Math.max(0, parsedQuestionCount);
   return (
     <div className="mt-5 flex flex-wrap gap-1.5" role="tablist" aria-label="Deductions workspace views">
       {WORKSPACE_VIEW_TABS.map((tab) => {
         const isQuestions = tab.value === "needs_attention";
-        const visibleLabel = isQuestions ? `Questions for you · ${questionCount}` : tab.label;
+        const visibleLabel = isQuestions ? `Questions for you · ${questionCount ?? "…"}` : tab.label;
         const accessibleLabel = isQuestions
-          ? questionCount === 0
+          ? questionCount == null
+            ? "Questions for you, count is loading"
+            : questionCount === 0
             ? "Questions for you, no questions requiring an answer"
             : `Questions for you, ${questionCount} question${questionCount === 1 ? "" : "s"} requiring an answer`
           : tab.label;

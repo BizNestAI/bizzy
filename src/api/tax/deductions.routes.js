@@ -15,6 +15,7 @@ import {
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
 import { optionalDate, optionalTaxYear, validateBusinessIdInput } from "./taxValidation.js";
 import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
+import { createHash, randomUUID } from "node:crypto";
 
 const router = Router();
 
@@ -30,15 +31,34 @@ export default router;
 
 async function overviewHandler(req, res) {
   setTaxNoStore(res);
+  const startedAt = Date.now();
+  const requestId = String(req.headers?.["x-request-id"] || randomUUID());
+  let safeBusinessId = "unresolved";
+  let taxYear = null;
+  let projectionId = null;
+  let resultStatus = "error";
   try {
     const businessId = validateBusinessIdInput(req);
-    const taxYear = optionalTaxYear(req.query?.year, new Date().getFullYear());
+    safeBusinessId = createHash("sha256").update(businessId).digest("hex").slice(0, 12);
+    taxYear = optionalTaxYear(req.query?.year, new Date().getFullYear());
     const asOfDate = optionalDate(req.query?.asOfDate, "asOfDate");
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const data = await getDeductionsOverview({ supabase, businessId, taxYear, asOfDate });
+    projectionId = data?.projection?.projectionId || null;
+    resultStatus = "success";
     return sendTaxSuccess(res, data);
   } catch (err) {
+    resultStatus = err?.code === "request_aborted" ? "aborted" : "error";
     return sendTaxError(res, err, "tax_deductions_overview_failed");
+  } finally {
+    console.info("[tax.deductions.overview]", {
+      requestId,
+      businessRef: safeBusinessId,
+      taxYear,
+      durationMs: Date.now() - startedAt,
+      resultStatus,
+      projectionId,
+    });
   }
 }
 

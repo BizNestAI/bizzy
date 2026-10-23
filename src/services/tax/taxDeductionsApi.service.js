@@ -17,6 +17,7 @@ import { getRequiredFederalTaxConfigSet } from "./taxRuleConfig.repository.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../bookkeeping/bookkeepingScope.js";
 import { listTaxPostingSourceRows } from "./taxPostedTransaction.repository.js";
 import { buildTaxReconciliationBridge } from "./taxReconciliationBridge.js";
+import { createHash } from "node:crypto";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -31,7 +32,51 @@ export async function getDeductionsOverview({ supabase, businessId, taxYear, asO
   ]);
   const setupState = await buildSetupState({ ...context, summary, reconciliation });
   const populationBridge = buildTaxReconciliationBridge({ sourceRows: taxPostingSourceRows });
-  return { ...summary, reconciliation, populationBridge, setupState, warnings: [...summary.warnings, ...setupState.warnings] };
+  const projection = buildOverviewProjection({ summary, populationBridge, businessId, taxYear: context.taxYear });
+  return { ...summary, projection, reconciliation, populationBridge, setupState, warnings: [...summary.warnings, ...setupState.warnings] };
+}
+
+function buildOverviewProjection({ summary, populationBridge, businessId, taxYear }) {
+  const evaluatedTransactionCount = Number(populationBridge?.tax_scope?.posted_transactions_evaluated_count ?? summary.coverage?.eligiblePostedCount ?? 0);
+  const matrixIncludedCount = Number(populationBridge?.tax_scope?.deductions_matrix_expense_count ?? summary.coverage?.classifiedCount ?? 0);
+  const outsideDeductionsCount = Number(populationBridge?.tax_scope?.posted_non_expense_outside_deductions_count ?? Math.max(0, evaluatedTransactionCount - matrixIncludedCount));
+  // The overview engine already grouped the full annual classification set by
+  // category. This count is part of the same response generation, never a
+  // separately fetched/partially hydrated transaction list.
+  const questionsForYouGroupCount = (summary.categories || []).filter((category) => Number(category.reviewCount || 0) > 0).length;
+  const identity = {
+    businessId,
+    taxYear,
+    engineVersion: summary.meta?.engineVersion || "unknown",
+    asOfDate: summary.meta?.asOfDate || null,
+    estimatedDeductibleAmount: Number(summary.totals?.estimatedDeductibleAmount || 0),
+    evaluatedTransactionCount,
+    matrixIncludedCount,
+    outsideDeductionsCount,
+    questionsForYouGroupCount,
+  };
+  const projectionId = createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 24);
+  return {
+    projectionId,
+    projectionVersion: "tax-deductions-overview-v1",
+    canonicalBusinessId: businessId,
+    taxYear,
+    generatedAt: summary.meta?.generatedAt || new Date().toISOString(),
+    refreshedAt: summary.meta?.generatedAt || new Date().toISOString(),
+    completeness: summary.coverage?.classificationCoveragePercent === 100 ? "complete" : "partial",
+    estimatedDeductibleAmount: identity.estimatedDeductibleAmount,
+    evaluatedTransactionCount,
+    matrixIncludedCount,
+    outsideDeductionsCount,
+    questionsForYouGroupCount,
+    actionOwnerCounts: {
+      customer: Number(summary.coverage?.needsReviewCount || 0),
+      system: Math.max(0, Number(summary.coverage?.eligiblePostedCount || 0) - Number(summary.coverage?.classifiedCount || 0)),
+    },
+    transactionDetailsAvailable: true,
+    warnings: summary.warnings || [],
+    sourceIdentities: [{ type: "transaction_tax_classifications", version: summary.meta?.engineVersion || null }],
+  };
 }
 
 export async function listDeductionTransactions({ supabase, businessId, taxYear, asOfDate, filters = {}, pagination = {} } = {}) {

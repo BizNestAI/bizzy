@@ -57,11 +57,8 @@ export function useTaxDeductions({
   const [classificationRows, setClassificationRows] = useState(null);
   const [classificationReviewSummary, setClassificationReviewSummary] = useState(null);
   const [decisionRules, setDecisionRules] = useState([]);
-  // The overview cache does not contain the transaction rows used by the matrix.
-  // Enter loading during render even when that cache exists so empty row DTOs do
-  // not briefly look like authoritative zero-value deduction totals.
   const startsWithLiveRequest = enabled && Boolean(businessId) && !shouldUseDemoData();
-  const [loading, setLoading] = useState(startsWithLiveRequest);
+  const [loading, setLoading] = useState(startsWithLiveRequest && !initialCachedOverview);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
   const [refreshError, setRefreshError] = useState(null);
@@ -74,7 +71,9 @@ export function useTaxDeductions({
     classification: "idle",
   });
   const seq = useRef(0);
+  const overviewRef = useRef(initialCachedOverview);
   const pollInFlight = useRef(false);
+  const refreshInFlight = useRef(null);
   const isDemo = shouldUseDemoData();
   const scopeKey = `${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`;
   const requestEnabled = enabled && Boolean(businessId);
@@ -82,6 +81,10 @@ export function useTaxDeductions({
   const shouldPollClassification = isActiveClassificationStatus(
     classificationJobStatus?.status || classificationCoverage?.jobStatus?.status || classificationCoverage?.classificationStatus
   );
+
+  useEffect(() => {
+    overviewRef.current = overview;
+  }, [overview]);
 
   // A completed grouped decision changes one bounded category/account scope,
   // but the question summary is a cross-workspace authority. Refresh just that
@@ -128,7 +131,7 @@ export function useTaxDeductions({
       matrix: enabled && businessId ? "loading" : "idle",
       classification: enabled && businessId ? "loading" : "idle",
     });
-    setLoading(Boolean(enabled && businessId));
+    setLoading(Boolean(enabled && businessId && !cached));
     setError(null);
     setRefreshError(null);
   }, [scopeKey, isDemo, businessId, year, asOfDate, enabled]);
@@ -153,7 +156,10 @@ export function useTaxDeductions({
     }
     if (!enabled || !businessId) return null;
     const request = ++seq.current;
-    setLoading(true);
+    // A verified cached overview is useful immediately. Revalidation and detail
+    // hydration must not hide it or replace its headline values with row-derived
+    // placeholders.
+    if (!overviewRef.current) setLoading(true);
     if (!refresh) {
       setRequestStatus({ scopeKey, overview: "loading", matrix: "loading", classification: "loading" });
     }
@@ -161,13 +167,26 @@ export function useTaxDeductions({
     setResourceErrors({});
     try {
       const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
-      const [overviewResult, allTransactionsResult, coverageResult, reviewSummaryResult, decisionRulesResult] = await Promise.allSettled([
-        getTaxDeductionsOverview({ businessId, year, asOfDate, refresh, signal }),
+      const overviewPromise = settle(getTaxDeductionsOverview({ businessId, year, asOfDate, refresh, signal }));
+      const detailPromises = [
         fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, refresh, signal }),
         getTaxClassificationCoverage({ businessId, year, refresh, signal }),
         getTaxClassificationReviewSummary({ businessId, year, refresh, signal }),
         getTaxDeductionDecisionRules({ businessId, year, refresh, signal }),
-      ]);
+      ].map(settle);
+      const overviewResult = await overviewPromise;
+      if (request === seq.current) {
+        if (overviewResult.status === "fulfilled") {
+          setOverview(overviewResult.value);
+          setRequestStatus((current) => ({ ...current, scopeKey, overview: "success" }));
+          if (refresh) setLastRefreshedAt(overviewResult.value?.projection?.refreshedAt || overviewResult.value?.meta?.generatedAt || new Date().toISOString());
+        } else if (overviewResult.reason?.code !== "request_aborted") {
+          setRequestStatus((current) => ({ ...current, scopeKey, overview: "error" }));
+          if (!overviewRef.current) setError(overviewResult.reason);
+        }
+        setLoading(false);
+      }
+      const [allTransactionsResult, coverageResult, reviewSummaryResult, decisionRulesResult] = await Promise.all(detailPromises);
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") setOverview(overviewResult.value);
         if (allTransactionsResult.status === "fulfilled") setAllTransactions(withTaxSnapshot(allTransactionsResult.value, request));
@@ -185,12 +204,13 @@ export function useTaxDeductions({
           decisionRules: decisionRulesResult,
         });
         setResourceErrors(errors);
-        setRequestStatus({
+        setRequestStatus((current) => ({
+          ...current,
           scopeKey,
-          overview: overviewResult.status === "fulfilled" ? "success" : "error",
+          overview: overviewResult.status === "fulfilled" ? "success" : current.overview,
           matrix: allTransactionsResult.status === "fulfilled" ? "success" : "error",
           classification: coverageResult.status === "fulfilled" ? "success" : "error",
-        });
+        }));
         // The review summary enriches the Needs attention view, but it is not
         // authoritative for the overview, coverage, or deductions matrix. A
         // failure there must not claim that the entire Tax request failed while
@@ -339,19 +359,25 @@ export function useTaxDeductions({
     lastRefreshedAt,
     isDemo,
     refetch: load,
-    refresh: async (options = {}) => {
+    retryTransactionDetails: (options = {}) => loadSecondaryDetails({ ...options, refresh: true }),
+    refresh: (options = {}) => {
+      if (refreshInFlight.current) return refreshInFlight.current;
       setRefreshing(true);
       setRefreshError(null);
-      try {
-        const primary = await load({ ...options, refresh: true });
-        const secondary = await loadSecondaryDetails({ ...options, refresh: true });
-        return { ...(primary || {}), ...(secondary || {}) };
-      } catch (err) {
-        setRefreshError(err);
-        throw err;
-      } finally {
-        setRefreshing(false);
-      }
+      const operation = Promise.all([
+        load({ ...options, refresh: true }),
+        loadSecondaryDetails({ ...options, refresh: true }),
+      ]).then(([primary, secondary]) => ({ ...(primary || {}), ...(secondary || {}) }))
+        .catch((err) => {
+          setRefreshError(err);
+          throw err;
+        })
+        .finally(() => {
+          refreshInFlight.current = null;
+          setRefreshing(false);
+        });
+      refreshInFlight.current = operation;
+      return operation;
     },
     getTransactionDetail: (transactionId, options = {}) =>
       getTaxDeductionTransactionDetail({ businessId, year, transactionId, ...options }),
@@ -740,6 +766,13 @@ async function fetchAllPostedTransactions({ businessId, year, refresh = false, s
 
 function valueOrNull(result) {
   return result?.status === "fulfilled" ? result.value : null;
+}
+
+function settle(promise) {
+  return Promise.resolve(promise).then(
+    (value) => ({ status: "fulfilled", value }),
+    (reason) => ({ status: "rejected", reason })
+  );
 }
 
 function collectResourceErrors(results = {}) {

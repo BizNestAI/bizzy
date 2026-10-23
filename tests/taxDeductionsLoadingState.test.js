@@ -93,3 +93,22 @@ test("Tax Overview skeleton and empty state are gated and accessible", () => {
   assert.match(source, /matrix\.accounts\.length \? \(/);
   assert.match(source, /Existing deduction data remains on screen and may be stale/);
 });
+
+test("headline amount and question count come from one overview projection", () => {
+  const source = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
+  assert.match(source, /overviewProjection\?\.estimatedDeductibleAmount/);
+  assert.match(source, /overviewProjection\?\.questionsForYouGroupCount/);
+  assert.doesNotMatch(source, /const estimatedDeductibleExpenses = matrixTotals\./);
+  assert.match(source, /Your last updated deductions summary is still shown/);
+  assert.match(source, /Retry transaction details/);
+});
+
+test("overview commits before detail hydration and refresh is single-flight", () => {
+  const source = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
+  const overviewCommit = source.indexOf("const overviewResult = await overviewPromise");
+  const detailCommit = source.indexOf("await Promise.all(detailPromises)");
+  assert.ok(overviewCommit > 0 && detailCommit > overviewCommit);
+  assert.match(source, /if \(request === seq\.current\)/);
+  assert.match(source, /if \(refreshInFlight\.current\) return refreshInFlight\.current/);
+  assert.match(source, /reason\?\.code !== "request_aborted"/);
+});
