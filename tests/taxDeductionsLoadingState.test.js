@@ -3,9 +3,26 @@ import { test } from "node:test";
 import fs from "node:fs";
 import {
   resolveDeductionsRenderState,
+  resolveQuestionsPanelState,
   resolveScopedDeductionsRequestStatus,
   selectDeductionsWorkspaceError,
 } from "../src/components/Tax/Deductions/deductionsRequestState.js";
+
+test("Questions for You keeps loading, empty, error, and populated states distinct", () => {
+  assert.equal(resolveQuestionsPanelState({ status: "loading", authoritativeCount: 8, renderedCount: 0 }), "loading");
+  assert.equal(resolveQuestionsPanelState({ status: "success", authoritativeCount: 0, renderedCount: 0, hasAuthoritativeDetails: true }), "ready_empty");
+  assert.equal(resolveQuestionsPanelState({ status: "success", authoritativeCount: 8, renderedCount: 8, hasAuthoritativeDetails: true }), "ready_nonempty");
+  assert.equal(resolveQuestionsPanelState({ status: "error", authoritativeCount: 8, renderedCount: 0 }), "error");
+});
+
+test("an older or incompatible zero-question detail projection cannot contradict a known badge count", () => {
+  assert.equal(resolveQuestionsPanelState({
+    status: "success",
+    authoritativeCount: 8,
+    renderedCount: 0,
+    hasAuthoritativeDetails: true,
+  }), "error");
+});
 
 test("a newly enabled scope is loading synchronously before its effect runs", () => {
   assert.deepEqual(
@@ -132,4 +149,25 @@ test("cached overview shows a scoped loader until the deductions matrix hydrates
   assert.match(source, /loading=\{matrixIsLoading\}/);
   assert.match(source, /Loading monthly deductions…/);
   assert.match(source, /role="status" aria-busy="true" aria-live="polite"/);
+});
+
+test("Questions for You hydrates eagerly and never renders a pending request as zero", () => {
+  const dashboard = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
+  const hook = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
+  assert.match(hook, /getTaxDeductionsOverview[\s\S]*fetchAllDeductionTransactions/);
+  assert.match(hook, /useEffect\(\(\) => \{[\s\S]*load\(\{ signal: controller\.signal \}\)/);
+  assert.match(dashboard, /questionsPanelState === "loading"[\s\S]*QuestionsPanelLoading/);
+  assert.match(dashboard, /Loading \$\{count\} questions…/);
+  assert.match(dashboard, /Nothing needs your input right now\./);
+  assert.match(dashboard, /We couldn’t load your questions\./);
+  assert.doesNotMatch(dashboard, /questionsPanelState === "loading"[\s\S]{0,300}customerQuestionSummaryText/);
+});
+
+test("question retry is scoped, single-flight, stale-safe, and read-only", () => {
+  const hook = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
+  assert.match(hook, /if \(questionsRetryInFlight\.current\) return questionsRetryInFlight\.current/);
+  assert.match(hook, /if \(request !== seq\.current\) return null/);
+  const retryBlock = hook.slice(hook.indexOf("const retryQuestions"), hook.indexOf("useEffect(() =>", hook.indexOf("const retryQuestions")));
+  assert.match(retryBlock, /fetchAllDeductionTransactions/);
+  assert.doesNotMatch(retryBlock, /runTaxClassification|prepareTaxClassifications|confirmGroupedTaxDeductionDecision|saveTaxDeductionDecisionRule/);
 });

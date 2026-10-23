@@ -14,7 +14,7 @@ import { useBusinessContext } from "../../context/BusinessContext";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
 import { useTaxOverview } from "../../hooks/tax/useTaxOverview.js";
 import { useTaxDeductions } from "../../hooks/tax/useTaxDeductions.js";
-import { resolveDeductionsRenderState } from "../../components/Tax/Deductions/deductionsRequestState.js";
+import { resolveDeductionsRenderState, resolveQuestionsPanelState } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import { useTaxPayments } from "../../hooks/tax/useTaxPayments.js";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
 import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/deductionsWorkspaceViewModel.js";
@@ -648,6 +648,14 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     overviewProjection?.estimatedDeductibleAmount ?? deductions.overview?.totals?.estimatedDeductibleAmount
   );
   const authoritativeQuestionCount = overviewProjection?.questionsForYouGroupCount;
+  const questionsRequestStatus = deductions.sectionStatus?.matrix || "idle";
+  const questionsPanelState = resolveQuestionsPanelState({
+    status: questionsRequestStatus,
+    authoritativeCount: authoritativeQuestionCount,
+    renderedCount: customerWorkflow.customerDecisionCount,
+    hasAuthoritativeDetails: Boolean(deductions.allTransactions),
+  });
+  const questionsError = deductions.resourceErrors?.allTransactions || null;
   const evidenceThroughAt = classificationSummary.lastRunAt || null;
   const openVehicleWorkflow = (decision) => {
     const decisionRows = decisionActionRows(decision?.group);
@@ -815,7 +823,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         </>
       ) : workspaceView === "needs_attention" ? (
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18" data-tax-classification-workspace>
-          <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+          {questionsPanelState === "loading" ? (
+            <QuestionsPanelLoading questionCount={authoritativeQuestionCount} />
+          ) : questionsPanelState === "error" ? (
+            <QuestionsPanelError error={questionsError} onRetry={() => deductions.retryQuestions()} />
+          ) : (
+          <><div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <div className="text-sm font-semibold text-white/84">{customerQuestionSummaryText(customerWorkflow.customerDecisionCount, customerWorkflow.customerInputCount)}</div>
               <div className="mt-0.5 text-xs text-white/45">Answer these to finish your {year} deduction estimates.</div>
@@ -828,11 +841,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
               Manage deduction defaults
             </button>
           </div>
-          <AttentionReviewGroups
-            groups={attentionGroups}
-            readOnly={readOnly}
-            onOpenDecision={setReviewDecision}
-          />
+          {questionsPanelState === "ready_empty" ? (
+            <div className="px-3 py-8 text-center text-sm text-white/58">Nothing needs your input right now.</div>
+          ) : (
+            <AttentionReviewGroups groups={attentionGroups} readOnly={readOnly} onOpenDecision={setReviewDecision} />
+          )}</>
+          )}
         </div>
       ) : (
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
@@ -1915,6 +1929,30 @@ function customerQuestionSummaryText(questionCount = 0, transactionCount = 0) {
   const questions = Number(questionCount) || 0;
   const transactions = Number(transactionCount) || 0;
   return `${questions} question${questions === 1 ? "" : "s"} covering ${transactions} transaction${transactions === 1 ? "" : "s"}`;
+}
+
+function QuestionsPanelLoading({ questionCount = null }) {
+  const count = Number(questionCount);
+  const label = Number.isFinite(count) && count > 0 ? `Loading ${count} questions…` : "Loading your questions…";
+  return (
+    <div className="flex min-h-44 items-center justify-center px-4 py-8 text-center" role="status" aria-live="polite" aria-busy="true">
+      <div>
+        <Loader2 className="mx-auto h-6 w-6 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
+        <span className="mx-auto hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" />
+        <p className="mt-3 text-sm font-semibold text-white/82">{label}</p>
+      </div>
+    </div>
+  );
+}
+
+function QuestionsPanelError({ error, onRetry }) {
+  return (
+    <div className="px-4 py-6 text-sm text-rose-100" role="alert">
+      <p className="font-semibold">We couldn’t load your questions.</p>
+      {error?.requestId ? <p className="mt-1 font-mono text-xs text-rose-100/60">Request ID: {error.requestId}</p> : null}
+      <button type="button" onClick={onRetry} className="mt-3 rounded-full border border-rose-200/25 px-3 py-1.5 text-xs font-semibold hover:bg-rose-100/10">Retry</button>
+    </div>
+  );
 }
 
 function AttentionReviewGroups({ groups, readOnly, onOpenDecision }) {

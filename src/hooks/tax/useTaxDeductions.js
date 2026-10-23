@@ -78,6 +78,7 @@ export function useTaxDeductions({
   const overviewRef = useRef(initialCachedOverview);
   const pollInFlight = useRef(false);
   const refreshInFlight = useRef(null);
+  const questionsRetryInFlight = useRef(null);
   const isDemo = shouldUseDemoData();
   const scopeKey = `${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`;
   const requestEnabled = enabled && Boolean(businessId);
@@ -287,6 +288,38 @@ export function useTaxDeductions({
     };
   }, [businessId, year, asOfDate, filterKey, paginationKey, enabled, isDemo]);
 
+  const retryQuestions = useCallback(({ signal } = {}) => {
+    if (questionsRetryInFlight.current) return questionsRetryInFlight.current;
+    if (isDemo || !enabled || !businessId) return Promise.resolve(null);
+    const request = seq.current;
+    setRequestStatus((current) => ({ ...current, scopeKey, matrix: "loading" }));
+    setResourceErrors((current) => ({ ...(current || {}), allTransactions: null }));
+    const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
+    const operation = fetchAllDeductionTransactions({
+      businessId,
+      year,
+      asOfDate,
+      filters: parsedFilters,
+      refresh: true,
+      signal,
+    }).then((value) => {
+      if (request !== seq.current) return null;
+      setAllTransactions(withTaxSnapshot(value, request));
+      setRequestStatus((current) => ({ ...current, scopeKey, matrix: "success" }));
+      return value;
+    }).catch((questionsError) => {
+      if (request === seq.current && questionsError?.code !== "request_aborted") {
+        setResourceErrors((current) => ({ ...(current || {}), allTransactions: questionsError }));
+        setRequestStatus((current) => ({ ...current, scopeKey, matrix: "error" }));
+      }
+      return null;
+    }).finally(() => {
+      if (questionsRetryInFlight.current === operation) questionsRetryInFlight.current = null;
+    });
+    questionsRetryInFlight.current = operation;
+    return operation;
+  }, [asOfDate, businessId, enabled, filterKey, isDemo, scopeKey, year]);
+
   useEffect(() => {
     const controller = new AbortController();
     load({ signal: controller.signal }).then(() => {
@@ -364,6 +397,7 @@ export function useTaxDeductions({
     isDemo,
     refetch: load,
     retryTransactionDetails: (options = {}) => loadSecondaryDetails({ ...options, refresh: true }),
+    retryQuestions,
     refresh: (options = {}) => {
       if (refreshInFlight.current) return refreshInFlight.current;
       setRefreshing(true);
