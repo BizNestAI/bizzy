@@ -112,3 +112,11 @@ test("overview commits before detail hydration and refresh is single-flight", ()
   assert.match(source, /if \(refreshInFlight\.current\) return refreshInFlight\.current/);
   assert.match(source, /reason\?\.code !== "request_aborted"/);
 });
+
+test("cached overview shows a scoped loader until the deductions matrix hydrates", () => {
+  const source = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
+  assert.match(source, /matrixRequestStatus === "loading" && !deductions\.allTransactions/);
+  assert.match(source, /loading=\{matrixIsLoading\}/);
+  assert.match(source, /Loading monthly deductions…/);
+  assert.match(source, /role="status" aria-busy="true" aria-live="polite"/);
+});

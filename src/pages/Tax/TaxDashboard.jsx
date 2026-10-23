@@ -588,6 +588,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     deductions.postedTransactions
   );
   const matrixRequestStatus = deductions.sectionStatus?.matrix || (deductions.loading ? "loading" : "idle");
+  const matrixIsLoading = matrixRequestStatus === "loading" && !deductions.allTransactions;
   const classificationRequestStatus = deductions.sectionStatus?.classification || (deductions.loading ? "loading" : "idle");
   const overviewRequestStatus = deductions.sectionStatus?.overview || (deductions.loading ? "loading" : "idle");
   const deductionsRenderState = resolveDeductionsRenderState({
@@ -764,9 +765,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
             projection={lifecycleProjection}
             awaitingEvaluationCount={classificationSummary.missingEvaluationTotal}
           />
-          <DeductionMatrixLegend />
+          {!matrixIsLoading ? <DeductionMatrixLegend /> : null}
           <DeductionAccountMatrix
             matrix={matrix}
+            loading={matrixIsLoading}
             onSelectCell={setSelectedCell}
             onOpenDecision={setReviewDecision}
             decisionGroups={lifecycleProjection.activeDecisionGroups}
@@ -1588,17 +1590,25 @@ function formatLifecycleSummaryLine(projection) {
   return `${projection.canonicalCount} stable transaction identities = ${labels.join(" + ")}`;
 }
 
-function DeductionAccountMatrix({ matrix, onSelectCell, onOpenDecision, decisionGroups = [] }) {
+function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenDecision, decisionGroups = [] }) {
   const includedTransactionCount = Number(matrix?.transactionCount || 0);
   return (
     <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] px-3 py-2 text-xs">
         <span className="font-semibold text-white/62">Monthly deductions</span>
         <span className="text-white/52" aria-live="polite">
-          {includedTransactionCount} expense transaction{includedTransactionCount === 1 ? "" : "s"} included
+          {loading ? "Loading matrix…" : `${includedTransactionCount} expense transaction${includedTransactionCount === 1 ? "" : "s"} included`}
         </span>
       </div>
-      {matrix.accounts.length ? (
+      {loading ? (
+        <div className="flex min-h-40 items-center justify-center px-4 py-8" role="status" aria-busy="true" aria-live="polite">
+          <div className="flex items-center gap-3 text-sm text-white/58">
+            <Loader2 className="h-4 w-4 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" aria-hidden="true" />
+            <span className="hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" aria-hidden="true" />
+            <span>Loading monthly deductions…</span>
+          </div>
+        </div>
+      ) : matrix.accounts.length ? (
         <div className="max-w-full overflow-x-auto">
           <table className="min-w-[1120px] border-collapse text-sm">
             <thead>
