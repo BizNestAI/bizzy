@@ -76,6 +76,13 @@ export async function upsertTaxClassification({ supabase, classification, force 
   }
 
   const row = toDbRow(classification, existing);
+  // Scheduled classification runs are allowed to observe the same evidence
+  // repeatedly.  Do not turn that observation into a write: `updated_at` is
+  // used by mutation CAS guards, so touching an otherwise identical row can
+  // invalidate a customer decision that is open in another request.
+  if (existing && isSemanticallyEqualClassification(existing, row)) {
+    return { row: existing, skipped: true, reason: "semantic_noop" };
+  }
   const { data, error } = await supabase
     .from("transaction_tax_classifications")
     .upsert(row, { onConflict: "business_id,transaction_id,tax_year" })
@@ -83,6 +90,43 @@ export async function upsertTaxClassification({ supabase, classification, force 
     .single();
   if (error) throw error;
   return { row: data || row, skipped: false };
+}
+
+export function isSemanticallyEqualClassification(existing = {}, next = {}) {
+  const fields = [
+    "business_id", "transaction_id", "tax_year", "transaction_date",
+    "tax_category", "deductibility_status", "deductible_percent",
+    "book_amount", "deductible_amount", "nondeductible_amount",
+    "capitalizable_amount", "classification_status", "confidence_score",
+    "confidence_level", "rule_id", "rule_code", "rule_version",
+    "rule_priority", "reason", "source", "requires_review",
+    "source_qbo_txn_id", "source_qbo_txn_type", "source_qbo_account_id",
+    "source_qbo_account_name", "user_override", "cpa_override",
+  ];
+  return fields.every((field) => stableSemanticValue(existing[field]) === stableSemanticValue(next[field])) &&
+    stableSemanticValue(existing.tax_treatment) === stableSemanticValue(next.tax_treatment) &&
+    stableSemanticValue(decisionRelevantMetadata(existing.metadata)) === stableSemanticValue(decisionRelevantMetadata(next.metadata));
+}
+
+const OPERATIONAL_CLASSIFICATION_METADATA_KEYS = new Set([
+  "classified_at", "classificationRunId", "classification_run_id",
+  "worker_id", "workerId", "lease_owner", "retry_at", "next_retry_at",
+  "attempt_count", "projection_generated_at", "cache_timestamp",
+]);
+
+function decisionRelevantMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return metadata || {};
+  return Object.fromEntries(Object.entries(metadata).filter(([key]) => !OPERATIONAL_CLASSIFICATION_METADATA_KEYS.has(key)));
+}
+
+function stableSemanticValue(value) {
+  if (value == null) return "null";
+  if (Array.isArray(value)) return `[${value.map(stableSemanticValue).join(",")}]`;
+  if (typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSemanticValue(value[key])}`).join(",")}}`;
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "null";
+  return JSON.stringify(value);
 }
 
 export async function updateClassificationStatus({ supabase, businessId, transactionId, taxYear, status, userId } = {}) {

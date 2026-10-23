@@ -21,9 +21,9 @@ import {
   updateTaxDeductionDecisionRule,
 } from "../../services/tax/taxDeductionDecisionRule.service.js";
 import {
-  applyGroupedTaxDeductionDecision,
   getGroupedTaxDeductionDecisionOperation,
 } from "../../services/tax/taxGroupedDeductionDecision.service.js";
+import { createGroupedDecisionPreview, confirmGroupedDecisionPreview } from "../../services/tax/taxGroupedDecisionPreview.service.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../services/tax/taxChangeEvents.js";
 import { forbiddenBusinessError, validationError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
@@ -134,17 +134,41 @@ router.patch("/deduction-decision-rules/:ruleId", async (req, res) => {
 // One customer answer may apply to hundreds of rows. This command is separate
 // from the legacy 100-row bulk endpoint so the rule, override history, and all
 // scoped classifications are committed (or rolled back) together.
+router.post("/deduction-decisions/preview", async (req, res) => {
+  setTaxNoStore(res);
+  let ctx = null;
+  try {
+    ctx = await routeContext(req, { requireServerBusinessContext: true });
+    assertTaxMutationAllowed(req);
+    const data = await createGroupedDecisionPreview({
+      ...ctx,
+      groupId: String(req.body?.groupId || "").trim(),
+      actor: actorFromRequest(req),
+    });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    logGroupedDecisionFailure({ req, ctx, err });
+    return sendTaxError(res, err, "tax_grouped_deduction_preview_failed");
+  }
+});
+
 router.post("/deduction-decisions/apply", async (req, res) => {
   setTaxNoStore(res);
   let ctx = null;
   try {
     ctx = await routeContext(req, { requireServerBusinessContext: true });
     assertTaxMutationAllowed(req);
-    const payload = validateGroupedDecisionPayload(req, ctx.businessId);
-    const data = await applyGroupedTaxDeductionDecision({
+    const actor = actorFromRequest(req);
+    const data = await confirmGroupedDecisionPreview({
       ...ctx,
-      input: payload,
-      actor: actorFromRequest(req),
+      input: {
+        previewId: req.body?.previewId,
+        idempotencyKey: req.get?.("Idempotency-Key") || req.headers?.["idempotency-key"] || req.body?.idempotencyKey,
+        answer: req.body?.answer,
+        businessUsePercent: req.body?.businessUsePercent,
+        personalExceptionIds: req.body?.personalExceptionIds,
+      },
+      actor,
     });
     // Deliberately emit a classification change rather than BUSINESS_RULE_CREATED:
     // the saved GL rule is forward-looking and this completed command must not
@@ -348,23 +372,6 @@ function validateDecisionRulePayload(req, businessId) {
   return payload;
 }
 
-function validateGroupedDecisionPayload(req, businessId) {
-  const body = req.body || {};
-  const changes = validateDecisionRulePayload({
-    ...req,
-    body: { ...(body.changes || {}), businessId },
-  }, businessId);
-  return {
-    idempotencyKey: req.get?.("Idempotency-Key") || req.headers?.["idempotency-key"] || body.idempotencyKey,
-    scope: body.scope,
-    scopeFingerprint: body.scopeFingerprint,
-    targetTransactionIds: body.targetTransactionIds,
-    expectedPopulationTransactionIds: body.expectedPopulationTransactionIds,
-    changes,
-    reason: body.reason,
-  };
-}
-
 function canonicalMutationBusinessId(req) {
   // `requireBusinessAccess` attaches this context only after it has resolved
   // the authenticated user's company. Mutable grouped commands intentionally
@@ -396,7 +403,13 @@ function logGroupedDecisionFailure({ req, ctx, err }) {
     requestId: req?.id || req?.headers?.["x-request-id"] || null,
     businessId: ctx?.businessId || null,
     taxYear: ctx?.taxYear || null,
+    previewId: typeof req?.body?.previewId === "string" ? req.body.previewId : null,
     reasonCode: err?.code || "tax_grouped_deduction_decision_failed",
+    previousCount: Number.isFinite(err?.details?.previousCount) ? err.details.previousCount : null,
+    currentCount: Number.isFinite(err?.details?.currentCount) ? err.details.currentCount : null,
+    addedCount: Number.isFinite(err?.details?.addedCount) ? err.details.addedCount : null,
+    removedCount: Number.isFinite(err?.details?.removedCount) ? err.details.removedCount : null,
+    changedFields: Array.isArray(err?.details?.changedFields) ? err.details.changedFields.slice(0, 8) : [],
   });
 }
 

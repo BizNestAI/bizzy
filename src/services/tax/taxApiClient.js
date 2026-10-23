@@ -456,45 +456,35 @@ export async function saveTaxDeductionDecisionRule({ businessId, year, transacti
   return result;
 }
 
-export async function applyGroupedTaxDeductionDecision({
-  businessId,
-  year,
-  idempotencyKey,
-  scope,
-  scopeFingerprint,
-  targetTransactionIds = [],
-  expectedPopulationTransactionIds = [],
-  changes = {},
-  reason,
-  signal,
-} = {}) {
+export async function previewGroupedTaxDeductionDecision({ businessId, year, groupId, signal } = {}) {
   requireBusinessId(businessId);
-  requireValue(idempotencyKey, "idempotencyKey");
-  if (!Array.isArray(targetTransactionIds) || !targetTransactionIds.length) throw new Error("targetTransactionIds are required");
-  if (!Array.isArray(expectedPopulationTransactionIds) || !expectedPopulationTransactionIds.length) throw new Error("expectedPopulationTransactionIds are required");
-  const path = `/api/tax/deduction-decisions/apply?${query({ businessId, year })}`;
-  const requestOptions = {
+  requireValue(groupId, "groupId");
+  return unwrap(await request(`/api/tax/deduction-decisions/preview?${query({ businessId, year })}`, {
     method: "POST",
-    headers: { "Idempotency-Key": idempotencyKey },
-    body: { businessId, year, idempotencyKey, scope, scopeFingerprint, targetTransactionIds, expectedPopulationTransactionIds, changes, reason },
+    body: { businessId, year, groupId },
     signal,
-  };
+  }));
+}
+
+export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, businessUsePercent, personalExceptionIds = [], signal } = {}) {
+  requireBusinessId(businessId);
+  requireValue(previewId, "previewId");
+  requireValue(idempotencyKey, "idempotencyKey");
   const commandRequest = withBoundedCommandSignal(signal, { timeoutMs: 20_000 });
   try {
-    const result = unwrap(await request(path, { ...requestOptions, signal: commandRequest.signal }));
+    const result = unwrap(await request(`/api/tax/deduction-decisions/apply?${query({ businessId, year })}`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: compact({ previewId, answer, businessUsePercent, personalExceptionIds }),
+      signal: commandRequest.signal,
+    }));
     clearBusinessCache(businessId);
     return result;
   } catch (caughtError) {
     const error = commandRequest.timedOut()
-      ? Object.assign(new Error("The save is taking longer than expected."), {
-        code: "command_timeout",
-        status: null,
-        requestId: caughtError?.requestId || null,
-      })
+      ? Object.assign(new Error("The save is taking longer than expected."), { code: "command_timeout", status: null, requestId: caughtError?.requestId || null })
       : caughtError;
     if (!isAmbiguousCommandFailure(error)) throw error;
-    // Do not replay an unsafe mutation after a timeout/5xx. Its idempotency
-    // record is the only authority for whether the prior request committed.
     const statusRequest = withBoundedCommandSignal(signal, { timeoutMs: 8_000 });
     try {
       const operation = await getGroupedTaxDeductionDecisionOperation({ businessId, year, idempotencyKey, signal: statusRequest.signal });
@@ -503,7 +493,7 @@ export async function applyGroupedTaxDeductionDecision({
         return operation.result;
       }
     } catch {
-      // The dialog will present the bounded unknown-outcome state below.
+      // The modal retains the selection and offers a bounded status check.
     } finally {
       statusRequest.cleanup();
     }
@@ -1196,7 +1186,6 @@ export default {
   overrideTaxClassification,
   getTaxDeductionDecisionRules,
   saveTaxDeductionDecisionRule,
-  applyGroupedTaxDeductionDecision,
   getGroupedTaxDeductionDecisionOperation,
   updateTaxDeductionDecisionRule,
   sendTaxClassificationsToReview,

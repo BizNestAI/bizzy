@@ -6,7 +6,7 @@ import {
   selectDeductionsWorkspaceError,
 } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import {
-  applyGroupedTaxDeductionDecision,
+  confirmGroupedTaxDeductionDecision,
   bulkUpdateTaxClassifications,
   confirmTaxClassification,
   excludeTaxClassification,
@@ -25,6 +25,7 @@ import {
   getTaxPostedTransactions,
   overrideTaxClassification,
   prepareTaxClassifications,
+  previewGroupedTaxDeductionDecision,
   previewTaxClassificationBackfill,
   rejectTaxClassification,
   restoreTaxClassification,
@@ -473,39 +474,11 @@ export function useTaxDeductions({
       if (options.skipReload !== true) await load();
       return result;
     },
-    // A grouped customer decision is committed by one idempotent server command.
-    // Patch only the returned scoped rows locally: a full-year reload here can
-    // combine a fresh rule response with an older workspace projection and
-    // incorrectly hide unrelated questions.
-    applyGroupedDeductionDecision: async ({
-      idempotencyKey,
-      scope,
-      scopeFingerprint,
-      targetTransactionIds,
-      expectedPopulationTransactionIds,
-      changes = {},
-      reason,
-      signal,
-    } = {}) => {
-      const result = await applyGroupedTaxDeductionDecision({
-        businessId,
-        year,
-        idempotencyKey,
-        scope,
-        scopeFingerprint,
-        targetTransactionIds,
-        expectedPopulationTransactionIds,
-        changes,
-        reason,
-        signal,
-      });
-      applyGroupedDecisionResult({
-        result,
-        setTransactions,
-        setAllTransactions,
-        setClassificationRows,
-        setDecisionRules,
-      });
+    previewGroupedDeductionDecision: ({ groupId, signal } = {}) =>
+      previewGroupedTaxDeductionDecision({ businessId, year, groupId, signal }),
+    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, businessUsePercent, personalExceptionIds, signal } = {}) => {
+      const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, businessUsePercent, personalExceptionIds, signal });
+      applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
       const questionSummary = await refreshAuthoritativeQuestionSummary({ signal });
       return { ...result, questionSummary };
     },

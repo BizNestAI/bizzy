@@ -31,7 +31,6 @@ import {
   taxClassificationBucketForDeductions,
   taxActionOwnerForRow,
 } from "../../services/tax/taxDeductionsLifecycleProjection.js";
-import { buildGroupedDeductionDecisionFingerprint } from "../../services/tax/taxGroupedDeductionDecisionFingerprint.js";
 import { buildTaxEvaluationNotice } from "../../services/tax/taxEvaluationNoticeProjection.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
@@ -224,7 +223,6 @@ export default function TaxDashboard() {
       {!readOnly ? <TaxSetupWorkflow
         open={setupWorkflow.open}
         onClose={() => setSetupWorkflow((current) => ({ ...current, open: false }))}
-        businessId={businessId}
         year={taxYear}
         currentBusiness={currentBusiness}
         overview={tax.data}
@@ -555,6 +553,34 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     () => buildAttentionReviewGroups([], { lifecycleProjection }),
     [lifecycleProjection]
   );
+  // Keep an open question bound to the latest canonical projection. This is
+  // especially important after a scope-conflict refresh: selections live in
+  // the modal, while counts/amounts/rows must come from the refreshed group.
+  useEffect(() => {
+    setReviewDecision((current) => {
+      if (!current?.group) return current;
+      const currentId = current.group.id || current.group.key;
+      const refreshed = attentionGroups
+        .flatMap((section) => section?.groups || [])
+        .find((group) => (group.id || group.key) === currentId);
+      if (refreshed) return current.group === refreshed ? current : { ...current, group: refreshed };
+      if (deductions.refreshing) return current;
+      if (Number(current.group.actionableTransactionCount ?? current.group.pendingCount ?? 0) === 0) return current;
+      return {
+        ...current,
+        group: {
+          ...current.group,
+          rows: [],
+          pendingRows: [],
+          actionableTransactionCount: 0,
+          pendingCount: 0,
+          actionableGrossAmountCents: 0,
+          actionableEstimatedDeductibleAmountCents: 0,
+          categoryTransactionCount: Number(current.group.alreadyResolvedCount || current.group.reviewedCount || 0),
+        },
+      };
+    });
+  }, [attentionGroups, deductions.refreshing]);
   const deductionDecisionRules = useMemo(
     () => enrichDeductionDecisionRules(deductions.decisionRules, workspaceRows),
     [deductions.decisionRules, workspaceRows]
@@ -846,44 +872,22 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         taxYear={year}
         readOnly={readOnly}
         onClose={() => setReviewDecision(null)}
+        onPreview={({ groupId }) => deductions.previewGroupedDeductionDecision({ groupId })}
+        onScopeChanged={async () => {
+          await deductions.refresh();
+        }}
         onOpenVehicleWorkflow={openVehicleWorkflow}
-        onApply={async ({ transactionIds, changes, reason, command }) => {
+        onApply={async ({ command }) => {
           if (!reviewDecision || readOnly) return null;
-          const ids = Array.from(new Set(transactionIds.filter(Boolean)));
-          if (!ids.length) return null;
-          const first = decisionActionRows(reviewDecision.group)[0] || {};
-          const scope = command?.scope || {
-            taxCategory: first.taxCategory || first.raw?.tax_category || "",
-            qboAccountId: first.qboAccountId || first.raw?.qboAccountId || first.raw?.source_qbo_account_id || "",
-            decisionType: reviewDecision.group.decision.kind,
-          };
-          const expectedPopulationTransactionIds = command?.expectedPopulationTransactionIds || decisionTransactionIds(
-            decisionActionRows(reviewDecision.group),
-            "all_business",
-            [],
-          );
-          const scopeFingerprint = command?.scopeFingerprint || buildGroupedDeductionDecisionFingerprint({
-            businessId,
-            taxYear: year,
-            taxCategory: scope.taxCategory,
-            qboAccountId: scope.qboAccountId,
-            decisionType: scope.decisionType,
-            transactionIds: ids,
-            expectedPopulationTransactionIds,
-            changes,
-            reason,
-          });
-          const result = await deductions.applyGroupedDeductionDecision({
+          const result = await deductions.confirmGroupedDeductionDecision({
+            previewId: command.previewId,
             idempotencyKey: command?.idempotencyKey,
-            scope,
-            scopeFingerprint,
-            targetTransactionIds: ids,
-            expectedPopulationTransactionIds,
-            changes,
-            reason,
+            answer: command.answer,
+            businessUsePercent: command.businessUsePercent,
+            personalExceptionIds: command.personalExceptionIds,
           });
           const savedCount = Number(result?.appliedCount || 0) + Number(result?.alreadyMatchingCount || 0);
-          setDecisionNotice(`${reviewDecision.group.qboAccountName || "Tax"} decision saved for ${savedCount || ids.length} transaction${(savedCount || ids.length) === 1 ? "" : "s"}.`);
+          setDecisionNotice(`${reviewDecision.group.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}.`);
           setReviewDecision(null);
           return result;
         }}
@@ -2096,7 +2100,7 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
   );
 }
 
-function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose, onApply, onCheckOutcome }) {
+function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, onCheckOutcome, onScopeChanged, onPreview }) {
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [dedicatedPremises, setDedicatedPremises] = useState(false);
   const [businessUseAnswer, setBusinessUseAnswer] = useState("all_business");
@@ -2105,6 +2109,9 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [outcomeUnknown, setOutcomeUnknown] = useState(false);
+  const [scopeRefreshing, setScopeRefreshing] = useState(false);
+  const [changedSummary, setChangedSummary] = useState(null);
+  const [serverPreview, setServerPreview] = useState(null);
   const modalRef = useRef(null);
   const closeButtonRef = useRef(null);
   const previousFocusRef = useRef(null);
@@ -2120,8 +2127,29 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
     setSaving(false);
     setError("");
     setOutcomeUnknown(false);
+    setScopeRefreshing(false);
+    setChangedSummary(null);
+    setServerPreview(null);
     idempotencyKeyRef.current = null;
   }, [decisionGroupKey, decision?.scope, decision?.selectedMonth]);
+
+  const onPreviewRef = useRef(onPreview);
+  useEffect(() => {
+    onPreviewRef.current = onPreview;
+  }, [onPreview]);
+
+  useEffect(() => {
+    if (!decisionGroupKey || readOnly || !onPreviewRef.current) return undefined;
+    const controller = new AbortController();
+    setScopeRefreshing(true);
+    onPreviewRef.current({ groupId: decisionGroupKey, signal: controller.signal })
+      .then((preview) => setServerPreview(preview))
+      .catch((previewError) => {
+        if (previewError?.name !== "AbortError") setError(previewError?.message || "The current transaction preview could not be loaded.");
+      })
+      .finally(() => setScopeRefreshing(false));
+    return () => controller.abort();
+  }, [decisionGroupKey, readOnly]);
 
   useEffect(() => {
     if (!decisionGroupKey || typeof document === "undefined") return undefined;
@@ -2167,8 +2195,8 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
   const hasPercentInput = dedicatedPremises || String(businessUsePercent).trim() !== "";
   const percentValue = dedicatedPremises ? 100 : Number(businessUsePercent);
   const changingReviewedEstimate = Boolean(group.completed && (action.kind === "business_use_percent" || action.kind === "utility_allocation"));
-  const actionGrossTotal = Number(group.actionableGrossAmountCents || 0) / 100;
-  const actionEstimatedTotal = Number(group.actionableEstimatedDeductibleAmountCents || 0) / 100;
+  const actionGrossTotal = Number(serverPreview?.grossAmountCents ?? group.actionableGrossAmountCents ?? 0) / 100;
+  const actionEstimatedTotal = Number(serverPreview?.estimatedDeductionCents ?? group.actionableEstimatedDeductibleAmountCents ?? 0) / 100;
   const actionButtonLabel = decisionActionLabel(action, businessUseAnswer, group.qboAccountName);
   const currentEstimate = action.kind === "vehicle_method"
     ? "Not estimated yet"
@@ -2178,28 +2206,16 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
         ? "Not estimated yet"
         : `${formatDeductiblePercent(group.deductiblePercent)} deductible`;
 
-  const selectedTransactionIds = decisionTransactionIds(rows, businessUseAnswer, exceptionIds);
   const expectedPopulationTransactionIds = decisionTransactionIds(rows, "all_business", []);
   const hasCanonicalScopeAmounts = Number.isInteger(group.actionableGrossAmountCents)
     && Number.isInteger(group.actionableEstimatedDeductibleAmountCents);
   const scopeIdentityConserved = population.isConserved
     && expectedPopulationTransactionIds.length === population.actionableTransactionCount
     && new Set(expectedPopulationTransactionIds).size === expectedPopulationTransactionIds.length;
-  const firstSelectedRow = selectedRows[0] || rows[0] || {};
-  const commandScope = {
-    taxCategory: firstSelectedRow.taxCategory || firstSelectedRow.raw?.tax_category || "",
-    qboAccountId: firstSelectedRow.qboAccountId || firstSelectedRow.raw?.qboAccountId || firstSelectedRow.raw?.source_qbo_account_id || group.qboAccountId || "",
-    decisionType: action.kind,
-  };
-  const hasCommandScope = Boolean(commandScope.taxCategory && commandScope.qboAccountId && commandScope.decisionType && businessId);
-  const canSubmit = !readOnly && action.kind !== "vehicle_method" && group.canApply && businessUseAnswer !== "unsure" && selectedRows.length > 0 && hasCommandScope && hasCanonicalScopeAmounts && scopeIdentityConserved && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
+  const canSubmit = !readOnly && Boolean(serverPreview?.previewId) && action.kind !== "vehicle_method" && group.canApply && businessUseAnswer !== "unsure" && selectedRows.length > 0 && hasCanonicalScopeAmounts && scopeIdentityConserved && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
 
   const submit = async () => {
     if (!canSubmit) return;
-    if (!hasCommandScope) {
-      setError("This decision no longer has a complete tax scope. Refresh the deductions workspace before trying again.");
-      return;
-    }
     if (!scopeIdentityConserved || !hasCanonicalScopeAmounts) {
       setError("These transactions changed while you were reviewing them. Close and reopen this question to review the current amounts.");
       return;
@@ -2208,36 +2224,42 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
     setError("");
     setOutcomeUnknown(false);
     try {
-      const changes = buildReviewDecisionChanges({ group, businessUsePercent: percentValue, dedicatedPremises });
       const idempotencyKey = idempotencyKeyRef.current || createGroupedDecisionIdempotencyKey();
       idempotencyKeyRef.current = idempotencyKey;
       await onApply({
-        transactionIds: selectedTransactionIds,
-        changes,
-        reason: reviewDecisionReason({ group, businessUsePercent: percentValue, dedicatedPremises }),
         command: {
           idempotencyKey,
-          scope: commandScope,
-          scopeFingerprint: buildGroupedDeductionDecisionFingerprint({
-            businessId,
-            taxYear,
-            taxCategory: commandScope.taxCategory,
-            qboAccountId: commandScope.qboAccountId,
-            decisionType: commandScope.decisionType,
-            transactionIds: selectedTransactionIds,
-            expectedPopulationTransactionIds,
-            changes,
-            reason: reviewDecisionReason({ group, businessUsePercent: percentValue, dedicatedPremises }),
-          }),
-          expectedPopulationTransactionIds,
+          previewId: serverPreview.previewId,
+          answer: requiresPercent ? "business_use_percent" : businessUseAnswer,
+          businessUsePercent: requiresPercent ? percentValue : null,
+          personalExceptionIds: businessUseAnswer === "some_personal" ? exceptionIds : [],
         },
       });
     } catch (saveError) {
       if (saveError?.outcomeUnknown || saveError?.code === "grouped_decision_outcome_unknown") {
         setOutcomeUnknown(true);
         setError("We’re checking whether your decision was saved. Don’t submit it again yet.");
-      } else if (saveError?.code === "grouped_decision_scope_changed" || saveError?.code === "grouped_decision_target_not_found") {
-        setError("These transactions changed while you were reviewing them. Close and reopen this question to review the current amounts.");
+      } else if (["grouped_decision_scope_changed", "grouped_decision_target_not_found", "scope_membership_changed", "scope_amount_changed", "scope_account_changed", "scope_treatment_changed", "customer_facts_changed", "protected_authority_changed", "rule_version_changed", "preview_expired", "preview_already_consumed", "stale_preview", "idempotency_payload_conflict"].includes(saveError?.code)) {
+        const before = {
+          actionable: population.actionableTransactionCount,
+          resolved: population.alreadyResolvedCount,
+          gross: group.actionableGrossAmountCents,
+          estimated: group.actionableEstimatedDeductibleAmountCents,
+        };
+        idempotencyKeyRef.current = null;
+        setScopeRefreshing(true);
+        setError("These transactions changed while you were reviewing them. We refreshed the list. Please review the updated totals and confirm again.");
+        try {
+          await onScopeChanged?.();
+          const refreshedPreview = await onPreviewRef.current?.({ groupId: decisionGroupKey });
+          setServerPreview(refreshedPreview || null);
+          setChangedSummary(before);
+        } catch (refreshError) {
+          const requestId = refreshError?.requestId ? ` Request ID: ${refreshError.requestId}.` : "";
+          setError(`These transactions changed while you were reviewing them, but the refreshed list could not be loaded.${requestId}`);
+        } finally {
+          setScopeRefreshing(false);
+        }
       } else {
         setError(saveError?.message || "We couldn’t save this decision. Please try again.");
       }
@@ -2278,12 +2300,13 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          {error ? <div className="mb-3 rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-sm text-rose-100">{error}</div> : null}
+          {error ? <div className="mb-3 rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-sm text-rose-100" role="status" aria-live="polite">{error}</div> : null}
           <div className="grid gap-2 sm:grid-cols-3" aria-label="Decision summary">
-            <DecisionSummaryCard label="Expenses being updated" value={`${population.actionableTransactionCount} transaction${population.actionableTransactionCount === 1 ? "" : "s"}`} />
-            <DecisionSummaryCard label="Gross expense total" value={formatCurrencyLocal(actionGrossTotal)} />
-            <DecisionSummaryCard label="Estimated deduction if confirmed" value={currentEstimate} />
+            <DecisionSummaryCard changed={changedSummary && changedSummary.actionable !== population.actionableTransactionCount} label="Expenses being updated" value={`${population.actionableTransactionCount} transaction${population.actionableTransactionCount === 1 ? "" : "s"}`} />
+            <DecisionSummaryCard changed={changedSummary && changedSummary.gross !== group.actionableGrossAmountCents} label="Gross expense total" value={formatCurrencyLocal(actionGrossTotal)} />
+            <DecisionSummaryCard changed={changedSummary && changedSummary.estimated !== group.actionableEstimatedDeductibleAmountCents} label="Estimated deduction if confirmed" value={currentEstimate} />
           </div>
+          {population.actionableTransactionCount === 0 ? <div className="mt-3 rounded-xl border border-emerald-300/18 bg-emerald-300/[0.06] px-3 py-2 text-sm text-emerald-50" role="status">This question no longer needs an answer.</div> : null}
           {population.alreadyResolvedCount > 0 ? <p className="mt-3 text-xs leading-relaxed text-white/46">{population.alreadyResolvedCount} transaction{population.alreadyResolvedCount === 1 ? " already has" : "s already have"} a reviewed treatment and will not be changed here.</p> : null}
           {action.kind === "confirm_business_purpose" ? (
             <div className="mt-3 space-y-2 rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
@@ -2364,10 +2387,10 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
             <button
               type="button"
               onClick={businessUseAnswer === "unsure" ? onClose : submit}
-              disabled={action.kind === "vehicle_method" || (businessUseAnswer === "unsure" ? outcomeUnknown : !canSubmit || saving || outcomeUnknown)}
+              disabled={scopeRefreshing || population.actionableTransactionCount === 0 || action.kind === "vehicle_method" || (businessUseAnswer === "unsure" ? outcomeUnknown : !canSubmit || saving || outcomeUnknown)}
               className="rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-[#120f04] hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {saving ? `Saving your ${group.qboAccountName || "tax"} decision…` : actionButtonLabel}
+              {scopeRefreshing ? "Refreshing…" : saving ? `Saving your ${group.qboAccountName || "tax"} decision…` : actionButtonLabel}
             </button>
           </div>
         </footer>
@@ -2377,9 +2400,9 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, onClose,
   return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
 }
 
-function DecisionSummaryCard({ label, value }) {
+function DecisionSummaryCard({ label, value, changed = false }) {
   return (
-    <div className="rounded-xl border border-white/10 bg-black/18 px-3 py-2.5">
+    <div className={`rounded-xl border px-3 py-2.5 ${changed ? "border-amber-200/40 bg-amber-200/[0.08]" : "border-white/10 bg-black/18"}`}>
       <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/40">{label}</div>
       <div className="mt-1 text-sm font-semibold text-white/82">{value}</div>
     </div>
@@ -3027,58 +3050,6 @@ function hasManualClassificationAuthority(row) {
     row?.raw?.cpa_override === true ||
     row?.userOverride === true ||
     row?.cpaOverride === true;
-}
-
-function buildReviewDecisionChanges({ group, businessUsePercent, dedicatedPremises }) {
-  const safeGroup = isTaxRecord(group) ? group : {};
-  const row = isTaxRecord(safeGroup.rows?.[0]) ? safeGroup.rows[0] : {};
-  if (safeGroup.decision?.kind === "vehicle_method") {
-    throw new Error("Vehicle expenses require a vehicle-method workflow.");
-  }
-  if (safeGroup.decision?.kind === "business_use_percent" || safeGroup.decision?.kind === "utility_allocation") {
-    const percent = dedicatedPremises ? 100 : Number(businessUsePercent);
-    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
-      throw new Error("Business-use percentage must be between 0 and 100.");
-    }
-    return {
-      taxCategory: row.taxCategory,
-      deductibilityStatus: percent >= 100 ? "fully_deductible" : percent <= 0 ? "nondeductible" : "partially_deductible",
-      deductiblePercent: percent,
-      taxTreatment: dedicatedPremises ? "dedicated_business_premises" : "business_use_allocation",
-    };
-  }
-  const category = row.taxCategory || "other";
-  const isMeal = String(category).toLowerCase().includes("meal");
-  const currentStatus = String(row.deductibilityStatus || "").toLowerCase();
-  const currentPercent = Number(row.deductiblePercent);
-  const hasCompletedCurrentTreatment = ["fully_deductible", "partially_deductible", "nondeductible", "capitalizable", "balance_sheet"].includes(currentStatus);
-  const deductiblePercent = hasCompletedCurrentTreatment && Number.isFinite(currentPercent)
-    ? currentPercent
-    : isMeal ? 50 : 100;
-  const deductibilityStatus = hasCompletedCurrentTreatment
-    ? currentStatus
-    : deductionStatusForPercent(deductiblePercent);
-  return {
-    taxCategory: category,
-    deductibilityStatus,
-    deductiblePercent,
-    taxTreatment: typeof row.taxTreatment === "string" && row.taxTreatment !== "not_determined"
-      ? row.taxTreatment
-      : isMeal ? "business_meals_business_purpose_confirmed" : "business_purpose_confirmed",
-  };
-}
-
-function reviewDecisionReason({ group, businessUsePercent, dedicatedPremises }) {
-  const scopeLabel = "matching expense category for this tax year";
-  if (group.decision.kind === "business_use_percent") {
-    return `User supplied ${businessUsePercent}% business use for ${scopeLabel}.`;
-  }
-  if (group.decision.kind === "utility_allocation") {
-    return dedicatedPremises
-      ? `User confirmed dedicated business premises or business-only utility service for ${scopeLabel}.`
-      : `User supplied ${businessUsePercent}% utility business allocation for ${scopeLabel}.`;
-  }
-  return `User confirmed business purpose for ${scopeLabel}.`;
 }
 
 function normalizeRows(value) {

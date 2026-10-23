@@ -37,7 +37,8 @@ export async function applyGroupedTaxDeductionDecision({
     });
   }
   if (!selectedRows.every((row) => isEligibleScopedDecisionRow(row, command.scope))) {
-    throw conflictError("grouped_decision_scope_changed", "The selected transactions no longer match this deduction decision. Refresh before trying again.", {
+    const protectedAuthority = selectedRows.some((row) => row.user_override === true || row.cpa_override === true || ["user_confirmed", "bizzi_operator_confirmed", "cpa_confirmed"].includes(text(row.classification_status).toLowerCase()));
+    throw conflictError(protectedAuthority ? "protected_authority_changed" : "scope_treatment_changed", "The selected transactions no longer match this deduction decision. Refresh before trying again.", {
       action: "refresh_tax_deductions",
     });
   }
@@ -47,7 +48,7 @@ export async function applyGroupedTaxDeductionDecision({
       .map((row) => row.transaction_id),
   );
   if (!sameIdSet(command.expectedPopulationTransactionIds, canonicalPopulationTransactionIds)) {
-    throw conflictError("grouped_decision_scope_changed", "The available decision population changed before it could be saved. Refresh before trying again.", {
+    throw conflictError("scope_membership_changed", "The available decision population changed before it could be saved. Refresh before trying again.", {
       action: "refresh_tax_deductions",
     });
   }
@@ -97,7 +98,8 @@ export async function applyGroupedTaxDeductionDecision({
     actor,
   });
 
-  const { data, error } = await supabase.rpc("apply_grouped_tax_deduction_decision", {
+  const rpcName = command.previewId ? "apply_grouped_tax_deduction_decision_from_preview" : "apply_grouped_tax_deduction_decision";
+  const rpcParams = {
     p_business_id: businessId,
     p_tax_year: year,
     p_actor_user_id: actor.userId || null,
@@ -116,7 +118,12 @@ export async function applyGroupedTaxDeductionDecision({
     p_expected_population_transaction_ids: command.expectedPopulationTransactionIds,
     p_items: items,
     p_rule: rule,
-  });
+  };
+  if (command.previewId) {
+    rpcParams.p_preview_id = command.previewId;
+    rpcParams.p_confirmation_fingerprint = command.confirmationFingerprint;
+  }
+  const { data, error } = await supabase.rpc(rpcName, rpcParams);
   if (error) throw mapGroupedDecisionRpcError(error);
   return normalizeGroupedDecisionResult(data, { fallbackRule: rule });
 }
@@ -175,6 +182,9 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
   const scopeFingerprint = text(input.scopeFingerprint);
   if (!scopeFingerprint) throw validationError("missing_grouped_decision_fingerprint", "Decision scope fingerprint is required.", { field: "scopeFingerprint" });
   const reason = text(input.reason) || "User applied a grouped deduction decision.";
+  const previewId = text(input.previewId) || null;
+  const confirmationFingerprint = text(input.confirmationFingerprint) || null;
+  if (previewId && !confirmationFingerprint) throw validationError("missing_confirmation_fingerprint", "A server confirmation fingerprint is required.");
   return {
     idempotencyKey,
     targetTransactionIds,
@@ -183,6 +193,8 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
     scopeFingerprint,
     changes,
     reason,
+    previewId,
+    confirmationFingerprint,
     businessId,
     taxYear,
   };
@@ -233,14 +245,20 @@ function normalizeGroupedDecisionResult(data, { fallbackRule = null, operation =
 
 function mapGroupedDecisionRpcError(error) {
   const textValue = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
-  if (textValue.includes("grouped_decision_scope_changed") || textValue.includes("classification_conflict") || textValue.includes("grouped_decision_population_changed")) {
-    return conflictError("grouped_decision_scope_changed", "The decision scope changed before it could be saved. Refresh before trying again.", { action: "refresh_tax_deductions" });
+  if (textValue.includes("grouped_decision_population_changed")) {
+    return conflictError("scope_membership_changed", "The decision population changed before it could be saved. Refresh before trying again.", { action: "refresh_tax_deductions" });
+  }
+  for (const code of ["scope_membership_changed", "scope_amount_changed", "scope_account_changed", "scope_treatment_changed", "customer_facts_changed", "protected_authority_changed", "rule_version_changed", "preview_expired", "preview_already_consumed", "idempotency_payload_conflict", "grouped_decision_outcome_unknown"]) {
+    if (textValue.includes(code)) return conflictError(code, "The decision preview changed before it could be saved. Refresh before trying again.", { action: "refresh_tax_deductions" });
+  }
+  if (textValue.includes("grouped_decision_scope_changed") || textValue.includes("classification_conflict")) {
+    return conflictError("stale_preview", "The decision scope changed before it could be saved. Refresh before trying again.", { action: "refresh_tax_deductions" });
   }
   if (textValue.includes("classification_not_found")) {
     return notFoundError("grouped_decision_target_not_found", "One or more selected transactions are no longer available for this decision.", { action: "refresh_tax_deductions" });
   }
   if (textValue.includes("idempotency_key_reused")) {
-    return conflictError("idempotency_key_reused", "This save command belongs to a different decision. Close the dialog and open it again.");
+    return conflictError("idempotency_payload_conflict", "This save command belongs to a different decision. Refresh before trying again.");
   }
   if (textValue.includes("invalid_grouped_tax_deduction_decision") || error?.code === "22023") {
     return validationError("invalid_grouped_deduction_decision", "The deduction decision is incomplete or invalid.");

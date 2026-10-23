@@ -8,6 +8,7 @@ import {
 } from "../src/services/tax/taxGroupedDeductionDecision.service.js";
 import { buildGroupedDeductionDecisionFingerprint } from "../src/services/tax/taxGroupedDeductionDecisionFingerprint.js";
 import { buildTaxDeductionsLifecycleProjection } from "../src/services/tax/taxDeductionsLifecycleProjection.js";
+import { isSemanticallyEqualClassification } from "../src/services/tax/taxClassification.repository.js";
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
 const YEAR = 2026;
@@ -133,7 +134,7 @@ test("a stale or cross-category target fails before the transactional write", as
       actor: { userId: "user-1", source: "user" },
       input: groupedInput(ids),
     }),
-    (error) => error.code === "grouped_decision_scope_changed"
+    (error) => error.code === "scope_treatment_changed"
   );
   assert.equal(supabase.rpcCount, 0);
   assert.equal(supabase.writeExecutions, 0);
@@ -153,10 +154,29 @@ test("a client cannot shrink the authoritative expected population by recalculat
       actor: { userId: "user-1", source: "user" },
       input,
     }),
-    (error) => error.code === "grouped_decision_scope_changed",
+    (error) => error.code === "scope_membership_changed",
   );
   assert.equal(supabase.rpcCount, 0);
   assert.equal(supabase.writeExecutions, 0);
+});
+
+test("decision fingerprints are stable across transaction ordering", () => {
+  const changes = defaultChanges();
+  const forward = buildGroupedDeductionDecisionFingerprint({ businessId: BUSINESS_ID, taxYear: YEAR, ...MEALS_SCOPE, transactionIds: ["meal-2", "meal-1"], expectedPopulationTransactionIds: ["meal-2", "meal-1"], changes, reason: "same" });
+  const reverse = buildGroupedDeductionDecisionFingerprint({ businessId: BUSINESS_ID, taxYear: YEAR, ...MEALS_SCOPE, transactionIds: ["meal-1", "meal-2"], expectedPopulationTransactionIds: ["meal-1", "meal-2"], changes, reason: "same" });
+  assert.equal(forward, reverse);
+});
+
+test("a no-op periodic classification sweep does not bump the row version", () => {
+  const existing = mealsClassification(1);
+  const next = {
+    ...existing,
+    updated_at: "2026-10-23T18:00:00.000Z",
+    metadata: { ...existing.metadata, classified_at: "2026-10-23T18:00:00.000Z", classificationRunId: "periodic-sweep-2" },
+  };
+  assert.equal(isSemanticallyEqualClassification(existing, next), true);
+  next.deductible_amount = 9;
+  assert.equal(isSemanticallyEqualClassification(existing, next), false, "a material amount change remains visible");
 });
 
 test("same idempotency key with a different treatment fingerprint conflicts instead of replaying", async () => {
@@ -176,7 +196,7 @@ test("same idempotency key with a different treatment fingerprint conflicts inst
   await applyGroupedTaxDeductionDecision({ supabase, businessId: BUSINESS_ID, taxYear: YEAR, actor: { userId: "user-1", source: "user" }, input: first });
   await assert.rejects(
     () => applyGroupedTaxDeductionDecision({ supabase, businessId: BUSINESS_ID, taxYear: YEAR, actor: { userId: "user-1", source: "user" }, input: changed }),
-    (error) => error.code === "idempotency_key_reused",
+    (error) => error.code === "idempotency_payload_conflict",
   );
   assert.equal(supabase.writeExecutions, 1);
 });
@@ -219,11 +239,23 @@ test("the client applies the returned scoped rows locally and does not reload th
   const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(hook, /function patchTaxPageWithGroupedDecision/);
   assert.match(hook, /setTransactions\(patchPage\);[\s\S]*setAllTransactions\(patchPage\);[\s\S]*setClassificationRows\(patchPage\);/);
-  assert.match(dashboard, /applyGroupedDeductionDecision/);
+  assert.match(dashboard, /confirmGroupedDeductionDecision/);
+  assert.match(dashboard, /previewGroupedDeductionDecision/);
   assert.doesNotMatch(dashboard, /for \(let index = 0; index < ids\.length; index \+= 100\)/);
   assert.match(hook, /refreshAuthoritativeQuestionSummary/);
   assert.match(hook, /getTaxClassificationReviewSummary\(\{ businessId, year, refresh: true, signal \}\)/);
-  assert.match(dashboard, /expectedPopulationTransactionIds/);
+  assert.match(dashboard, /previewId: serverPreview\.previewId/);
+});
+
+test("a confirmed scope conflict stays in the modal and requires a refreshed deliberate confirmation", () => {
+  const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /These transactions changed while you were reviewing them\. We refreshed the list\. Please review the updated totals and confirm again\./);
+  assert.match(dashboard, /await onScopeChanged\?\.\(\)/);
+  assert.match(dashboard, /idempotencyKeyRef\.current = null/);
+  assert.match(dashboard, /aria-live="polite"/);
+  assert.match(dashboard, /This question no longer needs an answer\./);
+  assert.match(dashboard, /changedSummary\.gross/);
+  assert.doesNotMatch(dashboard, /onScopeChanged\?\.\(\)[\s\S]{0,200}submit\(\)/);
 });
 
 test("the forward-only RPC migration uses one atomic, idempotent set-based command", () => {
@@ -260,7 +292,9 @@ test("the generated production audit is self-contained and strictly read-only", 
   assert.match(sql, /bookkeeping_detail_reasons/);
   assert.match(sql, /non_meals_incident_mutation/);
   assert.match(sql, /duplicate_or_overlapping_stable_ids/);
-  assert.doesNotMatch(sql, /^\s*(insert|update|delete|merge|create|alter|drop|grant|revoke|do|begin|commit|rollback|lock)\b/im);
+  assert.match(sql, /^\s*begin read only;/i);
+  assert.match(sql, /commit;\s*$/i);
+  assert.doesNotMatch(sql, /^\s*(insert|update|delete|merge|create|alter|drop|grant|revoke|do|lock)\b/im);
   assert.doesNotMatch(sql, /\bfor\s+update\b/i);
 });
 
