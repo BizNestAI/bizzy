@@ -54,6 +54,7 @@ export async function enqueueTaxClassificationRun({
   const queuedCandidateCount = repairUnresolvedFallback && unresolvedCount > 0
     ? unresolvedCount
     : candidateCount;
+  const exactRows = repairUnresolvedFallback ? [] : (snapshot.rows || []);
 
   if (eligiblePostedCount <= 0 || queuedCandidateCount <= 0) {
     return {
@@ -91,7 +92,7 @@ export async function enqueueTaxClassificationRun({
   }
 
   if (isMemorySupabase(supabase)) {
-    return enqueueMemoryRun({
+    const result = enqueueMemoryRun({
       supabase,
       businessId,
       taxYear: year,
@@ -105,6 +106,8 @@ export async function enqueueTaxClassificationRun({
       eligiblePostedCount,
       unclassifiedCount: queuedCandidateCount,
     });
+    if (result?.run && exactRows.length) insertMemoryRunItems({ supabase, run: result.run, rows: exactRows, now });
+    return result;
   }
 
   const row = runToDbRow({
@@ -120,11 +123,17 @@ export async function enqueueTaxClassificationRun({
     eligiblePostedCount,
     unclassifiedCount: queuedCandidateCount,
   });
-  const { data, error } = await supabase
-    .from("tax_classification_runs")
-    .insert(row)
-    .select("*")
-    .single();
+  const exactItems = exactRows.map((candidate) => ({
+    stable_transaction_id: candidate.transactionId,
+    source_fingerprint: candidate.sourceFingerprint,
+    membership_snapshot_at: now.toISOString(),
+  }));
+  const { data, error } = exactItems.length
+    ? await supabase.rpc("create_tax_classification_run_with_items", { p_run: row, p_items: exactItems })
+    : await supabase.from("tax_classification_runs").insert({
+      ...row,
+      metadata: { ...(row.metadata || {}), exact_membership: false, legacy_aggregate_only: true },
+    }).select("*").single();
   if (!error) return { queued: true, outcome: "queued", run: data || row };
   if (String(error.code || "") !== "23505") throw error;
 
@@ -172,16 +181,18 @@ export async function computeTaxClassificationSourceFingerprint({ supabase, busi
 }
 
 export function computeTaxClassificationSnapshotFingerprint({ businessId, taxYear, snapshot = {} } = {}) {
-  const ids = (snapshot.transactionIds || snapshot.rows?.map((row) => row.transactionId || row.transaction_id) || [])
-    .map((id) => String(id || ""))
-    .filter(Boolean);
+  const versions = (snapshot.rows || []).map((row) => ({
+    id: String(row.transactionId || row.transaction_id || ""),
+    version: String(row.sourceFingerprint || row.source_fingerprint || ""),
+  })).filter((row) => row.id).sort((a, b) => a.id.localeCompare(b.id) || a.version.localeCompare(b.version));
+  const ids = versions.length ? versions.map((row) => row.id) : (snapshot.transactionIds || []).map(String).filter(Boolean).sort();
   const unclassifiedCount = Number(snapshot.unclassifiedCount ?? ids.length);
   const payload = JSON.stringify({
     businessId,
     taxYear,
     rulesVersion: getTaxClassificationRulesVersion(),
     count: unclassifiedCount || ids.length,
-    ids: ids.sort(),
+    identities: versions.length ? versions : ids,
   });
   return sha256(payload);
 }
@@ -204,6 +215,66 @@ export async function getLatestTaxClassificationRun({ supabase, businessId, taxY
     .maybeSingle();
   if (error) throw error;
   return data || null;
+}
+
+export async function listTaxClassificationRunItems({ supabase, businessId, taxYear, runId, lifecycleStates = [] } = {}) {
+  const year = requireTaxYear(taxYear);
+  if (!runId) return [];
+  if (isMemorySupabase(supabase)) {
+    const allowed = new Set(lifecycleStates);
+    return (supabase.store.tax_classification_run_items || []).filter((row) =>
+      row.run_id === runId && row.business_id === businessId && Number(row.tax_year) === year && (!allowed.size || allowed.has(row.lifecycle_state))
+    );
+  }
+  let query = supabase.from("tax_classification_run_items").select("id,run_id,business_id,tax_year,stable_transaction_id,lifecycle_state,attempt_count,last_attempt_at,next_retry_at,completed_at,updated_at")
+    .eq("business_id", businessId).eq("tax_year", year).eq("run_id", runId).order("created_at", { ascending: true });
+  if (lifecycleStates.length) query = query.in("lifecycle_state", lifecycleStates);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+export async function updateTaxClassificationRunItems({ supabase, runId, transactionIds = [], patch = {} } = {}) {
+  const ids = [...new Set(transactionIds.map(String).filter(Boolean))];
+  if (!runId || !ids.length) return [];
+  const safePatch = Object.fromEntries(Object.entries(patch).filter(([key]) => [
+    "lifecycle_state", "safe_reason_code", "attempt_count", "last_attempt_at", "next_retry_at",
+    "lease_owner", "lease_expires_at", "completed_at",
+  ].includes(key)));
+  if (isMemorySupabase(supabase)) {
+    const updated = [];
+    for (const row of supabase.store.tax_classification_run_items || []) {
+      if (row.run_id === runId && ids.includes(String(row.stable_transaction_id))) {
+        Object.assign(row, safePatch, { updated_at: new Date().toISOString() });
+        updated.push(row);
+      }
+    }
+    return updated;
+  }
+  const { data, error } = await supabase.from("tax_classification_run_items").update(safePatch)
+    .eq("run_id", runId).in("stable_transaction_id", ids).select("id,stable_transaction_id,lifecycle_state,attempt_count,next_retry_at,completed_at");
+  if (error) throw error;
+  return data || [];
+}
+
+function insertMemoryRunItems({ supabase, run, rows, now }) {
+  supabase.store.tax_classification_run_items ||= [];
+  for (const candidate of rows) {
+    supabase.store.tax_classification_run_items.push({
+      id: `run-item-${run.id}-${candidate.transactionId}`,
+      run_id: run.id,
+      business_id: run.business_id,
+      tax_year: run.tax_year,
+      stable_transaction_id: String(candidate.transactionId),
+      source_fingerprint: candidate.sourceFingerprint,
+      membership_snapshot_at: now.toISOString(),
+      lifecycle_state: "queued",
+      attempt_count: 0,
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+    });
+  }
+  run.metadata = { ...(run.metadata || {}), exact_membership: true };
 }
 
 export async function getActiveTaxClassificationRun({
@@ -311,6 +382,12 @@ export async function getTaxClassificationLifecycleStatus({ supabase, businessId
     missingEvaluationCount: sourceSnapshot.candidateCount ?? coverage.missingEvaluationCount ?? 0,
   };
   const job = buildTaxClassificationJobStatus({ run: activeRun || latestRun, coverage: staleAwareCoverage, now: new Date() });
+  const selectedRun = activeRun || latestRun;
+  const hasExactMembership = selectedRun?.metadata?.exact_membership === true;
+  const exactItems = hasExactMembership
+    ? await listTaxClassificationRunItems({ supabase, businessId, taxYear: year, runId: selectedRun.id })
+    : [];
+  if (hasExactMembership) applyExactMembershipToJob(job, exactItems);
   const ruleReadiness = await getClassificationRuleReadiness({
     supabase,
     businessId,
@@ -359,7 +436,13 @@ export async function getTaxClassificationJobStatus({ supabase, businessId, taxY
       classifiedCount: sourceSnapshot.classifiedCount,
       unclassifiedCount: sourceSnapshot.unclassifiedCount,
     };
-    return buildTaxClassificationJobStatus({ run: activeRun || latestRun, coverage: reconciledCoverage });
+    const selectedRun = activeRun || latestRun;
+    const job = buildTaxClassificationJobStatus({ run: selectedRun, coverage: reconciledCoverage });
+    if (selectedRun?.metadata?.exact_membership === true) {
+      const items = await listTaxClassificationRunItems({ supabase, businessId, taxYear: year, runId: selectedRun.id });
+      applyExactMembershipToJob(job, items);
+    }
+    return job;
   }
   const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear: year });
   return lifecycle.jobStatus || buildTaxClassificationJobStatus({ run: null, coverage: lifecycle });
@@ -586,7 +669,31 @@ export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new 
     isExhausted,
     isStalled,
     pollAfterMs: status === "queued" ? DEFAULT_POLL_AFTER_MS : ["processing", "delayed", "stalled"].includes(status) ? 3000 : null,
+    hasExactMembership: normalizedRun?.metadata?.exact_membership === true,
+    exactTransactionIds: [],
   };
+}
+
+function applyExactMembershipToJob(job, items = []) {
+  const activeStates = new Set(["queued", "retry_scheduled", "processing", "failed_retryable"]);
+  const active = items.filter((item) => activeStates.has(item.lifecycle_state));
+  job.total = active.length;
+  job.remaining = active.length;
+  job.hasExactMembership = true;
+  job.exactTransactionIds = active.map((item) => String(item.stable_transaction_id));
+  job.items = active.map((item) => ({
+    transactionId: String(item.stable_transaction_id),
+    status: customerSafeRunItemStatus(item),
+    lastCheckedAt: item.last_attempt_at || item.updated_at || null,
+    nextRetryAt: item.lifecycle_state === "retry_scheduled" && item.next_retry_at ? item.next_retry_at : null,
+  }));
+}
+
+function customerSafeRunItemStatus(item = {}) {
+  if (item.lifecycle_state === "processing") return "checking_again";
+  if (item.lifecycle_state === "retry_scheduled" && item.next_retry_at) return "retry_scheduled";
+  if (["failed_retryable", "failed_terminal"].includes(item.lifecycle_state)) return "needs_bizzi_review";
+  return "waiting_to_be_evaluated";
 }
 
 function numberOrNull(value) {

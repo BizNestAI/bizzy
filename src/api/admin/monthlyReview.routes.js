@@ -110,6 +110,14 @@ import {
 } from "../../services/bookkeeping/pendingTransactionResolutionService.js";
 import { summarizePendingLifecycles } from "../../services/bookkeeping/pendingTransactionLifecycle.js";
 import {
+  applyBizziOperatorTaxDecision,
+  getBizziOperatorTaxDecisionStatus,
+  getTaxClassificationOperatorWorkspace,
+  previewBizziOperatorTaxDecision,
+  requestBizziOperatorTaxRetry,
+} from "../../services/tax/taxClassificationOperator.service.js";
+import { enqueueTaxClassificationRun } from "../../services/tax/taxClassificationRun.service.js";
+import {
   buildAccountingCloseFinalizationGuard,
   buildApprovalReadinessProjection,
   buildFinalizationGuard,
@@ -174,12 +182,130 @@ async function fetchPostingEligibilityHandledScope(run) {
 router.use(requireAuth);
 router.use(requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES));
 
+router.get("/businesses/:businessId/tax-classification-review", async (req, res) => {
+  try {
+    const businessId = assertFixedMonthlyReviewBusiness(req);
+    await assertMonthlyReviewBusinessExists(businessId);
+    const taxYear = Number(req.query.tax_year || String(req.query.month || "").slice(0, 4));
+    if (!Number.isInteger(taxYear) || taxYear < 2000 || taxYear > 2100) return res.status(400).json({ ok: false, error: "invalid_tax_year" });
+    const workspace = await getTaxClassificationOperatorWorkspace({ supabase, businessId, taxYear });
+    return res.json({ ok: true, workspace });
+  } catch (e) {
+    return sendMonthlyReviewError(res, "tax_classification_review_failed", "Could not load Tax Classification Review.", e);
+  }
+});
+
+router.post("/businesses/:businessId/tax-classification-review/reconcile", async (req, res) => {
+  try {
+    const businessId = assertFixedMonthlyReviewBusiness(req);
+    await assertMonthlyReviewBusinessExists(businessId);
+    const taxYear = Number(req.body?.tax_year);
+    const requestId = String(req.headers["x-request-id"] || req.body?.request_id || "").trim();
+    if (!Number.isInteger(taxYear) || taxYear < 2000 || taxYear > 2100) return res.status(400).json({ ok: false, error: "invalid_tax_year" });
+    if (!requestId || requestId.length > 160) return res.status(400).json({ ok: false, error: "request_id_required" });
+    const result = await enqueueTaxClassificationRun({
+      supabase, businessId, taxYear, triggerSource: "recovery_scan",
+      actorUserId: req.user?.id || null,
+      metadata: { source: "monthly_review_tax_reconciliation", request_id: requestId, internal_actor_id: req.user?.id || null },
+    });
+    return res.status(result.queued ? 202 : 200).json({ ok: true, outcome: result.outcome, run: result.run ? { id: result.run.id, status: result.run.status } : null });
+  } catch (e) {
+    return sendMonthlyReviewError(res, "tax_reconciliation_failed", "Could not reconcile Tax evaluation status.", e);
+  }
+});
+
+router.post("/businesses/:businessId/tax-classification-review/preview", async (req, res) => {
+  const requestId = monthlyReviewRequestId(req);
+  try {
+    const businessId = assertFixedMonthlyReviewBusiness(req);
+    await assertMonthlyReviewBusinessExists(businessId);
+    const taxYear = Number(req.body?.tax_year);
+    const preview = await previewBizziOperatorTaxDecision({
+      supabase, businessId, taxYear, groupId: String(req.body?.group_id || ""), input: req.body?.decision || {},
+    });
+    return res.json({ ok: true, preview, request_id: requestId });
+  } catch (e) {
+    return sendTaxOperatorError(res, e, requestId);
+  }
+});
+
+router.post("/businesses/:businessId/tax-classification-review/apply", async (req, res) => {
+  const requestId = monthlyReviewRequestId(req);
+  try {
+    const businessId = assertFixedMonthlyReviewBusiness(req);
+    await assertMonthlyReviewBusinessExists(businessId);
+    const taxYear = Number(req.body?.tax_year);
+    const idempotencyKey = String(req.body?.idempotency_key || "").trim();
+    if (!UUID_RE.test(idempotencyKey)) return res.status(400).json({ ok: false, error: "idempotency_key_required", message: "A valid operation ID is required.", request_id: requestId });
+    const result = await applyBizziOperatorTaxDecision({
+      supabase, businessId, taxYear, groupId: String(req.body?.group_id || ""), input: req.body?.decision || {},
+      actorUserId: req.internalStaff.userId, requestId, idempotencyKey,
+    });
+    return res.json({ ok: true, result, request_id: requestId });
+  } catch (e) {
+    return sendTaxOperatorError(res, e, requestId);
+  }
+});
+
+router.get("/businesses/:businessId/tax-classification-review/operations/:idempotencyKey", async (req, res) => {
+  const requestId = monthlyReviewRequestId(req);
+  try {
+    const businessId = assertFixedMonthlyReviewBusiness(req);
+    await assertMonthlyReviewBusinessExists(businessId);
+    const operation = await getBizziOperatorTaxDecisionStatus({ supabase, businessId, idempotencyKey: req.params.idempotencyKey, actorUserId: req.internalStaff.userId });
+    return res.json({ ok: true, operation, request_id: requestId });
+  } catch (e) {
+    return sendTaxOperatorError(res, e, requestId);
+  }
+});
+
+router.post("/businesses/:businessId/tax-classification-review/retry-evaluation", async (req, res) => {
+  const requestId = monthlyReviewRequestId(req);
+  try {
+    const businessId = assertFixedMonthlyReviewBusiness(req);
+    await assertMonthlyReviewBusinessExists(businessId);
+    const result = await requestBizziOperatorTaxRetry({
+      supabase, businessId, taxYear: Number(req.body?.tax_year), groupId: String(req.body?.group_id || ""),
+      actorUserId: req.internalStaff.userId, requestId,
+    });
+    return res.status(result.queued ? 202 : 200).json({ ok: true, result, request_id: requestId });
+  } catch (e) {
+    return sendTaxOperatorError(res, e, requestId);
+  }
+});
+
+function assertFixedMonthlyReviewBusiness(req) {
+  const businessId = String(req.params.businessId || "");
+  const supplied = [req.body?.business_id, req.query?.business_id, req.headers["x-business-id"]].filter(Boolean).map(String);
+  if (!UUID_RE.test(businessId) || supplied.some((value) => value !== businessId)) {
+    const error = new Error("fixed business context mismatch");
+    error.status = 400;
+    error.error = "business_context_conflict";
+    throw error;
+  }
+  return businessId;
+}
+
 function sendMonthlyReviewError(res, fallbackError, fallbackMessage, e) {
   return res.status(e?.status || 500).json({
     ok: false,
     error: e?.error || fallbackError,
     message: e?.message || fallbackMessage,
   });
+}
+
+function monthlyReviewRequestId(req) {
+  const supplied = String(req.headers["x-request-id"] || "").trim();
+  return supplied && supplied.length <= 160 ? supplied : crypto.randomUUID();
+}
+
+function sendTaxOperatorError(res, error, requestId) {
+  const allowed = new Set(["invalid_operator_tax_decision", "tax_review_group_not_found", "bookkeeping_review_required", "tax_review_group_not_editable", "operator_decision_population_changed", "operator_decision_scope_changed", "supported_tax_rule_required", "operator_reason_required", "idempotency_key_reused", "operator_operation_forbidden", "tax_retry_not_eligible"]);
+  const code = allowed.has(error?.error) ? error.error : "operator_tax_decision_failed";
+  const safeMessage = Number(error?.status) < 500 && allowed.has(error?.error)
+    ? error.message
+    : "Could not complete the Tax decision. No partial changes were saved.";
+  return res.status(Number(error?.status) || 500).json({ ok: false, error: code, message: safeMessage, request_id: requestId });
 }
 
 function setMonthlyReviewNoStore(res) {

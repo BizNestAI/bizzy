@@ -154,67 +154,24 @@ function JobCostingInitialLoadingState({ type = "jobs" }) {
 }
 
 function CollectionsInitialLoadingState({ message = "Loading your receivables" }) {
-  const shimmer = "animate-pulse motion-reduce:animate-none bg-white/[0.08]";
   return (
     <div
-      className="relative overflow-hidden rounded-[28px] border border-emerald-300/10 bg-white/[0.035] p-4 shadow-[0_28px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl sm:p-6"
+      className="relative flex min-h-[620px] items-center justify-center overflow-hidden rounded-[28px] border border-emerald-300/10 bg-white/[0.035] px-6 py-12 shadow-[0_28px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl"
       role="status"
+      aria-busy="true"
       aria-live="polite"
       aria-label={message}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/45 to-transparent" />
-      <div className="mb-5 flex items-center gap-3 rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.045] px-4 py-3.5">
-        <div className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full border border-emerald-300/15 bg-emerald-300/[0.08]">
-          <div className="absolute inset-1 rounded-full border border-emerald-200/15" />
-          <RefreshCcw className="h-4 w-4 animate-spin text-emerald-200 motion-reduce:animate-none" />
+      <div className="flex max-w-sm flex-col items-center text-center">
+        <div className="relative grid h-14 w-14 place-items-center" aria-hidden="true">
+          <div className="absolute inset-0 rounded-full border border-emerald-300/15 motion-safe:animate-ping" />
+          <div className="absolute inset-1 rounded-full border border-emerald-200/15 bg-emerald-300/[0.07]" />
+          <RefreshCcw className="relative h-6 w-6 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
+          <span className="relative hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" />
         </div>
-        <div>
-          <div className="text-sm font-semibold text-white/90">{message}</div>
-          <div className="mt-0.5 text-xs text-white/45">Preparing aging totals, outstanding invoices, and follow-up status.</div>
-        </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        {[0, 1].map((card) => (
-          <div key={card} className="min-h-[220px] rounded-[22px] border border-white/[0.055] bg-black/10 p-5">
-            <div className={`${shimmer} h-3 w-24 rounded-full`} />
-            <div className={`${shimmer} mt-3 h-7 w-40 rounded-lg`} />
-            <div className="mt-8 flex h-24 items-end gap-3">
-              {[42, 72, 54, 88, 64].map((height, index) => (
-                <div
-                  key={index}
-                  className={`${shimmer} flex-1 rounded-t-md`}
-                  style={{ height: `${card ? 100 - height / 2 : height}%`, animationDelay: `${index * 90}ms` }}
-                />
-              ))}
-            </div>
-            <div className="mt-5 flex gap-3">
-              <div className={`${shimmer} h-2.5 w-20 rounded-full`} />
-              <div className={`${shimmer} h-2.5 w-16 rounded-full`} />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-4 rounded-[22px] border border-white/[0.055] bg-black/10 p-5">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className={`${shimmer} h-4 w-36 rounded-full`} />
-            <div className={`${shimmer} mt-2.5 h-2.5 w-52 max-w-[60vw] rounded-full`} />
-          </div>
-          <div className={`${shimmer} h-8 w-20 rounded-full`} />
-        </div>
-        <div className="mt-5 divide-y divide-white/[0.055]">
-          {[0, 1, 2].map((row) => (
-            <div key={row} className="grid grid-cols-[1fr_auto] items-center gap-6 py-4 first:pt-0 last:pb-0">
-              <div className="space-y-2.5">
-                <div className={`${shimmer} h-3.5 rounded-full`} style={{ width: `${42 - row * 5}%` }} />
-                <div className={`${shimmer} h-2.5 rounded-full`} style={{ width: `${26 + row * 4}%` }} />
-              </div>
-              <div className={`${shimmer} h-4 w-16 rounded-full`} />
-            </div>
-          ))}
-        </div>
+        <div className="mt-4 text-sm font-semibold text-white/90">{message}</div>
+        <div className="mt-1 text-xs leading-relaxed text-white/45">Preparing aging totals, outstanding invoices, and follow-up status.</div>
       </div>
       <span className="sr-only">{message}</span>
     </div>

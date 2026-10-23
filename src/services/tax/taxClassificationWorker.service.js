@@ -13,7 +13,9 @@ import {
   failTaxClassificationRun,
   getTaxClassificationLifecycleStatus,
   heartbeatTaxClassificationRun,
+  listTaxClassificationRunItems,
   requeueTaxClassificationRun,
+  updateTaxClassificationRunItems,
 } from "./taxClassificationRun.service.js";
 import { classifyPostedTransactionsBatch } from "./taxClassificationEngine.js";
 import { repairUnresolvedFallbackClassifications } from "./taxClassificationFallbackRepair.service.js";
@@ -212,6 +214,11 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
       });
     }
     await validateDeductionRuleConfiguration({ supabase, businessId, taxYear });
+    const exactMembership = run.metadata?.exact_membership === true;
+    const runItems = exactMembership ? await listTaxClassificationRunItems({
+      supabase, businessId, taxYear, runId: run.id,
+      lifecycleStates: ["queued", "retry_scheduled", "failed_retryable"],
+    }) : [];
     if ((run.metadata || run.meta)?.repairMode === "unresolved_fallback") {
       const repaired = await repairUnresolvedFallbackClassifications({
         supabase,
@@ -272,8 +279,18 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
         limit: batchLimit,
         offset: 0,
       });
-      const ids = (page.rows || []).map((row) => row.transactionId).filter(Boolean);
+      const allowedIds = exactMembership ? new Set(runItems.map((item) => String(item.stable_transaction_id))) : null;
+      const currentById = new Map((page.rows || []).map((row) => [String(row.transactionId), row]));
+      const staleIds = exactMembership ? runItems.filter((item) => {
+        const current = currentById.get(String(item.stable_transaction_id));
+        return current && String(current.sourceFingerprint || "") !== String(item.source_fingerprint || "");
+      }).map((item) => String(item.stable_transaction_id)) : [];
+      if (staleIds.length) await updateTaxClassificationRunItems({ supabase, runId: run.id, transactionIds: staleIds, patch: { lifecycle_state: "superseded", safe_reason_code: "source_version_changed" } });
+      const ids = (page.rows || []).map((row) => row.transactionId).filter((id) => !allowedIds || allowedIds.has(String(id))).filter((id) => !staleIds.includes(String(id)));
       if (!ids.length) break;
+      if (exactMembership) await updateTaxClassificationRunItems({ supabase, runId: run.id, transactionIds: ids, patch: {
+        lifecycle_state: "processing", attempt_count: Number(run.attempt_count || 0), last_attempt_at: now.toISOString(), next_retry_at: null,
+      } });
       selectedTotal += ids.length;
       const batch = await classifyPostedTransactionsBatch({
         supabase,
@@ -283,8 +300,13 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
         source: TAX_CLASSIFICATION_SOURCES.RULE_ENGINE,
       });
       assertBatchMadeProgress({ batch, selectedCount: ids.length, run });
+      if (exactMembership) await updateTaxClassificationRunItems({ supabase, runId: run.id, transactionIds: ids, patch: {
+        lifecycle_state: "completed", safe_reason_code: null, completed_at: new Date().toISOString(), next_retry_at: null,
+      } });
       const batchLifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
-      const batchRemaining = Number(batchLifecycle.missingEvaluationCount ?? batchLifecycle.remainingCount ?? 0);
+      const batchRemaining = exactMembership
+        ? (await listTaxClassificationRunItems({ supabase, businessId, taxYear, runId: run.id, lifecycleStates: ["queued", "retry_scheduled", "processing", "failed_retryable"] })).length
+        : Number(batchLifecycle.missingEvaluationCount ?? batchLifecycle.remainingCount ?? 0);
       await heartbeatTaxClassificationRun({
         supabase,
         runId: run.id,
@@ -293,7 +315,10 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
       });
       if (batchRemaining <= 0) break;
     }
-    if (selectedTotal <= 0 && (Number(run.queued_count || run.queuedCount || 0) > 0 || Number(run.total_eligible || run.totalEligible || 0) > 0)) {
+    const activeExactItems = exactMembership
+      ? await listTaxClassificationRunItems({ supabase, businessId, taxYear, runId: run.id, lifecycleStates: ["queued", "retry_scheduled", "processing", "failed_retryable"] })
+      : null;
+    if (selectedTotal <= 0 && (!exactMembership || activeExactItems.length > 0) && (Number(run.queued_count || run.queuedCount || 0) > 0 || Number(run.total_eligible || run.totalEligible || 0) > 0)) {
       throw classificationWorkerInvariantError("candidate_snapshot_mismatch", "Classification run expected remaining transactions but selected none.", {
         selectedCount: 0,
         expectedRemaining: Number(run.queued_count || run.queuedCount || 0),
@@ -301,7 +326,9 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
       });
     }
     const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
-    const remainingCandidateCount = Number(lifecycle.missingEvaluationCount ?? lifecycle.remainingCount ?? lifecycle.unclassifiedCount ?? 0);
+    const remainingCandidateCount = exactMembership
+      ? activeExactItems.length
+      : Number(lifecycle.missingEvaluationCount ?? lifecycle.remainingCount ?? lifecycle.unclassifiedCount ?? 0);
     const progress = progressFromLifecycle(lifecycle, remainingCandidateCount);
     if (remainingCandidateCount > 0) {
       console.log("[tax-classification-worker] progress", {
@@ -341,12 +368,22 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
     }
     return completed;
   } catch (error) {
+    const retryAt = new Date(now.getTime() + Math.min(60_000 * 2 ** Math.min(Number(run.attempt_count || 1), 6), 60 * 60 * 1000));
+    if (run.metadata?.exact_membership === true) {
+      const items = await listTaxClassificationRunItems({ supabase, businessId, taxYear, runId: run.id, lifecycleStates: ["queued", "processing", "failed_retryable", "retry_scheduled"] });
+      const exhausted = error?.retryable === false || Number(run.attempt_count || 0) >= Number(run.max_attempts || 5);
+      await updateTaxClassificationRunItems({ supabase, runId: run.id, transactionIds: items.map((item) => item.stable_transaction_id), patch: {
+        lifecycle_state: exhausted ? "failed_terminal" : "retry_scheduled",
+        safe_reason_code: error?.code || "classification_attempt_failed",
+        next_retry_at: exhausted ? null : retryAt.toISOString(),
+      } });
+    }
     return failTaxClassificationRun({
       supabase,
       runId: run.id,
       error,
       now,
-      retryAt: new Date(now.getTime() + Math.min(60_000 * 2 ** Math.min(Number(run.attempt_count || 1), 6), 60 * 60 * 1000)),
+      retryAt,
     });
   }
 }

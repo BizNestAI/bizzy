@@ -72,16 +72,15 @@ test("Deductions enter a loading state before their first live request can paint
   assert.match(dashboardSource, /const initialDeductionsLoading = deductionsRenderState\.showInitialLoading;/);
 });
 
-test("Deductions first-load treatment is accessible, animated, and contains no false metrics", () => {
+test("Deductions first-load treatment is centered, accessible, and contains no partial content", () => {
   const skeleton = sourceBetween(dashboardSource, "function DeductionsLoadingState", "function ClassificationStat");
   assert.match(skeleton, /role="status"/);
   assert.match(skeleton, /aria-live="polite"/);
   assert.match(skeleton, /aria-busy="true"/);
   assert.match(skeleton, /Loading deduction totals and classification activity\./);
-  assert.match(skeleton, /SkeletonSheen/);
-  assert.match(skeleton, /SkeletonLine/);
-  assert.match(skeleton, /md:grid-cols-3/);
-  assert.match(skeleton, /Array\.from\(\{ length: 3 \}\)/);
+  assert.match(skeleton, /min-h-\[520px\] items-center justify-center/);
+  assert.match(skeleton, /motion-safe:animate-spin/);
+  assert.doesNotMatch(skeleton, /SkeletonSheen|SkeletonLine/);
   assert.doesNotMatch(skeleton, /\$0|No classification run yet|No QBO-confirmed/i);
 });
 

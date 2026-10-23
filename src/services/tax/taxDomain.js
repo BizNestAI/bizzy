@@ -102,6 +102,7 @@ export const TAX_CLASSIFICATION_STATUSES = freeze({
   NEEDS_TAX_REVIEW: "needs_tax_review",
   AUTO_CLASSIFIED: "auto_classified",
   USER_CONFIRMED: "user_confirmed",
+  BIZZI_OPERATOR_CONFIRMED: "bizzi_operator_confirmed",
   CPA_CONFIRMED: "cpa_confirmed",
   EXCLUDED: "excluded",
 });
@@ -110,6 +111,7 @@ export const TAX_CLASSIFICATION_SOURCES = freeze({
   SYSTEM: "system",
   RULE_ENGINE: "rule_engine",
   USER: "user",
+  BIZZI_OPERATOR: "bizzi_operator",
   CPA: "cpa",
   IMPORTED: "imported",
 });

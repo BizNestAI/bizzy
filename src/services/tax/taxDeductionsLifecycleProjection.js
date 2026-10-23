@@ -19,6 +19,17 @@ export const TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES = Object.freeze({
   AMBIGUOUS: "ambiguous",
 });
 
+export const TAX_ACTION_OWNERS = Object.freeze({
+  SYSTEM_PROCESSING: "system_processing",
+  SYSTEM_RETRY: "system_retry",
+  CUSTOMER_FACT_REQUIRED: "customer_fact_required",
+  BOOKKEEPING_REVIEW_REQUIRED: "bookkeeping_review_required",
+  BIZZI_TAX_MAPPING_REQUIRED: "bizzi_tax_mapping_required",
+  PROFESSIONAL_REVIEW_REQUIRED: "professional_review_required",
+  TERMINAL_SYSTEM_FAILURE: "terminal_system_failure",
+  NONE: "none",
+});
+
 const OUTCOME_ORDER = Object.freeze(Object.values(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES));
 
 export function stableTaxTransactionIdentity(row = {}) {
@@ -61,6 +72,7 @@ export function taxClassificationBucketForDeductions(row = {}) {
   if (status === "failed" || status === "classification_failed") return "failed";
   if (status === "needs_tax_review" || category === "tax_review_holding" || row.raw?.metadata?.is_holding === true) return "needs_tax_review";
   if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
+  if (status === "bizzi_operator_confirmed") return "bizzi_operator_confirmed";
   if (status === "user_confirmed" || row.userOverride === true || row.user_override === true) return "user_confirmed";
   if (status === "cpa_confirmed" || status === "accountant_reviewed" || row.cpaOverride === true || row.cpa_override === true) return "accountant_confirmed";
   if (status === "auto_classified" || status === "system_confirmed") return "auto_classified";
@@ -148,6 +160,36 @@ export function taxDeductionsLifecycleOutcomeForRow(row = {}) {
   return TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.AMBIGUOUS;
 }
 
+// Server-owned ownership projection. Callers may attach a tenant-scoped
+// `runItem` projection; raw worker/database errors are deliberately ignored.
+export function taxActionOwnerForRow(row = {}) {
+  row = taxRow(row);
+  const runState = String(row.runItem?.lifecycleState || row.runItem?.lifecycle_state || "").toLowerCase();
+  if (["queued", "processing"].includes(runState)) return TAX_ACTION_OWNERS.SYSTEM_PROCESSING;
+  if (["retry_scheduled", "failed_retryable"].includes(runState) && (row.runItem?.nextRetryAt || row.runItem?.next_retry_at)) return TAX_ACTION_OWNERS.SYSTEM_RETRY;
+  if (runState === "failed_terminal") return TAX_ACTION_OWNERS.TERMINAL_SYSTEM_FAILURE;
+  if (runState === "blocked_customer_fact") return TAX_ACTION_OWNERS.CUSTOMER_FACT_REQUIRED;
+  if (runState === "blocked_bookkeeping") return TAX_ACTION_OWNERS.BOOKKEEPING_REVIEW_REQUIRED;
+  if (runState === "blocked_tax_mapping") return TAX_ACTION_OWNERS.BIZZI_TAX_MAPPING_REQUIRED;
+  if (runState === "blocked_professional_review") return TAX_ACTION_OWNERS.PROFESSIONAL_REVIEW_REQUIRED;
+
+  if (isOutsideDeductionsScope(row) || ["excluded", "user_confirmed", "bizzi_operator_confirmed", "accountant_confirmed", "auto_classified"].includes(taxClassificationBucketForDeductions(row))) {
+    return TAX_ACTION_OWNERS.NONE;
+  }
+  if (requiresCustomerTaxDecision(row)) return TAX_ACTION_OWNERS.CUSTOMER_FACT_REQUIRED;
+
+  const warnings = new Set((row.warnings || row.raw?.warnings || []).map((value) => String(value || "").toLowerCase()));
+  const qboAccountId = firstValue(row.qboAccountId, row.qbo_account_id, row.raw?.qboAccountId, row.raw?.source_qbo_account_id);
+  const reasonCode = String(firstValue(row.reasonCode, row.reason_code, row.raw?.reason_code, row.raw?.metadata?.reason_code, row.raw?.metadata?.fallback_reason) || "").toLowerCase();
+  const bookkeepingIncomplete = !qboAccountId || ["missing_qbo_account", "qbo_id_mismatch", "conflicting_post_status", "source_conflict", "unsupported_bookkeeping_account_type"].some((code) => warnings.has(code) || reasonCode === code);
+  if (bookkeepingIncomplete) return TAX_ACTION_OWNERS.BOOKKEEPING_REVIEW_REQUIRED;
+  if (["no_matching_deduction_rule", "no_matching_rule", "tax_mapping_required"].includes(reasonCode) || taxClassificationBucketForDeductions(row) === "unclassified") {
+    return TAX_ACTION_OWNERS.BIZZI_TAX_MAPPING_REQUIRED;
+  }
+  if (taxClassificationBucketForDeductions(row) === "failed") return TAX_ACTION_OWNERS.TERMINAL_SYSTEM_FAILURE;
+  return TAX_ACTION_OWNERS.PROFESSIONAL_REVIEW_REQUIRED;
+}
+
 export function buildTaxDecisionIdentity({ businessId, taxYear, row = {}, decisionType = taxDecisionTypeForRow(row) } = {}) {
   row = taxRow(row);
   const qboAccountId = firstValue(row.qboAccountId, row.raw?.qboAccountId, row.raw?.source_qbo_account_id, "unmapped");
@@ -194,7 +236,8 @@ export function buildTaxDeductionsLifecycleProjection({ rows = [], businessId = 
       ? taxDecisionTypeForRow(row)
       : null;
     const decisionId = decisionType ? buildTaxDecisionIdentity({ businessId, taxYear, row, decisionType }) : null;
-    const entry = { id, row, outcome, decisionType, decisionId };
+    const actionOwner = taxActionOwnerForRow(row);
+    const entry = { id, row, outcome, actionOwner, decisionType, decisionId };
     entries.push(entry);
     counts[outcome] += 1;
     idsByOutcome[outcome].push(id);

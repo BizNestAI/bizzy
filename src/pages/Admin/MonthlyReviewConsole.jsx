@@ -2631,6 +2631,8 @@ export default function MonthlyReviewConsole() {
             </div>
           </aside>
 
+          {selectedBusinessId ? <TaxClassificationReviewWorkspace businessId={selectedBusinessId} taxYear={Number(month.slice(0, 4))} /> : null}
+
           <main className="rounded-2xl border border-white/10 bg-white/[0.035] p-5 shadow-[0_18px_50px_rgba(0,0,0,0.26)]">
             {loadingDetail ? (
               <div className="flex min-h-[460px] items-center justify-center text-white/60">
@@ -2920,6 +2922,100 @@ export default function MonthlyReviewConsole() {
       </div>
     </div>
   );
+}
+
+function TaxClassificationReviewWorkspace({ businessId, taxYear }) {
+  const [state, setState] = useState({ loading: true, error: "", workspace: null, reconciling: false, notice: "" });
+  const [editor, setEditor] = useState(null);
+  const load = useCallback(async () => {
+    setState((current) => ({ ...current, loading: true, error: "" }));
+    try {
+      const payload = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(businessId)}/tax-classification-review?tax_year=${encodeURIComponent(taxYear)}`, { cache: "no-store" });
+      setState((current) => ({ ...current, loading: false, workspace: payload.workspace }));
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false, error: error?.message || "Could not load Tax Classification Review." }));
+    }
+  }, [businessId, taxYear]);
+  useEffect(() => { load(); }, [load]);
+  const reconcile = async () => {
+    const requestId = `mrp-tax-reconcile:${businessId}:${taxYear}:${globalThis.crypto?.randomUUID?.() || Date.now()}`;
+    setState((current) => ({ ...current, reconciling: true, error: "", notice: "" }));
+    try {
+      const payload = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(businessId)}/tax-classification-review/reconcile`, {
+        method: "POST", headers: { "x-request-id": requestId }, body: { tax_year: taxYear, request_id: requestId },
+      });
+      setState((current) => ({ ...current, reconciling: false, notice: payload.outcome === "existing_active_run" ? "The current exact Tax evaluation run is already active." : "Exact Tax evaluation status was scheduled." }));
+      await load();
+    } catch (error) {
+      setState((current) => ({ ...current, reconciling: false, error: error?.message || "Could not reconcile Tax evaluation status." }));
+    }
+  };
+  const queues = state.workspace?.queues || {};
+  const previewDecision = async () => {
+    if (!editor?.group) return;
+    setEditor((current) => ({ ...current, pending: true, error: "", preview: null }));
+    const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}`;
+    try {
+      const decision = { scope_type: editor.scopeType, decision_mode: editor.decisionMode, rule_id: editor.ruleId || null, reason: editor.reason,
+        transaction_ids: editor.group.transactions.map((row) => row.transactionId) };
+      const payload = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(businessId)}/tax-classification-review/preview`, {
+        method: "POST", headers: { "x-request-id": requestId }, body: { tax_year: taxYear, group_id: editor.group.id, decision },
+      });
+      setEditor((current) => ({ ...current, pending: false, preview: payload.preview, decision }));
+    } catch (error) {
+      setEditor((current) => ({ ...current, pending: false, error: error?.message || "Could not preview this Tax decision." }));
+    }
+  };
+  const confirmDecision = async () => {
+    if (!editor?.preview || editor.pending) return;
+    const operationId = editor.operationId || globalThis.crypto?.randomUUID?.();
+    const requestId = editor.requestId || globalThis.crypto?.randomUUID?.();
+    const decision = { ...editor.decision, scope_fingerprint: editor.preview.scopeFingerprint };
+    setEditor((current) => ({ ...current, pending: true, operationId, requestId, error: "" }));
+    try {
+      await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(businessId)}/tax-classification-review/apply`, {
+        method: "POST", headers: { "x-request-id": requestId }, body: { tax_year: taxYear, group_id: editor.group.id, decision, idempotency_key: operationId },
+      });
+      const affectedGroupId = editor.group.id;
+      setEditor(null);
+      setState((current) => ({ ...current, notice: "Tax treatment applied.", workspace: current.workspace ? { ...current.workspace, queues: Object.fromEntries(Object.entries(current.workspace.queues || {}).map(([key, groups]) => [key, (groups || []).filter((group) => group.id !== affectedGroupId)])) } : current.workspace }));
+    } catch (error) {
+      setEditor((current) => ({ ...current, pending: false, checking: true, error: "" }));
+      try {
+        const status = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(businessId)}/tax-classification-review/operations/${encodeURIComponent(operationId)}`, { cache: "no-store", headers: { "x-request-id": requestId } });
+        if (status.operation?.status === "completed") { const affectedGroupId = editor.group.id; setEditor(null); setState((current) => ({ ...current, notice: "Tax treatment applied.", workspace: current.workspace ? { ...current.workspace, queues: Object.fromEntries(Object.entries(current.workspace.queues || {}).map(([key, groups]) => [key, (groups || []).filter((group) => group.id !== affectedGroupId)])) } : current.workspace })); return; }
+      } catch { /* Preserve the operator's selections for an explicit retry/status check. */ }
+      setEditor((current) => ({ ...current, checking: false, error: `${error?.message || "Could not confirm whether the Tax decision was saved."} Request ID: ${requestId}` }));
+    }
+  };
+  const retryEvaluation = async (group) => {
+    const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}`;
+    setState((current) => ({ ...current, error: "", notice: "" }));
+    try {
+      const payload = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(businessId)}/tax-classification-review/retry-evaluation`, {
+        method: "POST", headers: { "x-request-id": requestId }, body: { tax_year: taxYear, group_id: group.id },
+      });
+      setState((current) => ({ ...current, notice: payload.result?.outcome === "existing_active_run" ? "An exact reevaluation is already active." : "Tax reevaluation requested." }));
+      await load();
+    } catch (error) { setState((current) => ({ ...current, error: `${error?.message || "Could not request Tax reevaluation."} Request ID: ${requestId}` })); }
+  };
+  const queueDefs = [
+    ["tax_mappings_needed", "Tax mappings needed"], ["professional_review", "Professional review"],
+    ["bookkeeping_review", "Bookkeeping review"], ["technical_failures", "Technical failures"],
+    ["processing_retry_status", "Processing / retry status"], ["resolved_history", "Resolved history"],
+  ];
+  return <section className="rounded-2xl border border-emerald-300/15 bg-emerald-300/[0.035] p-4" data-tax-classification-review>
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div><div className="text-xs uppercase tracking-[0.14em] text-emerald-100/60">Tax Classification Review</div><p className="mt-1 text-sm text-white/55">Fixed-business operator queues grouped by stable QuickBooks GL account and reason.</p></div>
+      <button type="button" onClick={reconcile} disabled={state.reconciling} className="rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50">{state.reconciling ? "Reconciling…" : "Reconcile Tax evaluation status"}</button>
+    </div>
+    {state.error ? <div className="mt-3 text-xs text-amber-100" role="alert">{state.error}</div> : null}
+    {state.notice ? <div className="mt-3 text-xs text-emerald-100" role="status">{state.notice}</div> : null}
+    {state.loading ? <div className="flex min-h-28 items-center justify-center text-sm text-white/45"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Loading Tax queues…</div> : <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      {queueDefs.map(([key, label]) => <details key={key} className="rounded-xl border border-white/10 bg-black/15 p-3"><summary className="cursor-pointer text-sm font-semibold text-white/80">{label} · {(queues[key] || []).reduce((sum, group) => sum + Number(group.transactionCount || 0), 0)}</summary><div className="mt-2 space-y-2">{(queues[key] || []).map((group) => <div key={group.id} className="rounded-lg border border-white/[0.07] bg-black/15 p-2 text-xs"><div className="font-semibold text-white/78">{group.qboAccountName}</div><div className="mt-1 text-white/45">{group.transactionCount} transactions · {formatCurrency(group.grossAmount)} · {group.months.join(", ") || "No month"}</div><div className="mt-1 text-white/40">{group.reasonCode || "No safe reason code"}</div>{["tax_mappings_needed", "professional_review"].includes(key) && group.qboAccountId ? <button type="button" onClick={() => setEditor({ group, scopeType: "business_gl_tax_year", decisionMode: key === "professional_review" ? "professional_hold" : "tax_mapping", ruleId: "", reason: "", preview: null, pending: false, checking: false, error: "" })} className="mt-2 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-2 py-1 font-semibold text-emerald-50">Review treatment</button> : null}{key === "bookkeeping_review" ? <a href={group.transactions?.[0]?.bookkeepingReviewHref || "#"} className="mt-2 inline-block font-semibold text-sky-200 underline underline-offset-2">Open exact Books Review item</a> : null}{key === "technical_failures" ? <button type="button" onClick={() => retryEvaluation(group)} className="mt-2 rounded-lg border border-amber-300/20 bg-amber-300/10 px-2 py-1 font-semibold text-amber-50">Retry Tax evaluation</button> : null}</div>)}{!(queues[key] || []).length ? <div className="text-xs text-white/35">No items.</div> : null}</div></details>)}
+    </div>}
+    {editor ? <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-label="Apply Tax treatment"><div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/15 bg-[#101412] p-5 shadow-2xl"><div className="flex items-start justify-between"><div><div className="text-xs uppercase tracking-[0.14em] text-emerald-100/60">Operator Tax decision</div><h3 className="mt-1 text-lg font-semibold text-white">{editor.group.qboAccountName}</h3></div><button type="button" disabled={editor.pending} onClick={() => setEditor(null)} className="rounded-full border border-white/10 px-2 py-1 text-white/60">×</button></div><div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-xs text-white/60">Decision<select value={editor.decisionMode} onChange={(event) => setEditor((current) => ({ ...current, decisionMode: event.target.value, preview: null }))} className="mt-1 w-full rounded-lg border border-white/10 bg-[#0a0d0b] p-2 text-white"><option value="tax_mapping">Apply supported Tax treatment</option><option value="professional_hold">Professional review</option></select></label><label className="text-xs text-white/60">Scope<select value={editor.scopeType} onChange={(event) => setEditor((current) => ({ ...current, scopeType: event.target.value, preview: null }))} className="mt-1 w-full rounded-lg border border-white/10 bg-[#0a0d0b] p-2 text-white"><option value="exact_transactions">Exact selected transaction set</option><option value="business_gl_tax_year">This GL account for this business and tax year</option><option value="future_business_gl_tax_year">Current and future eligible transactions</option></select></label></div>{editor.decisionMode === "tax_mapping" ? <label className="mt-3 block text-xs text-white/60">Versioned Tax treatment<select value={editor.ruleId} onChange={(event) => setEditor((current) => ({ ...current, ruleId: event.target.value, preview: null }))} className="mt-1 w-full rounded-lg border border-white/10 bg-[#0a0d0b] p-2 text-white"><option value="">Select a supported treatment</option>{(state.workspace?.ruleOptions || []).map((rule) => <option key={rule.id} value={rule.id}>{rule.taxCategory} · {rule.deductibilityStatus} · {rule.deductiblePercent}% · {rule.version}</option>)}</select></label> : <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.06] p-3 text-xs text-amber-50"><strong>Professional review</strong><div className="mt-1 text-white/55">The amount stays outside the estimate. No customer action is required.</div></div>}<label className="mt-3 block text-xs text-white/60">Internal audit reason<textarea maxLength={1000} value={editor.reason} onChange={(event) => setEditor((current) => ({ ...current, reason: event.target.value, preview: null }))} className="mt-1 min-h-20 w-full rounded-lg border border-white/10 bg-[#0a0d0b] p-2 text-white" /></label>{editor.preview ? <div className="mt-4 rounded-xl border border-emerald-300/15 bg-emerald-300/[0.05] p-3 text-sm text-white/70"><div className="font-semibold text-white">Server preview</div><div className="mt-1">{editor.preview.count} transactions · {formatCurrency(editor.preview.grossAmount)} gross</div><div className="mt-1">Estimated deduction effect: {editor.preview.estimatedDeductionEffect == null ? "Excluded pending professional review" : formatCurrency(editor.preview.estimatedDeductionEffect)}</div><div className="mt-1">Professional-confirmed rows excluded: {editor.preview.professionalConfirmedRowsExcluded}</div><div className="mt-1">Customer-treatment conflicts: {editor.preview.customerFactConflicts?.length || 0}</div></div> : null}{editor.checking ? <div className="mt-3 text-sm text-amber-100" role="status">Checking whether your changes were saved</div> : null}{editor.error ? <div className="mt-3 text-sm text-rose-100" role="alert">{editor.error}</div> : null}<div className="mt-5 flex justify-end gap-2"><button type="button" disabled={editor.pending} onClick={() => setEditor(null)} className="rounded-xl border border-white/10 px-4 py-2 text-sm text-white/70">Cancel</button>{editor.preview ? <button type="button" disabled={editor.pending || editor.checking} onClick={confirmDecision} className="rounded-xl bg-emerald-300 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{editor.pending ? "Applying…" : `Apply Tax treatment to ${editor.preview.count} transactions`}</button> : <button type="button" disabled={editor.pending} onClick={previewDecision} className="rounded-xl bg-emerald-300 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50">{editor.pending ? "Preparing preview…" : "Preview Tax treatment"}</button>}</div></div></div> : null}
+  </section>;
 }
 
 function PostingEligibilityRecheckModal({ state, businessName, month, onClose, onConfirm, onRetry }) {

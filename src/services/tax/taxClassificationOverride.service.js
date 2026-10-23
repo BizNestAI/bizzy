@@ -24,6 +24,7 @@ export async function applyClassificationOverride({ supabase, businessId, taxYea
   const year = requireTaxYear(taxYear);
   const current = await requireClassification({ supabase, businessId, taxYear: year, transactionId });
   assertNoStaleWrite(current, input.expectedUpdatedAt);
+  assertActorMayOverrideAuthority(current, actor);
   if (input.protectConfirmedAuthority && hasConfirmedAuthority(current)) {
     throw conflictError("confirmed_authority_protected", "Confirmed tax classification authority is protected.", {
       transactionId,
@@ -218,6 +219,7 @@ export function buildClassificationOverrideBatchItems({ transactionIds = [], cur
   const roleStatus = statusForActor(actor);
   const items = ids.map((transactionId) => {
     const current = currentByTransactionId.get(transactionId);
+    assertActorMayOverrideAuthority(current, actor);
     const expectedUpdatedAt = input.expectedUpdatedAtByTransactionId?.[transactionId] || input.expectedUpdatedAtByTransactionId?.[String(transactionId)] || input.expectedUpdatedAt || null;
     if (expectedUpdatedAt) assertNoStaleWrite(current, expectedUpdatedAt);
     if (input.protectConfirmedAuthority && hasProtectedConfirmedAuthority(current, input)) {
@@ -269,6 +271,7 @@ export async function moveClassificationsToTaxReview({ supabase, businessId, tax
 function hasConfirmedAuthority(row = {}) {
   const status = String(row.classification_status || "").toLowerCase();
   return status === TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED ||
+    status === TAX_CLASSIFICATION_STATUSES.BIZZI_OPERATOR_CONFIRMED ||
     status === TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED ||
     status === "accountant_reviewed" ||
     row.user_override === true ||
@@ -278,6 +281,7 @@ function hasConfirmedAuthority(row = {}) {
 function hasProtectedConfirmedAuthority(row = {}, input = {}) {
   const status = String(row.classification_status || "").toLowerCase();
   if (status === TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED || status === "accountant_reviewed" || row.cpa_override === true) return true;
+  if (status === TAX_CLASSIFICATION_STATUSES.BIZZI_OPERATOR_CONFIRMED && input.allowOperatorConfirmedEdit !== true) return true;
   if (input.allowUserConfirmedEdit && (status === TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED || row.user_override === true)) return false;
   return hasConfirmedAuthority(row);
 }
@@ -311,7 +315,7 @@ function buildUpdatedClassification({ current, input, actor, transaction, status
     classification_status: effectiveStatus,
     confidence_score: [TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW].includes(effectiveStatus) ? Math.min(Number(current.confidence_score || 0), 60) : 100,
     confidence_level: [TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW].includes(effectiveStatus) ? TAX_CONFIDENCE_LEVELS.MEDIUM : TAX_CONFIDENCE_LEVELS.HIGH,
-    source: actor.source || TAX_CLASSIFICATION_SOURCES.USER,
+    source: actor.source || (["admin", "operator"].includes(resolveActorRole(actor)) ? TAX_CLASSIFICATION_SOURCES.BIZZI_OPERATOR : TAX_CLASSIFICATION_SOURCES.USER),
     requires_review: [TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW].includes(effectiveStatus),
     reason: input.reason || current.reason,
     user_override: input.clearUserOverride === true ? false : (effectiveStatus === TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED || current.user_override === true),
@@ -465,11 +469,24 @@ function buildBusinessRule({ businessId, taxYear, transaction, classification, o
 
 function statusForActor(actor) {
   const role = resolveActorRole(actor);
-  return role === "cpa" ? TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED : TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED;
+  if (role === "cpa") return TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED;
+  if (role === "admin" || role === "operator") return TAX_CLASSIFICATION_STATUSES.BIZZI_OPERATOR_CONFIRMED;
+  return TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED;
 }
 
 function resolveActorRole(actor = {}) {
-  return ["user", "cpa", "admin", "system"].includes(actor.role) ? actor.role : "user";
+  return ["user", "cpa", "admin", "operator", "system"].includes(actor.role) ? actor.role : "user";
+}
+
+function assertActorMayOverrideAuthority(current = {}, actor = {}) {
+  const currentStatus = String(current.classification_status || "").toLowerCase();
+  const role = resolveActorRole(actor);
+  if ((currentStatus === TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED || currentStatus === "accountant_reviewed" || current.cpa_override === true) && role !== "cpa") {
+    throw conflictError("confirmed_authority_protected", "CPA-confirmed Tax treatment cannot be changed by this actor.");
+  }
+  if (currentStatus === TAX_CLASSIFICATION_STATUSES.BIZZI_OPERATOR_CONFIRMED && role === "user") {
+    throw conflictError("confirmed_authority_protected", "Bizzi-operator-confirmed Tax treatment cannot be changed by a customer.");
+  }
 }
 
 async function requireClassification({ supabase, businessId, taxYear, transactionId }) {

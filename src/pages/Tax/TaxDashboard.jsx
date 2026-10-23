@@ -23,11 +23,13 @@ import { computeClassificationAmounts } from "../../services/tax/taxClassificati
 import { calculateVehicleMileageDeduction } from "../../services/tax/vehicleMileageRates.js";
 import {
   TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES,
+  TAX_ACTION_OWNERS,
   buildTaxDeductionsLifecycleProjection,
   isSupportedStandardRuleEstimate,
   reconcileLegacyTaxCoverage,
   requiresCustomerTaxDecision,
   taxClassificationBucketForDeductions,
+  taxActionOwnerForRow,
 } from "../../services/tax/taxDeductionsLifecycleProjection.js";
 import { buildGroupedDeductionDecisionFingerprint } from "../../services/tax/taxGroupedDeductionDecisionFingerprint.js";
 
@@ -531,7 +533,14 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     [deductions, populationBridge]
   );
   const workspaceRows = useMemo(() => buildClassificationWorkspaceRows(deductions), [deductions]);
-  const filteredWorkspaceRows = useMemo(() => filterClassificationWorkspaceRows(workspaceRows, classificationTab), [workspaceRows, classificationTab]);
+  const filteredWorkspaceRows = useMemo(() => filterClassificationWorkspaceRows(
+    workspaceRows,
+    classificationTab,
+    classificationSummary.jobStatus?.exactTransactionIds || []
+  ), [workspaceRows, classificationTab, classificationSummary.jobStatus?.exactTransactionIds]);
+  const updatingItemByTransaction = useMemo(() => new Map(
+    (classificationSummary.jobStatus?.items || []).map((item) => [String(item.transactionId), item])
+  ), [classificationSummary.jobStatus?.items]);
   const lifecycleProjection = useMemo(
     () => buildTaxDeductionsLifecycleProjection({ rows: workspaceRows, businessId, taxYear: year }),
     [businessId, workspaceRows, year]
@@ -729,7 +738,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
             Estimates are based on expenses posted to QuickBooks. Items that need more information are excluded until reviewed.
           </p>
         </div>
-        <ClassificationProgressSummary summary={classificationSummary} />
+        <ClassificationProgressSummary summary={classificationSummary} onViewTransactions={() => {
+          setWorkspaceView("all_transactions");
+          setClassificationTab("updating");
+          requestAnimationFrame(() => document.querySelector("[data-tax-classification-workspace]")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+        }} />
       </section>
 
       <WorkspaceViewTabs
@@ -764,7 +777,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           </div>
         </>
       ) : workspaceView === "needs_attention" ? (
-        <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
+        <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18" data-tax-classification-workspace>
           <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <div className="text-sm font-semibold text-white/84">{customerQuestionSummaryText(customerWorkflow.customerDecisionCount, customerWorkflow.customerInputCount)}</div>
@@ -792,7 +805,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
                 <FilterTabButton
                   key={tab.value}
                   tab={tab}
-                  count={tab.value === "bookkeeping_details" ? customerWorkflow.technicalCount : null}
+                  count={customerWorkflow.filterCounts?.[tab.value] ?? null}
                   selected={classificationTab === tab.value}
                   onClick={() => setClassificationTab(tab.value)}
                 />
@@ -802,12 +815,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
               {filteredWorkspaceRows.length} of {workspaceRows.length} transaction rows shown
             </div>
           </div>
-          {classificationTab === "bookkeeping_details" && customerWorkflow.technicalCount > 0 ? (
+          {classificationTab === "follow_up" && customerWorkflow.followUpCount > 0 ? (
             <div className="border-b border-amber-300/[0.12] bg-amber-300/[0.05] px-3 py-2 text-xs leading-relaxed text-amber-50/85" role="status">
-              <span className="font-semibold">Needs bookkeeping details · {customerWorkflow.technicalCount}</span>. Bizzi needs more bookkeeping information before estimating their tax treatment. These are not questions for you.
+              <span className="font-semibold">Needs follow-up · {customerWorkflow.followUpCount}</span>. These items are separated by who can resolve the next step; missing Tax mappings are not labeled as bookkeeping problems.
             </div>
           ) : null}
-          <ClassificationWorkspaceTable rows={filteredWorkspaceRows} loading={deductions.loading} />
+          <ClassificationWorkspaceTable rows={filteredWorkspaceRows} loading={deductions.loading} updating={classificationTab === "updating"} updatingItemByTransaction={updatingItemByTransaction} />
         </div>
       )}
 
@@ -931,10 +944,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
 const CLASSIFICATION_TABS = [
   { value: "all", label: "All" },
   { value: "auto_classified", label: "Estimated" },
-  { value: "needs_review", label: "Needs input" },
+  { value: "reviewed", label: "Reviewed" },
+  { value: "needs_answer", label: "Needs your answer" },
+  { value: "follow_up", label: "Needs follow-up" },
   { value: "outside_deductions", label: "Outside deductions" },
   { value: "excluded", label: "Excluded" },
-  { value: "bookkeeping_details", label: "Needs bookkeeping details" },
+  { value: "updating", label: "Updating" },
 ];
 
 const WORKSPACE_VIEW_TABS = [
@@ -2388,119 +2403,18 @@ function DecisionOption({ checked, onChange, children, description }) {
 }
 
 function DeductionsLoadingState() {
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"];
   return (
-    <div className="mt-5 space-y-4" role="status" aria-busy="true" aria-live="polite">
+    <div className="mt-5 flex min-h-[520px] items-center justify-center rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.025] px-6 py-12" role="status" aria-busy="true" aria-live="polite">
       <span className="sr-only">Loading deduction totals and classification activity.</span>
-      <div className="flex items-center gap-3 rounded-2xl border border-emerald-300/12 bg-emerald-300/[0.045] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.18)]">
-        <div className="relative flex h-10 w-10 shrink-0 items-center justify-center" aria-hidden="true">
-          <span className="absolute inset-0 rounded-full border border-emerald-300/20 motion-safe:animate-ping" />
-          <span className="absolute inset-1 rounded-full bg-emerald-300/[0.08]" />
-          <Loader2 className="relative h-5 w-5 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
-          <span className="relative hidden h-2 w-2 rounded-full bg-emerald-200 motion-reduce:block" />
+      <div className="flex max-w-sm flex-col items-center text-center">
+        <div className="relative flex h-14 w-14 items-center justify-center" aria-hidden="true">
+          <span className="absolute inset-0 rounded-full border border-emerald-300/15 motion-safe:animate-ping" />
+          <span className="absolute inset-1 rounded-full border border-emerald-300/12 bg-emerald-300/[0.07]" />
+          <Loader2 className="relative h-6 w-6 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
+          <span className="relative hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" />
         </div>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-white">Preparing your deductions overview</p>
-          <p className="mt-0.5 text-xs text-white/52">Loading your latest saved totals and transaction details.</p>
-        </div>
-      </div>
-      <div className="relative overflow-hidden rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-3">
-        <SkeletonSheen />
-        <div className="relative flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
-            <SkeletonLine className="h-3 w-36" />
-            <SkeletonLine className="h-4 w-[min(420px,70vw)]" />
-            <SkeletonLine className="h-3 w-[min(560px,78vw)]" />
-          </div>
-          <SkeletonLine className="h-3 w-28" />
-        </div>
-        <div className="relative mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
-          {Array.from({ length: 7 }).map((_, index) => (
-            <div key={index} className="rounded-xl border border-white/[0.08] bg-black/16 px-3 py-2">
-              <SkeletonLine className="h-2.5 w-20" />
-              <SkeletonLine className="mt-3 h-5 w-10" />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div aria-hidden="true" className="flex flex-wrap gap-1.5">
-        <SkeletonLine className="h-9 w-40 rounded-full" />
-        <SkeletonLine className="h-9 w-32 rounded-full" />
-        <SkeletonLine className="h-9 w-32 rounded-full" />
-      </div>
-
-      <div aria-hidden="true" className="grid gap-2 md:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, index) => (
-          <div key={index} className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-black/16 px-3 py-3">
-            <SkeletonSheen />
-            <div className="relative">
-              <SkeletonLine className="h-2.5 w-36" />
-              <SkeletonLine className="mt-3 h-7 w-20" />
-              <SkeletonLine className="mt-2 h-3 w-48 max-w-full" />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/18">
-        <SkeletonSheen />
-        <div className="max-w-full overflow-hidden">
-          <table className="min-w-[1040px] border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
-                <th className="w-[260px] px-3 py-3 text-left font-semibold">Expense category</th>
-                {months.map((month) => (
-                  <th key={month} className="w-[68px] px-2 py-3 text-right font-semibold">{month}</th>
-                ))}
-                <th className="w-[104px] px-3 py-3 text-right font-semibold">YTD</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Array.from({ length: 5 }).map((_, rowIndex) => (
-                <tr key={rowIndex} className="border-b border-white/[0.06] last:border-b-0">
-                  <th className="px-3 py-3 text-left align-middle">
-                    <SkeletonLine className="h-4 w-36" />
-                    <SkeletonLine className="mt-2 h-3 w-48" />
-                  </th>
-                  {months.map((month, monthIndex) => (
-                    <td key={`${month}-${monthIndex}`} className="px-1.5 py-2">
-                      <SkeletonLine className="ml-auto h-8 w-14 rounded-lg" />
-                    </td>
-                  ))}
-                  <td className="px-3 py-3">
-                    <SkeletonLine className="ml-auto h-4 w-16" />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/18">
-        <SkeletonSheen />
-        <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-1.5">
-            {Array.from({ length: 5 }).map((_, index) => (
-              <SkeletonLine key={index} className="h-9 w-24 rounded-full" />
-            ))}
-          </div>
-          <SkeletonLine className="h-3 w-40" />
-        </div>
-        <div className="space-y-0">
-          {Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="grid grid-cols-[110px_minmax(180px,1fr)_160px_90px] gap-5 border-b border-white/[0.06] px-3 py-4 last:border-b-0">
-              <SkeletonLine className="h-4 w-16" />
-              <div>
-                <SkeletonLine className="h-4 w-44" />
-                <SkeletonLine className="mt-2 h-3 w-32" />
-              </div>
-              <SkeletonLine className="h-4 w-28" />
-              <SkeletonLine className="ml-auto h-4 w-16" />
-            </div>
-          ))}
-        </div>
+        <p className="mt-4 text-sm font-semibold text-white">Preparing your deductions overview</p>
+        <p className="mt-1 text-xs leading-relaxed text-white/52">Loading your latest saved totals and transaction details.</p>
       </div>
     </div>
   );
@@ -2520,18 +2434,18 @@ function ClassificationStat({ label, value, tone = "default" }) {
   );
 }
 
-function ClassificationProgressSummary({ summary }) {
+function ClassificationProgressSummary({ summary, onViewTransactions }) {
   const job = summary.jobStatus;
   if (!job || !["queued", "delayed", "processing", "stalled", "failed"].includes(job.status)) return null;
-  const total = Number(job.total || job.queuedCount || 0);
+  const exactIds = job.hasExactMembership === true && Array.isArray(job.exactTransactionIds) ? job.exactTransactionIds : [];
+  const total = exactIds.length;
+  const exact = job.hasExactMembership === true;
   const active = ["queued", "processing", "delayed", "stalled"].includes(job.status);
-  const affectedText = total > 0 ? `${total} recently posted transaction${total === 1 ? "" : "s"}` : "recently posted transactions";
-  const heading = job.status === "failed" ? "Some deduction estimates need an update." : "Updating deduction estimates";
+  const affectedText = exact && total > 0 ? `${total} recently posted transaction${total === 1 ? "" : "s"}` : "some recently posted transactions";
+  const heading = exact ? "Some deduction estimates are still updating." : "Some recently posted transactions are still being evaluated.";
   const detail = job.status === "failed"
-    ? job.canRetry === true
-      ? `${affectedText} could not be evaluated yet. Existing deduction totals remain available. Bizzi will retry automatically.`
-      : `${affectedText} could not be evaluated yet. Existing deduction totals remain available while Bizzi investigates the technical update.`
-    : `Bizzi is evaluating ${affectedText}. Existing deduction results remain available.`;
+    ? `${affectedText} need Bizzi review. Existing deduction totals remain available.`
+    : exact ? `${affectedText} are waiting for Tax evaluation. Existing estimates remain available.` : "Existing estimates remain available while evaluation continues.";
   return (
     <div className={`mt-3 rounded-2xl border px-3 py-3 ${
       job.status === "failed" || job.status === "stalled" || job.status === "delayed"
@@ -2551,13 +2465,14 @@ function ClassificationProgressSummary({ summary }) {
             <div className="text-sm font-semibold text-white">{heading}</div>
             <div className="mt-1 text-xs leading-relaxed text-white/52">{detail}</div>
           </div>
+          {exact && total > 0 ? <button type="button" onClick={() => onViewTransactions?.(exactIds)} className="mt-2 text-xs font-semibold text-emerald-100 underline decoration-emerald-200/30 underline-offset-4 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">View {total} transaction{total === 1 ? "" : "s"}</button> : null}
         </div>
       </div>
     </div>
   );
 }
 
-function ClassificationWorkspaceTable({ rows, loading, emptyMessage = "No transactions match this classification view." }) {
+function ClassificationWorkspaceTable({ rows, loading, updating = false, updatingItemByTransaction = new Map(), emptyMessage = "No transactions match this classification view." }) {
   if (loading && !rows.length) {
     return (
       <div className="px-4 py-7 text-center text-sm text-white/50">
@@ -2585,6 +2500,8 @@ function ClassificationWorkspaceTable({ rows, loading, emptyMessage = "No transa
             <th className="px-3 py-3 text-left font-semibold">Deductibility</th>
             <th className="px-3 py-3 text-left font-semibold">Source</th>
             <th className="px-3 py-3 text-left font-semibold">Status</th>
+            {updating ? <th className="px-3 py-3 text-left font-semibold">Last checked</th> : null}
+            {updating ? <th className="px-3 py-3 text-left font-semibold">Next step</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -2603,6 +2520,8 @@ function ClassificationWorkspaceTable({ rows, loading, emptyMessage = "No transa
                 <div className="font-semibold text-white/76">{row.taxCategoryLabel}</div>
                 {row.reviewReason ? <div className="mt-0.5 truncate text-[11px] text-amber-100/56">{row.reviewReason}</div> : null}
               </td>
+              {updating ? <td className="whitespace-nowrap px-3 py-3 text-white/58">{formatUpdatingLastChecked(updatingItemByTransaction.get(String(row.transactionId || row.id)))}</td> : null}
+              {updating ? <td className="px-3 py-3 font-semibold text-white/72">{formatUpdatingNextStep(updatingItemByTransaction.get(String(row.transactionId || row.id)))}</td> : null}
               <td className="px-3 py-3">
                 <div className="font-semibold text-white/72">{row.deductibilityLabel}</div>
                 <div className="mt-0.5 text-[11px] text-white/38">{row.deductiblePercentLabel}</div>
@@ -2623,6 +2542,18 @@ function ClassificationWorkspaceTable({ rows, loading, emptyMessage = "No transa
       </table>
     </div>
   );
+}
+
+function formatUpdatingLastChecked(item) {
+  if (!item?.lastCheckedAt) return "Not checked yet";
+  const date = new Date(item.lastCheckedAt);
+  if (Number.isNaN(date.getTime())) return "Not checked yet";
+  return `Last checked ${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} at ${date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function formatUpdatingNextStep(item) {
+  const labels = { retry_scheduled: "Retry scheduled", checking_again: "Checking again", waiting_to_be_evaluated: "Waiting to be evaluated", needs_bizzi_review: "Bizzi is reviewing this" };
+  return labels[item?.status] || "Waiting to be evaluated";
 }
 
 function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfirm }) {
@@ -2869,6 +2800,9 @@ function buildCustomerDeductionsWorkflow(rows = [], projection = null) {
   const customerInputCount = outcome(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED);
   const bookkeepingEvidenceCount = outcome(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.BOOKKEEPING_EVIDENCE_REQUIRED);
   const technicalUpdateCount = outcome(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.TECHNICAL_UPDATE_PENDING) + outcome(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.TAX_REVIEW_REQUIRED) + outcome(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.AMBIGUOUS);
+  const ownerCounts = Object.values(TAX_ACTION_OWNERS).reduce((acc, owner) => ({ ...acc, [owner]: 0 }), {});
+  for (const entry of lifecycle.entries || []) ownerCounts[entry.actionOwner] = Number(ownerCounts[entry.actionOwner] || 0) + 1;
+  const followUpCount = ownerCounts.bookkeeping_review_required + ownerCounts.bizzi_tax_mapping_required + ownerCounts.professional_review_required + ownerCounts.terminal_system_failure;
   return {
     lifecycle,
     reviewedCount,
@@ -2880,6 +2814,14 @@ function buildCustomerDeductionsWorkflow(rows = [], projection = null) {
     bookkeepingEvidenceCount,
     technicalUpdateCount,
     technicalCount: bookkeepingEvidenceCount + technicalUpdateCount,
+    followUpCount,
+    ownerCounts,
+    filterCounts: {
+      reviewed: reviewedCount,
+      needs_answer: ownerCounts.customer_fact_required,
+      follow_up: followUpCount,
+      updating: ownerCounts.system_processing + ownerCounts.system_retry,
+    },
     outsideDeductionsCount: outcome(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.OUTSIDE_DEDUCTIONS),
   };
 }
@@ -2888,7 +2830,7 @@ function normalizeClassificationWorkspaceRow(row) {
   if (!row) return null;
   const bucket = classificationBucket(row);
   const treatmentUnavailable = row.taxDataUnavailable === true;
-  return {
+  const normalized = {
     ...row,
     vendor: safeText(row.vendor || row.description, "Unknown vendor"),
     description: safeText(row.description, ""),
@@ -2905,18 +2847,25 @@ function normalizeClassificationWorkspaceRow(row) {
     statusLabel: classificationStatusLabel(bucket),
     classificationBucket: bucket,
   };
+  normalized.actionOwner = taxActionOwnerForRow(normalized);
+  return normalized;
 }
 
-function filterClassificationWorkspaceRows(rows, tab) {
+function filterClassificationWorkspaceRows(rows, tab, exactUpdatingIds = []) {
   if (tab === "all") return rows;
-  if (tab === "bookkeeping_details") return rows.filter(isBookkeepingDetailsRow);
+  if (tab === "reviewed") return rows.filter((row) => ["user_confirmed", "bizzi_operator_confirmed", "accountant_confirmed"].includes(row.classificationBucket));
+  if (tab === "needs_answer") return rows.filter((row) => row.actionOwner === TAX_ACTION_OWNERS.CUSTOMER_FACT_REQUIRED);
+  if (tab === "follow_up") return rows.filter((row) => [
+    TAX_ACTION_OWNERS.BOOKKEEPING_REVIEW_REQUIRED,
+    TAX_ACTION_OWNERS.BIZZI_TAX_MAPPING_REQUIRED,
+    TAX_ACTION_OWNERS.PROFESSIONAL_REVIEW_REQUIRED,
+    TAX_ACTION_OWNERS.TERMINAL_SYSTEM_FAILURE,
+  ].includes(row.actionOwner));
+  if (tab === "updating") {
+    const ids = new Set(exactUpdatingIds.map(String));
+    return ids.size ? rows.filter((row) => ids.has(String(row.id || row.transactionId))) : [];
+  }
   return rows.filter((row) => row.classificationBucket === tab);
-}
-
-function isBookkeepingDetailsRow(row) {
-  const bucket = classificationBucket(row);
-  if (["unclassified", "technical_evidence_incomplete", "failed", "needs_tax_review"].includes(bucket)) return true;
-  return bucket === "needs_review" && !requiresCustomerTaxInput(row) && !isSupportedStandardRuleEstimate(row);
 }
 
 function filterAttentionWorkspaceRows(rows, tab) {
