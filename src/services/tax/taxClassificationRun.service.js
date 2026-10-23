@@ -668,6 +668,7 @@ export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new 
     isDelayed,
     isExhausted,
     isStalled,
+    evaluatedAt: now.toISOString(),
     pollAfterMs: status === "queued" ? DEFAULT_POLL_AFTER_MS : ["processing", "delayed", "stalled"].includes(status) ? 3000 : null,
     hasExactMembership: normalizedRun?.metadata?.exact_membership === true,
     exactTransactionIds: [],
@@ -677,6 +678,7 @@ export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new 
 function applyExactMembershipToJob(job, items = []) {
   const activeStates = new Set(["queued", "retry_scheduled", "processing", "failed_retryable"]);
   const active = items.filter((item) => activeStates.has(item.lifecycle_state));
+  const customerNoticeMembership = buildCustomerTaxEvaluationNoticeMembership({ job, items });
   job.total = active.length;
   job.remaining = active.length;
   job.hasExactMembership = true;
@@ -687,6 +689,47 @@ function applyExactMembershipToJob(job, items = []) {
     lastCheckedAt: item.last_attempt_at || item.updated_at || null,
     nextRetryAt: item.lifecycle_state === "retry_scheduled" && item.next_retry_at ? item.next_retry_at : null,
   }));
+  // Customer alerting is deliberately narrower than operational visibility.
+  // Normal queued/processing/retry work remains visible to MRP and Updating,
+  // but only exact items outside the server-owned processing window or in a
+  // terminal/Bizzi-review state are eligible for the customer notice.
+  job.customerNoticeTransactionIds = customerNoticeMembership.transactionIds;
+  job.customerNoticeItems = customerNoticeMembership.items;
+}
+
+export function buildCustomerTaxEvaluationNoticeMembership({ job = {}, items = [] } = {}) {
+  const activeStates = new Set(["queued", "retry_scheduled", "processing", "failed_retryable"]);
+  const exceptionalStates = new Set(["failed_terminal", "blocked_tax_mapping"]);
+  const serverWindowExceeded = job.isDelayed === true || job.isStalled === true || job.isExhausted === true;
+  const noticeItems = uniqueRunItems(items.filter((item) => (
+    exceptionalStates.has(item?.lifecycle_state)
+      || (activeStates.has(item?.lifecycle_state) && (
+        job.isExhausted === true
+          || (item.lifecycle_state === "retry_scheduled"
+            ? retryScheduleIsOverdue(item.next_retry_at, job.evaluatedAt)
+            : serverWindowExceeded)
+      ))
+  )));
+  return {
+    transactionIds: noticeItems.map((item) => String(item.stable_transaction_id)),
+    items: noticeItems.map((item) => ({
+      transactionId: String(item.stable_transaction_id),
+      lifecycleState: item.lifecycle_state,
+      excludedFromEstimate: true,
+    })),
+  };
+}
+
+function retryScheduleIsOverdue(nextRetryAt, evaluatedAt) {
+  const retryAtMs = Date.parse(nextRetryAt || "");
+  const evaluatedAtMs = Date.parse(evaluatedAt || "");
+  return Number.isFinite(retryAtMs) && Number.isFinite(evaluatedAtMs) && retryAtMs <= evaluatedAtMs;
+}
+
+function uniqueRunItems(items = []) {
+  return [...new Map(items
+    .filter((item) => item?.stable_transaction_id)
+    .map((item) => [String(item.stable_transaction_id), item])).values()];
 }
 
 function customerSafeRunItemStatus(item = {}) {

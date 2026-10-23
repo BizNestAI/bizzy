@@ -95,6 +95,45 @@ test("authenticatedFetch retains a successful server request id for safe client 
   assert.deepEqual(result.data, { rows: [] });
 });
 
+test("deductions overview client accepts the current deployment contract and rejects the old shape", async () => {
+  const businessId = "11111111-1111-4111-8111-111111111111";
+  const current = {
+    ok: true,
+    data: {
+      totals: { estimatedDeductibleAmount: 8524 },
+      categories: [],
+      projection: {
+        projectionId: "projection-1",
+        projectionVersion: "tax-deductions-overview-v1",
+        canonicalBusinessId: businessId,
+        taxYear: 2026,
+        refreshedAt: "2026-10-23T12:00:00.000Z",
+        estimatedDeductibleAmount: 8524,
+        evaluatedTransactionCount: 713,
+        matrixIncludedCount: 689,
+        outsideDeductionsCount: 24,
+        questionsForYouGroupCount: 8,
+      },
+    },
+  };
+  let response = current;
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: { access_token: "session-token" } } }) } },
+    fetchImpl: async () => jsonResponse(response, { headers: { "x-request-id": "overview-request" } }),
+  });
+  taxClient.clearTaxApiCache();
+  const overview = await taxClient.getTaxDeductionsOverview({ businessId, year: 2026 });
+  assert.equal(overview.projection.estimatedDeductibleAmount, 8524);
+
+  response = { ok: true, data: { totals: { estimatedDeductibleAmount: 8524 }, categories: [] } };
+  await assert.rejects(
+    () => taxClient.getTaxDeductionsOverview({ businessId, year: 2026, refresh: true }),
+    (error) => error.code === "tax_deductions_overview_version_mismatch" && error.requestId === "overview-request"
+  );
+  assert.equal(taxClient.getCachedTaxDeductionsOverview({ businessId, year: 2026 })?.value?.projection?.projectionId, "projection-1");
+});
+
 test("authenticatedFetch supports AbortSignal and blob exports", async () => {
   authMod.__setAuthenticatedFetchTestDeps({
     getApiBase: () => "https://api.example.test",

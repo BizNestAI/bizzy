@@ -5,6 +5,8 @@ import {
   TAX_ACTION_OWNERS,
   taxActionOwnerForRow,
 } from "../src/services/tax/taxDeductionsLifecycleProjection.js";
+import { buildCustomerTaxEvaluationNoticeMembership } from "../src/services/tax/taxClassificationRun.service.js";
+import { buildTaxEvaluationNotice } from "../src/services/tax/taxEvaluationNoticeProjection.js";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -35,12 +37,83 @@ test("durable retry evidence is required for system retry ownership", () => {
   assert.equal(taxActionOwnerForRow({ ...base, runItem: { lifecycle_state: "failed_terminal" } }), TAX_ACTION_OWNERS.TERMINAL_SYSTEM_FAILURE);
 });
 
-test("legacy customer UX omits fabricated exact counts and MRP stays separately authorized", () => {
+test("normal daily processing and bounded retry do not produce a customer notice", () => {
+  const items = [
+    { stable_transaction_id: "queued-1", lifecycle_state: "queued" },
+    { stable_transaction_id: "processing-1", lifecycle_state: "processing" },
+    { stable_transaction_id: "retry-1", lifecycle_state: "retry_scheduled", next_retry_at: "2026-10-23T15:00:00Z" },
+  ];
+  const membership = buildCustomerTaxEvaluationNoticeMembership({
+    job: { isDelayed: true, evaluatedAt: "2026-10-23T14:00:00Z" },
+    items,
+  });
+  assert.deepEqual(membership.transactionIds, ["queued-1", "processing-1"]);
+  assert.ok(!membership.transactionIds.includes("retry-1"));
+  const normalMembership = buildCustomerTaxEvaluationNoticeMembership({ job: {}, items });
+  assert.deepEqual(normalMembership.transactionIds, []);
+  assert.equal(buildTaxEvaluationNotice({
+    hasExactMembership: true,
+    customerNoticeTransactionIds: normalMembership.transactionIds,
+    customerNoticeItems: normalMembership.items,
+  }), null);
+});
+
+test("server-overdue, exhausted, terminal, and Bizzi mapping items produce an exact notice", () => {
+  const activeItems = [
+    { stable_transaction_id: "queued-1", lifecycle_state: "queued" },
+    { stable_transaction_id: "retry-1", lifecycle_state: "retry_scheduled" },
+  ];
+  for (const lifecycleFlag of ["isDelayed", "isStalled", "isExhausted"]) {
+    const membership = buildCustomerTaxEvaluationNoticeMembership({ job: { [lifecycleFlag]: true }, items: activeItems });
+    assert.deepEqual(membership.transactionIds, lifecycleFlag === "isExhausted" ? ["queued-1", "retry-1"] : ["queued-1"]);
+  }
+
+  const overdueRetry = buildCustomerTaxEvaluationNoticeMembership({
+    job: { evaluatedAt: "2026-10-23T16:00:00Z" },
+    items: [{ stable_transaction_id: "retry-overdue", lifecycle_state: "retry_scheduled", next_retry_at: "2026-10-23T15:00:00Z" }],
+  });
+  assert.deepEqual(overdueRetry.transactionIds, ["retry-overdue"]);
+
+  const membership = buildCustomerTaxEvaluationNoticeMembership({
+    job: {},
+    items: [
+      { stable_transaction_id: "terminal-1", lifecycle_state: "failed_terminal" },
+      { stable_transaction_id: "mapping-1", lifecycle_state: "blocked_tax_mapping" },
+    ],
+  });
+  const notice = buildTaxEvaluationNotice({
+    hasExactMembership: true,
+    customerNoticeTransactionIds: membership.transactionIds,
+    customerNoticeItems: membership.items,
+  });
+  assert.deepEqual(notice, { count: 2, transactionIds: ["terminal-1", "mapping-1"] });
+  assert.ok(membership.items.every((item) => item.excludedFromEstimate === true));
+});
+
+test("legacy aggregate state and inconsistent membership cannot fabricate an alert or View count", () => {
+  assert.equal(buildTaxEvaluationNotice({
+    hasExactMembership: false,
+    customerNoticeTransactionIds: ["aggregate-only"],
+    customerNoticeItems: [{ transactionId: "aggregate-only", excludedFromEstimate: true }],
+  }), null);
+  assert.equal(buildTaxEvaluationNotice({
+    hasExactMembership: true,
+    customerNoticeTransactionIds: ["one", "two"],
+    customerNoticeItems: [{ transactionId: "one", excludedFromEstimate: true }],
+  }), null);
+});
+
+test("customer UX limits the notice to exact exceptional membership and MRP stays separately authorized", () => {
   const dashboard = read("src/pages/Tax/TaxDashboard.jsx");
   const routes = read("src/api/admin/monthlyReview.routes.js");
-  assert.match(dashboard, /job\.hasExactMembership === true/);
-  assert.match(dashboard, /Some recently posted transactions are still being evaluated/);
-  assert.match(dashboard, /View \{total\} transaction/);
+  assert.match(dashboard, /buildTaxEvaluationNotice\(summary\.jobStatus\)/);
+  assert.match(dashboard, /Some transactions aren’t included in this estimate yet/);
+  assert.match(dashboard, /Bizzi is reviewing them\. No action is needed from you/);
+  assert.match(dashboard, /View \{notice\.count\} transaction/);
+  assert.match(dashboard, /setWorkspaceView\("all_transactions"\)/);
+  assert.match(dashboard, /setClassificationTab\("updating"\)/);
+  assert.match(dashboard, /Questions for you/);
+  assert.doesNotMatch(dashboard, /Some recently posted transactions are still being evaluated/);
   assert.match(routes, /router\.use\(requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)\)/);
   assert.match(routes, /tax-classification-review\/reconcile/);
   assert.match(routes, /business_context_conflict/);

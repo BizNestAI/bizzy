@@ -1,5 +1,9 @@
 import authenticatedFetch from "../api/authenticatedFetch.js";
 import { normalizeTaxOverview } from "./normalizeTaxOverview.js";
+import {
+  TAX_DEDUCTIONS_OVERVIEW_PROJECTION_VERSION,
+  validateTaxDeductionsOverviewResponse,
+} from "./taxDeductionsOverviewContract.js";
 
 export const TAX_API_VERSION = "2026-01";
 
@@ -17,12 +21,11 @@ const ALLOWED_INCLUDES = new Set([
 const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_ENTRIES = 50;
 const TAX_DETAIL_PAGE_LIMIT = 200;
-const TAX_DEDUCTIONS_OVERVIEW_PROJECTION_VERSION = "tax-deductions-overview-v1";
 const TAX_READ_TIMEOUT_MS = 20_000;
 const cache = new Map();
 const inflight = new Map();
 
-if (typeof window !== "undefined" && !window.__bizziTaxCacheInvalidationInstalled) {
+if (typeof window !== "undefined" && typeof window.addEventListener === "function" && !window.__bizziTaxCacheInvalidationInstalled) {
   window.__bizziTaxCacheInvalidationInstalled = true;
   for (const eventName of ["bizzy:auth-principal-changed", "bizzy:business-changed", "bizzy:admin-view-cleared"]) {
     window.addEventListener(eventName, () => clearTaxApiCache());
@@ -212,7 +215,19 @@ export async function expireTaxProfileMemory({ businessId, memoryKey, effectiveT
 export async function getTaxDeductionsOverview({ businessId, year, asOfDate, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
   const { path, cacheKey } = taxDeductionsOverviewPath({ businessId, year, asOfDate });
-  return unwrap(await cachedGet(path, { signal, cacheKey, bypassCache: refresh }));
+  const requestId = createClientRequestId();
+  return cachedGet(path, {
+    signal,
+    cacheKey,
+    bypassCache: refresh,
+    requestId,
+    timeoutCode: "tax_deductions_overview_timeout",
+    validate: (payload) => validateTaxDeductionsOverviewResponse(payload, {
+      businessId,
+      taxYear: year,
+      requestId: taxRequestId(payload) || requestId,
+    }),
+  });
 }
 
 export function getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale = true } = {}) {
@@ -794,27 +809,35 @@ function buildTrend(dto) {
   });
 }
 
-async function cachedGet(path, { signal, cacheKey = path, bypassCache = false } = {}) {
+async function cachedGet(path, { signal, cacheKey = path, bypassCache = false, requestId = null, timeoutCode = "detail_timeout", validate = null } = {}) {
   const now = Date.now();
+  if (inflight.has(cacheKey)) return waitForCaller(inflight.get(cacheKey), signal);
   if (!bypassCache) {
     const hit = cache.get(cacheKey);
-    if (hit && now - hit.ts < CACHE_TTL_MS) return hit.value;
-    if (inflight.has(cacheKey)) return waitForCaller(inflight.get(cacheKey), signal);
+    if (hit && now - hit.ts < CACHE_TTL_MS) {
+      try {
+        return validate ? validate(hit.value) : hit.value;
+      } catch (error) {
+        cache.delete(cacheKey);
+        throw error;
+      }
+    }
   }
   // The shared read owns its timeout. A component unmount only stops that
   // caller from observing the result; it cannot cancel the same-business/year
   // request being awaited by a prefetcher or a newly mounted route.
-  const promise = requestWithReadTimeout(path).then((value) => {
+  const promise = requestWithReadTimeout(path, { requestId, timeoutCode }).then((value) => {
+    const verified = validate ? validate(value) : value;
     cache.set(cacheKey, { ts: Date.now(), value });
     trimCache();
-    return value;
+    return verified;
   }).finally(() => inflight.delete(cacheKey));
   inflight.set(cacheKey, promise);
   return waitForCaller(promise, signal);
 }
 
-async function requestWithReadTimeout(path) {
-  if (typeof AbortController === "undefined") return request(path, { method: "GET" });
+async function requestWithReadTimeout(path, { requestId = null, timeoutCode = "detail_timeout" } = {}) {
+  if (typeof AbortController === "undefined") return request(path, { method: "GET", requestId });
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -822,16 +845,21 @@ async function requestWithReadTimeout(path) {
     controller.abort();
   }, TAX_READ_TIMEOUT_MS);
   try {
-    return await request(path, { method: "GET", signal: controller.signal });
+    return await request(path, { method: "GET", signal: controller.signal, requestId });
   } catch (error) {
     if (!timedOut) throw error;
     throw Object.assign(new Error("Tax data request timed out."), {
-      code: "detail_timeout",
+      code: timeoutCode,
+      requestId,
       retryable: true,
     });
   } finally {
     clearTimeout(timer);
   }
+}
+
+function createClientRequestId() {
+  return globalThis.crypto?.randomUUID?.() || `tax-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function waitForCaller(promise, signal) {

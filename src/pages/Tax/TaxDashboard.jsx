@@ -32,6 +32,7 @@ import {
   taxActionOwnerForRow,
 } from "../../services/tax/taxDeductionsLifecycleProjection.js";
 import { buildGroupedDeductionDecisionFingerprint } from "../../services/tax/taxGroupedDeductionDecisionFingerprint.js";
+import { buildTaxEvaluationNotice } from "../../services/tax/taxEvaluationNoticeProjection.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
@@ -520,6 +521,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const [selectedCell, setSelectedCell] = useState(null);
   const [workspaceView, setWorkspaceView] = useState("overview");
   const [classificationTab, setClassificationTab] = useState("all");
+  const [focusedUpdatingIds, setFocusedUpdatingIds] = useState([]);
   const [reviewDecision, setReviewDecision] = useState(null);
   const [decisionNotice, setDecisionNotice] = useState(null);
   const [decisionRuleEditor, setDecisionRuleEditor] = useState(null);
@@ -536,8 +538,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const filteredWorkspaceRows = useMemo(() => filterClassificationWorkspaceRows(
     workspaceRows,
     classificationTab,
-    classificationSummary.jobStatus?.exactTransactionIds || []
-  ), [workspaceRows, classificationTab, classificationSummary.jobStatus?.exactTransactionIds]);
+    focusedUpdatingIds.length ? focusedUpdatingIds : (classificationSummary.jobStatus?.exactTransactionIds || [])
+  ), [workspaceRows, classificationTab, focusedUpdatingIds, classificationSummary.jobStatus?.exactTransactionIds]);
   const updatingItemByTransaction = useMemo(() => new Map(
     (classificationSummary.jobStatus?.items || []).map((item) => [String(item.transactionId), item])
   ), [classificationSummary.jobStatus?.items]);
@@ -721,6 +723,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         <div className="mt-5 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-5 text-sm text-rose-100" role="alert">
           <div className="font-semibold">Your deductions summary could not be loaded. No totals have been changed.</div>
           <p className="mt-1 text-rose-100/75">{deductions.error?.message || "The deduction summary is unavailable."}</p>
+          {deductions.error?.requestId ? <p className="mt-1 font-mono text-xs text-rose-100/60">Request ID: {deductions.error.requestId}</p> : null}
           <button
             type="button"
             onClick={refreshDeductions}
@@ -744,7 +747,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
             Estimates are based on expenses posted to QuickBooks. Items that need more information are excluded until reviewed.
           </p>
         </div>
-        <ClassificationProgressSummary summary={classificationSummary} onViewTransactions={() => {
+        <ClassificationProgressSummary summary={classificationSummary} onViewTransactions={(transactionIds) => {
+          setFocusedUpdatingIds(transactionIds);
           setWorkspaceView("all_transactions");
           setClassificationTab("updating");
           requestAnimationFrame(() => document.querySelector("[data-tax-classification-workspace]")?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -814,7 +818,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
                   tab={tab}
                   count={customerWorkflow.filterCounts?.[tab.value] ?? null}
                   selected={classificationTab === tab.value}
-                  onClick={() => setClassificationTab(tab.value)}
+                  onClick={() => {
+                    setFocusedUpdatingIds([]);
+                    setClassificationTab(tab.value);
+                  }}
                 />
               ))}
             </div>
@@ -2452,37 +2459,18 @@ function ClassificationStat({ label, value, tone = "default" }) {
 }
 
 function ClassificationProgressSummary({ summary, onViewTransactions }) {
-  const job = summary.jobStatus;
-  if (!job || !["queued", "delayed", "processing", "stalled", "failed"].includes(job.status)) return null;
-  const exactIds = job.hasExactMembership === true && Array.isArray(job.exactTransactionIds) ? job.exactTransactionIds : [];
-  const total = exactIds.length;
-  const exact = job.hasExactMembership === true;
-  const active = ["queued", "processing", "delayed", "stalled"].includes(job.status);
-  const affectedText = exact && total > 0 ? `${total} recently posted transaction${total === 1 ? "" : "s"}` : "some recently posted transactions";
-  const heading = exact ? "Some deduction estimates are still updating." : "Some recently posted transactions are still being evaluated.";
-  const detail = job.status === "failed"
-    ? `${affectedText} need Bizzi review. Existing deduction totals remain available.`
-    : exact ? `${affectedText} are waiting for Tax evaluation. Existing estimates remain available.` : "Existing estimates remain available while evaluation continues.";
+  const notice = buildTaxEvaluationNotice(summary.jobStatus);
+  if (!notice) return null;
   return (
-    <div className={`mt-3 rounded-2xl border px-3 py-3 ${
-      job.status === "failed" || job.status === "stalled" || job.status === "delayed"
-        ? "border-amber-300/18 bg-amber-300/[0.07]"
-        : "border-emerald-300/18 bg-black/18"
-    }`} aria-busy={active ? "true" : "false"} aria-live="polite" role="status">
+    <div className="mt-3 rounded-2xl border border-amber-300/18 bg-amber-300/[0.07] px-3 py-3" aria-live="polite" role="status">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          {job.status === "failed" ? (
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" aria-hidden="true" />
-          ) : (
-            <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-emerald-300/20 bg-emerald-300/10" aria-hidden="true">
-              <Loader2 className="h-3.5 w-3.5 text-emerald-200 motion-safe:animate-spin" />
-            </span>
-          )}
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" aria-hidden="true" />
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-white">{heading}</div>
-            <div className="mt-1 text-xs leading-relaxed text-white/52">{detail}</div>
+            <div className="text-sm font-semibold text-white">Some transactions aren’t included in this estimate yet.</div>
+            <div className="mt-1 text-xs leading-relaxed text-white/52">Bizzi is reviewing them. No action is needed from you.</div>
+            <button type="button" onClick={() => onViewTransactions?.(notice.transactionIds)} className="mt-2 text-xs font-semibold text-emerald-100 underline decoration-emerald-200/30 underline-offset-4 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">View {notice.count} transaction{notice.count === 1 ? "" : "s"}</button>
           </div>
-          {exact && total > 0 ? <button type="button" onClick={() => onViewTransactions?.(exactIds)} className="mt-2 text-xs font-semibold text-emerald-100 underline decoration-emerald-200/30 underline-offset-4 focus:outline-none focus:ring-2 focus:ring-emerald-300/35">View {total} transaction{total === 1 ? "" : "s"}</button> : null}
         </div>
       </div>
     </div>

@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { buildMockTaxFixture } from "../../services/demo/mockTaxFixture.js";
-import { resolveScopedDeductionsRequestStatus } from "../../components/Tax/Deductions/deductionsRequestState.js";
+import {
+  resolveScopedDeductionsRequestStatus,
+  selectDeductionsWorkspaceError,
+} from "../../components/Tax/Deductions/deductionsRequestState.js";
 import {
   applyGroupedTaxDeductionDecision,
   bulkUpdateTaxClassifications,
@@ -215,9 +218,9 @@ export function useTaxDeductions({
         // authoritative for the overview, coverage, or deductions matrix. A
         // failure there must not claim that the entire Tax request failed while
         // the primary resources are visibly usable.
-        setError(selectWorkspaceError({ overviewResult, allTransactionsResult, coverageResult }));
+        const primaryError = selectDeductionsWorkspaceError({ overviewResult, allTransactionsResult, coverageResult });
+        setError(overviewRef.current ? null : primaryError);
         if (refresh) {
-          const primaryError = selectWorkspaceError({ overviewResult, allTransactionsResult, coverageResult });
           if (primaryError) setRefreshError(primaryError);
           else {
             setLastRefreshedAt(new Date().toISOString());
@@ -781,14 +784,6 @@ function collectResourceErrors(results = {}) {
       .filter(([, result]) => result?.status === "rejected" && result.reason?.code !== "request_aborted")
       .map(([keyName, result]) => [keyName, result.reason])
   );
-}
-
-export function selectWorkspaceError({ overviewResult, allTransactionsResult, coverageResult } = {}) {
-  const primaryResults = [overviewResult, allTransactionsResult, coverageResult].filter(Boolean);
-  const allPrimaryResourcesFailed = primaryResults.length > 0
-    && primaryResults.every((result) => result.status === "rejected");
-  if (!allPrimaryResourcesFailed) return null;
-  return primaryResults.find((result) => result.reason?.code !== "request_aborted")?.reason || null;
 }
 
 function stableObject(value) {

@@ -32,7 +32,7 @@ export default router;
 async function overviewHandler(req, res) {
   setTaxNoStore(res);
   const startedAt = Date.now();
-  const requestId = String(req.headers?.["x-request-id"] || randomUUID());
+  const requestId = String(req.id || req.headers?.["x-request-id"] || randomUUID());
   let safeBusinessId = "unresolved";
   let taxYear = null;
   let projectionId = null;

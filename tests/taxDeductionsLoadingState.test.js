@@ -4,6 +4,7 @@ import fs from "node:fs";
 import {
   resolveDeductionsRenderState,
   resolveScopedDeductionsRequestStatus,
+  selectDeductionsWorkspaceError,
 } from "../src/components/Tax/Deductions/deductionsRequestState.js";
 
 test("a newly enabled scope is loading synchronously before its effect runs", () => {
@@ -58,6 +59,18 @@ test("a transaction-detail failure cannot replace an available persisted summary
     }),
     { showInitialLoading: false, showInitialError: false, showAuthoritativeData: true, showUpdating: false }
   );
+});
+
+test("an overview failure retains its safe code and request id even when details succeed", () => {
+  const overviewError = Object.assign(new Error("Tax request failed."), {
+    code: "tax_deductions_overview_failed",
+    requestId: "tax-request-123",
+  });
+  assert.equal(selectDeductionsWorkspaceError({
+    overviewResult: { status: "rejected", reason: overviewError },
+    allTransactionsResult: { status: "fulfilled", value: { rows: [] } },
+    coverageResult: { status: "fulfilled", value: {} },
+  }), overviewError);
 });
 
 test("pending canonical context stays in loading without showing a terminal error", () => {

@@ -19,3 +19,14 @@ export function resolveDeductionsRenderState({
     showUpdating: hasData && refreshing,
   };
 }
+
+export function selectDeductionsWorkspaceError({ overviewResult, allTransactionsResult, coverageResult } = {}) {
+  if (overviewResult?.status === "rejected" && overviewResult.reason?.code !== "request_aborted") {
+    return overviewResult.reason;
+  }
+  const primaryResults = [overviewResult, allTransactionsResult, coverageResult].filter(Boolean);
+  const allPrimaryResourcesFailed = primaryResults.length > 0
+    && primaryResults.every((result) => result.status === "rejected");
+  if (!allPrimaryResourcesFailed) return null;
+  return primaryResults.find((result) => result.reason?.code !== "request_aborted")?.reason || null;
+}
