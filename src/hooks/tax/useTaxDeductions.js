@@ -336,11 +336,18 @@ export function useTaxDeductions({
 
   useEffect(() => {
     const controller = new AbortController();
-    load({ signal: controller.signal }).then(() => {
-      if (!controller.signal.aborted) loadSecondaryDetails({ signal: controller.signal });
+    const hasSavedOverview = Boolean(getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale: true })?.value);
+    if (hasSavedOverview) setRefreshing(true);
+    // The verified overview and every optional detail population start together.
+    // No transaction-row request is allowed to gate first overview paint.
+    Promise.allSettled([
+      load({ signal: controller.signal, refresh: hasSavedOverview }),
+      loadSecondaryDetails({ signal: controller.signal, refresh: hasSavedOverview }),
+    ]).finally(() => {
+      if (!controller.signal.aborted && hasSavedOverview) setRefreshing(false);
     });
     return () => controller.abort();
-  }, [load, loadSecondaryDetails]);
+  }, [asOfDate, businessId, load, loadSecondaryDetails, year]);
 
   useEffect(() => {
     if (isDemo || !enabled || !businessId || !shouldPollClassification) return undefined;

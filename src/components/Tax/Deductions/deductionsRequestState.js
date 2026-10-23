@@ -42,7 +42,6 @@ export function resolveDeductionsRenderState({
 } = {}) {
   const overview = sectionStatus.overview || "idle";
   const matrix = sectionStatus.matrix || "idle";
-  const hasCompletedWorkspace = hasSummaryData && matrix === "success";
   const hasPartialWorkspace = hasSummaryData && matrix === "error";
   const state = contextPending
     ? "bootstrapping_context"
@@ -54,9 +53,7 @@ export function resolveDeductionsRenderState({
           ? "refreshing"
           : hasPartialWorkspace
             ? "partial_error"
-            : hasCompletedWorkspace
-              ? "ready"
-              : "initial_loading";
+            : "ready";
   return {
     state,
     showInitialLoading: state === "bootstrapping_context" || state === "initial_loading",

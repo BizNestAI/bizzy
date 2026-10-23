@@ -5,6 +5,10 @@ import {
   TAX_DEDUCTIONS_OVERVIEW_PROJECTION_VERSION,
   validateTaxDeductionsOverviewResponse,
 } from "../src/services/tax/taxDeductionsOverviewContract.js";
+import {
+  clearVerifiedTaxOverviewSessionCache,
+  readVerifiedTaxOverviewSessionCache,
+} from "../src/services/tax/taxDeductionsOverviewSessionCache.js";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 
@@ -84,4 +88,39 @@ test("retry remains a deduplicated read-only operation", () => {
   assert.match(client, /if \(inflight\.has\(cacheKey\)\) return waitForCaller/);
   assert.doesNotMatch(hook, /prepareTaxClassifications\([^)]*refresh/);
   assert.doesNotMatch(hook, /runTaxClassification\([^)]*refresh/);
+});
+
+test("a verified tenant-year overview survives hard refresh in session cache and rejects scope drift", () => {
+  const values = new Map();
+  const previousStorage = globalThis.sessionStorage;
+  globalThis.sessionStorage = {
+    get length() { return values.size; },
+    key: (index) => [...values.keys()][index] ?? null,
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+  const cacheKey = `deductionsOverview:${TAX_DEDUCTIONS_OVERVIEW_PROJECTION_VERSION}:businessId=${businessId}&year=2026`;
+  values.set(`bizzi:tax:verified:${cacheKey}`, JSON.stringify({ ts: Date.now(), value: currentResponse() }));
+  try {
+    const cached = readVerifiedTaxOverviewSessionCache(cacheKey);
+    const overview = validateTaxDeductionsOverviewResponse(cached.value, { businessId, taxYear: 2026 });
+    assert.equal(overview.projection.estimatedDeductibleAmount, 8524);
+    assert.throws(
+      () => validateTaxDeductionsOverviewResponse(cached.value, { businessId, taxYear: 2025 }),
+      (error) => error.code === "tax_deductions_overview_version_mismatch"
+    );
+  } finally {
+    clearVerifiedTaxOverviewSessionCache();
+    if (previousStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = previousStorage;
+  }
+});
+
+test("critical overview is bounded at five seconds while optional details retain their own deadline", () => {
+  const client = fs.readFileSync(new URL("../src/services/tax/taxApiClient.js", import.meta.url), "utf8");
+  const requestState = fs.readFileSync(new URL("../src/components/Tax/Deductions/deductionsRequestState.js", import.meta.url), "utf8");
+  assert.match(client, /TAX_OVERVIEW_READ_TIMEOUT_MS = 5_000/);
+  assert.match(client, /timeoutMs: TAX_OVERVIEW_READ_TIMEOUT_MS/);
+  assert.match(requestState, /TAX_WORKSPACE_DETAIL_TIMEOUT_MS = 20_000/);
 });

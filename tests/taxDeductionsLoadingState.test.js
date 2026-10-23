@@ -124,14 +124,14 @@ test("idle or aborted initialization without a verified overview remains loading
   }
 });
 
-test("a verified overview waits for its same-load matrix rather than exposing placeholder counts", () => {
+test("a verified overview renders while its optional matrix details continue loading", () => {
   assert.deepEqual(resolveDeductionsRenderState({
     sectionStatus: { overview: "success", matrix: "loading", classification: "loading" },
     hasData: true,
     hasSummaryData: true,
   }), {
-    state: "initial_loading",
-    showInitialLoading: true,
+    state: "ready",
+    showInitialLoading: false,
     showInitialError: false,
     showAuthoritativeData: true,
     showUpdating: false,
@@ -183,6 +183,18 @@ test("cached overview shows a scoped loader until the deductions matrix hydrates
   assert.match(source, /role="status" aria-busy="true" aria-live="polite"/);
 });
 
+test("optional transaction populations never gate first valid overview paint", () => {
+  const requestState = fs.readFileSync(new URL("../src/components/Tax/Deductions/deductionsRequestState.js", import.meta.url), "utf8");
+  const hook = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
+  assert.equal(resolveDeductionsRenderState({
+    sectionStatus: { overview: "success", matrix: "loading", classification: "loading" },
+    hasData: true,
+    hasSummaryData: true,
+  }).state, "ready");
+  assert.doesNotMatch(requestState, /hasCompletedWorkspace/);
+  assert.match(hook, /Promise\.allSettled\(\[[\s\S]*load\(\{ signal: controller\.signal/);
+});
+
 test("headline transaction count comes from the validated overview and never from an unhydrated matrix", () => {
   const source = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
   assert.match(source, /authoritativeMatrixIncludedCount = Number\(overviewProjection\?\.matrixIncludedCount\)/);
@@ -194,7 +206,7 @@ test("Questions for You hydrates eagerly and never renders a pending request as 
   const dashboard = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
   const hook = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
   assert.match(hook, /getTaxDeductionsOverview[\s\S]*fetchAllDeductionTransactions/);
-  assert.match(hook, /useEffect\(\(\) => \{[\s\S]*load\(\{ signal: controller\.signal \}\)/);
+  assert.match(hook, /useEffect\(\(\) => \{[\s\S]*load\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\)/);
   assert.match(dashboard, /questionsPanelState === "loading"[\s\S]*QuestionsPanelLoading/);
   assert.match(dashboard, /Loading \$\{count\} questions…/);
   assert.match(dashboard, /Nothing needs your input right now\./);

@@ -65,7 +65,7 @@ test("Tax dashboard keeps cached content visible during background refresh", () 
 test("Deductions enter a loading state before their first live request can paint false zeros", () => {
   assert.match(deductionsHookSource, /const startsWithLiveRequest = enabled && Boolean\(businessId\) && !shouldUseDemoData\(\);/);
   assert.match(deductionsHookSource, /const \[loading, setLoading\] = useState\(startsWithLiveRequest && !initialCachedOverview\);/);
-  assert.match(dashboardSource, /const hasUsableDeductionsData = Boolean\([\s\S]*workspaceRows\.length[\s\S]*deductions\.allTransactions[\s\S]*deductions\.postedTransactions[\s\S]*\);/);
+  assert.match(dashboardSource, /const hasUsableDeductionsData = Boolean\(deductions\.overview\);/);
   assert.match(dashboardSource, /const deductionsRenderState = resolveDeductionsRenderState\(/);
   assert.match(dashboardSource, /hasData: hasUsableDeductionsData/);
   assert.match(dashboardSource, /hasSummaryData: Boolean\(deductions\.overview\)/);
@@ -96,6 +96,7 @@ test("Tax dashboard distinguishes slow, failed, processing, and unavailable stat
 
 test("Tax dashboard does not add sequential duplicate reads for independent deduction resources", () => {
   assert.match(deductionsHookSource, /Promise\.allSettled\(\[/);
+  assert.match(deductionsHookSource, /load\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\),[\s\S]*loadSecondaryDetails\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\)/);
   assert.equal((deductionsHookSource.match(/getTaxDeductionsOverview/g) || []).length, 2);
   assert.equal((deductionsHookSource.match(/getTaxClassificationCoverage/g) || []).length, 2);
 });
