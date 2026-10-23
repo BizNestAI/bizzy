@@ -37,13 +37,24 @@ async function overviewHandler(req, res) {
   let taxYear = null;
   let projectionId = null;
   let resultStatus = "error";
+  const stageTimingsMs = {};
   try {
+    let stageStartedAt = Date.now();
     const businessId = validateBusinessIdInput(req);
     safeBusinessId = createHash("sha256").update(businessId).digest("hex").slice(0, 12);
     taxYear = optionalTaxYear(req.query?.year, new Date().getFullYear());
     const asOfDate = optionalDate(req.query?.asOfDate, "asOfDate");
     await assertTaxBusinessAccess({ req, businessId, supabase });
-    const data = await getDeductionsOverview({ supabase, businessId, taxYear, asOfDate });
+    stageTimingsMs.authentication_and_tenant = Date.now() - stageStartedAt;
+    stageStartedAt = Date.now();
+    const data = await getDeductionsOverview({
+      supabase,
+      businessId,
+      taxYear,
+      asOfDate,
+      onStage: (stage, durationMs) => { stageTimingsMs[stage] = durationMs; },
+    });
+    stageTimingsMs.overview_total = Date.now() - stageStartedAt;
     projectionId = data?.projection?.projectionId || null;
     resultStatus = "success";
     return sendTaxSuccess(res, data);
@@ -58,6 +69,7 @@ async function overviewHandler(req, res) {
       durationMs: Date.now() - startedAt,
       resultStatus,
       projectionId,
+      stageTimingsMs,
     });
   }
 }

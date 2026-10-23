@@ -23,17 +23,28 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const SORTS = new Set(["date_desc", "date_asc", "amount_desc", "amount_asc", "confidence_asc", "confidence_desc", "updated_desc"]);
 
-export async function getDeductionsOverview({ supabase, businessId, taxYear, asOfDate } = {}) {
+export async function getDeductionsOverview({ supabase, businessId, taxYear, asOfDate, onStage } = {}) {
   const context = requireContext({ supabase, businessId, taxYear, asOfDate });
-  const [summary, reconciliation, taxPostingSourceRows] = await Promise.all([
-    computeTaxDeductionsSummary(context),
-    safeReconciliation(context),
-    listTaxPostingSourceRows(context),
+  const summaryPromise = timedStage("deductions_summary", onStage, () => computeTaxDeductionsSummary(context));
+  const postingRowsPromise = timedStage("posted_transaction_population", onStage, () => listTaxPostingSourceRows(context));
+  const summary = await summaryPromise;
+  const [reconciliation, taxPostingSourceRows] = await Promise.all([
+    timedStage("reconciliation", onStage, () => safeReconciliation({ ...context, summary })),
+    postingRowsPromise,
   ]);
-  const setupState = await buildSetupState({ ...context, summary, reconciliation });
-  const populationBridge = buildTaxReconciliationBridge({ sourceRows: taxPostingSourceRows });
-  const projection = buildOverviewProjection({ summary, populationBridge, businessId, taxYear: context.taxYear });
+  const setupState = await timedStage("setup_state", onStage, () => buildSetupState({ ...context, summary, reconciliation }));
+  const populationBridge = await timedStage("identity_bridge", onStage, async () => buildTaxReconciliationBridge({ sourceRows: taxPostingSourceRows }));
+  const projection = await timedStage("overview_projection", onStage, async () => buildOverviewProjection({ summary, populationBridge, businessId, taxYear: context.taxYear }));
   return { ...summary, projection, reconciliation, populationBridge, setupState, warnings: [...summary.warnings, ...setupState.warnings] };
+}
+
+async function timedStage(name, onStage, work) {
+  const startedAt = Date.now();
+  try {
+    return await work();
+  } finally {
+    onStage?.(name, Date.now() - startedAt);
+  }
 }
 
 function buildOverviewProjection({ summary, populationBridge, businessId, taxYear }) {

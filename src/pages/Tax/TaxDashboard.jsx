@@ -709,7 +709,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
             {deductions.refreshing ? "Updating" : "Refresh"}
           </button>
           {deductions.refreshing && hasUsableDeductionsData ? (
-            <span className="sr-only" role="status" aria-live="polite">Updating tax deduction data. Existing values remain visible.</span>
+            <span className="text-xs text-white/52" role="status" aria-live="polite">Refreshing your {year} deductions…</span>
           ) : null}
         </div>
       </div>
@@ -744,10 +744,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         </div>
       ) : null}
       {initialDeductionsLoading ? (
-        <DeductionsLoadingState />
+        <DeductionsLoadingState year={year} />
       ) : initialDeductionsError ? (
         <div className="mt-5 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-5 text-sm text-rose-100" role="alert">
-          <div className="font-semibold">Your deductions summary could not be loaded. No totals have been changed.</div>
+          <div className="font-semibold">Your deductions summary could not be loaded.</div>
           <p className="mt-1 text-rose-100/75">{deductions.error?.message || "The deduction summary is unavailable."}</p>
           {deductions.error?.requestId ? <p className="mt-1 font-mono text-xs text-rose-100/60">Request ID: {deductions.error.requestId}</p> : null}
           <button
@@ -2449,7 +2449,7 @@ function DecisionOption({ checked, onChange, children, description }) {
   );
 }
 
-function DeductionsLoadingState() {
+function DeductionsLoadingState({ year = new Date().getFullYear() }) {
   return (
     <div className="mt-5 flex min-h-[520px] items-center justify-center rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.025] px-6 py-12" role="status" aria-busy="true" aria-live="polite">
       <span className="sr-only">Loading deduction totals and classification activity.</span>
@@ -2460,8 +2460,8 @@ function DeductionsLoadingState() {
           <Loader2 className="relative h-6 w-6 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
           <span className="relative hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" />
         </div>
-        <p className="mt-4 text-sm font-semibold text-white">Preparing your deductions overview</p>
-        <p className="mt-1 text-xs leading-relaxed text-white/52">Loading your latest saved totals and transaction details.</p>
+        <p className="mt-4 text-sm font-semibold text-white">Loading your {year} deductions…</p>
+        <p className="mt-1 text-xs leading-relaxed text-white/52">Loading your latest saved summary and transaction details.</p>
       </div>
     </div>
   );

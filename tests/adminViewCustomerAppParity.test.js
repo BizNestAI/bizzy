@@ -131,7 +131,7 @@ test("Forecasts, Financials, Jobs, Tax, Docs, and Settings expose persisted read
   assert.match(jobs, /<JobCostingPage[\s\S]*businessId=\{businessId\}[\s\S]*usingDemo=\{usingDemo\}[\s\S]*readOnly=\{readOnly\}/);
 
   assert.match(taxUtils, /req\?\.tenantContext\?\.mode === "admin_view"/);
-  assert.match(tax, /const businessId = adminView\.active \? adminView\.businessId/);
+  assert.match(tax, /const businessId = contextPending \? null : \(adminView\.active \? adminView\.businessId : currentBusiness\?\.id\) \|\| null/);
   assert.match(tax, /Tax setup changes are unavailable in read-only Admin View/);
   assert.match(tax, /disabled=\{readOnly \|\| savingChanges\}/);
 

@@ -67,7 +67,7 @@ export async function computeTaxDeductionsSummary({
   }
 
   const comparisons = includeComparisons
-    ? await buildComparisons({ supabase, businessId, taxYear: context.taxYear, asOfDate: context.asOfDate })
+    ? await buildComparisons({ supabase, businessId, taxYear: context.taxYear, asOfDate: context.asOfDate, currentRows: classifications })
     : emptyComparisons();
 
   return {
@@ -394,24 +394,26 @@ function buildEmptyMonthMap(monthList) {
   }]));
 }
 
-async function buildComparisons({ supabase, businessId, taxYear, asOfDate }) {
-  const currentAmount = await sumDeductibleForPeriod({ supabase, businessId, taxYear, dateFrom: `${taxYear}-01-01`, dateTo: asOfDate });
+async function buildComparisons({ supabase, businessId, taxYear, asOfDate, currentRows = null }) {
+  const rows = currentRows || await loadVisibleClassifications({ supabase, businessId, taxYear, asOfDate, includeNeedsReview: false, includeExcluded: false });
   const priorDate = correspondingDate(asOfDate, taxYear - 1);
-  const priorAmount = await sumDeductibleForPeriod({ supabase, businessId, taxYear: taxYear - 1, dateFrom: `${taxYear - 1}-01-01`, dateTo: priorDate });
+  const priorRows = await loadVisibleClassifications({ supabase, businessId, taxYear: taxYear - 1, asOfDate: priorDate, includeNeedsReview: false, includeExcluded: false });
+  const currentAmount = sumDeductibleRows(rows, `${taxYear}-01-01`, asOfDate);
+  const priorAmount = sumDeductibleRows(priorRows, `${taxYear - 1}-01-01`, priorDate);
   const monthStart = `${asOfDate.slice(0, 7)}-01`;
   const priorMonthDate = addMonths(asOfDate, -1);
   const priorMonthStart = `${priorMonthDate.slice(0, 7)}-01`;
   const priorMonthTo = comparableMonthEnd(priorMonthDate, Number(asOfDate.slice(8, 10)));
-  const currentMonthAmount = await sumDeductibleForPeriod({ supabase, businessId, taxYear, dateFrom: monthStart, dateTo: asOfDate });
-  const priorMonthAmount = await sumDeductibleForPeriod({ supabase, businessId, taxYear: Number(priorMonthDate.slice(0, 4)), dateFrom: priorMonthStart, dateTo: priorMonthTo });
+  const priorMonthRows = Number(priorMonthDate.slice(0, 4)) === taxYear ? rows : priorRows;
+  const currentMonthAmount = sumDeductibleRows(rows, monthStart, asOfDate);
+  const priorMonthAmount = sumDeductibleRows(priorMonthRows, priorMonthStart, priorMonthTo);
   return {
     currentYtdVsPriorYearYtd: comparison(currentAmount, priorAmount),
     currentMonthVsPriorMonth: comparison(currentMonthAmount, priorMonthAmount),
   };
 }
 
-async function sumDeductibleForPeriod({ supabase, businessId, taxYear, dateFrom, dateTo }) {
-  const rows = await loadVisibleClassifications({ supabase, businessId, taxYear, asOfDate: dateTo, includeNeedsReview: false, includeExcluded: false });
+function sumDeductibleRows(rows, dateFrom, dateTo) {
   return round2(rows
     .filter((item) => item.transactionDate >= dateFrom && item.transactionDate <= dateTo)
     .reduce((sum, item) => sum + contributionFor(item).estimatedDeductibleAmount, 0));

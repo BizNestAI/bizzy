@@ -36,6 +36,32 @@ test("canonical overview returns setup state and totals without fake data", asyn
   assert.match(overview.projection.projectionId, /^[a-f0-9]{24}$/);
 });
 
+test("production-sized overview stays bounded and reports sanitized stage timings", async () => {
+  const stageTimings = new Map();
+  const startedAt = performance.now();
+  const overview = await getDeductionsOverview({
+    supabase: makeSupabase(largeStore(713)),
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    asOfDate: "2026-12-31",
+    onStage: (stage, durationMs) => stageTimings.set(stage, durationMs),
+  });
+  const elapsedMs = performance.now() - startedAt;
+
+  // This in-memory fixture is intentionally stricter than the 20s browser budget.
+  assert.ok(elapsedMs < 2_000, `overview fixture exceeded 2s local target: ${elapsedMs.toFixed(1)}ms`);
+  assert.equal(overview.projection.evaluatedTransactionCount, 713);
+  assert.deepEqual([...stageTimings.keys()].sort(), [
+    "deductions_summary",
+    "identity_bridge",
+    "overview_projection",
+    "posted_transaction_population",
+    "reconciliation",
+    "setup_state",
+  ]);
+  assert.equal([...stageTimings.values()].every((durationMs) => Number.isFinite(durationMs) && durationMs >= 0), true);
+});
+
 test("transaction drill-down filters by month, category, and status with pagination metadata", async () => {
   const result = await listDeductionTransactions({
     supabase: makeSupabase(baseStore()),
@@ -301,6 +327,11 @@ function largeStore(count) {
       merchant_name: isNeedle ? "Needle Vendor" : `Vendor ${i % 20}`,
       name: isNeedle ? "Needle vendor charge" : `Charge ${i}`,
       raw: { secret: "raw_secret" },
+    }));
+    store.transaction_categorizations.push(cat({
+      transaction_id: id,
+      final_qbo_account_id: mealsReview ? "acct-meals" : "acct-bank-fees",
+      final_qbo_account_name: mealsReview ? "Meals" : "Bank Fees",
     }));
     store.transaction_tax_classifications.push(classification({
       id: `class-${id}`,

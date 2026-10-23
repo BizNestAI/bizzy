@@ -8,6 +8,7 @@ export async function compareTaxClassificationsToBookkeepingRollups({
   businessId,
   taxYear,
   asOfDate,
+  summary: providedSummary = null,
 } = {}) {
   if (!supabase) throw new Error("Supabase client required");
   if (!businessId) throw validationError("missing_business_id", "businessId is required.");
@@ -15,7 +16,7 @@ export async function compareTaxClassificationsToBookkeepingRollups({
   if (!year) throw validationError("invalid_tax_year", "Tax year must be between 2000 and 2100.", { field: "year" });
   const cutoff = asOfDate == null || asOfDate === "" ? `${year}-12-31` : normalizeDateOnly(asOfDate);
   if (!cutoff) throw validationError("invalid_as_of_date", "asOfDate must be YYYY-MM-DD.", { field: "asOfDate" });
-  const summary = await computeTaxDeductionsSummary({ supabase, businessId, taxYear: year, asOfDate: cutoff, includeComparisons: false });
+  const summary = providedSummary || await computeTaxDeductionsSummary({ supabase, businessId, taxYear: year, asOfDate: cutoff, includeComparisons: false });
   const bookkeeping = await loadBookkeepingRollups({ supabase, businessId, taxYear: year, asOfDate: cutoff });
   const bookkeepingExpenseTotal = round2(bookkeeping.rows.reduce((sum, row) => sum + Number(row.amount || 0), 0));
   const classifiedBookExpenseTotal = summary.totals.bookExpenseAmount;

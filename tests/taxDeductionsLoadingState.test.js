@@ -98,7 +98,7 @@ test("Tax Overview skeleton and empty state are gated and accessible", () => {
   const source = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
   assert.match(source, /initialDeductionsLoading \? \(\s*<DeductionsLoadingState/);
   assert.match(source, /role="status" aria-busy="true" aria-live="polite"/);
-  assert.match(source, /Preparing your deductions overview/);
+  assert.match(source, /Loading your \{year\} deductions…/);
   assert.match(source, /motion-safe:animate-spin motion-reduce:hidden/);
   assert.match(source, /motion-safe:animate-pulse/);
   assert.match(source, /motion-reduce:hidden/);

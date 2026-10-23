@@ -64,7 +64,7 @@ test("Tax dashboard keeps cached content visible during background refresh", () 
 
 test("Deductions enter a loading state before their first live request can paint false zeros", () => {
   assert.match(deductionsHookSource, /const startsWithLiveRequest = enabled && Boolean\(businessId\) && !shouldUseDemoData\(\);/);
-  assert.match(deductionsHookSource, /const \[loading, setLoading\] = useState\(startsWithLiveRequest\);/);
+  assert.match(deductionsHookSource, /const \[loading, setLoading\] = useState\(startsWithLiveRequest && !initialCachedOverview\);/);
   assert.match(dashboardSource, /const hasUsableDeductionsData = Boolean\([\s\S]*workspaceRows\.length[\s\S]*deductions\.allTransactions[\s\S]*deductions\.postedTransactions[\s\S]*\);/);
   assert.match(dashboardSource, /const deductionsRenderState = resolveDeductionsRenderState\(/);
   assert.match(dashboardSource, /hasData: hasUsableDeductionsData/);
