@@ -189,6 +189,7 @@ export default function TaxDashboard() {
                 businessId={businessId}
                 year={taxYear}
                 readOnly={readOnly}
+                contextPending={contextPending}
               />
             </section>
 
@@ -515,7 +516,7 @@ function resolveOverviewStatus(model, isDemo) {
   };
 }
 
-function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
+function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPending = false }) {
   const [selectedCell, setSelectedCell] = useState(null);
   const [workspaceView, setWorkspaceView] = useState("overview");
   const [classificationTab, setClassificationTab] = useState("all");
@@ -525,7 +526,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const [decisionRuleEditor, setDecisionRuleEditor] = useState(null);
   const [deductionDefaultSetup, setDeductionDefaultSetup] = useState(null);
   const rulesPanelRef = useRef(null);
-  const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
+  const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 }, enabled: !contextPending && Boolean(businessId) });
   const refreshDeductions = deductions.refresh;
   const populationBridge = deductions.overview?.populationBridge || null;
   const classificationSummary = useMemo(
@@ -596,22 +597,17 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     };
     if (typeof window !== "undefined") window.requestAnimationFrame(focusRulesPanel);
   };
-  const hasUsableDeductionsData = Boolean(
-    deductions.overview ||
-    workspaceRows.length ||
-    deductions.allTransactions ||
-    deductions.transactions ||
-    deductions.classificationRows ||
-    deductions.postedTransactions
-  );
+  const hasUsableDeductionsData = Boolean(deductions.overview);
   const matrixRequestStatus = deductions.sectionStatus?.matrix || (deductions.loading ? "loading" : "idle");
-  const matrixIsLoading = matrixRequestStatus === "loading" && !deductions.allTransactions;
+  const matrixIsLoading = !deductions.allTransactions && matrixRequestStatus !== "error";
+  const matrixIsUnavailable = !deductions.allTransactions && matrixRequestStatus === "error";
   const classificationRequestStatus = deductions.sectionStatus?.classification || (deductions.loading ? "loading" : "idle");
   const overviewRequestStatus = deductions.sectionStatus?.overview || (deductions.loading ? "loading" : "idle");
   const deductionsRenderState = resolveDeductionsRenderState({
     sectionStatus: { overview: overviewRequestStatus, matrix: matrixRequestStatus, classification: classificationRequestStatus },
     hasData: hasUsableDeductionsData,
     hasSummaryData: Boolean(deductions.overview),
+    contextPending: contextPending || !businessId,
     refreshing: deductions.refreshing,
   });
   const initialDeductionsLoading = deductionsRenderState.showInitialLoading;
@@ -623,19 +619,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     },
     [deductions.isDemo, initialDeductionsLoading, workspaceRows, year]
   );
-  const populationCounts = useMemo(
-    () => resolveDeductionsPopulationCounts({
-      transactionCount: matrix.transactionCount,
-      populationBridge,
-      projection: lifecycleProjection,
-    }),
-    [lifecycleProjection, matrix.transactionCount, populationBridge]
-  );
   // Headline values are an atomic overview projection. Detail rows can enrich
   // the matrix, but may never recalculate or replace the persisted summary.
   const estimatedDeductibleExpenses = Number(
     overviewProjection?.estimatedDeductibleAmount ?? deductions.overview?.totals?.estimatedDeductibleAmount
   );
+  const authoritativeMatrixIncludedCount = Number(overviewProjection?.matrixIncludedCount);
   const authoritativeQuestionCount = overviewProjection?.questionsForYouGroupCount;
   const questionsRequestStatus = deductions.sectionStatus?.matrix || "idle";
   const questionsPanelState = resolveQuestionsPanelState({
@@ -744,7 +733,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         <DeductionsLoadingState year={year} />
       ) : initialDeductionsError ? (
         <div className="mt-5 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-5 text-sm text-rose-100" role="alert">
-          <div className="font-semibold">Your deductions summary could not be loaded.</div>
+          <div className="font-semibold">We couldn’t load your deductions.</div>
           <p className="mt-1 text-rose-100/75">{deductions.error?.message || "The deduction summary is unavailable."}</p>
           {deductions.error?.requestId ? <p className="mt-1 font-mono text-xs text-rose-100/60">Request ID: {deductions.error.requestId}</p> : null}
           <button
@@ -764,7 +753,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
             {formatCurrencyLocal(estimatedDeductibleExpenses)}
           </div>
           <p className="mt-1 text-sm text-white/68">
-            Based on {populationCounts.matrixIncludedCount} expense transaction{populationCounts.matrixIncludedCount === 1 ? "" : "s"}{evidenceThroughAt ? ` through ${formatLongDateLocal(evidenceThroughAt)}` : ""}.
+            Based on {authoritativeMatrixIncludedCount} expense transaction{authoritativeMatrixIncludedCount === 1 ? "" : "s"}{evidenceThroughAt ? ` through ${formatLongDateLocal(evidenceThroughAt)}` : ""}.
           </p>
           <p className="mt-3 max-w-2xl text-xs leading-relaxed text-white/50">
             Estimates are based on expenses posted to QuickBooks. Items that need more information are excluded until reviewed.
@@ -786,20 +775,22 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
 
       {workspaceView === "overview" ? (
         <>
-          <DeductionsIncludedDisclosure
+          {matrixIsUnavailable ? null : matrixIsLoading ? <DeductionsDetailsLoadingState /> : <DeductionsIncludedDisclosure
             transactionCount={matrix.transactionCount}
             populationBridge={populationBridge}
             projection={lifecycleProjection}
             awaitingEvaluationCount={classificationSummary.missingEvaluationTotal}
-          />
-          {!matrixIsLoading ? <DeductionMatrixLegend /> : null}
-          <DeductionAccountMatrix
-            matrix={matrix}
-            loading={matrixIsLoading}
-            onSelectCell={setSelectedCell}
-            onOpenDecision={setReviewDecision}
-            decisionGroups={lifecycleProjection.activeDecisionGroups}
-          />
+          />}
+          {!matrixIsLoading && !matrixIsUnavailable ? <DeductionMatrixLegend /> : null}
+          {!matrixIsUnavailable ? (
+            <DeductionAccountMatrix
+              matrix={matrix}
+              loading={matrixIsLoading}
+              onSelectCell={setSelectedCell}
+              onOpenDecision={setReviewDecision}
+              decisionGroups={lifecycleProjection.activeDecisionGroups}
+            />
+          ) : null}
           <div ref={rulesPanelRef} tabIndex={-1} className="scroll-mt-6 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
             <DeductionDecisionRulesPanel
               rules={deductionDecisionRules}
@@ -837,6 +828,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           )}</>
           )}
         </div>
+      ) : matrixIsUnavailable ? (
+        <DeductionsTransactionDetailsError error={questionsError} onRetry={() => deductions.retryTransactionDetails()} />
       ) : (
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
           <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
@@ -1579,6 +1572,29 @@ function DeductionMatrixLegend() {
       <span><span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-sky-200" aria-hidden="true" />Blue: Estimated</span>
       <span><span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-emerald-200" aria-hidden="true" />Green: Reviewed</span>
       <span><span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-amber-200" aria-hidden="true" />Yellow: Needs input</span>
+    </div>
+  );
+}
+
+function DeductionsDetailsLoadingState() {
+  return (
+    <div className="mt-4 flex min-h-16 items-center justify-center rounded-xl border border-white/[0.08] bg-black/[0.12] px-4 py-3" role="status" aria-busy="true" aria-live="polite">
+      <div className="flex items-center gap-3 text-sm text-white/58">
+        <Loader2 className="h-4 w-4 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" aria-hidden="true" />
+        <span className="hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" aria-hidden="true" />
+        <span>Loading transaction totals…</span>
+      </div>
+    </div>
+  );
+}
+
+function DeductionsTransactionDetailsError({ error, onRetry }) {
+  return (
+    <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-4 py-4 text-sm text-amber-50" role="alert">
+      <div className="font-semibold">Transaction details are temporarily unavailable.</div>
+      <p className="mt-1 text-amber-50/72">Your verified deductions summary remains available.</p>
+      {error?.requestId ? <p className="mt-1 font-mono text-xs text-amber-50/55">Request ID: {error.requestId}</p> : null}
+      <button type="button" onClick={onRetry} className="mt-3 rounded-full border border-amber-100/20 px-3 py-1 text-xs font-semibold hover:bg-amber-100/10">Retry transaction details</button>
     </div>
   );
 }

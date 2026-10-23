@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { buildMockTaxFixture } from "../../services/demo/mockTaxFixture.js";
 import {
+  TAX_WORKSPACE_DETAIL_TIMEOUT_MS,
   resolveScopedDeductionsRequestStatus,
   selectDeductionsWorkspaceError,
+  withBoundedWorkspaceRead,
 } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import {
   confirmGroupedTaxDeductionDecision,
@@ -161,11 +163,12 @@ export function useTaxDeductions({
     }
     if (!enabled || !businessId) return null;
     const request = ++seq.current;
+    const hasVerifiedWorkspace = Boolean(overviewRef.current);
     // A verified cached overview is useful immediately. Revalidation and detail
     // hydration must not hide it or replace its headline values with row-derived
     // placeholders.
     if (!overviewRef.current) setLoading(true);
-    if (!refresh) {
+    if (!refresh || !hasVerifiedWorkspace) {
       setRequestStatus({ scopeKey, overview: "loading", matrix: "loading", classification: "loading" });
     }
     setError(null);
@@ -174,7 +177,10 @@ export function useTaxDeductions({
       const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
       const overviewPromise = settle(getTaxDeductionsOverview({ businessId, year, asOfDate, refresh, signal }));
       const detailPromises = [
-        fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, refresh, signal }),
+        withBoundedWorkspaceRead(
+          (workspaceSignal) => fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, refresh, signal: workspaceSignal }),
+          { signal, timeoutMs: TAX_WORKSPACE_DETAIL_TIMEOUT_MS, timeoutCode: "tax_deductions_matrix_timeout" }
+        ),
         getTaxClassificationCoverage({ businessId, year, refresh, signal }),
         getTaxClassificationReviewSummary({ businessId, year, refresh, signal }),
         getTaxDeductionDecisionRules({ businessId, year, refresh, signal }),
@@ -182,7 +188,10 @@ export function useTaxDeductions({
       const overviewResult = await overviewPromise;
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") {
-          setOverview(overviewResult.value);
+          // Initial loads may expose a verified summary while optional details
+          // settle. A refresh keeps the prior completed workspace intact until
+          // its replacement matrix succeeds, preventing mixed generations.
+          if (!refresh || !hasVerifiedWorkspace) setOverview(overviewResult.value);
           setRequestStatus((current) => ({ ...current, scopeKey, overview: "success" }));
           if (refresh) setLastRefreshedAt(overviewResult.value?.projection?.refreshedAt || overviewResult.value?.meta?.generatedAt || new Date().toISOString());
         } else if (overviewResult.reason?.code !== "request_aborted") {
@@ -193,7 +202,9 @@ export function useTaxDeductions({
       }
       const [allTransactionsResult, coverageResult, reviewSummaryResult, decisionRulesResult] = await Promise.all(detailPromises);
       if (request === seq.current) {
-        if (overviewResult.status === "fulfilled") setOverview(overviewResult.value);
+        if (overviewResult.status === "fulfilled" && (!refresh || allTransactionsResult.status === "fulfilled")) {
+          setOverview(overviewResult.value);
+        }
         if (allTransactionsResult.status === "fulfilled") setAllTransactions(withTaxSnapshot(allTransactionsResult.value, request));
         if (coverageResult.status === "fulfilled") {
           setClassificationCoverage(coverageResult.value);
@@ -295,14 +306,17 @@ export function useTaxDeductions({
     setRequestStatus((current) => ({ ...current, scopeKey, matrix: "loading" }));
     setResourceErrors((current) => ({ ...(current || {}), allTransactions: null }));
     const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
-    const operation = fetchAllDeductionTransactions({
-      businessId,
-      year,
-      asOfDate,
-      filters: parsedFilters,
-      refresh: true,
-      signal,
-    }).then((value) => {
+    const operation = withBoundedWorkspaceRead(
+      (workspaceSignal) => fetchAllDeductionTransactions({
+        businessId,
+        year,
+        asOfDate,
+        filters: parsedFilters,
+        refresh: true,
+        signal: workspaceSignal,
+      }),
+      { signal, timeoutMs: TAX_WORKSPACE_DETAIL_TIMEOUT_MS, timeoutCode: "tax_deductions_questions_timeout" }
+    ).then((value) => {
       if (request !== seq.current) return null;
       setAllTransactions(withTaxSnapshot(value, request));
       setRequestStatus((current) => ({ ...current, scopeKey, matrix: "success" }));

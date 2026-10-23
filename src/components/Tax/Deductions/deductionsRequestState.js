@@ -4,6 +4,35 @@ export function resolveScopedDeductionsRequestStatus({ requestStatus, scopeKey, 
   return { scopeKey, overview: status, matrix: status, classification: status };
 }
 
+export const TAX_WORKSPACE_DETAIL_TIMEOUT_MS = 20_000;
+
+export async function withBoundedWorkspaceRead(operation, {
+  signal,
+  timeoutMs = TAX_WORKSPACE_DETAIL_TIMEOUT_MS,
+  timeoutCode = "tax_deductions_detail_timeout",
+} = {}) {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abortFromParent();
+  else signal?.addEventListener?.("abort", abortFromParent, { once: true });
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(Object.assign(new Error("Tax transaction details timed out."), {
+        code: timeoutCode,
+        retryable: true,
+      }));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([Promise.resolve().then(() => operation(controller.signal)), timeout]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener?.("abort", abortFromParent);
+  }
+}
+
 export function resolveDeductionsRenderState({
   sectionStatus = {},
   hasData = false,
@@ -12,11 +41,28 @@ export function resolveDeductionsRenderState({
   refreshing = false,
 } = {}) {
   const overview = sectionStatus.overview || "idle";
+  const matrix = sectionStatus.matrix || "idle";
+  const hasCompletedWorkspace = hasSummaryData && matrix === "success";
+  const hasPartialWorkspace = hasSummaryData && matrix === "error";
+  const state = contextPending
+    ? "bootstrapping_context"
+    : !hasSummaryData && overview === "error"
+      ? "fatal_error"
+      : !hasSummaryData
+        ? "initial_loading"
+        : refreshing
+          ? "refreshing"
+          : hasPartialWorkspace
+            ? "partial_error"
+            : hasCompletedWorkspace
+              ? "ready"
+              : "initial_loading";
   return {
-    showInitialLoading: contextPending || (!hasSummaryData && overview === "loading"),
-    showInitialError: !contextPending && !hasSummaryData && overview === "error",
-    showAuthoritativeData: hasData,
-    showUpdating: hasData && refreshing,
+    state,
+    showInitialLoading: state === "bootstrapping_context" || state === "initial_loading",
+    showInitialError: state === "fatal_error",
+    showAuthoritativeData: hasData && hasSummaryData,
+    showUpdating: hasSummaryData && state === "refreshing",
   };
 }
 
