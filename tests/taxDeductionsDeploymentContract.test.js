@@ -117,10 +117,11 @@ test("a verified tenant-year overview survives hard refresh in session cache and
   }
 });
 
-test("critical overview is bounded at five seconds while optional details retain their own deadline", () => {
+test("critical overview keeps a compatibility bound without presenting a shorter timeout as a fast path", () => {
   const client = fs.readFileSync(new URL("../src/services/tax/taxApiClient.js", import.meta.url), "utf8");
   const requestState = fs.readFileSync(new URL("../src/components/Tax/Deductions/deductionsRequestState.js", import.meta.url), "utf8");
-  assert.match(client, /TAX_OVERVIEW_READ_TIMEOUT_MS = 5_000/);
+  assert.match(client, /TAX_OVERVIEW_READ_TIMEOUT_MS = 30_000/);
   assert.match(client, /timeoutMs: TAX_OVERVIEW_READ_TIMEOUT_MS/);
+  assert.match(client, /not the product's five-second paint target/);
   assert.match(requestState, /TAX_WORKSPACE_DETAIL_TIMEOUT_MS = 20_000/);
 });

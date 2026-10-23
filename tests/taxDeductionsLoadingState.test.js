@@ -151,6 +151,19 @@ test("Tax Overview skeleton and empty state are gated and accessible", () => {
   assert.match(source, /Existing deduction data remains on screen and may be stale/);
 });
 
+test("canonical context bootstrap is bounded and retryable", () => {
+  const dashboard = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
+  const businessContext = fs.readFileSync(new URL("../src/context/BusinessContext.jsx", import.meta.url), "utf8");
+  assert.match(dashboard, /TAX_BOOTSTRAP_TIMEOUT_MS = 20_000/);
+  assert.match(dashboard, /tax_context_bootstrap_timeout/);
+  assert.match(dashboard, /bootstrapFailure \? \(/);
+  assert.match(dashboard, /onRetry=\{retryTaxBootstrap\}/);
+  assert.match(dashboard, /setBootstrapAttempt\(\(attempt\) => attempt \+ 1\)/);
+  assert.match(dashboard, /\[contextPending, bootstrapAttempt\]/);
+  assert.match(businessContext, /refreshBusinessContext/);
+  assert.match(businessContext, /refreshGeneration/);
+});
+
 test("headline amount and question count come from one overview projection", () => {
   const source = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
   assert.match(source, /overviewProjection\?\.estimatedDeductibleAmount/);

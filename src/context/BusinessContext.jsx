@@ -1,5 +1,5 @@
 // File: /src/context/BusinessContext.jsx
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabaseClient.js";
 import { ensureDemoBusinessNameStored } from "../services/demo/demoClient.js";
 import { useAuth } from "./AuthContext.jsx";
@@ -13,6 +13,11 @@ export const BusinessProvider = ({ children }) => {
   const [businessId, setBusinessIdState] = useState(null);
   const [currentBusiness, setCurrentBusiness] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const refreshBusinessContext = useCallback(() => {
+    setLoading(true);
+    setRefreshGeneration((generation) => generation + 1);
+  }, []);
 
   // Load initial businessId from localStorage (SSR-safe)
   useEffect(() => {
@@ -164,7 +169,7 @@ export const BusinessProvider = ({ children }) => {
     }
     loadProfile();
     return () => { alive = false; };
-  }, [adminView.loading, adminView.active, adminView.businessId, adminView.businessName, authLoading, businessId, user?.id]);
+  }, [adminView.loading, adminView.active, adminView.businessId, adminView.businessName, authLoading, businessId, user?.id, refreshGeneration]);
 
   const value = useMemo(
     () => ({
@@ -175,10 +180,11 @@ export const BusinessProvider = ({ children }) => {
       currentBusiness,
       setCurrentBusiness,
       loading,
+      refreshBusinessContext,
       adminView: adminView.active,
       readOnly: adminView.active ? adminView.readOnly : false,
     }),
-    [businessId, currentBusiness, loading, adminView.active, adminView.readOnly]
+    [businessId, currentBusiness, loading, refreshBusinessContext, adminView.active, adminView.readOnly]
   );
 
   return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;
@@ -196,6 +202,7 @@ export function useBusinessContext() {
       setBusinessId: () => {},
       currentBusiness: null,
       setCurrentBusiness: () => {},
+      refreshBusinessContext: () => {},
       loading: false,
     };
   }

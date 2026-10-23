@@ -28,7 +28,7 @@ test("Tax dashboard shows the active loading shell before unresolved data can re
   assert.ok(initialBranchIndex > -1, "TaxDashboard should branch on initialLoading");
   assert.ok(failedBranchIndex > initialBranchIndex, "request failure should be handled after pending loading");
   assert.ok(trendIndex > failedBranchIndex, "dashboard content should render after loading and initial failure branches");
-  assert.match(dashboardSource, /const initialLoading = contextPending \|\| \(taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData\);/);
+  assert.match(dashboardSource, /const initialLoading = !bootstrapFailure && \(contextPending \|\| \(taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData\)\);/);
   assert.match(dashboardSource, /const initialRequestFailed = taxLiabilityEstimateEnabled && Boolean\(tax\.error && !hasPreviousData && !tax\.loading\);/);
 });
 
@@ -56,7 +56,7 @@ test("Tax loading shell preserves dashboard geometry for low-jump replacement", 
 
 test("Tax dashboard keeps cached content visible during background refresh", () => {
   assert.match(dashboardSource, /const hasPreviousData = !!tax\.data;/);
-  assert.match(dashboardSource, /const initialLoading = contextPending \|\| \(taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData\);/);
+  assert.match(dashboardSource, /const initialLoading = !bootstrapFailure && \(contextPending \|\| \(taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData\)\);/);
   assert.match(dashboardSource, /loading=\{tax\.refreshing\}/);
   assert.match(dashboardSource, /tax\.error && hasPreviousData/);
   assert.match(dashboardSource, /Keeping the last Tax view on screen\./);

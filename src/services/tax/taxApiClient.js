@@ -28,7 +28,11 @@ const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_ENTRIES = 50;
 const TAX_DETAIL_PAGE_LIMIT = 200;
 const TAX_READ_TIMEOUT_MS = 20_000;
-const TAX_OVERVIEW_READ_TIMEOUT_MS = 5_000;
+// Compatibility bound for the current live-computed overview route. This is
+// deliberately not the product's five-second paint target: a verified session
+// snapshot supplies the fast paint, while this bound prevents the existing
+// authoritative request from being killed before its historical ~20s runtime.
+const TAX_OVERVIEW_READ_TIMEOUT_MS = 30_000;
 const cache = new Map();
 const inflight = new Map();
 

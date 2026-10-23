@@ -36,6 +36,7 @@ import { buildTaxEvaluationNotice } from "../../services/tax/taxEvaluationNotice
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
 const CURRENT_YEAR = new Date().getFullYear();
+const TAX_BOOTSTRAP_TIMEOUT_MS = 20_000;
 
 export default function TaxDashboard() {
   const businessContext = useBusinessContext?.() || {};
@@ -52,13 +53,40 @@ export default function TaxDashboard() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [slowInitialLoad, setSlowInitialLoad] = useState(false);
+  const [bootstrapFailure, setBootstrapFailure] = useState(null);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
 
   const tax = useTaxOverview({ businessId, year: taxYear, enabled: taxLiabilityEstimateEnabled });
   const payments = useTaxPayments({ businessId, year: taxYear, enabled: taxLiabilityEstimateEnabled && Boolean(businessId) });
   const model = useMemo(() => buildTaxDashboardViewModel(tax.data), [tax.data]);
   const hasPreviousData = !!tax.data;
-  const initialLoading = contextPending || (taxLiabilityEstimateEnabled && tax.loading && !hasPreviousData);
+  const initialLoading = !bootstrapFailure && (contextPending || (taxLiabilityEstimateEnabled && tax.loading && !hasPreviousData));
   const initialRequestFailed = taxLiabilityEstimateEnabled && Boolean(tax.error && !hasPreviousData && !tax.loading);
+
+  useEffect(() => {
+    if (!contextPending) {
+      setBootstrapFailure(null);
+      return undefined;
+    }
+    const requestId = globalThis.crypto?.randomUUID?.() || `tax-bootstrap-${Date.now()}`;
+    const timer = globalThis.setTimeout(() => {
+      setBootstrapFailure(Object.assign(new Error("Tax workspace setup timed out."), {
+        code: "tax_context_bootstrap_timeout",
+        requestId,
+        retryable: true,
+      }));
+    }, TAX_BOOTSTRAP_TIMEOUT_MS);
+    return () => globalThis.clearTimeout(timer);
+  }, [contextPending, bootstrapAttempt]);
+
+  const retryTaxBootstrap = () => {
+    setBootstrapFailure(null);
+    setBootstrapAttempt((attempt) => attempt + 1);
+    void Promise.allSettled([
+      Promise.resolve(businessContext.refreshBusinessContext?.()),
+      Promise.resolve(adminView.refreshAdminViewContext?.()),
+    ]);
+  };
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -164,7 +192,9 @@ export default function TaxDashboard() {
       </div>
 
       <main className="bizzy-page-width bizzy-page-width--workspace relative z-0 flex min-w-0 flex-col gap-7 overflow-x-hidden pt-1 pb-[calc(var(--chat-clearance,156px)+24px)]">
-        {initialLoading ? (
+        {bootstrapFailure ? (
+          <ErrorPanel error={bootstrapFailure} onRetry={retryTaxBootstrap} hasPreviousData={false} />
+        ) : initialLoading ? (
           <DashboardSkeleton slow={slowInitialLoad} />
         ) : initialRequestFailed ? (
           <ErrorPanel error={tax.error} onRetry={tax.refetch} hasPreviousData={false} />
@@ -5350,9 +5380,10 @@ function ErrorPanel({ error, onRetry, hasPreviousData }) {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="inline-flex items-start gap-2">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            {hasPreviousData ? "Refresh failed. Keeping the last Tax view on screen." : "We couldn’t load your tax workspace."} {error?.message || ""}
-          </span>
+              <span>
+                {hasPreviousData ? "Refresh failed. Keeping the last Tax view on screen." : "We couldn’t load your tax workspace."} {error?.message || ""}
+                {error?.requestId ? <span className="mt-1 block font-mono text-xs text-rose-100/60">Request ID: {error.requestId}</span> : null}
+              </span>
         </div>
         <button type="button" onClick={onRetry} className="rounded-full border border-white/12 bg-black/18 px-3 py-1.5 font-semibold text-white/82 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-rose-200/40">
           Try again
