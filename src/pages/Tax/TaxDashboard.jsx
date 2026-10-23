@@ -564,21 +564,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         .flatMap((section) => section?.groups || [])
         .find((group) => (group.id || group.key) === currentId);
       if (refreshed) return current.group === refreshed ? current : { ...current, group: refreshed };
-      if (deductions.refreshing) return current;
-      if (Number(current.group.actionableTransactionCount ?? current.group.pendingCount ?? 0) === 0) return current;
-      return {
-        ...current,
-        group: {
-          ...current.group,
-          rows: [],
-          pendingRows: [],
-          actionableTransactionCount: 0,
-          pendingCount: 0,
-          actionableGrossAmountCents: 0,
-          actionableEstimatedDeductibleAmountCents: 0,
-          categoryTransactionCount: Number(current.group.alreadyResolvedCount || current.group.reviewedCount || 0),
-        },
-      };
+      // Absence from a still-changing local projection is not proof that the
+      // server-owned question was resolved. Preserve it until preview returns
+      // an explicit authoritative outcome.
+      return current;
     });
   }, [attentionGroups, deductions.refreshing]);
   const deductionDecisionRules = useMemo(
@@ -2150,6 +2139,9 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   const [scopeRefreshing, setScopeRefreshing] = useState(false);
   const [changedSummary, setChangedSummary] = useState(null);
   const [serverPreview, setServerPreview] = useState(null);
+  const [previewState, setPreviewState] = useState("preview_loading");
+  const [previewRequestId, setPreviewRequestId] = useState(null);
+  const [previewAttempt, setPreviewAttempt] = useState(0);
   const modalRef = useRef(null);
   const closeButtonRef = useRef(null);
   const previousFocusRef = useRef(null);
@@ -2168,26 +2160,45 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
     setScopeRefreshing(false);
     setChangedSummary(null);
     setServerPreview(null);
+    setPreviewState("preview_loading");
+    setPreviewRequestId(null);
     idempotencyKeyRef.current = null;
   }, [decisionGroupKey, decision?.scope, decision?.selectedMonth]);
 
   const onPreviewRef = useRef(onPreview);
+  const onScopeChangedRef = useRef(onScopeChanged);
   useEffect(() => {
     onPreviewRef.current = onPreview;
-  }, [onPreview]);
+    onScopeChangedRef.current = onScopeChanged;
+  }, [onPreview, onScopeChanged]);
 
   useEffect(() => {
     if (!decisionGroupKey || readOnly || !onPreviewRef.current) return undefined;
     const controller = new AbortController();
     setScopeRefreshing(true);
+    setPreviewState("preview_loading");
+    setPreviewRequestId(null);
+    setError("");
     onPreviewRef.current({ groupId: decisionGroupKey, signal: controller.signal })
-      .then((preview) => setServerPreview(preview))
+      .then((preview) => {
+        setServerPreview(preview);
+        setPreviewState(preview.actionableCount === 0 ? "preview_resolved" : "preview_ready");
+        if (preview.actionableCount === 0) void onScopeChangedRef.current?.();
+      })
       .catch((previewError) => {
-        if (previewError?.name !== "AbortError") setError(previewError?.message || "The current transaction preview could not be loaded.");
+        if (previewError?.name === "AbortError" || previewError?.code === "request_aborted") return;
+        setServerPreview(null);
+        setPreviewRequestId(previewError?.requestId || null);
+        if (previewError?.code === "grouped_decision_group_not_found") {
+          setPreviewState("preview_stale");
+          void onScopeChangedRef.current?.();
+        } else {
+          setPreviewState("preview_error");
+        }
       })
       .finally(() => setScopeRefreshing(false));
     return () => controller.abort();
-  }, [decisionGroupKey, readOnly]);
+  }, [decisionGroupKey, previewAttempt, readOnly]);
 
   useEffect(() => {
     if (!decisionGroupKey || typeof document === "undefined") return undefined;
@@ -2250,7 +2261,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   const scopeIdentityConserved = population.isConserved
     && expectedPopulationTransactionIds.length === population.actionableTransactionCount
     && new Set(expectedPopulationTransactionIds).size === expectedPopulationTransactionIds.length;
-  const canSubmit = !readOnly && Boolean(serverPreview?.previewId) && action.kind !== "vehicle_method" && group.canApply && businessUseAnswer !== "unsure" && selectedRows.length > 0 && hasCanonicalScopeAmounts && scopeIdentityConserved && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
+  const canSubmit = previewState === "preview_ready" && !readOnly && Boolean(serverPreview?.previewId) && serverPreview.actionableCount > 0 && action.kind !== "vehicle_method" && group.canApply && businessUseAnswer !== "unsure" && selectedRows.length > 0 && hasCanonicalScopeAmounts && scopeIdentityConserved && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -2338,13 +2349,19 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {previewState !== "preview_ready" ? (
+            <GroupedDecisionPreviewState
+              state={previewState}
+              requestId={previewRequestId}
+              onRetry={() => setPreviewAttempt((current) => current + 1)}
+            />
+          ) : <>
           {error ? <div className="mb-3 rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-sm text-rose-100" role="status" aria-live="polite">{error}</div> : null}
           <div className="grid gap-2 sm:grid-cols-3" aria-label="Decision summary">
             <DecisionSummaryCard changed={changedSummary && changedSummary.actionable !== population.actionableTransactionCount} label="Expenses being updated" value={`${population.actionableTransactionCount} transaction${population.actionableTransactionCount === 1 ? "" : "s"}`} />
             <DecisionSummaryCard changed={changedSummary && changedSummary.gross !== group.actionableGrossAmountCents} label="Gross expense total" value={formatCurrencyLocal(actionGrossTotal)} />
             <DecisionSummaryCard changed={changedSummary && changedSummary.estimated !== group.actionableEstimatedDeductibleAmountCents} label="Estimated deduction if confirmed" value={currentEstimate} />
           </div>
-          {population.actionableTransactionCount === 0 ? <div className="mt-3 rounded-xl border border-emerald-300/18 bg-emerald-300/[0.06] px-3 py-2 text-sm text-emerald-50" role="status">This question no longer needs an answer.</div> : null}
           {population.alreadyResolvedCount > 0 ? <p className="mt-3 text-xs leading-relaxed text-white/46">{population.alreadyResolvedCount} transaction{population.alreadyResolvedCount === 1 ? " already has" : "s already have"} a reviewed treatment and will not be changed here.</p> : null}
           {action.kind === "confirm_business_purpose" ? (
             <div className="mt-3 space-y-2 rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
@@ -2401,10 +2418,13 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
             </section>
           ) : null}
           <p className="mt-3 text-xs leading-relaxed text-white/42">Personal exceptions stay separate from the saved category decision.</p>
+          </>}
         </div>
         <footer className="flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-xs text-white/46">
-            {businessUseAnswer === "some_personal"
+            {previewState !== "preview_ready"
+              ? "No changes will be made without a current preview"
+              : businessUseAnswer === "some_personal"
               ? `${selectedRows.length} business expense${selectedRows.length === 1 ? "" : "s"} will receive this treatment`
               : businessUseAnswer === "unsure"
                 ? "All expenses will remain in Needs input"
@@ -2422,20 +2442,45 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
                 {saving ? "Checking…" : "Check save status"}
               </button>
             ) : null}
-            <button
+            {previewState === "preview_ready" ? <button
               type="button"
               onClick={businessUseAnswer === "unsure" ? onClose : submit}
               disabled={scopeRefreshing || population.actionableTransactionCount === 0 || action.kind === "vehicle_method" || (businessUseAnswer === "unsure" ? outcomeUnknown : !canSubmit || saving || outcomeUnknown)}
               className="rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-[#120f04] hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {scopeRefreshing ? "Refreshing…" : saving ? `Saving your ${group.qboAccountName || "tax"} decision…` : actionButtonLabel}
-            </button>
+            </button> : null}
           </div>
         </footer>
       </section>
     </div>
   );
   return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
+}
+
+function GroupedDecisionPreviewState({ state, requestId, onRetry }) {
+  if (state === "preview_loading") {
+    return (
+      <div className="flex min-h-52 items-center justify-center text-center" role="status" aria-live="polite" aria-busy="true">
+        <div>
+          <Loader2 className="mx-auto h-6 w-6 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
+          <span className="mx-auto hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" />
+          <p className="mt-3 text-sm font-semibold text-white/82">Loading this question…</p>
+        </div>
+      </div>
+    );
+  }
+  if (state === "preview_resolved") {
+    return <div className="rounded-xl border border-emerald-300/18 bg-emerald-300/[0.06] px-3 py-3 text-sm text-emerald-50" role="status">This question no longer needs an answer.</div>;
+  }
+  const stale = state === "preview_stale";
+  return (
+    <div className="rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-3 text-sm text-rose-100" role="alert">
+      <p className="font-semibold">{stale ? "This question changed while you were viewing it." : "We couldn’t load this question. No changes were made."}</p>
+      {requestId ? <p className="mt-1 font-mono text-xs text-rose-100/60">Request ID: {requestId}</p> : null}
+      <button type="button" onClick={onRetry} className="mt-3 rounded-full border border-rose-200/25 px-3 py-1.5 text-xs font-semibold hover:bg-rose-100/10">Retry</button>
+    </div>
+  );
 }
 
 function DecisionSummaryCard({ label, value, changed = false }) {
@@ -5369,6 +5414,7 @@ export const __TaxDashboardTestInternals = {
   DeductionsIncludedDisclosure,
   DeductionMonthDetailModal,
   ReviewDecisionModal,
+  GroupedDecisionPreviewState,
   TaxDashboardDeductions,
   WorkspaceViewTabs,
   buildDeductionDefaultSetupOptions,

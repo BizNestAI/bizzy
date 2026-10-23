@@ -95,6 +95,53 @@ test("authenticatedFetch retains a successful server request id for safe client 
   assert.deepEqual(result.data, { rows: [] });
 });
 
+test("grouped Tax preview uses the canonical POST route and rejects route 404 as technical failure", async () => {
+  const calls = [];
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: { access_token: "session-token" } } }) } },
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      return jsonResponse({ ok: false, error: `Not found: ${init.method} /api/tax/deduction-decisions/preview` }, {
+        status: 404,
+        headers: { "x-request-id": "preview-route-404" },
+      });
+    },
+  });
+  await assert.rejects(
+    () => taxClient.previewGroupedTaxDeductionDecision({ businessId: "business-1", year: 2026, groupId: "decision:meals" }),
+    (error) => error.status === 404 && error.requestId === "preview-route-404" && error.code !== "grouped_decision_group_not_found",
+  );
+  assert.equal(calls[0].url, "https://api.example.test/api/tax/deduction-decisions/preview?businessId=business-1&year=2026");
+  assert.equal(calls[0].init.method, "POST");
+});
+
+test("grouped Tax preview accepts only the matching versioned server scope", async () => {
+  let data = {
+    previewVersion: "tax-grouped-decision-preview-v1",
+    previewId: "preview-1",
+    canonicalBusinessId: "business-1",
+    taxYear: 2026,
+    groupId: "decision:meals",
+    actionableCount: 1,
+    transactions: [{ transactionId: "txn-1" }],
+    proposedTreatment: { type: "business_meals_business_purpose_confirmed" },
+  };
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: null } }) } },
+    fetchImpl: async () => jsonResponse({ ok: true, data }, { headers: { "x-request-id": "preview-contract" } }),
+  });
+  const preview = await taxClient.previewGroupedTaxDeductionDecision({ businessId: "business-1", year: 2026, groupId: "decision:meals" });
+  assert.equal(preview.previewId, "preview-1");
+
+  data = { ...data, previewVersion: undefined };
+  await assert.rejects(
+    () => taxClient.previewGroupedTaxDeductionDecision({ businessId: "business-1", year: 2026, groupId: "decision:meals" }),
+    (error) => error.code === "tax_grouped_preview_contract_mismatch" && error.requestId === "preview-contract",
+  );
+});
+
 test("deductions overview client accepts the current deployment contract and rejects the old shape", async () => {
   const businessId = "11111111-1111-4111-8111-111111111111";
   const current = {

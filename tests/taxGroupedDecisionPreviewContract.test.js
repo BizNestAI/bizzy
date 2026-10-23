@@ -48,6 +48,45 @@ test("browser uses opaque server preview and no longer constructs an authoritati
   assert.doesNotMatch(dashboard, /scopeFingerprint:/);
 });
 
+test("frontend preview URL exactly matches the mounted canonical backend route", () => {
+  const client = readFileSync("src/services/tax/taxApiClient.js", "utf8");
+  const route = readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
+  const taxRouter = readFileSync("src/api/tax/index.js", "utf8");
+  const server = readFileSync("src/server.js", "utf8");
+  assert.match(client, /request\(`\/api\/tax\/deduction-decisions\/preview\?/);
+  assert.match(client, /method: "POST"/);
+  assert.match(route, /router\.post\("\/deduction-decisions\/preview"/);
+  assert.match(taxRouter, /router\.use\("\/", taxClassificationReviewRouter\)/);
+  assert.match(server, /app\.use\("\/api\/tax"[^\n]*taxRouter\)/);
+  assert.ok(server.indexOf('app.use("/api/tax"') < server.indexOf("Not found:"), "Tax router must precede the application 404 handler");
+});
+
+test("preview response carries a bounded deployment contract and canonical scope identity", () => {
+  const preview = previewTestables.customerPreview({
+    id: "preview-1",
+    business_id: "business-1",
+    tax_year: 2026,
+    group_id: "decision:meals",
+    decision_type: "business_use_confirmation",
+    expires_at: "2026-10-23T12:05:00.000Z",
+  }, [{ ...BASE }]);
+  assert.equal(preview.previewVersion, "tax-grouped-decision-preview-v1");
+  assert.equal(preview.canonicalBusinessId, "business-1");
+  assert.equal(preview.taxYear, 2026);
+  assert.equal(preview.groupId, "decision:meals");
+  assert.equal(preview.actionableCount, 1);
+});
+
+test("technical preview failure cannot be converted to resolved zero-population UI", () => {
+  const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /setPreviewState\("preview_error"\)/);
+  assert.match(dashboard, /previewError\?\.code === "grouped_decision_group_not_found"/);
+  assert.match(dashboard, /preview\.actionableCount === 0 \? "preview_resolved" : "preview_ready"/);
+  assert.match(dashboard, /previewState === "preview_ready"[^\n]*serverPreview\.actionableCount > 0/);
+  assert.match(dashboard, /We couldn’t load this question\. No changes were made\./);
+  assert.doesNotMatch(dashboard, /setServerPreview\(\{[^}]*actionableCount:\s*0/);
+});
+
 test("preview persistence is service-role-only, short-lived, and atomic confirmation locks semantics", () => {
   const sql = readFileSync("supabase/migrations/20261103130000_grouped_tax_decision_previews.sql", "utf8");
   assert.match(sql, /enable row level security/i);

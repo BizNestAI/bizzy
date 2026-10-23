@@ -459,11 +459,37 @@ export async function saveTaxDeductionDecisionRule({ businessId, year, transacti
 export async function previewGroupedTaxDeductionDecision({ businessId, year, groupId, signal } = {}) {
   requireBusinessId(businessId);
   requireValue(groupId, "groupId");
-  return unwrap(await request(`/api/tax/deduction-decisions/preview?${query({ businessId, year })}`, {
+  const payload = await request(`/api/tax/deduction-decisions/preview?${query({ businessId, year })}`, {
     method: "POST",
     body: { businessId, year, groupId },
     signal,
-  }));
+  });
+  return validateGroupedDecisionPreview(unwrap(payload), {
+    businessId,
+    year,
+    groupId,
+    requestId: taxRequestId(payload),
+  });
+}
+
+function validateGroupedDecisionPreview(preview, { businessId, year, groupId, requestId = null } = {}) {
+  const valid = preview
+    && preview.previewVersion === "tax-grouped-decision-preview-v1"
+    && typeof preview.previewId === "string"
+    && preview.previewId.length > 0
+    && String(preview.canonicalBusinessId || "") === String(businessId || "")
+    && Number(preview.taxYear) === Number(year)
+    && String(preview.groupId || "") === String(groupId || "")
+    && Number.isInteger(preview.actionableCount)
+    && preview.actionableCount >= 0
+    && Array.isArray(preview.transactions)
+    && preview.transactions.length === preview.actionableCount
+    && (preview.actionableCount === 0 || (preview.proposedTreatment && typeof preview.proposedTreatment === "object"));
+  if (valid) return preview;
+  throw Object.assign(new Error("This Tax question preview is incompatible with the current app."), {
+    code: "tax_grouped_preview_contract_mismatch",
+    requestId: requestId || preview?.requestId || null,
+  });
 }
 
 export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, businessUsePercent, personalExceptionIds = [], signal } = {}) {

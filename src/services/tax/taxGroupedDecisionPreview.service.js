@@ -118,7 +118,8 @@ function treatmentForAnswer(row, input) {
 
 function customerPreview(record, rows) {
   const actionable = rows.filter(isActionable);
-  return { previewId: record.id, groupId: record.group_id, decisionType: record.decision_type, expiresAt: record.expires_at,
+  return { previewVersion: "tax-grouped-decision-preview-v1", previewId: record.id, canonicalBusinessId: record.business_id,
+    taxYear: Number(record.tax_year), groupId: record.group_id, decisionType: record.decision_type, expiresAt: record.expires_at,
     totalGroupCount: rows.length, actionableCount: actionable.length, previouslyReviewedCount: rows.length - actionable.length,
     grossAmountCents: actionable.reduce((sum, row) => sum + Math.abs(Math.round(Number(row.book_amount || 0) * 100)), 0),
     estimatedDeductionCents: actionable.reduce((sum, row) => sum + Math.round(Math.abs(Number(row.book_amount || 0) * 100) * Number(row.deductible_percent || 0) / 100), 0),

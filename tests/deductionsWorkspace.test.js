@@ -1269,8 +1269,8 @@ test("Tax Dashboard presents all customer questions by authoritative decision ty
   assert.doesNotMatch(html, /gross|need your answer|total transactions in this category|future posted transactions/);
 });
 
-test("Tax review dialog distinguishes the full category population from expenses that still need an answer", async () => {
-  const { ReviewDecisionModal, toDecisionActionGroup, decisionPopulation, decisionTransactionIds } = await loadTaxDashboardInternals();
+test("Tax review dialog loads an authoritative preview before rendering amounts or submission controls", async () => {
+  const { ReviewDecisionModal, GroupedDecisionPreviewState, toDecisionActionGroup, decisionPopulation, decisionTransactionIds } = await loadTaxDashboardInternals();
   const pending = ["meal-1", "meal-2"].map((id) => ({
     id,
     transactionId: id,
@@ -1328,12 +1328,26 @@ test("Tax review dialog distinguishes the full category population from expenses
   assert.match(html, /Review Meals/);
   assert.match(html, /3 Meals transactions in 2026/);
   assert.match(html, /2 still need your answer; 1 already has a reviewed treatment/);
-  assert.match(html, /All were business expenses/);
-  assert.match(html, /Some were personal expenses/);
-  assert.match(html, /I&#x27;m not sure yet|I’m not sure yet/);
-  assert.match(html, /Updates the currently listed 2026 transactions/);
-  assert.match(html, /This also saves a default for future Meals transactions\. You can change it later\./);
-  assert.doesNotMatch(html, /Preserve selected exceptions|rows selected|Proposed treatment/);
+  assert.match(html, /Loading this question/);
+  assert.match(html, /No changes will be made without a current preview/);
+  assert.doesNotMatch(html, /\$0|0 transactions|View 0 affected transactions|Confirm business meals/);
+
+  const technicalFailure = renderToStaticMarkup(React.createElement(GroupedDecisionPreviewState, {
+    state: "preview_error",
+    requestId: "safe-request-1",
+    onRetry: () => {},
+  }));
+  assert.match(technicalFailure, /We couldn’t load this question\. No changes were made\./);
+  assert.match(technicalFailure, /Request ID: safe-request-1/);
+  assert.match(technicalFailure, /Retry/);
+  assert.doesNotMatch(technicalFailure, /no longer needs an answer/);
+
+  const resolved = renderToStaticMarkup(React.createElement(GroupedDecisionPreviewState, {
+    state: "preview_resolved",
+    requestId: null,
+    onRetry: () => {},
+  }));
+  assert.match(resolved, /This question no longer needs an answer\./);
   assert.deepEqual(decisionTransactionIds(group.rows, "all_business"), ["meal-1", "meal-2"]);
   assert.deepEqual(decisionTransactionIds(group.rows, "some_personal", ["meal-2"]), ["meal-1"]);
   assert.deepEqual(decisionTransactionIds(group.rows, "unsure"), []);
