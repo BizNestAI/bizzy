@@ -173,27 +173,25 @@ test("headline amount and question count come from one overview projection", () 
   assert.match(source, /Retry transaction details/);
 });
 
-test("initial overview resolves before detail hydration while refresh replacement is atomic", () => {
+test("initial workspace projection resolves without detail hydration while refresh remains atomic", () => {
   const source = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
   const overviewCommit = source.indexOf("const overviewResult = await overviewPromise");
-  const detailCommit = source.indexOf("await Promise.all(detailPromises)");
-  assert.ok(overviewCommit > 0 && detailCommit > overviewCommit);
+  assert.ok(overviewCommit > 0);
+  assert.match(source, /getTaxWorkspace\(\{ businessId, year, refresh, signal \}\)/);
   assert.match(source, /if \(request === seq\.current\)/);
   assert.match(source, /if \(refreshInFlight\.current\) return refreshInFlight\.current/);
   assert.match(source, /reason\?\.code !== "request_aborted"/);
-  assert.match(source, /if \(!refresh \|\| !hasVerifiedWorkspace\) setOverview\(overviewResult\.value\)/);
-  assert.match(source, /!refresh \|\| allTransactionsResult\.status === "fulfilled"/);
+  assert.match(source, /setOverview\(compatibleOverview\)/);
+  assert.doesNotMatch(source.slice(source.indexOf("const load = useCallback"), source.indexOf("const loadSecondaryDetails")), /fetchAllDeductionTransactions/);
 });
 
-test("cached overview shows a scoped loader until the deductions matrix hydrates", () => {
+test("persisted projection renders the matrix without transaction hydration", () => {
   const source = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
-  assert.match(source, /!deductions\.allTransactions && matrixRequestStatus !== "error"/);
+  assert.match(source, /hasProjectedMatrix/);
+  assert.match(source, /buildPersistedWorkspaceMatrix\(deductions\.workspaceProjection, year\)/);
   assert.match(source, /loading=\{matrixIsLoading\}/);
-  assert.match(source, /Loading monthly deductions…/);
-  assert.match(source, /Loading transaction totals…/);
-  assert.match(source, /matrixIsUnavailable = !deductions\.allTransactions && matrixRequestStatus === "error"/);
+  assert.match(source, /!hasProjectedMatrix && !deductions\.allTransactions/);
   assert.match(source, /Transaction details are temporarily unavailable\./);
-  assert.match(source, /role="status" aria-busy="true" aria-live="polite"/);
 });
 
 test("optional transaction populations never gate first valid overview paint", () => {
@@ -215,15 +213,17 @@ test("headline transaction count comes from the validated overview and never fro
   assert.doesNotMatch(source, /Based on \{populationCounts\.matrixIncludedCount\}/);
 });
 
-test("Questions for You hydrates eagerly and never renders a pending request as zero", () => {
+test("Questions for You renders bounded projection cards and hydrates rows lazily", () => {
   const dashboard = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
   const hook = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
-  assert.match(hook, /getTaxDeductionsOverview[\s\S]*fetchAllDeductionTransactions/);
+  assert.match(hook, /getTaxWorkspace/);
+  assert.match(hook, /const retryQuestions[\s\S]*fetchAllDeductionTransactions/);
   assert.match(hook, /useEffect\(\(\) => \{[\s\S]*load\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\)/);
   assert.match(dashboard, /questionsPanelState === "loading"[\s\S]*QuestionsPanelLoading/);
   assert.match(dashboard, /Loading \$\{count\} questions…/);
   assert.match(dashboard, /Nothing needs your input right now\./);
   assert.match(dashboard, /We couldn’t load your questions\./);
+  assert.match(dashboard, /ProjectedQuestionGroups/);
   assert.doesNotMatch(dashboard, /questionsPanelState === "loading"[\s\S]{0,300}customerQuestionSummaryText/);
 });
 

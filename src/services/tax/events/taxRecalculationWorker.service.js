@@ -1,6 +1,7 @@
 /* global process */
 import { supabase } from "../../supabaseAdmin.js";
 import { processPendingTaxRecalculationRequests } from "./processTaxRecalculationRequests.js";
+import { processTaxWorkspaceProjectionRequests } from "../processTaxWorkspaceProjectionRequests.js";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_BATCH_SIZE = 10;
@@ -23,8 +24,10 @@ export function startTaxRecalculationWorker({
     return null;
   }
   const run = () => {
-    processPendingTaxRecalculationRequests({ supabase, workerId, batchSize })
-      .then((result) => {
+    Promise.all([
+      processPendingTaxRecalculationRequests({ supabase, workerId, batchSize }),
+      processTaxWorkspaceProjectionRequests({ supabase, workerId: `${workerId}:workspace`, batchSize: Math.min(batchSize, 5) }),
+    ]).then(([result, workspace]) => {
         if (result.processed > 0) {
           console.info("[tax-recalculation-worker] processed", {
             workerId,
@@ -34,6 +37,7 @@ export function startTaxRecalculationWorker({
             failed: result.failed,
           });
         }
+        if (workspace.processed > 0) console.info("[tax-workspace-worker] processed", { workerId, ...workspace });
       })
       .catch((err) => console.warn("[tax-recalculation-worker] failed", err?.message || err));
   };

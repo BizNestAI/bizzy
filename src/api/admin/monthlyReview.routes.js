@@ -117,6 +117,7 @@ import {
   requestBizziOperatorTaxRetry,
 } from "../../services/tax/taxClassificationOperator.service.js";
 import { enqueueTaxClassificationRun } from "../../services/tax/taxClassificationRun.service.js";
+import { enqueueTaxWorkspaceProjection } from "../../services/tax/taxWorkspaceProjection.service.js";
 import {
   buildAccountingCloseFinalizationGuard,
   buildApprovalReadinessProjection,
@@ -240,6 +241,10 @@ router.post("/businesses/:businessId/tax-classification-review/apply", async (re
     const result = await applyBizziOperatorTaxDecision({
       supabase, businessId, taxYear, groupId: String(req.body?.group_id || ""), input: req.body?.decision || {},
       actorUserId: req.internalStaff.userId, requestId, idempotencyKey,
+    });
+    await enqueueTaxWorkspaceProjection({
+      supabase, businessId, taxYear, reason: "operator_tax_decision",
+      requestKey: `tax-workspace:${businessId}:${taxYear}:operator:${idempotencyKey}`,
     });
     return res.json({ ok: true, result, request_id: requestId });
   } catch (e) {

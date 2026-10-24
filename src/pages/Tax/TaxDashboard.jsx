@@ -558,6 +558,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   const rulesPanelRef = useRef(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 }, enabled: !contextPending && Boolean(businessId) });
   const refreshDeductions = deductions.refresh;
+  const deductionsUpdating = deductions.refreshing || deductions.rebuildPending;
   const populationBridge = deductions.overview?.populationBridge || null;
   const classificationSummary = useMemo(
     () => buildDeductionClassificationSummary(deductions, populationBridge),
@@ -629,8 +630,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   };
   const hasUsableDeductionsData = Boolean(deductions.overview);
   const matrixRequestStatus = deductions.sectionStatus?.matrix || (deductions.loading ? "loading" : "idle");
-  const matrixIsLoading = !deductions.allTransactions && matrixRequestStatus !== "error";
-  const matrixIsUnavailable = !deductions.allTransactions && matrixRequestStatus === "error";
+  const hasProjectedMatrix = Array.isArray(deductions.workspaceProjection?.matrix);
+  const matrixIsLoading = !hasProjectedMatrix && !deductions.allTransactions && matrixRequestStatus !== "error";
+  const matrixIsUnavailable = !hasProjectedMatrix && !deductions.allTransactions && matrixRequestStatus === "error";
   const classificationRequestStatus = deductions.sectionStatus?.classification || (deductions.loading ? "loading" : "idle");
   const overviewRequestStatus = deductions.sectionStatus?.overview || (deductions.loading ? "loading" : "idle");
   const deductionsRenderState = resolveDeductionsRenderState({
@@ -645,9 +647,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   const matrix = useMemo(
     () => {
       if (initialDeductionsLoading) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
+      if (!deductions.allTransactions && hasProjectedMatrix) return buildPersistedWorkspaceMatrix(deductions.workspaceProjection, year);
       return buildDeductionAccountMatrix(workspaceRows, year, { isDemo: deductions.isDemo, scope: "overview" });
     },
-    [deductions.isDemo, initialDeductionsLoading, workspaceRows, year]
+    [deductions.allTransactions, deductions.isDemo, deductions.workspaceProjection, hasProjectedMatrix, initialDeductionsLoading, workspaceRows, year]
   );
   // Headline values are an atomic overview projection. Detail rows can enrich
   // the matrix, but may never recalculate or replace the persisted summary.
@@ -656,14 +659,19 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   );
   const authoritativeMatrixIncludedCount = Number(overviewProjection?.matrixIncludedCount);
   const authoritativeQuestionCount = overviewProjection?.questionsForYouGroupCount;
+  const projectedQuestionGroups = deductions.workspaceProjection?.questionGroups || [];
   const questionsRequestStatus = deductions.sectionStatus?.matrix || "idle";
   const questionsPanelState = resolveQuestionsPanelState({
     status: questionsRequestStatus,
     authoritativeCount: authoritativeQuestionCount,
-    renderedCount: customerWorkflow.customerDecisionCount,
-    hasAuthoritativeDetails: Boolean(deductions.allTransactions),
+    renderedCount: deductions.allTransactions ? customerWorkflow.customerDecisionCount : projectedQuestionGroups.length,
+    hasAuthoritativeDetails: Boolean(deductions.allTransactions || deductions.workspaceProjection),
   });
   const questionsError = deductions.resourceErrors?.allTransactions || null;
+  useEffect(() => {
+    if (workspaceView !== "all_transactions" || deductions.allTransactions || deductions.isDemo) return;
+    void deductions.retryQuestions();
+  }, [deductions, workspaceView]);
   const evidenceThroughAt = classificationSummary.lastRunAt || null;
   const openVehicleWorkflow = (decision) => {
     const decisionRows = decisionActionRows(decision?.group);
@@ -721,10 +729,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
             disabled={deductions.refreshing || !hasUsableDeductionsData}
             className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-[12px] text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           >
-            <RefreshCcw className={`h-3.5 w-3.5 ${deductions.refreshing ? "animate-spin motion-reduce:animate-none" : ""}`} />
-            {deductions.refreshing ? "Updating" : "Refresh"}
+            <RefreshCcw className={`h-3.5 w-3.5 ${deductionsUpdating ? "animate-spin motion-reduce:animate-none" : ""}`} />
+            {deductionsUpdating ? "Updating" : "Refresh"}
           </button>
-          {deductions.refreshing && hasUsableDeductionsData ? (
+          {deductionsUpdating && hasUsableDeductionsData ? (
             <span className="text-xs text-white/52" role="status" aria-live="polite">Refreshing your {year} deductions…</span>
           ) : null}
         </div>
@@ -840,7 +848,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           ) : (
           <><div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <div className="text-sm font-semibold text-white/84">{customerQuestionSummaryText(customerWorkflow.customerDecisionCount, customerWorkflow.customerInputCount)}</div>
+              <div className="text-sm font-semibold text-white/84">{customerQuestionSummaryText(deductions.allTransactions ? customerWorkflow.customerDecisionCount : projectedQuestionGroups.length, deductions.allTransactions ? customerWorkflow.customerInputCount : projectedQuestionGroups.reduce((sum, group) => sum + Number(group.actionableTransactionCount || 0), 0))}</div>
               <div className="mt-0.5 text-xs text-white/45">Answer these to finish your {year} deduction estimates.</div>
             </div>
             <button
@@ -854,11 +862,13 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           {questionsPanelState === "ready_empty" ? (
             <div className="px-3 py-8 text-center text-sm text-white/58">Nothing needs your input right now.</div>
           ) : (
-            <AttentionReviewGroups groups={attentionGroups} readOnly={readOnly} onOpenDecision={setReviewDecision} />
+            deductions.allTransactions
+              ? <AttentionReviewGroups groups={attentionGroups} readOnly={readOnly} onOpenDecision={setReviewDecision} />
+              : <ProjectedQuestionGroups groups={projectedQuestionGroups} onOpen={() => deductions.retryQuestions()} />
           )}</>
           )}
         </div>
-      ) : matrixIsUnavailable ? (
+      ) : (matrixIsUnavailable || (questionsError && !deductions.allTransactions)) ? (
         <DeductionsTransactionDetailsError error={questionsError} onRetry={() => deductions.retryTransactionDetails()} />
       ) : (
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
@@ -886,7 +896,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
               <span className="font-semibold">Needs follow-up · {customerWorkflow.followUpCount}</span>. These items are separated by who can resolve the next step; missing Tax mappings are not labeled as bookkeeping problems.
             </div>
           ) : null}
-          <ClassificationWorkspaceTable rows={filteredWorkspaceRows} loading={deductions.loading} updating={classificationTab === "updating"} updatingItemByTransaction={updatingItemByTransaction} />
+          <ClassificationWorkspaceTable rows={filteredWorkspaceRows} loading={!deductions.allTransactions} updating={classificationTab === "updating"} updatingItemByTransaction={updatingItemByTransaction} />
         </div>
       )}
 
@@ -1614,6 +1624,20 @@ function DeductionsDetailsLoadingState() {
         <span className="hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" aria-hidden="true" />
         <span>Loading transaction totals…</span>
       </div>
+    </div>
+  );
+}
+
+function ProjectedQuestionGroups({ groups = [], onOpen }) {
+  return (
+    <div className="grid gap-3 p-3 sm:grid-cols-2" aria-label="Questions for you">
+      {groups.map((group) => (
+        <article key={group.id} className="rounded-xl border border-amber-300/15 bg-amber-300/[0.05] p-3">
+          <div className="text-sm font-semibold text-white">{group.qboAccountName || "Expense review"}</div>
+          <div className="mt-1 text-xs text-white/55">{Number(group.actionableTransactionCount || 0)} transaction{Number(group.actionableTransactionCount || 0) === 1 ? "" : "s"} need your input.</div>
+          <button type="button" onClick={() => onOpen?.(group)} className="mt-3 rounded-full border border-amber-100/20 px-3 py-1 text-xs font-semibold text-amber-50 hover:bg-amber-100/10">Open question</button>
+        </article>
+      ))}
     </div>
   );
 }
@@ -4998,6 +5022,53 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
     taxDataReasonCode: classified?.taxDataReasonCode || row.taxDataReasonCode || null,
     raw: { ...row, classification: classified?.raw || null },
   };
+}
+
+function buildPersistedWorkspaceMatrix(workspace, year) {
+  const months = Array.from({ length: 12 }, (_, index) => {
+    const date = new Date(year, index, 1);
+    return { key: `${year}-${String(index + 1).padStart(2, "0")}`, shortLabel: date.toLocaleDateString(undefined, { month: "short" }), longLabel: date.toLocaleDateString(undefined, { month: "long", year: "numeric" }) };
+  });
+  const accounts = (workspace?.matrix || []).map((category) => {
+    const monthMap = Object.fromEntries(months.map((month) => {
+      const stored = category.months?.[month.key] || {};
+      const deductible = Number(stored.deductibleAmount || 0);
+      const needsInput = Number(stored.needsReviewAmount || 0);
+      return [month.key, {
+        expenseTotal: Number(stored.bookExpenseAmount || 0), authoritativeDeductibleTotal: deductible,
+        proposedDeductibleTotal: 0, standardRuleDeductibleTotal: deductible, reviewedDeductibleTotal: 0,
+        needsInputDeductibleTotal: 0, needsInputGrossExpense: needsInput,
+        displayDeductibleTotal: deductible, autoTransactionCount: Number(stored.transactionCount || 0),
+        userConfirmedTransactionCount: 0, accountantConfirmedTransactionCount: 0, standardMileageTransactionCount: 0,
+        resolvedZeroTransactionCount: 0, excludedTransactionCount: 0, failedTransactionCount: 0,
+        unclassifiedTransactionCount: 0, reviewTransactionCount: needsInput > 0 ? Number(stored.transactionCount || 0) : 0,
+        standardRuleTransactionCount: needsInput > 0 ? 0 : Number(stored.transactionCount || 0), reviewedTransactionCount: 0,
+        customerInputTransactionCount: needsInput > 0 ? Number(stored.transactionCount || 0) : 0,
+        needsTaxReviewTransactionCount: Number(stored.needsTaxReviewGrossExpense || 0) > 0 ? Number(stored.transactionCount || 0) : 0,
+        needsTaxReviewGrossExpense: Number(stored.needsTaxReviewGrossExpense || 0), reviewActionLabel: null, transactions: [],
+      }];
+    }));
+    const values = Object.values(monthMap);
+    return {
+      key: `tax-category:${category.categoryKey}`, id: category.categoryKey, name: category.categoryLabel,
+      sourceLabel: "Tax category", months: monthMap,
+      expenseTotal: values.reduce((sum, item) => sum + item.expenseTotal, 0),
+      authoritativeDeductibleTotal: values.reduce((sum, item) => sum + item.authoritativeDeductibleTotal, 0),
+      proposedDeductibleTotal: 0, standardRuleDeductibleTotal: values.reduce((sum, item) => sum + item.standardRuleDeductibleTotal, 0),
+      reviewedDeductibleTotal: 0, needsInputDeductibleTotal: 0,
+      needsInputGrossExpense: values.reduce((sum, item) => sum + item.needsInputGrossExpense, 0),
+      displayDeductibleTotal: values.reduce((sum, item) => sum + item.displayDeductibleTotal, 0),
+      transactionCount: Number(category.transactionCount || 0), autoTransactionCount: Number(category.transactionCount || 0),
+      userConfirmedTransactionCount: 0, accountantConfirmedTransactionCount: 0, standardMileageTransactionCount: 0,
+      resolvedZeroTransactionCount: 0, excludedTransactionCount: 0, failedTransactionCount: 0, unclassifiedTransactionCount: 0,
+      reviewTransactionCount: values.reduce((sum, item) => sum + item.reviewTransactionCount, 0),
+      standardRuleTransactionCount: values.reduce((sum, item) => sum + item.standardRuleTransactionCount, 0), reviewedTransactionCount: 0,
+      customerInputTransactionCount: values.reduce((sum, item) => sum + item.customerInputTransactionCount, 0),
+      needsTaxReviewTransactionCount: values.reduce((sum, item) => sum + item.needsTaxReviewTransactionCount, 0),
+      needsTaxReviewGrossExpense: values.reduce((sum, item) => sum + item.needsTaxReviewGrossExpense, 0), reviewActionLabel: null,
+    };
+  });
+  return { months, accounts, transactionCount: Number(workspace?.matrixIncludedCount || 0), persisted: true };
 }
 
 function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all" } = {}) {

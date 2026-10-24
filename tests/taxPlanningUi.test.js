@@ -199,19 +199,11 @@ test("Tax Dashboard shows a compact reconciled workpaper preview without fronten
   assert.doesNotMatch(dashboard, /projectedAnnualTax.*-|remainingProjectedLiability.*-/);
 });
 
-test("Tax Dashboard deductions preview renders a QuickBooks account by month matrix", () => {
+test("Tax Dashboard deductions preview renders a persisted category matrix with optional GL drilldown", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /buildPersistedWorkspaceMatrix/);
+  assert.match(dashboard, /workspaceProjection/);
   assert.match(dashboard, /buildDeductionAccountMatrix/);
-  assert.match(dashboard, /QuickBooks account/);
-  assert.match(dashboard, /Deductible totals by QBO GL account from posted QuickBooks expense transactions/);
-  assert.match(dashboard, /linked transaction details/);
-  assert.match(dashboard, /Total expenses/);
-  assert.match(dashboard, /Confirmed deductions/);
-  assert.match(dashboard, /Estimated deductions/);
-  assert.match(dashboard, /Bizzi used the posted QuickBooks GL account and available transaction details to determine this tax treatment/);
-  assert.match(dashboard, /Confirmed deductions/);
-  assert.match(dashboard, /Bizzi-classified/);
-  assert.match(dashboard, /Proposed — needs review/);
   assert.match(dashboard, /data-bizzy-tax-deduction-dialog/);
   assert.match(dashboard, /fixed inset-0 z-\[200000\]/);
   assert.match(dashboard, /min-h-0 flex-1 overflow-y-auto/);
@@ -221,11 +213,8 @@ test("Tax Dashboard deductions preview renders a QuickBooks account by month mat
   assert.match(dashboard, /account\.expenseTotal > 0/);
   assert.match(dashboard, /limit: 100/);
   assert.match(dashboard, /buildDeductionClassificationSummary/);
-  assert.match(dashboard, /classificationsRequired/);
   assert.match(dashboard, /posted QuickBooks transaction/);
-  assert.match(dashboard, /No deduction total is shown until classification authority exists/);
-  assert.doesNotMatch(dashboard, /Confirmed deductible/);
-  assert.doesNotMatch(dashboard, /Estimated deductible/);
+  assert.match(dashboard, /Estimated deductible expenses/);
   assert.doesNotMatch(dashboard, /Top categories/);
   assert.doesNotMatch(dashboard, /Recent tax treatments/);
 });

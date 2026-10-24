@@ -27,6 +27,7 @@ import { handleTaxRecalculationEvent } from "./events/taxRecalculationTrigger.se
 import { TAX_RECALCULATION_EVENT_TYPES } from "./events/taxRecalculationEventDomain.js";
 import { getBusinessesEligibleForTaxClassification } from "./taxClassificationRecovery.service.js";
 import { businessHasPaidEntitlement } from "../billing/entitledBusinesses.js";
+import { enqueueTaxWorkspaceProjection } from "./taxWorkspaceProjection.service.js";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_RUN_BATCH_SIZE = 5;
@@ -352,6 +353,10 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
       ? TAX_CLASSIFICATION_RUN_STATUSES.REVIEW_REQUIRED
       : TAX_CLASSIFICATION_RUN_STATUSES.COMPLETED;
     const completed = await completeTaxClassificationRun({ supabase, runId: run.id, status: terminalStatus, progress, now });
+    await enqueueTaxWorkspaceProjection({
+      supabase, businessId, taxYear, reason: "classification_run_completed",
+      requestKey: `tax-workspace:${businessId}:${taxYear}:classification-run:${run.id}`,
+    });
     console.log("[tax-classification-worker] completed", {
       businessId,
       taxYear,

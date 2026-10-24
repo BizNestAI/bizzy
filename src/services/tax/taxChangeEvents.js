@@ -63,6 +63,15 @@ export function emitTaxDataChanged({ businessId, taxYear, changeType, entityId, 
         metadata,
       })).catch((err) => console.warn("[tax-change] classification enqueue failed", err?.code || err?.message || err));
     }
+    if (shouldRebuildTaxWorkspace(changeType) && process.env.NODE_ENV !== "test" && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      getSupabaseForEvents().then(async (supabase) => {
+        const { enqueueTaxWorkspaceProjection } = await import("./taxWorkspaceProjection.service.js");
+        return enqueueTaxWorkspaceProjection({
+          supabase, businessId, taxYear: Number(taxYear || new Date().getFullYear()), reason: changeType,
+          requestKey: `tax-workspace:${businessId}:${taxYear || new Date().getFullYear()}:${changeType}:${entityId || metadata.correlationId || "scope"}`,
+        });
+      }).catch((err) => console.warn("[tax-change] workspace enqueue failed", err?.code || err?.message || err));
+    }
     const eventType = mapChangeTypeToRecalculationEvent(changeType);
     if (!eventType || isNonRecalculationEvent(eventType)) return;
     if (process.env.NODE_ENV !== "test" && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -88,6 +97,17 @@ export function emitTaxDataChanged({ businessId, taxYear, changeType, entityId, 
   } catch (err) {
     console.warn("[tax-change] downstream signal failed", err?.message || err);
   }
+}
+
+function shouldRebuildTaxWorkspace(changeType) {
+  return [
+    TAX_CHANGE_TYPES.CLASSIFICATION_OVERRIDDEN, TAX_CHANGE_TYPES.CLASSIFICATION_CONFIRMED,
+    TAX_CHANGE_TYPES.CLASSIFICATION_REJECTED, TAX_CHANGE_TYPES.CLASSIFICATION_EXCLUDED,
+    TAX_CHANGE_TYPES.CLASSIFICATION_RESTORED, TAX_CHANGE_TYPES.BUSINESS_RULE_CREATED,
+    TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED, TAX_CHANGE_TYPES.QBO_TRANSACTION_UPDATED,
+    TAX_CHANGE_TYPES.QBO_TRANSACTION_VOIDED, TAX_CHANGE_TYPES.QBO_TRANSACTION_DELETED,
+    TAX_CHANGE_TYPES.QBO_TRANSACTION_REVERSED,
+  ].includes(changeType);
 }
 
 function shouldDispatchTaxClassification(changeType) {

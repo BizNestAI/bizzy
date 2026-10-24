@@ -23,10 +23,12 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const SORTS = new Set(["date_desc", "date_asc", "amount_desc", "amount_asc", "confidence_asc", "confidence_desc", "updated_desc"]);
 
-export async function getDeductionsOverview({ supabase, businessId, taxYear, asOfDate, onStage } = {}) {
+export async function getDeductionsOverview({ supabase, businessId, taxYear, asOfDate, onStage, authoritativeSourceRows } = {}) {
   const context = requireContext({ supabase, businessId, taxYear, asOfDate });
   const summaryPromise = timedStage("deductions_summary", onStage, () => computeTaxDeductionsSummary(context));
-  const postingRowsPromise = timedStage("posted_transaction_population", onStage, () => listTaxPostingSourceRows(context));
+  const postingRowsPromise = authoritativeSourceRows
+    ? Promise.resolve(authoritativeSourceRows)
+    : timedStage("posted_transaction_population", onStage, () => listTaxPostingSourceRows(context));
   const summary = await summaryPromise;
   const [reconciliation, taxPostingSourceRows] = await Promise.all([
     timedStage("reconciliation", onStage, () => safeReconciliation({ ...context, summary })),

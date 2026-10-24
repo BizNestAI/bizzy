@@ -4,7 +4,6 @@ import { buildMockTaxFixture } from "../../services/demo/mockTaxFixture.js";
 import {
   TAX_WORKSPACE_DETAIL_TIMEOUT_MS,
   resolveScopedDeductionsRequestStatus,
-  selectDeductionsWorkspaceError,
   withBoundedWorkspaceRead,
 } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import {
@@ -13,17 +12,14 @@ import {
   confirmTaxClassification,
   excludeTaxClassification,
   exportTaxDeductions,
-  getCachedTaxDeductionsOverview,
-  getTaxClassificationCoverage,
   getTaxClassificationStatus,
   getTaxClassificationReviewSummary,
   getTaxClassifications,
-  getTaxDeductionDecisionRules,
   getTaxDeductionCategoryDetail,
   getGroupedTaxDeductionDecisionOperation,
   getTaxDeductionTransactionDetail,
   getTaxDeductionTransactions,
-  getTaxDeductionsOverview,
+  getTaxWorkspace,
   getTaxPostedTransactions,
   overrideTaxClassification,
   prepareTaxClassifications,
@@ -48,13 +44,9 @@ export function useTaxDeductions({
 } = {}) {
   const filterKey = useMemo(() => JSON.stringify(stableObject(filters)), [filters]);
   const paginationKey = useMemo(() => JSON.stringify(stableObject(pagination)), [pagination]);
-  const initialCachedOverview = useMemo(
-    () => (!shouldUseDemoData() && enabled && businessId
-      ? getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale: true })?.value || null
-      : null),
-    [businessId, year, asOfDate, enabled]
-  );
+  const initialCachedOverview = null;
   const [overview, setOverview] = useState(initialCachedOverview);
+  const [workspaceProjection, setWorkspaceProjection] = useState(null);
   const [transactions, setTransactions] = useState(null);
   const [allTransactions, setAllTransactions] = useState(null);
   const [postedTransactions, setPostedTransactions] = useState(null);
@@ -66,6 +58,7 @@ export function useTaxDeductions({
   const startsWithLiveRequest = enabled && Boolean(businessId) && !shouldUseDemoData();
   const [loading, setLoading] = useState(startsWithLiveRequest && !initialCachedOverview);
   const [refreshing, setRefreshing] = useState(false);
+  const [rebuildPending, setRebuildPending] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
   const [refreshError, setRefreshError] = useState(null);
   const [error, setError] = useState(null);
@@ -120,10 +113,9 @@ export function useTaxDeductions({
   useEffect(() => {
     if (isDemo) return;
     seq.current += 1;
-    const cached = enabled && businessId
-      ? getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale: true })?.value || null
-      : null;
+    const cached = null;
     setOverview(cached);
+    setWorkspaceProjection(null);
     setTransactions(null);
     setAllTransactions(null);
     setPostedTransactions(null);
@@ -141,6 +133,7 @@ export function useTaxDeductions({
     setLoading(Boolean(enabled && businessId && !cached));
     setError(null);
     setRefreshError(null);
+    setRebuildPending(false);
   }, [scopeKey, isDemo, businessId, year, asOfDate, enabled]);
 
   const load = useCallback(async ({ signal, refresh = false } = {}) => {
@@ -174,82 +167,37 @@ export function useTaxDeductions({
     setError(null);
     setResourceErrors({});
     try {
-      const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
-      const overviewPromise = settle(getTaxDeductionsOverview({ businessId, year, asOfDate, refresh, signal }));
-      const detailPromises = [
-        withBoundedWorkspaceRead(
-          (workspaceSignal) => fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, refresh, signal: workspaceSignal }),
-          { signal, timeoutMs: TAX_WORKSPACE_DETAIL_TIMEOUT_MS, timeoutCode: "tax_deductions_matrix_timeout" }
-        ),
-        getTaxClassificationCoverage({ businessId, year, refresh, signal }),
-        getTaxClassificationReviewSummary({ businessId, year, refresh, signal }),
-        getTaxDeductionDecisionRules({ businessId, year, refresh, signal }),
-      ].map(settle);
+      const overviewPromise = settle(getTaxWorkspace({ businessId, year, refresh, signal }));
       const overviewResult = await overviewPromise;
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") {
+          const workspace = overviewResult.value?.projection;
+          const compatibleOverview = overviewFromWorkspace(workspace);
+          setWorkspaceProjection(workspace);
+          setRebuildPending(overviewResult.value?.state === "refreshing");
           // Initial loads may expose a verified summary while optional details
           // settle. A refresh keeps the prior completed workspace intact until
           // its replacement matrix succeeds, preventing mixed generations.
-          if (!refresh || !hasVerifiedWorkspace) setOverview(overviewResult.value);
-          setRequestStatus((current) => ({ ...current, scopeKey, overview: "success" }));
-          if (refresh) setLastRefreshedAt(overviewResult.value?.projection?.refreshedAt || overviewResult.value?.meta?.generatedAt || new Date().toISOString());
+          setOverview(compatibleOverview);
+          setRequestStatus((current) => ({ ...current, scopeKey, overview: "success", matrix: "success", classification: "success" }));
+          if (refresh) setLastRefreshedAt(workspace?.refreshedAt || workspace?.generatedAt || new Date().toISOString());
         } else if (overviewResult.reason?.code !== "request_aborted") {
           setRequestStatus((current) => ({ ...current, scopeKey, overview: "error" }));
           if (!overviewRef.current) setError(overviewResult.reason);
         }
         setLoading(false);
       }
-      const [allTransactionsResult, coverageResult, reviewSummaryResult, decisionRulesResult] = await Promise.all(detailPromises);
-      if (request === seq.current) {
-        if (overviewResult.status === "fulfilled" && (!refresh || allTransactionsResult.status === "fulfilled")) {
-          setOverview(overviewResult.value);
-        }
-        if (allTransactionsResult.status === "fulfilled") setAllTransactions(withTaxSnapshot(allTransactionsResult.value, request));
-        if (coverageResult.status === "fulfilled") {
-          setClassificationCoverage(coverageResult.value);
-          setClassificationJobStatus(coverageResult.value?.jobStatus || null);
-        }
-        if (reviewSummaryResult.status === "fulfilled") setClassificationReviewSummary(reviewSummaryResult.value);
-        if (decisionRulesResult.status === "fulfilled") setDecisionRules(decisionRulesResult.value || []);
-        const errors = collectResourceErrors({
-          overview: overviewResult,
-          allTransactions: allTransactionsResult,
-          classificationCoverage: coverageResult,
-          classificationReviewSummary: reviewSummaryResult,
-          decisionRules: decisionRulesResult,
-        });
-        setResourceErrors(errors);
-        setRequestStatus((current) => ({
-          ...current,
-          scopeKey,
-          overview: overviewResult.status === "fulfilled" ? "success" : current.overview,
-          matrix: allTransactionsResult.status === "fulfilled" ? "success" : "error",
-          classification: coverageResult.status === "fulfilled" ? "success" : "error",
-        }));
-        // The review summary enriches the Needs attention view, but it is not
-        // authoritative for the overview, coverage, or deductions matrix. A
-        // failure there must not claim that the entire Tax request failed while
-        // the primary resources are visibly usable.
-        const primaryError = selectDeductionsWorkspaceError({ overviewResult, allTransactionsResult, coverageResult });
-        setError(overviewRef.current ? null : primaryError);
-        if (refresh) {
-          if (primaryError) setRefreshError(primaryError);
-          else {
-            setLastRefreshedAt(new Date().toISOString());
-            setRefreshError(null);
-          }
-        }
-      }
+      const primaryError = overviewResult.status === "rejected" ? overviewResult.reason : null;
+      if (request === seq.current && refresh) setRefreshError(primaryError);
       return {
-        overview: valueOrNull(overviewResult),
+        overview: overviewResult.status === "fulfilled" ? overviewFromWorkspace(overviewResult.value?.projection) : null,
         transactions: null,
-        allTransactions: valueOrNull(allTransactionsResult),
+        allTransactions: null,
         postedTransactions: null,
-        classificationCoverage: valueOrNull(coverageResult),
+        classificationCoverage: null,
         classificationRows: null,
-        classificationReviewSummary: valueOrNull(reviewSummaryResult),
-        decisionRules: valueOrNull(decisionRulesResult),
+        classificationReviewSummary: null,
+        decisionRules: null,
       };
     } catch (err) {
       if (err?.code !== "request_aborted" && request === seq.current) setError(err);
@@ -258,7 +206,7 @@ export function useTaxDeductions({
     } finally {
       if (request === seq.current) setLoading(false);
     }
-  }, [businessId, year, asOfDate, filterKey, enabled, isDemo, scopeKey]);
+  }, [businessId, year, enabled, isDemo, scopeKey]);
 
   const loadSecondaryDetails = useCallback(async ({ signal, refresh = false } = {}) => {
     if (isDemo || !enabled || !businessId) return null;
@@ -336,18 +284,15 @@ export function useTaxDeductions({
 
   useEffect(() => {
     const controller = new AbortController();
-    const hasSavedOverview = Boolean(getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale: true })?.value);
+    const hasSavedOverview = Boolean(overviewRef.current);
     if (hasSavedOverview) setRefreshing(true);
     // The verified overview and every optional detail population start together.
     // No transaction-row request is allowed to gate first overview paint.
-    Promise.allSettled([
-      load({ signal: controller.signal, refresh: hasSavedOverview }),
-      loadSecondaryDetails({ signal: controller.signal, refresh: hasSavedOverview }),
-    ]).finally(() => {
+    Promise.resolve(load({ signal: controller.signal, refresh: hasSavedOverview })).finally(() => {
       if (!controller.signal.aborted && hasSavedOverview) setRefreshing(false);
     });
     return () => controller.abort();
-  }, [asOfDate, businessId, load, loadSecondaryDetails, year]);
+  }, [asOfDate, businessId, load, year]);
 
   useEffect(() => {
     if (isDemo || !enabled || !businessId || !shouldPollClassification) return undefined;
@@ -396,6 +341,7 @@ export function useTaxDeductions({
 
   return {
     overview,
+    workspaceProjection,
     transactions,
     allTransactions,
     postedTransactions,
@@ -413,6 +359,7 @@ export function useTaxDeductions({
       classification: scopedRequestStatus.classification,
     },
     refreshing,
+    rebuildPending,
     refreshError,
     lastRefreshedAt,
     isDemo,
@@ -423,10 +370,7 @@ export function useTaxDeductions({
       if (refreshInFlight.current) return refreshInFlight.current;
       setRefreshing(true);
       setRefreshError(null);
-      const operation = Promise.all([
-        load({ ...options, refresh: true }),
-        loadSecondaryDetails({ ...options, refresh: true }),
-      ]).then(([primary, secondary]) => ({ ...(primary || {}), ...(secondary || {}) }))
+      const operation = load({ ...options, refresh: true })
         .catch((err) => {
           setRefreshError(err);
           throw err;
@@ -820,6 +764,36 @@ function stableObject(value) {
     acc[key] = value[key];
     return acc;
   }, {});
+}
+
+function overviewFromWorkspace(workspace) {
+  if (!workspace) return null;
+  return {
+    meta: {
+      businessId: workspace.canonicalBusinessId,
+      taxYear: workspace.taxYear,
+      generatedAt: workspace.generatedAt,
+      engineVersion: workspace.formulaVersion,
+      source: "tax_workspace_projection",
+    },
+    projection: {
+      projectionId: workspace.sourceFingerprint,
+      projectionVersion: workspace.projectionVersion,
+      canonicalBusinessId: workspace.canonicalBusinessId,
+      taxYear: workspace.taxYear,
+      refreshedAt: workspace.refreshedAt,
+      generatedAt: workspace.generatedAt,
+      completeness: workspace.completeness,
+      estimatedDeductibleAmount: workspace.estimatedDeductibleAmount,
+      evaluatedTransactionCount: workspace.evaluatedTransactionCount,
+      matrixIncludedCount: workspace.matrixIncludedCount,
+      outsideDeductionsCount: workspace.outsideDeductionsCount,
+      questionsForYouGroupCount: workspace.questionGroupCount,
+    },
+    totals: { estimatedDeductibleAmount: workspace.estimatedDeductibleAmount },
+    categories: workspace.matrix || [],
+    warnings: workspace.warnings || [],
+  };
 }
 
 // Primary classifications and posted-source rows are fetched independently.

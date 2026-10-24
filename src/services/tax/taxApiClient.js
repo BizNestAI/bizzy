@@ -33,6 +33,7 @@ const TAX_READ_TIMEOUT_MS = 20_000;
 // snapshot supplies the fast paint, while this bound prevents the existing
 // authoritative request from being killed before its historical ~20s runtime.
 const TAX_OVERVIEW_READ_TIMEOUT_MS = 30_000;
+const TAX_WORKSPACE_READ_TIMEOUT_MS = 5_000;
 const cache = new Map();
 const inflight = new Map();
 
@@ -243,6 +244,36 @@ export async function getTaxDeductionsOverview({ businessId, year, asOfDate, ref
       requestId: taxRequestId(payload) || requestId,
     }),
   });
+}
+
+export async function getTaxWorkspace({ businessId, year, refresh = false, signal } = {}) {
+  requireBusinessId(businessId);
+  const params = query({ businessId, year });
+  const payload = await cachedGet(`/api/tax/workspace?${params}`, {
+    signal,
+    cacheKey: key("taxWorkspace:tax-workspace-v1", params),
+    bypassCache: refresh,
+    requestId: createClientRequestId(),
+    timeoutCode: "tax_workspace_timeout",
+    timeoutMs: TAX_WORKSPACE_READ_TIMEOUT_MS,
+    validate: (response) => validateTaxWorkspaceResponse(response, { businessId, year }),
+  });
+  return unwrap(payload);
+}
+
+function validateTaxWorkspaceResponse(response, { businessId, year }) {
+  const envelope = response?.ok === true ? response.data : response;
+  const projection = envelope?.projection;
+  const valid = ["complete", "refreshing"].includes(envelope?.state)
+    && envelope?.projectionVersion === "tax-workspace-v1"
+    && projection?.projectionVersion === "tax-workspace-v1"
+    && String(projection?.canonicalBusinessId) === String(businessId)
+    && Number(projection?.taxYear) === Number(year)
+    && Array.isArray(projection?.matrix)
+    && Array.isArray(projection?.questionGroups)
+    && Number.isFinite(Number(projection?.estimatedDeductibleAmount));
+  if (!valid) throw Object.assign(new Error("The Tax workspace is not compatible with this version of Bizzi."), { code: "tax_workspace_version_mismatch", retryable: false });
+  return response;
 }
 
 export function getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale = true } = {}) {

@@ -22,6 +22,7 @@ import taxPaymentRouter from "./taxPayment.routes.js";
 import taxRecalculationRouter from "./taxRecalculation.routes.js";
 import taxSchedulerRouter from "./taxScheduler.routes.js";
 import taxLegacyHistoryRouter from "./taxLegacyHistory.routes.js";
+import taxWorkspaceRouter from "./taxWorkspace.routes.js";
 import { taxSecurityMiddleware } from "./taxSecurity.js";
 
 const router = Router();
@@ -56,6 +57,7 @@ router.use("/", taxPaymentRouter);
 router.use("/", taxRecalculationRouter);
 router.use("/", taxSchedulerRouter);
 router.use("/", taxLegacyHistoryRouter);
+router.use("/", taxWorkspaceRouter);
 router.use("/", taxRoutes);
 router.use("/deductions", taxDeductionsRouter);
 

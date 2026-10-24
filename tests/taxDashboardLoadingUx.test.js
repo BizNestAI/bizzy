@@ -94,9 +94,9 @@ test("Tax dashboard distinguishes slow, failed, processing, and unavailable stat
   assert.match(dashboardSource, /classification_queued|classifying|classification_review_required|classification_failed/);
 });
 
-test("Tax dashboard does not add sequential duplicate reads for independent deduction resources", () => {
-  assert.match(deductionsHookSource, /Promise\.allSettled\(\[/);
-  assert.match(deductionsHookSource, /load\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\),[\s\S]*loadSecondaryDetails\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\)/);
-  assert.equal((deductionsHookSource.match(/getTaxDeductionsOverview/g) || []).length, 2);
-  assert.equal((deductionsHookSource.match(/getTaxClassificationCoverage/g) || []).length, 2);
+test("Tax dashboard critical path uses one projection read and defers transaction populations", () => {
+  const primary = deductionsHookSource.slice(deductionsHookSource.indexOf("const load = useCallback"), deductionsHookSource.indexOf("const loadSecondaryDetails"));
+  assert.match(primary, /getTaxWorkspace/);
+  assert.doesNotMatch(primary, /fetchAllDeductionTransactions|getTaxClassificationCoverage|fetchAllPostedTransactions|getTaxClassifications/);
+  assert.match(deductionsHookSource, /const retryQuestions[\s\S]*fetchAllDeductionTransactions/);
 });

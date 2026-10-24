@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
-import { prefetchTaxDeductionsOverviewBundle } from "../../services/tax/taxApiClient.js";
+import { getTaxWorkspace } from "../../services/tax/taxApiClient.js";
 
 export function TaxDeductionsPrefetcher({ businessId, loading = false, year = new Date().getFullYear() }) {
   useTaxDeductionsPrefetch({ businessId, loading, year });
@@ -13,7 +13,7 @@ export function useTaxDeductionsPrefetch({ businessId, loading = false, year = n
     let cancelled = false;
     const run = () => {
       if (cancelled) return;
-      prefetchTaxDeductionsOverviewBundle({ businessId, year }).catch(() => {});
+      getTaxWorkspace({ businessId, year }).catch(() => {});
     };
     const idle = scheduleIdle(run);
     return () => {
