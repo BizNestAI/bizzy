@@ -13,6 +13,7 @@ import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
 import { optionalTaxYear, validateBusinessIdInput } from "./taxValidation.js";
 import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
 import { assertInternalSchedulerAccess } from "./taxSchedulerAuth.js";
+import { workspaceReadError } from "./taxWorkspaceErrors.js";
 
 const router = Router();
 
@@ -41,7 +42,7 @@ router.get("/workspace", async (req, res) => {
       projection: record.projection_data,
     });
   } catch (error) {
-    return sendTaxError(res, error, "tax_workspace_read_failed");
+    return sendTaxError(res, workspaceReadError(error), "tax_workspace_read_failed");
   }
 });
 

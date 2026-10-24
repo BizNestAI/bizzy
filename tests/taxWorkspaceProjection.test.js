@@ -9,6 +9,8 @@ import {
   TAX_WORKSPACE_FORMULA_VERSION,
   TAX_WORKSPACE_PROJECTION_VERSION,
 } from "../src/services/tax/taxWorkspaceProjection.service.js";
+import { workspaceReadError } from "../src/api/tax/taxWorkspaceErrors.js";
+import { sendTaxError } from "../src/api/tax/taxHttp.js";
 
 const BUSINESS = "11111111-1111-4111-8111-111111111111";
 function source() {
@@ -94,4 +96,34 @@ test("workspace endpoint enforces tenant access, entitlement, read-only GET, and
   assert.match(backfill, /assertInternalSchedulerAccess/);
   assert.match(backfill, /Idempotency-Key/);
   assert.doesNotMatch(backfill, /assertTaxBusinessAccess/);
+});
+
+test("missing production projection schema becomes a bounded retryable 503", () => {
+  for (const databaseError of [
+    { code: "42P01", message: 'relation "public.tax_workspace_projections" does not exist' },
+    { code: "PGRST205", message: "Could not find the table in the schema cache" },
+  ]) {
+    const mapped = workspaceReadError(databaseError);
+    assert.equal(mapped.code, "tax_workspace_schema_unavailable");
+    assert.equal(mapped.status, 503);
+    assert.equal(mapped.details.action, "retry");
+  }
+});
+
+test("Tax errors always include a sanitized request correlation id", () => {
+  let status = null;
+  let body = null;
+  const headers = {};
+  const res = {
+    req: { headers: {} },
+    set(name, value) { headers[name] = value; },
+    status(value) { status = value; return this; },
+    json(value) { body = value; return value; },
+  };
+  sendTaxError(res, workspaceReadError({ code: "ECONNRESET" }));
+  assert.equal(status, 503);
+  assert.match(headers["X-Request-ID"], /^[0-9a-f-]{36}$/i);
+  assert.equal(body.errorDetail.requestId, headers["X-Request-ID"]);
+  assert.equal(body.error, "tax_workspace_database_unavailable");
+  assert.doesNotMatch(JSON.stringify(body), /ECONNRESET/);
 });

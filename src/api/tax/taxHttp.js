@@ -1,5 +1,6 @@
 // /src/api/tax/taxHttp.js
 import { isTaxEngineError } from "../../services/tax/taxErrors.js";
+import { randomUUID } from "node:crypto";
 
 const DEFAULT_ERROR_MESSAGE = "Tax request failed.";
 
@@ -21,7 +22,8 @@ export function sendTaxError(res, err, fallbackCode = "tax_error") {
   const safe = isTaxEngineError(err) ? err.safeToExpose !== false : false;
   const error = safe && err?.code ? err.code : fallbackCode;
   const message = safe && err?.message ? err.message : DEFAULT_ERROR_MESSAGE;
-  const requestId = res?.req?.id || res?.req?.headers?.["x-request-id"] || null;
+  const requestId = res?.req?.id || res?.req?.headers?.["x-request-id"] || randomUUID();
+  res?.set?.("X-Request-ID", requestId);
   const body = {
     ok: false,
     error,
