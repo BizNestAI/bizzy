@@ -483,7 +483,7 @@ test("tax API cache dedupes in-flight overview requests between prefetch and rou
   assert.match(cachedGet, /inflight\.set\(cacheKey, promise\)/);
   assert.doesNotMatch(cachedGet, /if \(!signal && inflight\.has/);
   assert.match(apiClient, /function taxDeductionsOverviewPath/);
-  assert.match(apiClient, /cacheKey: key\("taxWorkspace:tax-workspace-v1", params\)/);
+  assert.match(apiClient, /cacheKey: key\("taxWorkspace:tax-workspace-v2", params\)/);
 });
 
 test("deductions hook stages cold loading and keeps cached data visible during refresh", () => {
@@ -1164,7 +1164,8 @@ test("Tax Dashboard groups Questions for You by a stable annual decision identit
   assert.match(dashboard, /function toDecisionActionGroup/);
   assert.match(dashboard, /CUSTOMER_QUESTION_SECTIONS/);
   assert.match(dashboard, /function buildCustomerQuestionSections/);
-  assert.match(dashboard, /customerQuestionSummaryText\(deductions\.allTransactions \? customerWorkflow\.customerDecisionCount/);
+  assert.match(dashboard, /projectedQuestionGroups\.length\} questions covering \{questionCoveredUniqueCount\} unique transactions/);
+  assert.match(dashboard, /onOpen=\{\(group\) => setReviewDecision\(\{ group: toDecisionActionGroup\(group\)/);
   assert.match(dashboard, /Answer these to finish your \{year\} deduction estimates\./);
   assert.match(dashboard, /Manage deduction defaults/);
   assert.doesNotMatch(dashboard, /Review individual transactions|one_transaction/);

@@ -6,7 +6,7 @@ import {
   normalizeMoney,
   normalizeTaxYear,
 } from "./taxDomain.js";
-import { validationError, notFoundError } from "./taxErrors.js";
+import { validationError, notFoundError, dataUnavailableError } from "./taxErrors.js";
 import { computeTaxDeductionsSummary } from "./taxDeductionsEngine.js";
 import { compareTaxClassificationsToBookkeepingRollups } from "./taxDeductionsReconciliation.js";
 import { getClassificationHistory } from "./taxClassificationOverride.service.js";
@@ -113,6 +113,126 @@ export async function listDeductionTransactions({ supabase, businessId, taxYear,
     availableFilters: availableFilters(filterRows),
     warnings: collectWarnings(pageRows),
   };
+}
+
+// Projection-scoped detail hydration is anchored to the immutable server-only
+// evaluated manifest, not to the classification table. An evaluated posted
+// transaction can legitimately be waiting for a Bizzi Tax mapping and have no
+// classification row yet; omitting it would make All Transactions contradict
+// the accepted workspace projection.
+export async function listProjectionEvaluatedTransactions({
+  supabase,
+  businessId,
+  taxYear,
+  evaluatedIdentities,
+  pagination = {},
+} = {}) {
+  const context = requireContext({ supabase, businessId, taxYear });
+  const limit = normalizeLimit(pagination.limit);
+  const offset = normalizeOffset(pagination.offset);
+  const identities = Array.isArray(evaluatedIdentities) ? evaluatedIdentities.map(String) : [];
+  const uniqueIdentities = new Set(identities);
+  if (!identities.length || uniqueIdentities.size !== identities.length) {
+    throw dataUnavailableError("The Tax workspace transaction population is unavailable.", { reason: "evaluated_manifest_invalid" });
+  }
+
+  const sourceRows = (await listTaxPostingSourceRows(context))
+    .filter((row) => row.taxScopeDisposition && uniqueIdentities.has(String(row.transactionId)));
+  const sourceById = new Map(sourceRows.map((row) => [String(row.transactionId), row]));
+  if (sourceById.size !== uniqueIdentities.size || [...uniqueIdentities].some((id) => !sourceById.has(id))) {
+    throw dataUnavailableError("The Tax workspace transaction population is unavailable.", { reason: "evaluated_population_mismatch" });
+  }
+
+  const orderedSources = [...sourceRows].sort(compareProjectionSourceRows);
+  const pageSources = orderedSources.slice(offset, offset + limit);
+  const pageIds = pageSources.map((row) => String(row.transactionId));
+  const classificationById = new Map();
+  for (const idChunk of chunkValues(pageIds, 100)) {
+    const { data, error } = await supabase
+      .from("transaction_tax_classifications")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("tax_year", context.taxYear)
+      .in("transaction_id", idChunk);
+    if (error) throw error;
+    for (const row of data || []) classificationById.set(String(row.transaction_id), row);
+  }
+
+  const rows = pageSources.map((sourceRow) => projectionEvaluatedTransactionRow(
+    sourceRow,
+    classificationById.get(String(sourceRow.transactionId)) || null
+  ));
+  return {
+    rows,
+    pagination: {
+      limit,
+      offset,
+      returned: rows.length,
+      total: uniqueIdentities.size,
+      hasMore: offset + rows.length < uniqueIdentities.size,
+    },
+    population: {
+      projectionVersion: "tax-workspace-v2",
+      evaluatedUniqueCount: uniqueIdentities.size,
+      missingClassificationCount: rows.filter((row) => row.classificationStatus === "unclassified").length,
+    },
+  };
+}
+
+function projectionEvaluatedTransactionRow(source = {}, classification = null) {
+  const signedAmount = Number(classification?.book_amount ?? source.signedAmount ?? source.signed_amount ?? 0);
+  const transactionId = String(source.transactionId);
+  return {
+    transactionId,
+    transaction_id: transactionId,
+    date: normalizeDateOnly(source.transactionDate || source.transaction_date || source.date),
+    description: source.description || source.merchantName || source.counterpartyName || null,
+    merchantName: source.merchantName || null,
+    counterpartyName: source.counterpartyName || null,
+    signedAmount,
+    absoluteAmount: Math.abs(signedAmount),
+    direction: source.direction || (signedAmount >= 0 ? "INFLOW" : "OUTFLOW"),
+    qboAccountId: classification ? sourceQboAccountId(classification) : source.qboAccountId || null,
+    qboAccountName: classification ? sourceQboAccountName(classification) : source.qboAccountName || source.bookkeepingCategory || null,
+    qboTxnId: classification?.source_qbo_txn_id || source.qboTxnId || null,
+    qboTxnType: classification?.source_qbo_txn_type || source.qboTxnType || null,
+    taxCategory: classification?.tax_category || null,
+    deductibilityStatus: classification?.deductibility_status || null,
+    deductiblePercent: nullableNumber(classification?.deductible_percent),
+    deductibleAmount: nullableNumber(classification?.deductible_amount),
+    nondeductibleAmount: nullableNumber(classification?.nondeductible_amount),
+    capitalizableAmount: nullableNumber(classification?.capitalizable_amount),
+    taxTreatment: classification?.tax_treatment || null,
+    classificationStatus: classification?.classification_status || "unclassified",
+    confidenceScore: classification?.confidence_score ?? null,
+    confidenceLevel: classification?.confidence_level || "unavailable",
+    matched_rule_id: classification?.rule_id || null,
+    matched_rule_code: classification?.rule_code || null,
+    rule_version: classification?.rule_version || classification?.metadata?.rule_version || null,
+    source_type: classification?.source || null,
+    reason: classification?.reason || null,
+    warnings: classification ? safeWarnings(classification) : [],
+    requiresReview: classification?.requires_review === true,
+    taxScopeDisposition: source.taxScopeDisposition,
+    taxDataReasonCode: classification ? null : "tax_mapping_required",
+    override: {
+      hasOverride: Boolean(classification?.user_override || classification?.cpa_override),
+      source: classification?.source || null,
+      lastChangedAt: null,
+    },
+    updatedAt: classification?.updated_at || null,
+  };
+}
+
+function compareProjectionSourceRows(a, b) {
+  return String(b.transactionDate || b.date || "").localeCompare(String(a.transactionDate || a.date || "")) ||
+    String(a.transactionId).localeCompare(String(b.transactionId));
+}
+
+function chunkValues(values, size) {
+  const result = [];
+  for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+  return result;
 }
 
 export async function getDeductionTransactionDetail({ supabase, businessId, taxYear, transactionId } = {}) {

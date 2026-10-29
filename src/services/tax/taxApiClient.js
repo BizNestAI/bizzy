@@ -248,10 +248,11 @@ export async function getTaxDeductionsOverview({ businessId, year, asOfDate, ref
 
 export async function getTaxWorkspace({ businessId, year, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  const params = query({ businessId, year });
+  const projectionVersion = "tax-workspace-v2";
+  const params = query({ businessId, year, projectionVersion });
   const payload = await cachedGet(`/api/tax/workspace?${params}`, {
     signal,
-    cacheKey: key("taxWorkspace:tax-workspace-v1", params),
+    cacheKey: key("taxWorkspace:tax-workspace-v2", params),
     bypassCache: refresh,
     requestId: createClientRequestId(),
     timeoutCode: "tax_workspace_timeout",
@@ -264,15 +265,25 @@ export async function getTaxWorkspace({ businessId, year, refresh = false, signa
 function validateTaxWorkspaceResponse(response, { businessId, year }) {
   const envelope = response?.ok === true ? response.data : response;
   const projection = envelope?.projection;
+  const matrixRows = Array.isArray(projection?.matrix) ? projection.matrix : [];
+  const matrixRowCount = matrixRows.reduce((sum, row) => sum + Number(row?.transactionCount || 0), 0);
+  const matrixMonthCount = matrixRows.reduce((sum, row) => sum + Object.values(row?.months || {})
+    .reduce((monthSum, month) => monthSum + Number(month?.transactionCount || 0), 0), 0);
   const valid = ["complete", "refreshing"].includes(envelope?.state)
-    && envelope?.projectionVersion === "tax-workspace-v1"
-    && projection?.projectionVersion === "tax-workspace-v1"
+    && envelope?.projectionVersion === "tax-workspace-v2"
+    && projection?.projectionVersion === "tax-workspace-v2"
     && String(projection?.canonicalBusinessId) === String(businessId)
     && Number(projection?.taxYear) === Number(year)
     && Array.isArray(projection?.matrix)
     && Array.isArray(projection?.questionGroups)
-    && Number.isFinite(Number(projection?.estimatedDeductibleAmount));
-  if (!valid) throw Object.assign(new Error("The Tax workspace is not compatible with this version of Bizzi."), { code: "tax_workspace_version_mismatch", retryable: false });
+    && Number.isFinite(Number(projection?.estimatedDeductibleAmount))
+    && Number(projection?.evaluatedTransactionCount) === Number(projection?.matrixIncludedCount) + Number(projection?.outsideDeductionsCount)
+    && matrixRowCount === Number(projection?.matrixIncludedCount)
+    && matrixMonthCount === Number(projection?.matrixIncludedCount);
+  const treatmentCount = Number(projection?.treatmentCounts?.estimated) + Number(projection?.treatmentCounts?.reviewed) + Number(projection?.treatmentCounts?.needs_input);
+  const questionsValid = Number(projection?.questionMembershipSum) >= Number(projection?.questionCoveredUniqueCount)
+    && Number(projection?.questionMembershipOverlapCount) === Number(projection?.questionMembershipSum) - Number(projection?.questionCoveredUniqueCount);
+  if (!valid || treatmentCount !== Number(projection?.matrixIncludedCount) || !questionsValid) throw Object.assign(new Error("The Tax workspace is not compatible with this version of Bizzi."), { code: "tax_workspace_version_mismatch", retryable: false });
   return response;
 }
 
@@ -342,6 +353,20 @@ export async function getTaxDeductionTransactions({ businessId, year, asOfDate, 
     source: "deduction_transactions",
     requestId: taxRequestId(payload),
   });
+}
+
+export async function getTaxWorkspaceTransactions({ businessId, year, limit, offset, refresh = false, signal } = {}) {
+  requireBusinessId(businessId);
+  const projectionVersion = "tax-workspace-v2";
+  const payload = await cachedGet(`/api/tax/workspace/transactions?${query({ businessId, year, projectionVersion, limit: clampTaxDetailLimit(limit), offset })}`, { signal, bypassCache: refresh });
+  const page = normalizeTaxRowPage(unwrap(payload), {
+    source: "tax_workspace_projection_transactions",
+    requestId: taxRequestId(payload),
+  });
+  if (page?.population?.projectionVersion !== projectionVersion || Number(page?.pagination?.total) !== Number(page?.population?.evaluatedUniqueCount)) {
+    throw Object.assign(new Error("The Tax workspace transaction population is incomplete."), { code: "tax_workspace_transaction_population_mismatch", retryable: true });
+  }
+  return page;
 }
 
 export async function getTaxPostedTransactions({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit, offset, refresh = false, signal } = {}) {

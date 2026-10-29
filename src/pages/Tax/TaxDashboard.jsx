@@ -647,10 +647,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   const matrix = useMemo(
     () => {
       if (initialDeductionsLoading) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
-      if (!deductions.allTransactions && hasProjectedMatrix) return buildPersistedWorkspaceMatrix(deductions.workspaceProjection, year);
+      if (hasProjectedMatrix) return buildPersistedWorkspaceMatrix(deductions.workspaceProjection, year);
       return buildDeductionAccountMatrix(workspaceRows, year, { isDemo: deductions.isDemo, scope: "overview" });
     },
-    [deductions.allTransactions, deductions.isDemo, deductions.workspaceProjection, hasProjectedMatrix, initialDeductionsLoading, workspaceRows, year]
+    [deductions.isDemo, deductions.workspaceProjection, hasProjectedMatrix, initialDeductionsLoading, workspaceRows, year]
   );
   // Headline values are an atomic overview projection. Detail rows can enrich
   // the matrix, but may never recalculate or replace the persisted summary.
@@ -658,14 +658,20 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     overviewProjection?.estimatedDeductibleAmount ?? deductions.overview?.totals?.estimatedDeductibleAmount
   );
   const authoritativeMatrixIncludedCount = Number(overviewProjection?.matrixIncludedCount);
+  const evaluatedTransactionCount = Number(overviewProjection?.evaluatedTransactionCount);
+  const outsideDeductionsCount = Number(overviewProjection?.outsideDeductionsCount);
+  const treatmentCounts = overviewProjection?.treatmentCounts || {};
+  const questionCoveredUniqueCount = Number(overviewProjection?.questionCoveredUniqueCount || 0);
   const authoritativeQuestionCount = overviewProjection?.questionsForYouGroupCount;
   const projectedQuestionGroups = deductions.workspaceProjection?.questionGroups || [];
-  const questionsRequestStatus = deductions.sectionStatus?.matrix || "idle";
+  // Projection summaries are the question-list authority. Optional row/detail
+  // reads must never replace or erase them.
+  const questionsRequestStatus = deductions.workspaceProjection ? "success" : (deductions.sectionStatus?.overview || "idle");
   const questionsPanelState = resolveQuestionsPanelState({
     status: questionsRequestStatus,
     authoritativeCount: authoritativeQuestionCount,
-    renderedCount: deductions.allTransactions ? customerWorkflow.customerDecisionCount : projectedQuestionGroups.length,
-    hasAuthoritativeDetails: Boolean(deductions.allTransactions || deductions.workspaceProjection),
+    renderedCount: projectedQuestionGroups.length,
+    hasAuthoritativeDetails: Boolean(deductions.workspaceProjection),
   });
   const questionsError = deductions.resourceErrors?.allTransactions || null;
   useEffect(() => {
@@ -796,6 +802,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           <p className="mt-3 max-w-2xl text-xs leading-relaxed text-white/50">
             Estimates are based on expenses posted to QuickBooks. Items that need more information are excluded until reviewed.
           </p>
+          <div className="mt-3 space-y-1 text-xs text-white/58" aria-label="Tax workspace reconciliation">
+            <p>{evaluatedTransactionCount} posted transactions evaluated · {authoritativeMatrixIncludedCount} deductible-expense transactions included · {outsideDeductionsCount} outside deductions</p>
+            <p>{authoritativeMatrixIncludedCount} matrix transactions = {Number(treatmentCounts.estimated || 0)} estimated + {Number(treatmentCounts.reviewed || 0)} reviewed + {Number(treatmentCounts.needs_input || 0)} needing input</p>
+          </div>
         </div>
         <ClassificationProgressSummary summary={classificationSummary} onViewTransactions={(transactionIds) => {
           setFocusedUpdatingIds(transactionIds);
@@ -848,7 +858,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           ) : (
           <><div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <div className="text-sm font-semibold text-white/84">{customerQuestionSummaryText(deductions.allTransactions ? customerWorkflow.customerDecisionCount : projectedQuestionGroups.length, deductions.allTransactions ? customerWorkflow.customerInputCount : projectedQuestionGroups.reduce((sum, group) => sum + Number(group.actionableTransactionCount || 0), 0))}</div>
+              <div className="text-sm font-semibold text-white/84">{projectedQuestionGroups.length} questions covering {questionCoveredUniqueCount} unique transactions</div>
               <div className="mt-0.5 text-xs text-white/45">Answer these to finish your {year} deduction estimates.</div>
             </div>
             <button
@@ -862,9 +872,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           {questionsPanelState === "ready_empty" ? (
             <div className="px-3 py-8 text-center text-sm text-white/58">Nothing needs your input right now.</div>
           ) : (
-            deductions.allTransactions
-              ? <AttentionReviewGroups groups={attentionGroups} readOnly={readOnly} onOpenDecision={setReviewDecision} />
-              : <ProjectedQuestionGroups groups={projectedQuestionGroups} onOpen={() => deductions.retryQuestions()} />
+            <ProjectedQuestionGroups
+              groups={projectedQuestionGroups}
+              onOpen={(group) => setReviewDecision({ group: toDecisionActionGroup(group), selectedMonth: null })}
+            />
           )}</>
           )}
         </div>
@@ -2306,7 +2317,9 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
 
   if (!decision?.group) return null;
   const { group } = decision;
-  const rows = decisionActionRows(group);
+  const rows = serverPreview?.transactions?.length
+    ? serverPreview.transactions.map(mapDeductionTransactionRow)
+    : decisionActionRows(group);
   const population = decisionPopulation(group);
   const selectedRows = decisionRowsForAnswer(rows, businessUseAnswer, exceptionIds);
   const action = isTaxRecord(group.decision) ? group.decision : reviewDecisionForType(group.decisionType);

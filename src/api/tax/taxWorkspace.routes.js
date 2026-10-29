@@ -16,6 +16,7 @@ import { optionalTaxYear, validateBusinessIdInput } from "./taxValidation.js";
 import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
 import { assertInternalSchedulerAccess } from "./taxSchedulerAuth.js";
 import { workspaceReadError } from "./taxWorkspaceErrors.js";
+import { listProjectionEvaluatedTransactions, normalizeDeductionPagination } from "../../services/tax/taxDeductionsApi.service.js";
 
 const router = Router();
 
@@ -47,6 +48,33 @@ router.get("/workspace", async (req, res) => {
     });
   } catch (error) {
     return sendTaxError(res, workspaceReadError(error), "tax_workspace_read_failed");
+  }
+});
+
+router.get("/workspace/transactions", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const db = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    assertNoConflictingBusinessIdentity(req, businessId);
+    const access = await assertTaxBusinessAccess({ req, businessId, supabase: db });
+    if (String(access.businessId) !== String(businessId)) throw safeError("tax_workspace_scope_conflict", 403, "Tax workspace scope does not match the authenticated business.");
+    if (!(await businessHasPaidEntitlement(businessId, { db }))) throw safeError("paid_entitlement_required", 403, "A paid subscription is required to view this Tax workspace.");
+    const taxYear = optionalTaxYear(req.query.year ?? req.query.taxYear, new Date().getFullYear());
+    const projectionVersion = String(req.query.projectionVersion || "");
+    if (projectionVersion !== TAX_WORKSPACE_PROJECTION_VERSION) throw safeError("tax_workspace_version_required", 422, `projectionVersion must be ${TAX_WORKSPACE_PROJECTION_VERSION}.`);
+    const record = await getLatestTaxWorkspaceProjection({ supabase: db, businessId, taxYear, projectionVersion });
+    if (!record) throw safeError("projection_unavailable", 503, "Your Tax workspace is not available yet.", { action: "retry" });
+    const data = await listProjectionEvaluatedTransactions({
+      supabase: db,
+      businessId,
+      taxYear,
+      evaluatedIdentities: record.projection_data?.identityEvidence?.evaluated,
+      pagination: normalizeDeductionPagination(req.query || {}),
+    });
+    return sendTaxSuccess(res, data);
+  } catch (error) {
+    return sendTaxError(res, workspaceReadError(error), "tax_workspace_transactions_failed");
   }
 });
 

@@ -9,6 +9,16 @@ import {
   withBoundedWorkspaceRead,
 } from "../src/components/Tax/Deductions/deductionsRequestState.js";
 
+test("frontend critical route is one projection read and detail paging is lazy", () => {
+  const hook = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
+  const client = fs.readFileSync(new URL("../src/services/tax/taxApiClient.js", import.meta.url), "utf8");
+  const initialEffect = hook.slice(hook.indexOf("useEffect(() => {", hook.indexOf("const retryQuestions")), hook.indexOf("useEffect(() => {", hook.indexOf("const retryQuestions") + 200));
+  assert.match(hook, /getTaxWorkspace\(\{ businessId, year, refresh, signal \}\)/);
+  assert.match(client, /\/api\/tax\/workspace\?/);
+  assert.match(client, /TAX_WORKSPACE_READ_TIMEOUT_MS = 5_000/);
+  assert.doesNotMatch(initialEffect, /loadSecondaryDetails/);
+});
+
 test("Questions for You keeps loading, empty, error, and populated states distinct", () => {
   assert.equal(resolveQuestionsPanelState({ status: "loading", authoritativeCount: 8, renderedCount: 0 }), "loading");
   assert.equal(resolveQuestionsPanelState({ status: "success", authoritativeCount: 0, renderedCount: 0, hasAuthoritativeDetails: true }), "ready_empty");
@@ -217,13 +227,16 @@ test("Questions for You renders bounded projection cards and hydrates rows lazil
   const dashboard = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
   const hook = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
   assert.match(hook, /getTaxWorkspace/);
-  assert.match(hook, /const retryQuestions[\s\S]*fetchAllDeductionTransactions/);
+  assert.match(hook, /const retryQuestions[\s\S]*fetchAllWorkspaceTransactions/);
   assert.match(hook, /useEffect\(\(\) => \{[\s\S]*load\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\)/);
   assert.match(dashboard, /questionsPanelState === "loading"[\s\S]*QuestionsPanelLoading/);
   assert.match(dashboard, /Loading \$\{count\} questions…/);
   assert.match(dashboard, /Nothing needs your input right now\./);
   assert.match(dashboard, /We couldn’t load your questions\./);
   assert.match(dashboard, /ProjectedQuestionGroups/);
+  assert.match(dashboard, /Optional row\/detail[\s\S]*must never replace or erase them/);
+  assert.match(dashboard, /onOpen=\{\(group\) => setReviewDecision/);
+  assert.doesNotMatch(dashboard, /deductions\.allTransactions\s*\? <AttentionReviewGroups/);
   assert.doesNotMatch(dashboard, /questionsPanelState === "loading"[\s\S]{0,300}customerQuestionSummaryText/);
 });
 
@@ -232,7 +245,7 @@ test("question retry is scoped, single-flight, stale-safe, and read-only", () =>
   assert.match(hook, /if \(questionsRetryInFlight\.current\) return questionsRetryInFlight\.current/);
   assert.match(hook, /if \(request !== seq\.current\) return null/);
   const retryBlock = hook.slice(hook.indexOf("const retryQuestions"), hook.indexOf("useEffect(() =>", hook.indexOf("const retryQuestions")));
-  assert.match(retryBlock, /fetchAllDeductionTransactions/);
+  assert.match(retryBlock, /fetchAllWorkspaceTransactions/);
   assert.doesNotMatch(retryBlock, /runTaxClassification|prepareTaxClassifications|confirmGroupedTaxDeductionDecision|saveTaxDeductionDecisionRule/);
 });
 

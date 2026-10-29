@@ -20,6 +20,7 @@ import {
   getTaxDeductionTransactionDetail,
   getTaxDeductionTransactions,
   getTaxWorkspace,
+  getTaxWorkspaceTransactions,
   getTaxPostedTransactions,
   overrideTaxClassification,
   prepareTaxClassifications,
@@ -253,13 +254,10 @@ export function useTaxDeductions({
     const request = seq.current;
     setRequestStatus((current) => ({ ...current, scopeKey, matrix: "loading" }));
     setResourceErrors((current) => ({ ...(current || {}), allTransactions: null }));
-    const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
     const operation = withBoundedWorkspaceRead(
-      (workspaceSignal) => fetchAllDeductionTransactions({
+      (workspaceSignal) => fetchAllWorkspaceTransactions({
         businessId,
         year,
-        asOfDate,
-        filters: parsedFilters,
         refresh: true,
         signal: workspaceSignal,
       }),
@@ -280,7 +278,7 @@ export function useTaxDeductions({
     });
     questionsRetryInFlight.current = operation;
     return operation;
-  }, [asOfDate, businessId, enabled, filterKey, isDemo, scopeKey, year]);
+  }, [businessId, enabled, isDemo, scopeKey, year]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -665,13 +663,13 @@ function mapJobStatusToLifecycle(status, fallback = null) {
   return fallback;
 }
 
-async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filters, refresh = false, signal }) {
+async function fetchAllWorkspaceTransactions({ businessId, year, refresh = false, signal }) {
   const limit = 200;
   const rows = [];
   let latestPage = null;
   for (let offset = 0; ; offset += limit) {
     const page = await withBoundedReadRetry(
-      () => getTaxDeductionTransactions({ businessId, year, asOfDate, filters, limit, offset, refresh, signal }),
+      () => getTaxWorkspaceTransactions({ businessId, year, limit, offset, refresh, signal }),
       { signal }
     );
     const pageRows = Array.isArray(page?.rows) ? page.rows : [];
@@ -679,17 +677,14 @@ async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filte
     latestPage = page;
     if (!page?.pagination?.hasMore || !pageRows.length) break;
   }
+  const uniqueCount = new Set(rows.map(stableTaxRowId).filter(Boolean)).size;
+  if (uniqueCount !== Number(latestPage?.population?.evaluatedUniqueCount)) {
+    throw Object.assign(new Error("The Tax workspace transaction population is incomplete."), { code: "tax_workspace_transaction_population_mismatch", retryable: true });
+  }
   return {
     ...(latestPage || {}),
     rows,
-    pagination: {
-      ...(latestPage?.pagination || {}),
-      limit,
-      offset: 0,
-      returned: rows.length,
-      total: latestPage?.pagination?.total ?? rows.length,
-      hasMore: false,
-    },
+    pagination: { ...(latestPage?.pagination || {}), limit, offset: 0, returned: rows.length, total: uniqueCount, hasMore: false },
   };
 }
 
@@ -789,6 +784,10 @@ function overviewFromWorkspace(workspace) {
       matrixIncludedCount: workspace.matrixIncludedCount,
       outsideDeductionsCount: workspace.outsideDeductionsCount,
       questionsForYouGroupCount: workspace.questionGroupCount,
+      questionCoveredUniqueCount: workspace.questionCoveredUniqueCount,
+      questionMembershipOverlapCount: workspace.questionMembershipOverlapCount,
+      treatmentCounts: workspace.treatmentCounts,
+      actionOwnerCounts: workspace.actionOwnerCounts,
     },
     totals: { estimatedDeductibleAmount: workspace.estimatedDeductibleAmount },
     categories: workspace.matrix || [],
