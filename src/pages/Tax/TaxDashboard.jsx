@@ -827,6 +827,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
             transactionCount={matrix.transactionCount}
             populationBridge={populationBridge}
             projection={lifecycleProjection}
+            workspaceProjection={deductions.workspaceProjection}
+            updating={deductionsUpdating || matrixIsLoading}
             awaitingEvaluationCount={classificationSummary.missingEvaluationTotal}
           />}
           {!matrixIsLoading && !matrixIsUnavailable ? <DeductionMatrixLegend /> : null}
@@ -1547,7 +1549,10 @@ function describeOutsideMatrixActivity(dispositions = {}) {
   return `Outside the matrix includes ${categories.slice(0, -1).join(", ")}, and ${categories[categories.length - 1]}.`;
 }
 
-function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null, awaitingEvaluationCount = null }) {
+function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null, workspaceProjection = null, updating = false, awaitingEvaluationCount = null }) {
+  const legacyCounts = resolveDeductionsPopulationCounts({ transactionCount, populationBridge, projection });
+  const hasPersistedCounts = workspaceProjection?.projectionVersion === "tax-workspace-v2"
+    && Number(workspaceProjection?.evaluatedTransactionCount) === Number(workspaceProjection?.matrixIncludedCount) + Number(workspaceProjection?.outsideDeductionsCount);
   const {
     bridgeScope,
     matrixIncludedCount,
@@ -1558,7 +1563,16 @@ function DeductionsIncludedDisclosure({ transactionCount, populationBridge = nul
     needsInputCount,
     bookkeepingDetailCount,
     conservationOk,
-  } = resolveDeductionsPopulationCounts({ transactionCount, populationBridge, projection });
+  } = hasPersistedCounts ? {
+    ...legacyCounts,
+    matrixIncludedCount: Number(workspaceProjection.matrixIncludedCount),
+    evaluatedCount: Number(workspaceProjection.evaluatedTransactionCount),
+    outsideMatrixCount: Number(workspaceProjection.outsideDeductionsCount),
+    reviewedCount: Number(workspaceProjection.treatmentCounts?.reviewed || 0),
+    standardEstimateCount: Number(workspaceProjection.treatmentCounts?.estimated || 0),
+    needsInputCount: Number(workspaceProjection.treatmentCounts?.needs_input || 0),
+    conservationOk: true,
+  } : legacyCounts;
   const workflowDetails = [
     ["Customer-reviewed decisions", reviewedCount],
     ["Standard estimates", standardEstimateCount],
@@ -1570,7 +1584,7 @@ function DeductionsIncludedDisclosure({ transactionCount, populationBridge = nul
       <p className="font-semibold leading-relaxed text-white/74" role="status">
         {conservationOk
           ? `${evaluatedCount} posted transactions evaluated · ${matrixIncludedCount} expense transactions included in the deductions matrix · ${outsideMatrixCount} outside deductions`
-          : "Transaction totals are updating."}
+          : updating ? "Transaction totals are updating." : "Transaction totals are temporarily unavailable."}
       </p>
       <p className="sr-only" id="deductions-reconciliation-description">
         Outside deductions means the transaction was evaluated but does not belong in the expense-deduction matrix. Transactions awaiting evaluation are reported separately and are not included in this equation.
@@ -1642,15 +1656,31 @@ function DeductionsDetailsLoadingState() {
 function ProjectedQuestionGroups({ groups = [], onOpen }) {
   return (
     <div className="grid gap-3 p-3 sm:grid-cols-2" aria-label="Questions for you">
-      {groups.map((group) => (
-        <article key={group.id} className="rounded-xl border border-amber-300/15 bg-amber-300/[0.05] p-3">
+      {groups.map((group, groupIndex) => {
+        const sameNameGroups = groups.filter((candidate) => String(candidate.qboAccountName || "Expense review") === String(group.qboAccountName || "Expense review"));
+        const scopePosition = sameNameGroups.length > 1 ? sameNameGroups.findIndex((candidate) => candidate.id === group.id) + 1 : null;
+        return <article key={group.id} className="rounded-xl border border-amber-300/15 bg-amber-300/[0.05] p-3" data-question-position={groupIndex + 1}>
           <div className="text-sm font-semibold text-white">{group.qboAccountName || "Expense review"}</div>
+          <div className="mt-0.5 text-[11px] text-white/42">{projectedQuestionGroupSubtitle(group, scopePosition, sameNameGroups.length)}</div>
           <div className="mt-1 text-xs text-white/55">{Number(group.actionableTransactionCount || 0)} transaction{Number(group.actionableTransactionCount || 0) === 1 ? "" : "s"} need your input.</div>
           <button type="button" onClick={() => onOpen?.(group)} className="mt-3 rounded-full border border-amber-100/20 px-3 py-1 text-xs font-semibold text-amber-50 hover:bg-amber-100/10">Open question</button>
-        </article>
-      ))}
+        </article>;
+      })}
     </div>
   );
+}
+
+function projectedQuestionGroupSubtitle(group = {}, scopePosition = null, scopeCount = 0) {
+  const action = {
+    business_use_confirmation: "Business-use review",
+    business_use_percent: "Business-use percentage",
+    vehicle_method: "Vehicle deduction method",
+  }[group.decisionType] || "Deduction review";
+  const months = [...new Set((group.months || []).map((month) => String(month).slice(0, 7)).filter(Boolean))].sort();
+  const scope = scopePosition ? `Account scope ${scopePosition} of ${scopeCount}` : null;
+  if (!months.length) return [action, scope].filter(Boolean).join(" · ");
+  const labels = months.map((month) => new Date(`${month}-01T12:00:00Z`).toLocaleDateString(undefined, { month: "short", timeZone: "UTC" }));
+  return [action, labels.join(", "), scope].filter(Boolean).join(" · ");
 }
 
 function DeductionsTransactionDetailsError({ error, onRetry }) {
@@ -1755,9 +1785,10 @@ function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenD
 }
 
 function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisionGroups = [] }) {
-  if (!cell?.transactions?.length) {
+  if (!Number(cell?.transactionCount || cell?.transactions?.length || 0)) {
     return <span className="block px-2 py-1.5 text-[12px] text-white/22" role="img" aria-label="No activity">—</span>;
   }
+  if (cell.persisted) return <PersistedMatrixCell account={account} month={month} cell={cell} />;
   const openCell = (authority) => {
     const transactions = authority === "reviewed"
       ? cell.transactions.filter((row) => hasReviewedTaxTreatment(row) && !isStandardMileageGasRow(row))
@@ -1899,6 +1930,16 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
           Needs bookkeeping details
         </button>
       ) : null}
+    </div>
+  );
+}
+
+function PersistedMatrixCell({ account, month, cell }) {
+  return (
+    <div className="flex flex-col items-stretch gap-1" aria-label={`${account.name}, ${month.longLabel}`}>
+      {cell.reviewedTransactionCount > 0 ? <div className="rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50"><span className="block">{formatCurrencyLocal(cell.reviewedDeductibleTotal)}</span><span className="block text-[10px] font-medium">Reviewed deduction</span></div> : null}
+      {cell.standardRuleTransactionCount > 0 ? <div className="rounded-lg border border-sky-300/10 bg-sky-300/[0.05] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-sky-100"><span className="block">{formatCurrencyLocal(cell.standardRuleDeductibleTotal)}</span><span className="block text-[10px] font-medium">Estimated deduction</span></div> : null}
+      {cell.customerInputTransactionCount > 0 ? <div className="rounded-lg border border-amber-300/10 bg-amber-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-amber-100"><span className="block">{formatCurrencyLocal(cell.needsInputGrossExpense)}</span><span className="block text-[10px] font-medium">Expenses awaiting input</span></div> : null}
     </div>
   );
 }
@@ -2669,8 +2710,15 @@ function ClassificationProgressSummary({ summary, onViewTransactions }) {
 function ClassificationWorkspaceTable({ rows, loading, updating = false, updatingItemByTransaction = new Map(), emptyMessage = "No transactions match this classification view." }) {
   if (loading && !rows.length) {
     return (
-      <div className="px-4 py-7 text-center text-sm text-white/50">
-        Loading classification workspace...
+      <div
+        className="flex min-h-[110px] flex-col items-center justify-center gap-3 px-4 py-7 text-center text-sm text-white/50"
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+      >
+        <Loader2 className="h-6 w-6 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" aria-hidden="true" />
+        <span className="hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" aria-hidden="true" />
+        <span>Loading All Transactions…</span>
       </div>
     );
   }
@@ -5046,18 +5094,25 @@ function buildPersistedWorkspaceMatrix(workspace, year) {
     const monthMap = Object.fromEntries(months.map((month) => {
       const stored = category.months?.[month.key] || {};
       const deductible = Number(stored.deductibleAmount || 0);
-      const needsInput = Number(stored.needsReviewAmount || 0);
+      const estimatedDeductible = Number(stored.estimatedDeductibleAmount || 0);
+      const reviewedDeductible = Number(stored.reviewedDeductibleAmount || 0);
+      const needsInput = Number(stored.needsInputGrossExpense ?? stored.needsReviewAmount ?? 0);
+      const estimatedCount = Number(stored.estimatedTransactionCount || 0);
+      const reviewedCount = Number(stored.reviewedTransactionCount || 0);
+      const needsInputCount = Number(stored.needsInputTransactionCount || 0);
+      const transactionCount = Number(stored.transactionCount || 0);
       return [month.key, {
+        persisted: true, transactionCount,
         expenseTotal: Number(stored.bookExpenseAmount || 0), authoritativeDeductibleTotal: deductible,
-        proposedDeductibleTotal: 0, standardRuleDeductibleTotal: deductible, reviewedDeductibleTotal: 0,
+        proposedDeductibleTotal: 0, standardRuleDeductibleTotal: estimatedDeductible, reviewedDeductibleTotal: reviewedDeductible,
         needsInputDeductibleTotal: 0, needsInputGrossExpense: needsInput,
-        displayDeductibleTotal: deductible, autoTransactionCount: Number(stored.transactionCount || 0),
-        userConfirmedTransactionCount: 0, accountantConfirmedTransactionCount: 0, standardMileageTransactionCount: 0,
+        displayDeductibleTotal: deductible, autoTransactionCount: estimatedCount,
+        userConfirmedTransactionCount: reviewedCount, accountantConfirmedTransactionCount: 0, standardMileageTransactionCount: 0,
         resolvedZeroTransactionCount: 0, excludedTransactionCount: 0, failedTransactionCount: 0,
-        unclassifiedTransactionCount: 0, reviewTransactionCount: needsInput > 0 ? Number(stored.transactionCount || 0) : 0,
-        standardRuleTransactionCount: needsInput > 0 ? 0 : Number(stored.transactionCount || 0), reviewedTransactionCount: 0,
-        customerInputTransactionCount: needsInput > 0 ? Number(stored.transactionCount || 0) : 0,
-        needsTaxReviewTransactionCount: Number(stored.needsTaxReviewGrossExpense || 0) > 0 ? Number(stored.transactionCount || 0) : 0,
+        unclassifiedTransactionCount: 0, reviewTransactionCount: reviewedCount + needsInputCount,
+        standardRuleTransactionCount: estimatedCount, reviewedTransactionCount: reviewedCount,
+        customerInputTransactionCount: needsInputCount,
+        needsTaxReviewTransactionCount: 0,
         needsTaxReviewGrossExpense: Number(stored.needsTaxReviewGrossExpense || 0), reviewActionLabel: null, transactions: [],
       }];
     }));
@@ -5068,14 +5123,14 @@ function buildPersistedWorkspaceMatrix(workspace, year) {
       expenseTotal: values.reduce((sum, item) => sum + item.expenseTotal, 0),
       authoritativeDeductibleTotal: values.reduce((sum, item) => sum + item.authoritativeDeductibleTotal, 0),
       proposedDeductibleTotal: 0, standardRuleDeductibleTotal: values.reduce((sum, item) => sum + item.standardRuleDeductibleTotal, 0),
-      reviewedDeductibleTotal: 0, needsInputDeductibleTotal: 0,
+      reviewedDeductibleTotal: values.reduce((sum, item) => sum + item.reviewedDeductibleTotal, 0), needsInputDeductibleTotal: 0,
       needsInputGrossExpense: values.reduce((sum, item) => sum + item.needsInputGrossExpense, 0),
       displayDeductibleTotal: values.reduce((sum, item) => sum + item.displayDeductibleTotal, 0),
-      transactionCount: Number(category.transactionCount || 0), autoTransactionCount: Number(category.transactionCount || 0),
-      userConfirmedTransactionCount: 0, accountantConfirmedTransactionCount: 0, standardMileageTransactionCount: 0,
+      transactionCount: Number(category.transactionCount || 0), autoTransactionCount: values.reduce((sum, item) => sum + item.autoTransactionCount, 0),
+      userConfirmedTransactionCount: values.reduce((sum, item) => sum + item.userConfirmedTransactionCount, 0), accountantConfirmedTransactionCount: 0, standardMileageTransactionCount: 0,
       resolvedZeroTransactionCount: 0, excludedTransactionCount: 0, failedTransactionCount: 0, unclassifiedTransactionCount: 0,
       reviewTransactionCount: values.reduce((sum, item) => sum + item.reviewTransactionCount, 0),
-      standardRuleTransactionCount: values.reduce((sum, item) => sum + item.standardRuleTransactionCount, 0), reviewedTransactionCount: 0,
+      standardRuleTransactionCount: values.reduce((sum, item) => sum + item.standardRuleTransactionCount, 0), reviewedTransactionCount: values.reduce((sum, item) => sum + item.reviewedTransactionCount, 0),
       customerInputTransactionCount: values.reduce((sum, item) => sum + item.customerInputTransactionCount, 0),
       needsTaxReviewTransactionCount: values.reduce((sum, item) => sum + item.needsTaxReviewTransactionCount, 0),
       needsTaxReviewGrossExpense: values.reduce((sum, item) => sum + item.needsTaxReviewGrossExpense, 0), reviewActionLabel: null,
@@ -5543,6 +5598,8 @@ export const __TaxDashboardTestInternals = {
   DeductionDecisionRuleEditor,
   DeductionDecisionRulesPanel,
   DeductionsIncludedDisclosure,
+  MatrixCell,
+  ProjectedQuestionGroups,
   DeductionMonthDetailModal,
   ReviewDecisionModal,
   GroupedDecisionPreviewState,
@@ -5550,6 +5607,7 @@ export const __TaxDashboardTestInternals = {
   WorkspaceViewTabs,
   buildDeductionDefaultSetupOptions,
   buildDeductionAccountMatrix,
+  buildPersistedWorkspaceMatrix,
   buildMatrixAuthorityTotals,
   buildMatrixCellAmountProjection,
   buildClassificationWorkspaceRows,
@@ -5572,5 +5630,6 @@ export const __TaxDashboardTestInternals = {
   isStandardRuleProposal,
   requiresCustomerTaxInput,
   questionActionableCount,
+  projectedQuestionGroupSubtitle,
   resolveDeductionsPopulationCounts,
 };

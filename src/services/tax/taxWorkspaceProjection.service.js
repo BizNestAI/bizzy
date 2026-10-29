@@ -155,14 +155,34 @@ function buildIdentityMatrix(entries, taxYear, amountCategories = []) {
 }
 
 function aggregateMonth(entries, authoritativeAmounts = null) {
+  const treatment = entries.reduce((totals, entry) => {
+    const bucket = treatmentBucket(entry);
+    totals[`${bucket}TransactionCount`] += 1;
+    if (bucket === "needsInput") return totals;
+    totals[`${bucket}DeductibleAmount`] += Number(entry?.row?.deductibleAmount ?? entry?.row?.deductible_amount ?? 0) || 0;
+    return totals;
+  }, {
+    estimatedTransactionCount: 0, reviewedTransactionCount: 0, needsInputTransactionCount: 0,
+    estimatedDeductibleAmount: 0, reviewedDeductibleAmount: 0,
+  });
+  const authoritativeDeductibleAmount = round(authoritativeAmounts?.deductibleAmount || 0);
+  if (treatment.estimatedTransactionCount > 0 && treatment.reviewedTransactionCount === 0) treatment.estimatedDeductibleAmount = authoritativeDeductibleAmount;
+  if (treatment.reviewedTransactionCount > 0 && treatment.estimatedTransactionCount === 0) treatment.reviewedDeductibleAmount = authoritativeDeductibleAmount;
   return {
     transactionCount: entries.length,
     identityManifest: sortedUnique(entries.map((entry) => entry.id)),
     bookExpenseAmount: round(authoritativeAmounts?.bookExpenseAmount || 0),
-    deductibleAmount: round(authoritativeAmounts?.deductibleAmount || 0),
+    deductibleAmount: authoritativeDeductibleAmount,
     needsReviewAmount: round(authoritativeAmounts?.needsReviewAmount || 0),
     needsTaxReviewGrossExpense: round(authoritativeAmounts?.needsTaxReviewGrossExpense || 0),
+    ...Object.fromEntries(Object.entries(treatment).map(([key, value]) => [key, key.endsWith("Amount") ? round(value) : value])),
   };
+}
+
+function treatmentBucket(entry) {
+  if ([TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_APPLIED, TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_ESTIMATED_NO_ACTION].includes(entry?.outcome)) return "estimated";
+  if ([TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED, TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.EXCLUDED].includes(entry?.outcome)) return "reviewed";
+  return "needsInput";
 }
 
 function monthIdentityEvidence(entries, taxYear) {
@@ -228,6 +248,22 @@ export function publicTaxWorkspaceProjection(payload) {
       delete row.identityManifest;
       row.months = Object.fromEntries(Object.entries(row.months || {}).map(([month, sourceValue]) => {
         const value = { ...sourceValue };
+        const identities = Array.isArray(value.identityManifest) ? value.identityManifest : [];
+        const treatments = payload.identityEvidence?.treatments || {};
+        const countIn = (setName) => {
+          const set = new Set(treatments[setName] || []);
+          return identities.reduce((count, id) => count + (set.has(id) ? 1 : 0), 0);
+        };
+        const estimatedTransactionCount = Number(value.estimatedTransactionCount ?? countIn("estimated"));
+        const reviewedTransactionCount = Number(value.reviewedTransactionCount ?? countIn("reviewed"));
+        const needsInputTransactionCount = Number(value.needsInputTransactionCount ?? countIn("needs_input"));
+        const deductibleAmount = Number(value.deductibleAmount || 0);
+        value.estimatedTransactionCount = estimatedTransactionCount;
+        value.reviewedTransactionCount = reviewedTransactionCount;
+        value.needsInputTransactionCount = needsInputTransactionCount;
+        value.estimatedDeductibleAmount = Number(value.estimatedDeductibleAmount ?? (estimatedTransactionCount > 0 && reviewedTransactionCount === 0 ? deductibleAmount : 0));
+        value.reviewedDeductibleAmount = Number(value.reviewedDeductibleAmount ?? (reviewedTransactionCount > 0 && estimatedTransactionCount === 0 ? deductibleAmount : 0));
+        value.needsInputGrossExpense = Number(value.needsInputGrossExpense ?? value.needsReviewAmount ?? 0);
         delete value.identityManifest;
         return [month, value];
       }));

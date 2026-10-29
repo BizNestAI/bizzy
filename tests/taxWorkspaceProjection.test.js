@@ -184,6 +184,21 @@ test("browser response omits stable identity manifests", () => {
   assert.equal(browser.identityFingerprints.matrixIncluded.length, 64);
 });
 
+test("browser response exposes safe monthly treatment aggregates without identity evidence", () => {
+  const { overview, lifecycle } = source();
+  const payload = internals.buildPayload({ overview, lifecycle, businessId: BUSINESS, taxYear: 2026, sourceFingerprint: "4".repeat(64), generatedAt: overview.meta.generatedAt });
+  const browser = publicTaxWorkspaceProjection(payload);
+  const software = browser.matrix.find((row) => row.categoryKey === "software_subscriptions").months["2026-10"];
+  const meals = browser.matrix.find((row) => row.categoryKey === "business_meals").months["2026-10"];
+  assert.deepEqual({ estimated: software.estimatedTransactionCount, reviewed: software.reviewedTransactionCount, needsInput: software.needsInputTransactionCount }, { estimated: 1, reviewed: 0, needsInput: 0 });
+  assert.equal(software.estimatedDeductibleAmount, software.deductibleAmount);
+  assert.deepEqual({ estimated: meals.estimatedTransactionCount, reviewed: meals.reviewedTransactionCount, needsInput: meals.needsInputTransactionCount }, { estimated: 0, reviewed: 1, needsInput: 1 });
+  assert.equal(meals.reviewedDeductibleAmount, meals.deductibleAmount);
+  assert.equal(meals.needsInputGrossExpense, meals.needsReviewAmount);
+  assert.equal(JSON.stringify(browser).includes("estimated-1"), false);
+  assert.equal(JSON.stringify(browser).includes("reviewed-1"), false);
+});
+
 test("v1 and v2 selection is explicit and cannot interchange records", async () => {
   const supabase = { store: { tax_workspace_projections: [
     { id: "v1", business_id: BUSINESS, tax_year: 2026, projection_version: TAX_WORKSPACE_LEGACY_PROJECTION_VERSION, status: "complete", generated_at: "2026-10-01", projection_data: { projectionVersion: TAX_WORKSPACE_LEGACY_PROJECTION_VERSION } },

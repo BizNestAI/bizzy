@@ -161,6 +161,19 @@ test("Tax Overview skeleton and empty state are gated and accessible", () => {
   assert.match(source, /Existing deduction data remains on screen and may be stale/);
 });
 
+test("All Transactions shows an animated accessible loading state while its rows load", () => {
+  const source = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("function ClassificationWorkspaceTable");
+  const end = source.indexOf("if (!rows.length)", start);
+  const loadingState = source.slice(start, end);
+
+  assert.match(loadingState, /if \(loading && !rows\.length\)/);
+  assert.match(loadingState, /<Loader2[^>]+motion-safe:animate-spin motion-reduce:hidden/);
+  assert.match(loadingState, /role="status"/);
+  assert.match(loadingState, /aria-busy="true"/);
+  assert.match(loadingState, /Loading All Transactions…/);
+});
+
 test("canonical context bootstrap is bounded and retryable", () => {
   const dashboard = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
   const businessContext = fs.readFileSync(new URL("../src/context/BusinessContext.jsx", import.meta.url), "utf8");

@@ -1,6 +1,8 @@
+/* global process */
+/* eslint-disable no-unused-vars -- legacy broad-RLS fixture helpers remain available for older harness consumers */
 import { createClient } from "@supabase/supabase-js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
 export const REPORT_JSON = resolve(process.cwd(), "reports/tax-rls-integration-report.json");
@@ -122,42 +124,70 @@ export async function createTaxRlsFixtureContext(config) {
 
   const userAEmail = `${testId}-a@example.test`;
   const userBEmail = `${testId}-b@example.test`;
+  const formerEmail = `${testId}-former@example.test`;
+  const adminEmail = `${testId}-admin@example.test`;
   const userA = await createTestUser(service, userAEmail, password, testId);
   const userB = await createTestUser(service, userBEmail, password, testId);
+  const former = await createTestUser(service, formerEmail, password, testId);
+  const admin = await createTestUser(service, adminEmail, password, testId);
+  await insertRequired(service, "user_profiles", [userA.user, userB.user, former.user, admin.user].map((user) => ({ id: user.id, email: user.email, role: "owner" })));
   const clientA = anon();
   const clientB = anon();
+  const formerClient = anon();
   const { data: sessionA, error: signInAError } = await clientA.auth.signInWithPassword({ email: userAEmail, password });
   if (signInAError) throw signInAError;
   const { data: sessionB, error: signInBError } = await clientB.auth.signInWithPassword({ email: userBEmail, password });
   if (signInBError) throw signInBError;
+  const { data: formerSession, error: formerSignInError } = await formerClient.auth.signInWithPassword({ email: formerEmail, password });
+  if (formerSignInError) throw formerSignInError;
 
   const businessA = randomUUID();
   const businessB = randomUUID();
-  const runA = randomUUID();
-  const runB = randomUUID();
-  const transactionA = randomUUID();
-  const transactionB = randomUUID();
-  const paymentA = randomUUID();
-  const paymentB = randomUUID();
-  const reserveA = randomUUID();
-  const reserveB = randomUUID();
-
-  const ids = { businessA, businessB, runA, runB, transactionA, transactionB, paymentA, paymentB, reserveA, reserveB };
-  const resources = [];
+  const ids = { businessA, businessB };
 
   await insertRequired(service, "business_profiles", [
     businessProfileFixture({ id: businessA, userId: userA.user.id, testId, name: "Tax RLS Business A" }),
     businessProfileFixture({ id: businessB, userId: userB.user.id, testId, name: "Tax RLS Business B" }),
   ]);
+  await insertRequired(service, "user_business_link", [
+    { user_id: userA.user.id, business_id: businessA, role: "owner" },
+    { user_id: userB.user.id, business_id: businessB, role: "owner" },
+  ]);
+  await insertRequired(service, "business_billing", [businessA, businessB].map((businessId) => ({
+    business_id: businessId,
+    subscription_status: "active",
+    subscription_status_test: "active",
+    subscription_status_live: "inactive",
+  })));
 
-  for (const resource of [...BUSINESS_SCOPED_RESOURCES, ...INTERNAL_ONLY_RESOURCES]) {
-    const rows = [
-      resource.fixture({ side: "A", testId, ids, businessId: businessA, userId: userA.user.id }),
-      resource.fixture({ side: "B", testId, ids, businessId: businessB, userId: userB.user.id }),
-    ].filter(Boolean);
-    const setup = await tryInsert(service, resource.table, rows);
-    resources.push({ ...resource, setup, ids: rows.map((row) => row.id).filter(Boolean) });
-  }
+  const v1A = await persistSyntheticProjection(service, businessA, "tax-workspace-v1", "a");
+  const v2A = await persistSyntheticProjection(service, businessA, "tax-workspace-v2", "b");
+  const v1B = await persistSyntheticProjection(service, businessB, "tax-workspace-v1", "c");
+  const v2B = await persistSyntheticProjection(service, businessB, "tax-workspace-v2", "d");
+  const backfillKey = randomUUID();
+  await insertRequired(service, "tax_workspace_projection_requests", [{
+    business_id: businessA,
+    tax_year: TAX_YEAR,
+    request_key: `tax-workspace-backfill:tax-workspace-v2:${backfillKey}`,
+    reason: "controlled_backfill",
+    status: "completed",
+    projection_id: v2A.id,
+    completed_at: new Date().toISOString(),
+  }]);
+  const adminViewToken = randomBytes(32).toString("base64url");
+  await insertRequired(service, "internal_staff_users", [{ user_id: admin.user.id, role: "accountant", active: true }]);
+  await insertRequired(service, "internal_admin_view_sessions", [{
+    staff_user_id: admin.user.id,
+    staff_role: "accountant",
+    business_id: businessA,
+    source: "tax_rls_integration",
+    read_only: true,
+    capabilities: [],
+    session_token_hash: createHash("sha256").update(adminViewToken).digest("hex"),
+    started_at: new Date().toISOString(),
+    last_seen_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  }]);
 
   return {
     config,
@@ -165,71 +195,39 @@ export async function createTaxRlsFixtureContext(config) {
     service,
     clientA,
     clientB,
+    formerClient,
     anonymous: anon(),
-    users: { A: userA.user, B: userB.user },
-    sessions: { A: sessionA.session, B: sessionB.session },
+    users: { A: userA.user, B: userB.user, former: former.user, admin: admin.user },
+    sessions: { A: sessionA.session, B: sessionB.session, former: formerSession.session },
+    projections: { v1A, v2A, v1B, v2B },
+    backfillKey,
+    adminViewToken,
     ids,
-    resources,
     async cleanup() {
-      await cleanupFixtures({ service, testId, ids, users: [userA.user, userB.user] });
+      await cleanupFixtures({ service, testId, ids, users: [userA.user, userB.user, former.user, admin.user] });
     },
   };
 }
 
 export async function runDirectSupabaseRlsChecks(ctx) {
   const results = [];
-  const userPairs = [
-    { label: "User A", client: ctx.clientA, ownBusinessId: ctx.ids.businessA, foreignBusinessId: ctx.ids.businessB, ownRunId: ctx.ids.runA, foreignRunId: ctx.ids.runB },
-    { label: "User B", client: ctx.clientB, ownBusinessId: ctx.ids.businessB, foreignBusinessId: ctx.ids.businessA, ownRunId: ctx.ids.runB, foreignRunId: ctx.ids.runA },
+  const browserActors = [
+    ["anonymous", ctx.anonymous],
+    ["Customer A", ctx.clientA],
+    ["Customer B", ctx.clientB],
+    ["revoked former member", ctx.formerClient],
   ];
-
-  for (const resource of ctx.resources.filter((item) => BUSINESS_SCOPED_RESOURCES.some((r) => r.table === item.table))) {
-    for (const pair of userPairs) {
-      if (!resource.setup.ok) {
-        results.push(result(resource.table, pair.label, "setup", resource.required ? "fail" : "skip", resource.setup.message));
-        continue;
-      }
-      results.push(await ownRead(pair.client, resource.table, pair.ownBusinessId, pair.label));
-      results.push(await foreignRead(pair.client, resource.table, pair.foreignBusinessId, pair.label));
-      results.push(await foreignInsert(pair.client, resource, pair.foreignBusinessId, pair.label, ctx));
-      results.push(await foreignUpdate(pair.client, resource.table, pair.foreignBusinessId, pair.label));
-      results.push(await foreignDelete(pair.client, resource.table, pair.foreignBusinessId, pair.label));
+  for (const [label, client] of browserActors) {
+    for (const table of ["tax_workspace_projections", "tax_workspace_projection_requests"]) {
+      results.push(await projectionReadDenied(client, table, label));
+      results.push(await projectionMutationDenied(client, table, label, "insert", ctx.ids.businessA));
+      results.push(await projectionMutationDenied(client, table, label, "update", ctx.ids.businessA));
+      results.push(await projectionMutationDenied(client, table, label, "delete", ctx.ids.businessA));
     }
+    results.push(await projectionRpcDenied(client, label, "persist_tax_workspace_projection", ctx.ids.businessA));
+    results.push(await projectionRpcDenied(client, label, "claim_tax_workspace_projection_requests", ctx.ids.businessA));
   }
-
-  for (const pair of userPairs) {
-    results.push(await businessProfileOwnRead(pair.client, pair.ownBusinessId, pair.label));
-    results.push(await businessProfileForeignRead(pair.client, pair.foreignBusinessId, pair.label));
-    results.push(await businessProfileForeignInsert(pair.client, pair.foreignBusinessId, pair.label, ctx));
-    results.push(await businessProfileForeignUpdate(pair.client, pair.foreignBusinessId, pair.label));
-    results.push(await businessProfileForeignDelete(pair.client, pair.foreignBusinessId, pair.label));
-  }
-
-  for (const resource of ctx.resources.filter((item) => INTERNAL_ONLY_RESOURCES.some((r) => r.table === item.table))) {
-    for (const pair of userPairs) {
-      if (!resource.setup.ok) {
-        results.push(result(resource.table, pair.label, "setup", "skip", resource.setup.message));
-        continue;
-      }
-      results.push(await foreignRead(pair.client, resource.table, pair.foreignBusinessId, pair.label, { expectedZeroForOwnToo: true }));
-      results.push(await ownRead(pair.client, resource.table, pair.ownBusinessId, pair.label, { internalOnly: true }));
-    }
-  }
-
-  for (const pair of userPairs) {
-    results.push(await anonymousDenied(ctx.anonymous, "tax_profiles"));
-    results.push(await immutableMutationDenied(pair.client, "tax_calculation_runs", pair.ownBusinessId, pair.label));
-    results.push(await immutableMutationDenied(pair.client, "tax_calculation_components", pair.ownBusinessId, pair.label));
-    results.push(await immutableMutationDenied(pair.client, "tax_classification_overrides", pair.ownBusinessId, pair.label));
-    results.push(await immutableMutationDenied(pair.client, "tax_reserve_snapshots", pair.ownBusinessId, pair.label));
-  }
-
-  for (const table of RULE_TABLES) {
-    for (const pair of userPairs) {
-      results.push(await ruleTableReadAllowedOrEmpty(pair.client, table, pair.label));
-      results.push(await ruleTableWriteDenied(pair.client, table, pair.label));
-    }
-  }
+  results.push(await serviceProjectionAuthorityChecks(ctx));
 
   return finalizeSection("direct_supabase", results, ctx.config);
 }
@@ -238,54 +236,214 @@ export async function runHttpTenancyChecks(ctx) {
   const results = [];
   const tokenA = ctx.sessions.A?.access_token;
   const tokenB = ctx.sessions.B?.access_token;
-  const userPairs = [
-    { label: "User A", token: tokenA, ownBusinessId: ctx.ids.businessA, foreignBusinessId: ctx.ids.businessB, foreignRunId: ctx.ids.runB, foreignTransactionId: ctx.ids.transactionB, foreignPaymentId: ctx.ids.paymentB, foreignReserveId: ctx.ids.reserveB },
-    { label: "User B", token: tokenB, ownBusinessId: ctx.ids.businessB, foreignBusinessId: ctx.ids.businessA, foreignRunId: ctx.ids.runA, foreignTransactionId: ctx.ids.transactionA, foreignPaymentId: ctx.ids.paymentA, foreignReserveId: ctx.ids.reserveA },
-  ];
+  const tokenFormer = ctx.sessions.former?.access_token;
+  const beforeDenied = await projectionWriteCounts(ctx.service);
+  results.push(await workspaceReadExpected(ctx, tokenA, ctx.ids.businessA, null, "tax-workspace-v1", ctx.projections.v1A.id, "Customer A unversioned v1"));
+  results.push(await workspaceReadExpected(ctx, tokenA, ctx.ids.businessA, "tax-workspace-v1", "tax-workspace-v1", ctx.projections.v1A.id, "Customer A explicit v1"));
+  results.push(await workspaceReadExpected(ctx, tokenA, ctx.ids.businessA, "tax-workspace-v2", "tax-workspace-v2", ctx.projections.v2A.id, "Customer A explicit v2", { redacted: true }));
+  results.push(await workspaceDenied(ctx, tokenB, ctx.ids.businessA, "Customer B cannot read A"));
+  results.push(await workspaceDenied(ctx, tokenFormer, ctx.ids.businessA, "revoked former member denied"));
+  results.push(await workspaceAnonymousDenied(ctx, ctx.ids.businessA));
+  results.push(await workspaceUnknownVersionDenied(ctx, tokenA, ctx.ids.businessA));
+  for (const vector of [
+    { label: "query substitution", path: `/api/tax/workspace?businessId=${ctx.ids.businessB}&year=${TAX_YEAR}` },
+    { label: "body substitution", path: `/api/tax/workspace?businessId=${ctx.ids.businessA}&year=${TAX_YEAR}`, body: { businessId: ctx.ids.businessB } },
+    { label: "path-like conflicting header", path: `/api/tax/workspace/${ctx.ids.businessB}?businessId=${ctx.ids.businessA}&year=${TAX_YEAR}`, headers: { "x-business-id": ctx.ids.businessB } },
+    { label: "header substitution", path: `/api/tax/workspace?businessId=${ctx.ids.businessA}&year=${TAX_YEAR}`, headers: { "x-business-id": ctx.ids.businessB } },
+  ]) results.push(await rawHttpDenied(ctx, tokenA, vector.label, vector));
 
-  for (const pair of userPairs) {
-    const foreign = encodeURIComponent(pair.foreignBusinessId);
-    const own = encodeURIComponent(pair.ownBusinessId);
-    const routes = [
-      { name: "overview foreign business", method: "GET", path: `/api/tax/overview?businessId=${foreign}&year=${TAX_YEAR}` },
-      { name: "profile foreign business", method: "GET", path: `/api/tax/profile?businessId=${foreign}&year=${TAX_YEAR}` },
-      { name: "profile patch foreign business", method: "PATCH", path: `/api/tax/profile?businessId=${foreign}`, body: { businessId: pair.foreignBusinessId, taxYear: TAX_YEAR, filingStatus: "single" } },
-      { name: "deductions overview foreign business", method: "GET", path: `/api/tax/deductions/overview?businessId=${foreign}&year=${TAX_YEAR}` },
-      { name: "deduction transactions foreign business", method: "GET", path: `/api/tax/deductions/transactions?businessId=${foreign}&year=${TAX_YEAR}` },
-      { name: "deduction transaction idor", method: "GET", path: `/api/tax/deductions/transactions/${encodeURIComponent(pair.foreignTransactionId)}?businessId=${own}&year=${TAX_YEAR}` },
-      { name: "classification detail idor", method: "GET", path: `/api/tax/classifications/${encodeURIComponent(pair.foreignTransactionId)}?businessId=${own}&year=${TAX_YEAR}` },
-      { name: "classification confirm idor", method: "POST", path: `/api/tax/classifications/${encodeURIComponent(pair.foreignTransactionId)}/confirm`, body: { businessId: pair.ownBusinessId, taxYear: TAX_YEAR } },
-      { name: "classification override idor", method: "PATCH", path: `/api/tax/classifications/${encodeURIComponent(pair.foreignTransactionId)}`, body: { businessId: pair.ownBusinessId, taxYear: TAX_YEAR, reason: "rls integration idor" } },
-      { name: "calculation run idor", method: "GET", path: `/api/tax/calculations/${encodeURIComponent(pair.foreignRunId)}?businessId=${own}` },
-      { name: "components idor", method: "GET", path: `/api/tax/calculations/${encodeURIComponent(pair.foreignRunId)}/components?businessId=${own}` },
-      { name: "explanation idor", method: "GET", path: `/api/tax/calculations/${encodeURIComponent(pair.foreignRunId)}/explanation?businessId=${own}` },
-      { name: "confidence idor", method: "GET", path: `/api/tax/calculations/${encodeURIComponent(pair.foreignRunId)}/confidence?businessId=${own}` },
-      { name: "payment list foreign business", method: "GET", path: `/api/tax/payments?businessId=${foreign}&year=${TAX_YEAR}` },
-      { name: "payment update idor", method: "PATCH", path: `/api/tax/payments/${encodeURIComponent(pair.foreignPaymentId)}`, body: { businessId: pair.ownBusinessId, amount: 20 } },
-      { name: "reserve list foreign business", method: "GET", path: `/api/tax/reserve/accounts?businessId=${foreign}` },
-      { name: "reserve update idor", method: "PATCH", path: `/api/tax/reserve/accounts/${encodeURIComponent(pair.foreignReserveId)}`, body: { businessId: pair.ownBusinessId, label: "IDOR" } },
-      { name: "deductions export foreign business", method: "GET", path: `/api/tax/deductions/export?businessId=${foreign}&year=${TAX_YEAR}&format=summary_csv` },
-      { name: "legacy history foreign business", method: "GET", path: `/api/tax/legacy/snapshots?businessId=${foreign}&year=${TAX_YEAR}` },
-      { name: "seed deadlines foreign business", method: "POST", path: `/api/tax/seed-deadlines/run`, body: { businessId: pair.foreignBusinessId, year: TAX_YEAR } },
-    ];
-
-    for (const route of routes) {
-      results.push(await httpDenied(ctx.config.apiBaseUrl, pair.token, pair.label, route));
-    }
-
-    for (const internalRoute of [
-      { name: "daily scheduler ordinary user denied", method: "POST", path: "/api/tax/scheduler/run-daily", body: { taxYear: TAX_YEAR } },
-      { name: "weekly scheduler ordinary user denied", method: "POST", path: "/api/tax/scheduler/run-weekly", body: { taxYear: TAX_YEAR } },
-      { name: "recalculation diagnostics ordinary user denied", method: "GET", path: `/api/tax/recalculation/diagnostics?businessId=${own}&year=${TAX_YEAR}` },
-      { name: "deductions upsert ordinary user denied", method: "POST", path: "/api/tax/deductions/upsert", body: { businessId: pair.ownBusinessId, year: TAX_YEAR } },
-    ]) {
-      results.push(await httpDenied(ctx.config.apiBaseUrl, pair.token, pair.label, internalRoute));
-    }
-  }
-
-  results.push(await httpAnonymousDenied(ctx.config.apiBaseUrl, "/api/tax/overview?businessId=00000000-0000-4000-8000-000000000000&year=2026"));
-  results.push(await httpAnonymousDenied(ctx.config.apiBaseUrl, "/api/tax/deductions/export?businessId=00000000-0000-4000-8000-000000000000&year=2026&format=summary_csv"));
+  results.push(await backfillDenied(ctx, tokenA, ctx.ids.businessA, null, "missing scheduler secret"));
+  results.push(await backfillDenied(ctx, tokenA, ctx.ids.businessA, "incorrect", "incorrect scheduler secret"));
+  results.push(await backfillDenied(ctx, tokenB, ctx.ids.businessA, process.env.TAX_SCHEDULER_INTERNAL_SECRET, "Customer B plus valid secret"));
+  results.push(await adminViewWorkspaceRead(ctx, ctx.ids.businessA, ctx.projections.v1A.id));
+  results.push(await adminViewDenied(ctx, ctx.ids.businessB, "Admin View fixed-business switch denied"));
+  results.push(await adminViewBackfillDenied(ctx, ctx.ids.businessA));
+  const afterDenied = await projectionWriteCounts(ctx.service);
+  results.push(result("http", "denial instrumentation", "zero projection persistence calls", JSON.stringify(beforeDenied) === JSON.stringify(afterDenied) ? "pass" : "fail", `${beforeDenied.projections}/${beforeDenied.requests} -> ${afterDenied.projections}/${afterDenied.requests}`));
+  results.push(result("http", "denial instrumentation", "zero provider/background invocations", process.env.DISABLE_BACKGROUND_WORKERS === "true" && process.env.TAX_RLS_PROVIDER_CALL_SENTINEL === "deny" ? "pass" : "fail", "workers disabled; provider sentinel deny"));
+  results.push(...await backfillIdempotencyChecks(ctx, tokenA, tokenB));
   return finalizeSection("http_tenancy", results, ctx.config);
+}
+
+async function persistSyntheticProjection(service, businessId, version, fingerprintSeed) {
+  const sourceFingerprint = fingerprintSeed.repeat(64);
+  const payload = {
+    canonicalBusinessId: businessId,
+    taxYear: TAX_YEAR,
+    projectionVersion: version,
+    formulaVersion: "synthetic-tax-rls-v1",
+    sourceFingerprint,
+    status: "complete",
+    completeness: "complete",
+    generatedAt: "2026-10-01T00:00:00.000Z",
+    matrix: [],
+    questionGroups: [],
+    identityEvidence: { evaluated: [`synthetic-${fingerprintSeed}`] },
+  };
+  const { data, error } = await service.rpc("persist_tax_workspace_projection", {
+    p_business_id: businessId,
+    p_tax_year: TAX_YEAR,
+    p_projection_version: version,
+    p_formula_version: payload.formulaVersion,
+    p_source_fingerprint: sourceFingerprint,
+    p_completeness: payload.completeness,
+    p_payload: payload,
+    p_generated_at: payload.generatedAt,
+  });
+  if (error || !data?.id) throw error || new Error(`Could not persist synthetic ${version}.`);
+  return data;
+}
+
+async function projectionReadDenied(client, table, actor) {
+  const { data, error } = await client.from(table).select("id").limit(5);
+  return result(table, actor, "direct read denied", error || !data?.length ? "pass" : "fail", error ? safeErrorMessage(error) : `returned ${data.length} rows`);
+}
+
+async function projectionMutationDenied(client, table, actor, operation, businessId) {
+  let query;
+  if (operation === "insert") {
+    query = client.from(table).insert(table.endsWith("requests") ? {
+      business_id: businessId, tax_year: TAX_YEAR, request_key: `forbidden-${randomUUID()}`, reason: "forbidden",
+    } : {
+      business_id: businessId, tax_year: TAX_YEAR, projection_version: "forbidden", formula_version: "forbidden",
+      source_fingerprint: "f".repeat(64), status: "complete", completeness: "complete", projection_data: {}, generated_at: new Date().toISOString(),
+    }).select("id");
+  } else if (operation === "update") query = client.from(table).update({ status: "failed" }).eq("business_id", businessId).select("id");
+  else query = client.from(table).delete().eq("business_id", businessId).select("id");
+  const { data, error } = await query;
+  return result(table, actor, `${operation} denied`, error || !data?.length ? "pass" : "fail", error ? safeErrorMessage(error) : `affected ${data.length} rows`);
+}
+
+async function projectionRpcDenied(client, actor, rpc, businessId) {
+  const args = rpc.startsWith("persist") ? {
+    p_business_id: businessId, p_tax_year: TAX_YEAR, p_projection_version: "forbidden", p_formula_version: "forbidden",
+    p_source_fingerprint: "e".repeat(64), p_completeness: "complete", p_payload: {}, p_generated_at: new Date().toISOString(),
+  } : { p_worker_id: "forbidden-browser", p_batch_size: 1, p_now: new Date().toISOString() };
+  const { data, error } = await client.rpc(rpc, args);
+  return result("projection RPC", actor, `${rpc} denied`, error || !data?.length ? "pass" : "fail", error ? safeErrorMessage(error) : "RPC unexpectedly returned data");
+}
+
+async function serviceProjectionAuthorityChecks(ctx) {
+  const { data: rows, error } = await ctx.service.from("tax_workspace_projections").select("id,business_id,projection_version,projection_data");
+  const directInsert = await ctx.service.from("tax_workspace_projections").insert({
+    business_id: ctx.ids.businessA, tax_year: TAX_YEAR, projection_version: "forbidden-direct", formula_version: "forbidden-direct",
+    source_fingerprint: "9".repeat(64), status: "complete", completeness: "complete", projection_data: {}, generated_at: new Date().toISOString(),
+  });
+  const directUpdate = await ctx.service.from("tax_workspace_projections").update({ completeness: "partial" }).eq("id", ctx.projections.v1A.id);
+  const directDelete = await ctx.service.from("tax_workspace_projections").delete().eq("id", ctx.projections.v1A.id);
+  const requestDelete = await ctx.service.from("tax_workspace_projection_requests").delete().eq("business_id", ctx.ids.businessA);
+  const pendingKey = `service-claim-${randomUUID()}`;
+  const pending = await ctx.service.from("tax_workspace_projection_requests").insert({ business_id: ctx.ids.businessA, tax_year: TAX_YEAR, request_key: pendingKey, reason: "service_claim_test" });
+  const claimed = await ctx.service.rpc("claim_tax_workspace_projection_requests", { p_worker_id: "tax-rls-service", p_batch_size: 5, p_now: new Date().toISOString() });
+  const correct = !error && rows?.length === 4
+    && rows.filter((row) => row.business_id === ctx.ids.businessA).length === 2
+    && rows.filter((row) => row.business_id === ctx.ids.businessB).length === 2
+    && rows.every((row) => row.projection_data?.identityEvidence)
+    && directInsert.error && directUpdate.error && directDelete.error && requestDelete.error
+    && !pending.error && !claimed.error && claimed.data?.some((row) => row.request_key === pendingKey);
+  return result("tax workspace authority", "service_role", "only intended select/request/secure-RPC operations", correct ? "pass" : "fail", error ? safeErrorMessage(error) : `${rows?.length || 0} projections; claim ${claimed.data?.length || 0}`);
+}
+
+async function workspaceReadExpected(ctx, token, businessId, requestedVersion, expectedVersion, expectedId, label, options = {}) {
+  const versionQuery = requestedVersion ? `&projectionVersion=${encodeURIComponent(requestedVersion)}` : "";
+  const response = await fetch(`${ctx.config.apiBaseUrl}/api/tax/workspace?businessId=${businessId}&year=${TAX_YEAR}${versionQuery}`, { headers: { Authorization: `Bearer ${token}` } });
+  const body = await response.json().catch(() => null);
+  const serialized = JSON.stringify(body?.data?.projection || {});
+  const correct = response.ok && body?.data?.projectionVersion === expectedVersion && body?.data?.projectionId === expectedId
+    && body?.data?.projection?.projectionVersion === expectedVersion
+    && (!options.redacted || (!serialized.includes("identityEvidence") && !serialized.includes("identityManifest")));
+  return result("http workspace", label, "exact version read", correct ? "pass" : "fail", `status ${response.status}; version ${body?.data?.projectionVersion || "none"}; error ${body?.error || body?.code || "none"}`);
+}
+
+async function workspaceDenied(ctx, token, businessId, label) {
+  return rawHttpDenied(ctx, token, label, { path: `/api/tax/workspace?businessId=${businessId}&year=${TAX_YEAR}` });
+}
+
+async function workspaceAnonymousDenied(ctx, businessId) {
+  const response = await fetch(`${ctx.config.apiBaseUrl}/api/tax/workspace?businessId=${businessId}&year=${TAX_YEAR}`);
+  return result("http workspace", "anonymous", "access denied", response.status === 401 ? "pass" : "fail", `status ${response.status}`);
+}
+
+async function workspaceUnknownVersionDenied(ctx, token, businessId) {
+  const response = await fetch(`${ctx.config.apiBaseUrl}/api/tax/workspace?businessId=${businessId}&year=${TAX_YEAR}&projectionVersion=tax-workspace-v999`, { headers: { Authorization: `Bearer ${token}` } });
+  const body = await response.json().catch(() => null);
+  return result("http workspace", "Customer A", "unknown version safely denied", response.status === 422 ? "pass" : "fail", `status ${response.status}; error ${body?.error || body?.code || "none"}`);
+}
+
+async function rawHttpDenied(ctx, token, label, { path, body, headers = {} }) {
+  const response = await fetch(`${ctx.config.apiBaseUrl}${path}`, {
+    method: body ? "POST" : "GET",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...headers },
+    body: body ? JSON.stringify(body) : undefined,
+  }).catch(() => null);
+  return result("http workspace", "Customer", label, response && (response.status === 400 || SAFE_DENIED_STATUSES.has(response.status)) ? "pass" : "fail", `status ${response?.status || "network_error"}`);
+}
+
+async function backfillDenied(ctx, token, businessId, secret, label) {
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Idempotency-Key": randomUUID() };
+  if (secret) headers["X-Internal-Cron-Secret"] = secret;
+  const response = await fetch(`${ctx.config.apiBaseUrl}/api/tax/workspace/backfill`, {
+    method: "POST", headers, body: JSON.stringify({ businessId, year: TAX_YEAR, projectionVersion: "tax-workspace-v2" }),
+  });
+  return result("http backfill", "Customer", label, SAFE_DENIED_STATUSES.has(response.status) ? "pass" : "fail", `status ${response.status}`);
+}
+
+async function backfillIdempotencyChecks(ctx, tokenA, tokenB) {
+  const key = ctx.backfillKey;
+  const invoke = (token, businessId, year = TAX_YEAR, version = "tax-workspace-v2") => fetch(`${ctx.config.apiBaseUrl}/api/tax/workspace/backfill`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": key,
+      "X-Internal-Cron-Secret": process.env.TAX_SCHEDULER_INTERNAL_SECRET,
+    },
+    body: JSON.stringify({ businessId, year, projectionVersion: version }),
+  });
+  const firstResponse = await invoke(tokenA, ctx.ids.businessA);
+  const first = await firstResponse.json().catch(() => null);
+  const repeatResponse = await invoke(tokenA, ctx.ids.businessA);
+  const repeat = await repeatResponse.json().catch(() => null);
+  const businessConflict = await invoke(tokenB, ctx.ids.businessB);
+  const yearConflict = await invoke(tokenA, ctx.ids.businessA, TAX_YEAR - 1);
+  const versionRejected = await invoke(tokenA, ctx.ids.businessA, TAX_YEAR, "tax-workspace-v1");
+  return [
+    result("http backfill", "Customer A", "exact-v2 completed request is idempotent", firstResponse.ok && first?.data?.projectionVersion === "tax-workspace-v2" && first?.data?.idempotent === true ? "pass" : "fail", `status ${firstResponse.status}`),
+    result("http backfill", "Customer A", "same scope/key returns same projection", repeatResponse.ok && repeat?.data?.idempotent === true && repeat?.data?.requestId === first?.data?.requestId && repeat?.data?.projectionId === first?.data?.projectionId ? "pass" : "fail", `status ${repeatResponse.status}`),
+    result("http backfill", "Customer B", "same key cannot cross business", businessConflict.status === 409 ? "pass" : "fail", `status ${businessConflict.status}`),
+    result("http backfill", "Customer A", "same key cannot cross year", yearConflict.status === 409 ? "pass" : "fail", `status ${yearConflict.status}`),
+    result("http backfill", "Customer A", "non-v2 version rejected before enqueue", versionRejected.status === 422 ? "pass" : "fail", `status ${versionRejected.status}`),
+  ];
+}
+
+async function adminViewWorkspaceRead(ctx, businessId, expectedId) {
+  const response = await fetch(`${ctx.config.apiBaseUrl}/api/tax/workspace?businessId=${businessId}&year=${TAX_YEAR}`, { headers: { "x-bizzi-admin-view": ctx.adminViewToken } });
+  const body = await response.json().catch(() => null);
+  return result("http workspace", "Admin View", "fixed-business read-only v1", response.ok && body?.data?.projectionId === expectedId ? "pass" : "fail", `status ${response.status}; error ${body?.error || body?.code || "none"}`);
+}
+
+async function adminViewDenied(ctx, businessId, label) {
+  const response = await fetch(`${ctx.config.apiBaseUrl}/api/tax/workspace?businessId=${businessId}&year=${TAX_YEAR}`, { headers: { "x-bizzi-admin-view": ctx.adminViewToken } });
+  return result("http workspace", "Admin View", label, response.status === 403 ? "pass" : "fail", `status ${response.status}`);
+}
+
+async function adminViewBackfillDenied(ctx, businessId) {
+  const response = await fetch(`${ctx.config.apiBaseUrl}/api/tax/workspace/backfill`, {
+    method: "POST",
+    headers: { "x-bizzi-admin-view": ctx.adminViewToken, "x-internal-cron-secret": process.env.TAX_SCHEDULER_INTERNAL_SECRET, "idempotency-key": randomUUID(), "content-type": "application/json" },
+    body: JSON.stringify({ businessId, year: TAX_YEAR, projectionVersion: "tax-workspace-v2" }),
+  });
+  return result("http backfill", "Admin View", "read-only contract denies backfill", response.status === 403 ? "pass" : "fail", `status ${response.status}`);
+}
+
+async function projectionWriteCounts(service) {
+  const [projections, requests] = await Promise.all([
+    service.from("tax_workspace_projections").select("id", { count: "exact", head: true }),
+    service.from("tax_workspace_projection_requests").select("id", { count: "exact", head: true }),
+  ]);
+  if (projections.error) throw projections.error;
+  if (requests.error) throw requests.error;
+  return { projections: projections.count, requests: requests.count };
 }
 
 async function createTestUser(service, email, password, testId) {
@@ -302,6 +460,12 @@ async function createTestUser(service, email, password, testId) {
 async function cleanupFixtures({ service, testId, ids, users }) {
   const businessIds = [ids.businessA, ids.businessB].filter(Boolean);
   const tables = [
+    "tax_workspace_projection_requests",
+    "tax_workspace_projections",
+    "internal_admin_view_sessions",
+    "internal_staff_users",
+    "business_billing",
+    "user_business_link",
     "tax_calculation_components",
     "tax_calculation_runs",
     "tax_classification_overrides",
@@ -678,6 +842,10 @@ function businessProfileFixture({ id, userId, testId, name }) {
     id,
     user_id: userId,
     business_name: name,
+    industry: "Synthetic test",
+    team_size: 1,
+    state: "NY",
+    services_offered: "Synthetic test",
     metadata: { taxRlsIntegrationTestId: testId },
   };
 }

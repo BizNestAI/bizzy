@@ -761,9 +761,25 @@ test("Tax deduction summary uses the bridge population, keeps workflow counts se
     transactionCount: 685,
     populationBridge: { ...populationBridge, identity_comparison: { identity_match: false } },
     projection,
+    updating: true,
   }));
   assert.match(mismatched, /Transaction totals are updating\./);
   assert.doesNotMatch(mismatched, /709 posted transactions evaluated ·/);
+
+  const acceptedPersisted = renderToStaticMarkup(React.createElement(DeductionsIncludedDisclosure, {
+    transactionCount: 690,
+    populationBridge: { ...populationBridge, identity_comparison: { identity_match: false } },
+    projection,
+    workspaceProjection: {
+      projectionVersion: "tax-workspace-v2",
+      evaluatedTransactionCount: 714,
+      matrixIncludedCount: 690,
+      outsideDeductionsCount: 24,
+      treatmentCounts: { estimated: 276, reviewed: 43, needs_input: 371 },
+    },
+  }));
+  assert.match(acceptedPersisted, /714 posted transactions evaluated · 690 expense transactions included in the deductions matrix · 24 outside deductions/);
+  assert.doesNotMatch(acceptedPersisted, /Transaction totals are updating/);
 
   const tabs = renderToStaticMarkup(React.createElement(WorkspaceViewTabs, {
     value: "overview",
@@ -781,6 +797,46 @@ test("Tax deduction summary uses the bridge population, keeps workflow counts se
   }));
   assert.match(zeroQuestionTabs, /Questions for you · 0/);
   assert.match(zeroQuestionTabs, /aria-label="Questions for you, no questions requiring an answer"/);
+});
+
+test("persisted v2 monthly aggregates render treatment amounts while empty months remain dashes", async () => {
+  const { buildPersistedWorkspaceMatrix, MatrixCell } = await loadTaxDashboardInternals();
+  const matrix = buildPersistedWorkspaceMatrix({
+    matrixIncludedCount: 3,
+    matrix: [{
+      categoryKey: "business_meals", categoryLabel: "Business Meals", transactionCount: 3,
+      months: {
+        "2026-05": { transactionCount: 3, bookExpenseAmount: 300, deductibleAmount: 75, estimatedTransactionCount: 1, estimatedDeductibleAmount: 50, reviewedTransactionCount: 1, reviewedDeductibleAmount: 25, needsInputTransactionCount: 1, needsInputGrossExpense: 100 },
+      },
+    }],
+  }, 2026);
+  assert.equal(matrix.transactionCount, 3);
+  const account = matrix.accounts[0];
+  const may = matrix.months.find((month) => month.key === "2026-05");
+  const january = matrix.months.find((month) => month.key === "2026-01");
+  const mayHtml = renderToStaticMarkup(React.createElement(MatrixCell, { account, month: may, cell: account.months[may.key] }));
+  const januaryHtml = renderToStaticMarkup(React.createElement(MatrixCell, { account, month: january, cell: account.months[january.key] }));
+  assert.match(mayHtml, /\$25/);
+  assert.match(mayHtml, /Reviewed deduction/);
+  assert.match(mayHtml, /\$50/);
+  assert.match(mayHtml, /Estimated deduction/);
+  assert.match(mayHtml, /\$100/);
+  assert.match(mayHtml, /Expenses awaiting input/);
+  assert.match(januaryHtml, /aria-label="No activity"/);
+});
+
+test("duplicate-named projected questions remain distinct and receive safe scope subtitles", async () => {
+  const { ProjectedQuestionGroups } = await loadTaxDashboardInternals();
+  const groups = [
+    { id: "group-a", qboAccountName: "Meals", decisionType: "business_use_confirmation", months: ["2026-05", "2026-06"], actionableTransactionCount: 2 },
+    { id: "group-b", qboAccountName: "Meals", decisionType: "business_use_confirmation", months: ["2026-08"], actionableTransactionCount: 3 },
+  ];
+  const html = renderToStaticMarkup(React.createElement(ProjectedQuestionGroups, { groups }));
+  assert.equal((html.match(/>Meals</g) || []).length, 2);
+  assert.match(html, /Business-use review · May, Jun · Account scope 1 of 2/);
+  assert.match(html, /Business-use review · Aug · Account scope 2 of 2/);
+  assert.match(html, /2 transactions need your input/);
+  assert.match(html, /3 transactions need your input/);
 });
 
 test("Tax matrix launch labels retain accessible details and grouped decision navigation", () => {
