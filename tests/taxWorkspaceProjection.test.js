@@ -1,7 +1,9 @@
-/* global Buffer */
+/* global Buffer, process */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   __taxWorkspaceProjectionTestInternals as internals,
   enqueueTaxWorkspaceProjection,
@@ -30,6 +32,32 @@ function source() {
       warnings: [],
     },
     lifecycle: { entries, activeDecisionGroups: [{ id: "q-meals", decisionType: "business_use_confirmation", qboAccountId: "a-meals", qboAccountName: "Meals", ruleVersion: "v1", transactionCount: 1, actionableTransactionCount: 1, months: ["2026-10"], actionableGrossAmountCents: 7500, actionableEstimatedDeductibleAmountCents: 0, state: "needs_input", stableTransactionIds: { actionable: ["question-1"] } }] },
+  };
+}
+
+function productionSizedSource() {
+  const entries = [];
+  const add = (prefix, count, outcome, actionOwner, scope = "expense_cogs_in_matrix") => {
+    for (let index = 0; index < count; index += 1) {
+      const id = `${prefix}-${String(index).padStart(3, "0")}`;
+      entries.push({ id, outcome, actionOwner, row: { transactionId: id, taxScopeDisposition: scope, taxCategory: scope === "expense_cogs_in_matrix" ? "software_subscriptions" : "income", taxCategoryLabel: "Software", date: "2026-10-01" } });
+    }
+  };
+  add("estimated", 276, "standard_rule_applied", "none");
+  add("reviewed", 43, "reviewed", "none");
+  add("question", 315, "customer_input_required", "customer_fact_required");
+  add("mapping", 51, "ambiguous", "bizzi_tax_mapping_required");
+  add("professional", 5, "tax_review_required", "professional_review_required");
+  add("outside", 24, "outside_deductions", "none", "income_outside_deductions");
+  const questionIds = entries.filter((entry) => entry.actionOwner === "customer_fact_required").map((entry) => entry.id);
+  return {
+    overview: { meta: { generatedAt: "2026-10-29T19:23:46.324Z" }, projection: { completeness: "partial" }, categories: [], warnings: [] },
+    lifecycle: { entries, activeDecisionGroups: Array.from({ length: 15 }, (_, index) => ({
+      id: `question-group-${index}`,
+      transactionCount: 21,
+      actionableTransactionCount: 21,
+      stableTransactionIds: { actionable: questionIds.slice(index * 21, (index + 1) * 21) },
+    })) },
   };
 }
 
@@ -109,6 +137,43 @@ test("missing, duplicate, overlapping, or omitted identities fail closed", () =>
   }
 });
 
+test("builder and validator share canonical, order-independent set fingerprints", () => {
+  const { overview, lifecycle } = source();
+  const payload = internals.buildPayload({ overview, lifecycle, businessId: BUSINESS, taxYear: 2026, sourceFingerprint: "0".repeat(64), generatedAt: overview.meta.generatedAt });
+  assert.equal(payload.identityFingerprints.matrixIncluded, internals.setFingerprint(payload.identityEvidence.matrixIncluded));
+  assert.equal(internals.setFingerprint(["b", "a", "c"]), internals.setFingerprint(["c", "b", "a"]));
+  assert.doesNotThrow(() => internals.validatePayload(payload));
+});
+
+test("JSONB object key ordering and JSON round-tripping do not change validation", () => {
+  const { overview, lifecycle } = source();
+  const payload = internals.buildPayload({ overview, lifecycle, businessId: BUSINESS, taxYear: 2026, sourceFingerprint: "2".repeat(64), generatedAt: overview.meta.generatedAt });
+  payload.identityEvidence.treatments = {
+    reviewed: payload.identityEvidence.treatments.reviewed,
+    estimated: payload.identityEvidence.treatments.estimated,
+    needs_input: payload.identityEvidence.treatments.needs_input,
+  };
+  const roundTripped = JSON.parse(JSON.stringify(payload));
+  assert.deepEqual(Object.keys(roundTripped.identityEvidence.treatments), ["reviewed", "estimated", "needs_input"]);
+  assert.doesNotThrow(() => internals.validatePayload(roundTripped));
+});
+
+test("714/690/24 declarations reject 689 matrix or 713 evaluated identities", () => {
+  const { overview, lifecycle } = productionSizedSource();
+  const build = () => internals.buildPayload({ overview, lifecycle, businessId: BUSINESS, taxYear: 2026, sourceFingerprint: "3".repeat(64), generatedAt: overview.meta.generatedAt });
+  const valid = build();
+  assert.deepEqual([valid.evaluatedTransactionCount, valid.matrixIncludedCount, valid.outsideDeductionsCount], [714, 690, 24]);
+  assert.doesNotThrow(() => internals.validatePayload(valid));
+
+  const matrix689 = build();
+  matrix689.identityEvidence.matrixIncluded.pop();
+  assert.throws(() => internals.validatePayload(matrix689), /Tax workspace projection/);
+
+  const evaluated713 = build();
+  evaluated713.identityEvidence.evaluated.pop();
+  assert.throws(() => internals.validatePayload(evaluated713), /Tax workspace projection/);
+});
+
 test("browser response omits stable identity manifests", () => {
   const { overview, lifecycle } = source();
   const payload = internals.buildPayload({ overview, lifecycle, businessId: BUSINESS, taxYear: 2026, sourceFingerprint: "1".repeat(64), generatedAt: overview.meta.generatedAt });
@@ -163,14 +228,30 @@ test("workspace endpoint enforces tenant access, entitlement, read-only GET, and
   assert.doesNotMatch(backfill, /assertTaxBusinessAccess/);
 });
 
-test("canary validator is read-only, checks both exact versions, and validates browser redaction", () => {
+test("canary validator is read-only, selects exact IDs, and validates browser redaction", () => {
   const validator = fs.readFileSync(new URL("../scripts/tax/validateTaxWorkspaceV2Canary.js", import.meta.url), "utf8");
-  assert.match(validator, /\.eq\("projection_version", version\)/);
+  assert.match(validator, /\.eq\("id", id\)/);
+  assert.match(validator, /--v2-projection-id/);
+  assert.match(validator, /--expected-v1-projection-id/);
+  assert.match(validator, /--expected-v1-fingerprint/);
   assert.match(validator, /internals\.validatePayload\(payload\)/);
   assert.match(validator, /readWorkspace\(""\)/);
   assert.match(validator, /projectionVersion=\$\{encodeURIComponent\(TAX_WORKSPACE_PROJECTION_VERSION\)\}/);
   assert.match(validator, /assertNoIdentityManifests/);
   assert.doesNotMatch(validator, /\.insert\(|\.upsert\(|\.update\(|\.delete\(|buildAndPersist|provider/i);
+});
+
+test("canary CLI help and argument errors exit before database initialization", () => {
+  const script = fileURLToPath(new URL("../scripts/tax/validateTaxWorkspaceV2Canary.js", import.meta.url));
+  const help = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8", env: {} });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /Usage:/);
+  assert.doesNotMatch(`${help.stdout}${help.stderr}`, /supabaseAdmin/);
+
+  const unknown = spawnSync(process.execPath, [script, "--unknown"], { encoding: "utf8", env: {} });
+  assert.equal(unknown.status, 2);
+  assert.match(unknown.stderr, /Unknown argument/);
+  assert.doesNotMatch(`${unknown.stdout}${unknown.stderr}`, /supabaseAdmin/);
 });
 
 test("missing production projection schema becomes a bounded retryable 503", () => {

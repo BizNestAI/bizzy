@@ -189,7 +189,14 @@ function validatePayload(p){
   const outside=requiredUniqueSet(evidence.outsideDeductions,"tax_workspace_outside_identity_invalid");
   if(intersection(matrix,outside).size) throw coded("tax_workspace_matrix_outside_overlap");
   if(!sameSet(evaluated,new Set([...matrix,...outside]))) throw coded("tax_workspace_evaluated_not_conserved");
-  const treatments=Object.values(evidence.treatments||{}).map((ids)=>requiredUniqueSet(ids,"tax_workspace_treatment_identity_invalid"));
+  const treatmentEvidence=evidence.treatments||{};
+  if(!sameKeys(treatmentEvidence,["estimated","reviewed","needs_input"])) throw coded("tax_workspace_treatment_partition_invalid");
+  const treatmentSets={
+    estimated:requiredUniqueSet(treatmentEvidence.estimated,"tax_workspace_treatment_identity_invalid"),
+    reviewed:requiredUniqueSet(treatmentEvidence.reviewed,"tax_workspace_treatment_identity_invalid"),
+    needs_input:requiredUniqueSet(treatmentEvidence.needs_input,"tax_workspace_treatment_identity_invalid"),
+  };
+  const treatments=Object.values(treatmentSets);
   if(treatments.length!==3 || hasOverlap(treatments) || !sameSet(matrix,new Set(treatments.flatMap((set)=>[...set])))) throw coded("tax_workspace_treatment_partition_invalid");
   const categories=Object.values(evidence.categories||{}).map((ids)=>requiredUniqueSet(ids,"tax_workspace_category_identity_invalid"));
   if(hasOverlap(categories) || !sameSet(matrix,new Set(categories.flatMap((set)=>[...set])))) throw coded("tax_workspace_category_membership_invalid");
@@ -201,9 +208,10 @@ function validatePayload(p){
   if(p.evaluatedTransactionCount!==evaluated.size || p.matrixIncludedCount!==matrix.size || p.outsideDeductionsCount!==outside.size || rowCount!==matrix.size || monthCount!==matrix.size) throw coded("tax_workspace_identity_count_mismatch");
   if(p.questionMembershipSum!==questionSum || p.questionCoveredUniqueCount!==questionUnion.size || p.questionMembershipOverlapCount!==questionSum-questionUnion.size) throw coded("tax_workspace_question_membership_mismatch");
   for(const id of questionUnion) if(!matrix.has(id)) throw coded("tax_workspace_question_outside_matrix");
-  for(const [name,ids] of [["evaluated",evaluated],["matrixIncluded",matrix],["outsideDeductions",outside],["estimated",treatments[0]],["reviewed",treatments[1]],["needsInput",treatments[2]],["questionCovered",questionUnion]]) if(p.identityFingerprints?.[name]!==setFingerprint([...ids])) throw coded("tax_workspace_identity_fingerprint_mismatch");
+  for(const [name,ids] of [["evaluated",evaluated],["matrixIncluded",matrix],["outsideDeductions",outside],["estimated",treatmentSets.estimated],["reviewed",treatmentSets.reviewed],["needsInput",treatmentSets.needs_input],["questionCovered",questionUnion]]) if(p.identityFingerprints?.[name]!==setFingerprint([...ids])) throw coded("tax_workspace_identity_fingerprint_mismatch");
 }
 function requiredUniqueSet(ids,code){ if(!Array.isArray(ids)||ids.some((id)=>!String(id||"").trim())||new Set(ids.map(String)).size!==ids.length) throw coded(code); return new Set(ids.map(String)); }
+function sameKeys(value,expected){const keys=Object.keys(value).sort();return keys.length===expected.length&&keys.every((key,index)=>key===expected.slice().sort()[index]);}
 function intersection(a,b){return new Set([...a].filter((id)=>b.has(id)));}
 function sameSet(a,b){return a.size===b.size&&[...a].every((id)=>b.has(id));}
 function hasOverlap(sets){const seen=new Set();for(const set of sets)for(const id of set){if(seen.has(id))return true;seen.add(id);}return false;}

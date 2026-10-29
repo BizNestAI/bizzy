@@ -1,27 +1,40 @@
 /* global Buffer, process */
-import "dotenv/config";
-import { supabase } from "../../src/services/supabaseAdmin.js";
-import {
-  __taxWorkspaceProjectionTestInternals as internals,
+const USAGE = `Usage:
+  node --env-file=.env scripts/tax/validateTaxWorkspaceV2Canary.js \\
+    --business-id <uuid> \\
+    --year <yyyy> \\
+    --v2-projection-id <uuid> \\
+    --expected-v1-projection-id <uuid> \\
+    --expected-v1-fingerprint <64-char-sha256>
+
+Required secure environment:
+  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, BIZZI_API_URL, PAT_ACCESS_TOKEN
+
+The command is read-only and never prints identity manifests or credentials.`;
+
+const parsed = parseArguments(process.argv.slice(2));
+if (parsed.help) {
+  console.log(USAGE);
+  process.exit(0);
+}
+
+const { supabase } = await import("../../src/services/supabaseAdmin.js");
+const {
+  __taxWorkspaceProjectionTestInternals: internals,
   TAX_WORKSPACE_LEGACY_PROJECTION_VERSION,
   TAX_WORKSPACE_PROJECTION_VERSION,
-} from "../../src/services/tax/taxWorkspaceProjection.service.js";
+} = await import("../../src/services/tax/taxWorkspaceProjection.service.js");
 
-const BUSINESS_ID = "cffc2183-e77c-4148-a206-d5192e090925";
-const TAX_YEAR = 2026;
 const ONE_MIB = 1024 * 1024;
-
-const expectedV1Id = requiredEnv("EXPECTED_V1_PROJECTION_ID");
-const expectedV1Fingerprint = requiredEnv("EXPECTED_V1_SOURCE_FINGERPRINT");
 const apiBaseUrl = requiredEnv("BIZZI_API_URL").replace(/\/+$/, "");
 const accessToken = requiredEnv("PAT_ACCESS_TOKEN");
+const { businessId, taxYear, v2ProjectionId, expectedV1Id, expectedV1Fingerprint } = parsed;
 
 const [v1, v2] = await Promise.all([
-  exactProjection(TAX_WORKSPACE_LEGACY_PROJECTION_VERSION),
-  exactProjection(TAX_WORKSPACE_PROJECTION_VERSION),
+  exactProjection(expectedV1Id, TAX_WORKSPACE_LEGACY_PROJECTION_VERSION),
+  exactProjection(v2ProjectionId, TAX_WORKSPACE_PROJECTION_VERSION),
 ]);
 
-assertEqual(v1.id, expectedV1Id, "v1 projection ID changed");
 assertEqual(v1.source_fingerprint, expectedV1Fingerprint, "v1 source fingerprint changed");
 assertEqual(v1.projection_version, TAX_WORKSPACE_LEGACY_PROJECTION_VERSION, "stored v1 version");
 assertEqual(v2.projection_version, TAX_WORKSPACE_PROJECTION_VERSION, "stored v2 version");
@@ -58,13 +71,13 @@ const [unversioned, explicitV2] = await Promise.all([
 assertEqual(unversioned.projectionVersion, TAX_WORKSPACE_LEGACY_PROJECTION_VERSION, "unversioned GET version");
 assertEqual(unversioned.projectionId, expectedV1Id, "unversioned GET v1 projection ID");
 assertEqual(explicitV2.projectionVersion, TAX_WORKSPACE_PROJECTION_VERSION, "explicit GET version");
-assertEqual(explicitV2.projectionId, v2.id, "explicit GET v2 projection ID");
+assertEqual(explicitV2.projectionId, v2ProjectionId, "explicit GET v2 projection ID");
 assertNoIdentityManifests(explicitV2.projection);
 
 console.log(JSON.stringify({
   ok: true,
-  businessId: BUSINESS_ID,
-  taxYear: TAX_YEAR,
+  businessId,
+  taxYear,
   v1: { unchanged: true, projectionId: v1.id, projectionVersion: v1.projection_version },
   v2: {
     projectionId: v2.id,
@@ -91,29 +104,61 @@ console.log(JSON.stringify({
   },
 }, null, 2));
 
-async function exactProjection(version) {
+async function exactProjection(id, version) {
   const { data, error } = await supabase
     .from("tax_workspace_projections")
     .select("id,projection_version,source_fingerprint,status,projection_data,generated_at")
-    .eq("business_id", BUSINESS_ID)
-    .eq("tax_year", TAX_YEAR)
+    .eq("id", id)
+    .eq("business_id", businessId)
+    .eq("tax_year", taxYear)
     .eq("projection_version", version)
-    .eq("status", "complete")
-    .order("generated_at", { ascending: false })
-    .limit(1)
     .maybeSingle();
   if (error) throw error;
-  assert(data, `no complete ${version} projection exists`);
+  assert(data, `the specified ${version} projection does not exist in this scope`);
   return data;
 }
 
 async function readWorkspace(versionQuery) {
-  const response = await fetch(`${apiBaseUrl}/api/tax/workspace?businessId=${BUSINESS_ID}&year=${TAX_YEAR}${versionQuery}`, {
+  const response = await fetch(`${apiBaseUrl}/api/tax/workspace?businessId=${encodeURIComponent(businessId)}&year=${taxYear}${versionQuery}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const body = await response.json().catch(() => null);
   assert(response.ok && body?.ok === true && body?.data, `workspace GET failed with HTTP ${response.status}`);
   return body.data;
+}
+
+function parseArguments(argv) {
+  if (argv.includes("--help") || argv.includes("-h")) return { help: true };
+  const names = new Map([
+    ["--business-id", "businessId"],
+    ["--year", "taxYear"],
+    ["--v2-projection-id", "v2ProjectionId"],
+    ["--expected-v1-projection-id", "expectedV1Id"],
+    ["--expected-v1-fingerprint", "expectedV1Fingerprint"],
+  ]);
+  const values = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const [rawName, inlineValue] = token.split("=", 2);
+    const key = names.get(rawName);
+    if (!key) usageError(`Unknown argument: ${rawName}`);
+    if (values[key] != null) usageError(`Duplicate argument: ${rawName}`);
+    const value = inlineValue ?? argv[++index];
+    if (!value || value.startsWith("--")) usageError(`Missing value for ${rawName}`);
+    values[key] = value;
+  }
+  for (const [name, key] of names) if (!values[key]) usageError(`Missing required argument: ${name}`);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  for (const key of ["businessId", "v2ProjectionId", "expectedV1Id"]) if (!uuid.test(values[key])) usageError(`Invalid UUID for ${key}`);
+  if (!/^\d{4}$/.test(values.taxYear)) usageError("--year must be a four-digit year");
+  values.taxYear = Number(values.taxYear);
+  if (!/^[0-9a-f]{64}$/i.test(values.expectedV1Fingerprint)) usageError("--expected-v1-fingerprint must be a SHA-256 hex digest");
+  return values;
+}
+
+function usageError(message) {
+  console.error(`${message}\n\n${USAGE}`);
+  process.exit(2);
 }
 
 function assertNoIdentityManifests(value) {
