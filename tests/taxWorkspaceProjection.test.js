@@ -15,9 +15,11 @@ import {
 } from "../src/services/tax/taxWorkspaceProjection.service.js";
 import { workspaceReadError } from "../src/api/tax/taxWorkspaceErrors.js";
 import { sendTaxError } from "../src/api/tax/taxHttp.js";
+import { buildTaxQuestionIdentity } from "../src/services/tax/taxQuestionSemanticIdentity.js";
 
 const BUSINESS = "11111111-1111-4111-8111-111111111111";
 function source() {
+  const questionIdentity = buildTaxQuestionIdentity({ businessId: BUSINESS, taxYear: 2026, decisionType: "business_use_confirmation", row: { qboAccountId: "a-meals", taxCategory: "business_meals", taxTreatment: "ordinary_expense", deductiblePercent: 50, deductibilityStatus: "partially_deductible" } });
   const entries = [
     { id: "estimated-1", outcome: "standard_rule_applied", actionOwner: "none", row: { transactionId: "estimated-1", taxScopeDisposition: "expense_cogs_in_matrix", taxCategory: "software_subscriptions", taxCategoryLabel: "Software", date: "2026-10-01", amount: 100, deductibleAmount: 100 } },
     { id: "reviewed-1", outcome: "reviewed", actionOwner: "none", row: { transactionId: "reviewed-1", taxScopeDisposition: "expense_cogs_in_matrix", taxCategory: "business_meals", taxCategoryLabel: "Meals", date: "2026-10-02", amount: 100, deductibleAmount: 50 } },
@@ -31,7 +33,7 @@ function source() {
       categories: [{ taxCategory: "software_subscriptions", displayName: "Software", transactionCount: 689, monthly: { "2026-10": { transactionCount: 689, bookExpenseAmount: 9000, deductibleAmount: 8524, needsReviewAmount: 0 } } }],
       warnings: [],
     },
-    lifecycle: { entries, activeDecisionGroups: [{ id: "q-meals", decisionType: "business_use_confirmation", qboAccountId: "a-meals", qboAccountName: "Meals", ruleVersion: "v1", transactionCount: 1, actionableTransactionCount: 1, months: ["2026-10"], actionableGrossAmountCents: 7500, actionableEstimatedDeductibleAmountCents: 0, state: "needs_input", stableTransactionIds: { actionable: ["question-1"] } }] },
+    lifecycle: { entries, activeDecisionGroups: [{ id: questionIdentity.id, decisionType: "business_use_confirmation", qboAccountId: "a-meals", qboAccountName: "Meals", semanticManifest: questionIdentity.manifest, semanticFingerprint: questionIdentity.semanticFingerprint, ruleVersions: ["v1"], transactionCount: 1, actionableTransactionCount: 1, months: ["2026-10"], actionableGrossAmountCents: 7500, actionableEstimatedDeductibleAmountCents: 0, state: "needs_input", stableTransactionIds: { actionable: ["question-1"] } }] },
   };
 }
 
@@ -53,7 +55,7 @@ function productionSizedSource() {
   return {
     overview: { meta: { generatedAt: "2026-10-29T19:23:46.324Z" }, projection: { completeness: "partial" }, categories: [], warnings: [] },
     lifecycle: { entries, activeDecisionGroups: Array.from({ length: 15 }, (_, index) => ({
-      id: `question-group-${index}`,
+      id: `question-group-${index}`, semanticFingerprint: `semantic-${index}`, semanticManifest: { version: 1, index }, ruleVersions: [index % 2 ? "v3" : "v4"],
       transactionCount: 21,
       actionableTransactionCount: 21,
       stableTransactionIds: { actionable: questionIds.slice(index * 21, (index + 1) * 21) },
@@ -111,14 +113,14 @@ test("v2 matrix excludes Income and conserves category, month, treatment, and ou
   assert.doesNotThrow(() => internals.validatePayload(payload));
 });
 
-test("duplicate question membership reports group sum and unique union separately", () => {
+test("duplicate question membership fails closed", () => {
   const { overview, lifecycle } = source();
   lifecycle.activeDecisionGroups.push({ ...lifecycle.activeDecisionGroups[0], id: "q-meals-overlap" });
   const payload = internals.buildPayload({ overview, lifecycle, businessId: BUSINESS, taxYear: 2026, sourceFingerprint: "e".repeat(64), generatedAt: overview.meta.generatedAt });
   assert.equal(payload.questionMembershipSum, 2);
   assert.equal(payload.questionCoveredUniqueCount, 1);
   assert.equal(payload.questionMembershipOverlapCount, 1);
-  assert.doesNotThrow(() => internals.validatePayload(payload));
+  assert.throws(() => internals.validatePayload(payload), /Tax workspace projection/);
 });
 
 test("missing, duplicate, overlapping, or omitted identities fail closed", () => {
@@ -179,6 +181,9 @@ test("browser response omits stable identity manifests", () => {
   const payload = internals.buildPayload({ overview, lifecycle, businessId: BUSINESS, taxYear: 2026, sourceFingerprint: "1".repeat(64), generatedAt: overview.meta.generatedAt });
   const browser = publicTaxWorkspaceProjection(payload);
   assert.equal(browser.identityEvidence, undefined);
+  assert.equal(browser.questionGroups[0].semanticManifest, undefined);
+  assert.equal(browser.questionGroups[0].semanticFingerprint, undefined);
+  assert.equal(browser.questionGroups[0].ruleVersions, undefined);
   assert.equal(browser.matrix[0].identityManifest, undefined);
   assert.equal(Object.values(browser.matrix[0].months)[0].identityManifest, undefined);
   assert.equal(browser.identityFingerprints.matrixIncluded.length, 64);

@@ -5,6 +5,7 @@ import { buildGroupedDeductionDecisionFingerprint } from "./taxGroupedDeductionD
 import { applyGroupedTaxDeductionDecision, getGroupedTaxDeductionDecisionOperation } from "./taxGroupedDeductionDecision.service.js";
 import { buildGroupedDecisionManifest, compareGroupedDecisionManifests, fingerprintGroupedDecisionManifest } from "./taxGroupedDecisionManifest.js";
 import { conflictError, forbiddenBusinessError, notFoundError, validationError } from "./taxErrors.js";
+import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
 
 const DEFAULT_PREVIEW_TTL_SECONDS = 10 * 60;
 
@@ -24,7 +25,12 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
     actor_user_id: actor.userId,
     group_id: groupId,
     decision_type: taxDecisionTypeForClassification(first),
-    scope: { tax_category: first.tax_category, qbo_account_id: accountId(first), rule_version: ruleVersion(first) },
+    scope: {
+      tax_category: first.tax_category,
+      qbo_account_id: accountId(first),
+      semantic_fingerprint: questionIdentity({ businessId, taxYear, row: first }).semanticFingerprint,
+      rule_versions: [...new Set(rows.map(ruleVersion).filter(Boolean))].sort(),
+    },
     semantic_manifest: manifest,
     semantic_fingerprint: fingerprintGroupedDecisionManifest(manifest),
     actionable_transaction_ids: actionable.map((row) => String(row.transaction_id)).sort(),
@@ -71,16 +77,17 @@ async function applyFromPreview({ supabase, businessId, taxYear, preview, input,
   const actionableIds = new Set(preview.actionable_transaction_ids || []);
   const exceptions = new Set((input.personalExceptionIds || []).map(String));
   if ([...exceptions].some((id) => !actionableIds.has(id))) throw validationError("invalid_grouped_decision_exceptions", "A selected exception is outside this preview.");
-  const targetIds = [...actionableIds].filter((id) => !exceptions.has(id)).sort();
-  if (!targetIds.length) throw validationError("invalid_grouped_decision_targets", "At least one business expense is required.");
-  const first = currentRows.find((row) => targetIds.includes(String(row.transaction_id)));
+  const businessIds = [...actionableIds].filter((id) => !exceptions.has(id)).sort();
+  if (!businessIds.length) throw validationError("invalid_grouped_decision_targets", "At least one business expense is required.");
+  const targetIds = businessIds;
+  const first = currentRows.find((row) => businessIds.includes(String(row.transaction_id)));
   const changes = treatmentForAnswer(first, input);
   const reason = "Customer confirmed a grouped Tax question from a server preview.";
-  const scope = { taxCategory: first.tax_category, qboAccountId: accountId(first), decisionType: preview.decision_type };
-  const scopeFingerprint = buildGroupedDeductionDecisionFingerprint({ businessId, taxYear, ...scope, transactionIds: targetIds, expectedPopulationTransactionIds: [...actionableIds], changes, reason });
+  const scope = { taxCategory: first.tax_category, qboAccountId: accountId(first), decisionType: preview.decision_type, semanticFingerprint: preview.scope?.semantic_fingerprint };
+  const scopeFingerprint = buildGroupedDeductionDecisionFingerprint({ businessId, taxYear, ...scope, transactionIds: targetIds, expectedPopulationTransactionIds: [...actionableIds], personalExceptionIds: [...exceptions], changes, reason });
   return applyGroupedTaxDeductionDecision({ supabase, businessId, taxYear, actor, input: {
     idempotencyKey: input.idempotencyKey, previewId: preview.id, confirmationFingerprint, scope, scopeFingerprint, targetTransactionIds: targetIds,
-    expectedPopulationTransactionIds: [...actionableIds], changes, reason,
+    expectedPopulationTransactionIds: [...actionableIds], personalExceptionIds: [...exceptions], changes, reason,
   } });
 }
 
@@ -92,12 +99,22 @@ async function decisionGroupRows({ supabase, businessId, taxYear, groupId }) {
 function decisionIdentity({ businessId, taxYear, row }) {
   const decisionType = taxDecisionTypeForClassification(row);
   if (!decisionType) return null;
-  return buildTaxDecisionIdentity({ businessId, taxYear, decisionType, row: {
+  return buildTaxDecisionIdentity({ businessId, taxYear, decisionType, row: classificationQuestionRow(row) });
+}
+
+function questionIdentity({ businessId, taxYear, row }) {
+  const decisionType = taxDecisionTypeForClassification(row);
+  return buildTaxQuestionIdentity({ businessId, taxYear, decisionType, row: classificationQuestionRow(row) });
+}
+
+function classificationQuestionRow(row) {
+  return {
     transactionId: row.transaction_id, taxScopeDisposition: "expense_cogs_in_matrix",
     qboAccountId: accountId(row), qboAccountName: row.source_qbo_account_name || row.metadata?.source_qbo_account_name,
     taxCategory: row.tax_category, taxTreatment: row.tax_treatment?.type || row.tax_treatment,
-    ruleVersion: ruleVersion(row), ruleCode: row.rule_code,
-  } });
+    deductiblePercent: row.deductible_percent, deductibilityStatus: row.deductibility_status,
+    metadata: row.metadata, ruleVersion: ruleVersion(row), ruleCode: row.rule_code,
+  };
 }
 
 function taxDecisionTypeForClassification(row) {

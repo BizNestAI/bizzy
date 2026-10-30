@@ -10,8 +10,10 @@ export function buildGroupedDeductionDecisionFingerprint({
   taxCategory,
   qboAccountId,
   decisionType,
+  semanticFingerprint,
   transactionIds = [],
   expectedPopulationTransactionIds = transactionIds,
+  personalExceptionIds = [],
   changes = {},
   reason = "",
 } = {}) {
@@ -27,8 +29,10 @@ export function buildGroupedDeductionDecisionFingerprint({
     taxCategory: text(taxCategory),
     qboAccountId: text(qboAccountId),
     decisionType: text(decisionType),
+    semanticFingerprint: text(semanticFingerprint),
     targetTransactionIds: stableIds(transactionIds),
     expectedPopulationTransactionIds: stableIds(expectedPopulationTransactionIds),
+    personalExceptionIds: stableIds(personalExceptionIds),
     changes: {
       taxCategory: text(changes?.taxCategory),
       deductibilityStatus: text(changes?.deductibilityStatus),

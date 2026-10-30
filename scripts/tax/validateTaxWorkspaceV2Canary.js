@@ -57,7 +57,7 @@ assertObject(payload.actionOwnerCounts, {
   professional_review_required: 17,
   none: 307,
 }, "action ownership");
-assertEqual(payload.questionGroupCount, 15, "question groups");
+assertEqual(payload.questionGroupCount, 8, "semantic question groups");
 assertEqual(payload.questionMembershipSum, 315, "question summed memberships");
 assertEqual(payload.questionCoveredUniqueCount, 315, "question unique memberships");
 assertEqual(payload.questionMembershipOverlapCount, 0, "question overlap");
@@ -176,6 +176,9 @@ function assertNoIdentityManifests(value) {
   const serialized = JSON.stringify(value);
   assert(!serialized.includes("identityEvidence"), "browser response exposes identityEvidence");
   assert(!serialized.includes("identityManifest"), "browser response exposes identityManifest");
+  assert(!serialized.includes("semanticManifest"), "browser response exposes semanticManifest");
+  assert(!serialized.includes("semanticFingerprint"), "browser response exposes semanticFingerprint");
+  assert(!serialized.includes("ruleVersions"), "browser response exposes rule-version provenance");
 }
 
 function unionSize(groups) {

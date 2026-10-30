@@ -77,6 +77,22 @@ test("a failed grouped command has no client-side rule or classification side ef
   assert.deepEqual(rows, before);
 });
 
+test("personal exceptions remain outside the atomic business write while one account default is saved", async () => {
+  const rows = [mealsClassification(1), mealsClassification(2), mealsClassification(3)];
+  const ids = rows.map((row) => row.transaction_id);
+  const supabase = makeGroupedDecisionSupabase(rows);
+  const input = groupedInput(ids);
+  input.personalExceptionIds = [ids[1]];
+  input.targetTransactionIds = [ids[0], ids[2]];
+  input.scopeFingerprint = buildGroupedDeductionDecisionFingerprint({ businessId: BUSINESS_ID, taxYear: YEAR, ...MEALS_SCOPE, transactionIds: input.targetTransactionIds, expectedPopulationTransactionIds: ids, personalExceptionIds: input.personalExceptionIds, changes: input.changes, reason: input.reason });
+  const result = await applyGroupedTaxDeductionDecision({ supabase, businessId: BUSINESS_ID, taxYear: YEAR, actor: { userId: "user-1", source: "user" }, input });
+  assert.equal(supabase.rpcCount, 1);
+  assert.equal(supabase.writeExecutions, 1);
+  assert.equal(result.appliedCount, 2);
+  assert.equal(result.targetTransactionIds.includes(ids[1]), false);
+  assert.equal(result.rule.accountName, "Meals");
+});
+
 test("failure injection at every atomic database stage produces no partial client result", async () => {
   for (const stage of ["rule", "override_history", "classification", "review_task", "operation_result"]) {
     const rows = [mealsClassification(1), mealsClassification(2)];

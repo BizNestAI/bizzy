@@ -11,7 +11,7 @@ import { listTaxClassifications } from "./taxClassification.repository.js";
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
-export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.1-signed-amounts`;
+export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.2-semantic-questions`;
 export const TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION = "signed-treatment-amounts-v1";
 const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;
@@ -93,7 +93,8 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
   const matrix = buildIdentityMatrix(matrixEntries, taxYear);
   const questionGroups = lifecycle.activeDecisionGroups.slice(0, MAX_QUESTIONS).map((group) => ({
     id: group.id, decisionType: group.decisionType, qboAccountId: group.qboAccountId,
-    qboAccountName: group.qboAccountName, ruleVersion: group.ruleVersion,
+    qboAccountName: group.qboAccountName, semanticFingerprint: group.semanticFingerprint,
+    semanticManifest: group.semanticManifest, ruleVersions: group.ruleVersions,
     transactionCount: group.transactionCount, actionableTransactionCount: group.actionableTransactionCount,
     months: group.months, actionableGrossAmountCents: group.actionableGrossAmountCents,
     actionableEstimatedDeductibleAmountCents: group.actionableEstimatedDeductibleAmountCents, state: group.state,
@@ -257,8 +258,11 @@ function validatePayload(p){
   const questionSets=Object.values(evidence.questionGroups||{}).map((ids)=>requiredUniqueSet(ids,"tax_workspace_question_identity_invalid"));
   const questionUnion=new Set(questionSets.flatMap((set)=>[...set]));
   const questionSum=questionSets.reduce((sum,set)=>sum+set.size,0);
+  if(hasOverlap(questionSets)) throw coded("tax_workspace_question_membership_overlap");
+  if(!Array.isArray(p.questionGroups) || p.questionGroups.length!==Object.keys(evidence.questionGroups||{}).length || p.questionGroups.some((group)=>!group?.id || !group?.semanticFingerprint || !group?.semanticManifest || !Array.isArray(group?.ruleVersions))) throw coded("tax_workspace_question_semantics_invalid");
+  if(new Set(p.questionGroups.map((group)=>group.id)).size!==p.questionGroups.length || p.questionGroups.some((group)=>!Object.hasOwn(evidence.questionGroups||{},group.id))) throw coded("tax_workspace_question_semantics_invalid");
   if(p.evaluatedTransactionCount!==evaluated.size || p.matrixIncludedCount!==matrix.size || p.outsideDeductionsCount!==outside.size || rowCount!==matrix.size || monthCount!==matrix.size) throw coded("tax_workspace_identity_count_mismatch");
-  if(p.questionMembershipSum!==questionSum || p.questionCoveredUniqueCount!==questionUnion.size || p.questionMembershipOverlapCount!==questionSum-questionUnion.size) throw coded("tax_workspace_question_membership_mismatch");
+  if(p.questionMembershipSum!==questionSum || p.questionCoveredUniqueCount!==questionUnion.size || p.questionMembershipOverlapCount!==0 || questionSum!==questionUnion.size) throw coded("tax_workspace_question_membership_mismatch");
   for(const id of questionUnion) if(!matrix.has(id)) throw coded("tax_workspace_question_outside_matrix");
   for(const [name,ids] of [["evaluated",evaluated],["matrixIncluded",matrix],["outsideDeductions",outside],["estimated",treatmentSets.estimated],["reviewed",treatmentSets.reviewed],["needsInput",treatmentSets.needs_input],["questionCovered",questionUnion]]) if(p.identityFingerprints?.[name]!==setFingerprint([...ids])) throw coded("tax_workspace_identity_fingerprint_mismatch");
 }
@@ -274,6 +278,14 @@ export function publicTaxWorkspaceProjection(payload) {
   const safe = { ...payload };
   const matrix = safe.matrix || [];
   delete safe.identityEvidence;
+  safe.questionGroups = (safe.questionGroups || []).map((sourceGroup) => {
+    const group = { ...sourceGroup };
+    delete group.semanticFingerprint;
+    delete group.semanticManifest;
+    delete group.ruleVersions;
+    delete group.ruleVersion;
+    return group;
+  });
   return {
     ...safe,
     matrix: matrix.map((sourceRow) => {

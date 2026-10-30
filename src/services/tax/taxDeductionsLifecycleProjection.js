@@ -6,6 +6,8 @@
 // partition here prevents the Deductions page from comparing the legacy
 // coverage aggregates (which overlap) with customer-facing workflow counts.
 
+import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
+
 export const TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES = Object.freeze({
   REVIEWED: "reviewed",
   STANDARD_RULE_APPLIED: "standard_rule_applied",
@@ -192,20 +194,7 @@ export function taxActionOwnerForRow(row = {}) {
 
 export function buildTaxDecisionIdentity({ businessId, taxYear, row = {}, decisionType = taxDecisionTypeForRow(row) } = {}) {
   row = taxRow(row);
-  const qboAccountId = firstValue(row.qboAccountId, row.raw?.qboAccountId, row.raw?.source_qbo_account_id, "unmapped");
-  const ruleVersion = firstValue(row.ruleVersion, row.raw?.rule_version, row.raw?.classification?.rule_version, row.matchedRuleCode, row.ruleCode, row.taxTreatment, "unversioned");
-  // Vehicle identity is conservatively the authoritative GL account until a
-  // separate vehicle registry exists. That makes a decision tenant/year/GL
-  // scoped and avoids treating a click in one month as a decision for another.
-  const subject = decisionType === "vehicle_method" ? qboAccountId : "account";
-  return [
-    `business:${String(businessId || "unknown")}`,
-    `year:${String(taxYear || "unknown")}`,
-    `gl:${String(qboAccountId)}`,
-    `type:${String(decisionType || "none")}`,
-    `subject:${String(subject)}`,
-    `rule:${String(ruleVersion)}`,
-  ].join("|");
+  return buildTaxQuestionIdentity({ businessId, taxYear, row, decisionType }).id;
 }
 
 export function buildTaxDeductionsLifecycleProjection({ rows = [], businessId = null, taxYear = null } = {}) {
@@ -301,6 +290,7 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
   for (const entry of entries) {
     if (!entry.decisionId) continue;
     const row = entry.row;
+    const semanticIdentity = buildTaxQuestionIdentity({ businessId, taxYear, row, decisionType: entry.decisionType });
     const existing = groups.get(entry.decisionId) || {
       id: entry.decisionId,
       businessId,
@@ -308,7 +298,9 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
       decisionType: entry.decisionType,
       qboAccountId: firstValue(row.qboAccountId, row.raw?.qboAccountId, row.raw?.source_qbo_account_id, null),
       qboAccountName: firstValue(row.qboAccountName, row.bookAccount, row.raw?.qboAccountName, row.raw?.source_qbo_account_name, "Unmapped QuickBooks account"),
-      ruleVersion: firstValue(row.ruleVersion, row.raw?.rule_version, row.raw?.classification?.rule_version, row.matchedRuleCode, row.ruleCode, row.taxTreatment, "unversioned"),
+      semanticManifest: semanticIdentity.manifest,
+      semanticFingerprint: semanticIdentity.semanticFingerprint,
+      ruleVersions: new Set(),
       rows: [],
       pendingRows: [],
       reviewedRows: [],
@@ -320,6 +312,7 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
       latestDecisionAt: null,
       currentDeductiblePercent: null,
     };
+    existing.ruleVersions.add(String(firstValue(row.ruleVersion, row.raw?.rule_version, row.raw?.classification?.rule_version, row.matchedRuleCode, row.ruleCode, row.taxTreatment, "unversioned")));
     existing.rows.push(row);
     if (entry.outcome === TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED) {
       existing.pendingRows.push(row);
@@ -350,6 +343,7 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
       const explicitlyExcludedCount = 0;
       return {
         ...group,
+        ruleVersions: [...group.ruleVersions].sort(),
         pendingCount: actionableTransactionCount,
         reviewedCount: alreadyResolvedCount,
         transactionCount: categoryTransactionCount,

@@ -195,14 +195,14 @@ test("12. incomplete QBO evidence is bookkeeping follow-up, not a customer quest
   assert.equal(result.activeDecisionGroups.length, 0);
 });
 
-test("13. decision identity is tenant, year, GL, type, vehicle/account, and rule-version scoped", () => {
+test("13. decision identity is tenant, year, GL, type, subject, and semantics scoped but not rule-version scoped", () => {
   const source = row("scoped", { status: "needs_review", requiresReview: true, taxCategory: "vehicle_expense", qboAccountId: "vehicle", matchedRuleCode: "vehicle_v3" });
   const base = buildTaxDecisionIdentity({ businessId: "a", taxYear: 2026, row: source, decisionType: "vehicle_method" });
   assert.notEqual(base, buildTaxDecisionIdentity({ businessId: "b", taxYear: 2026, row: source, decisionType: "vehicle_method" }));
   assert.notEqual(base, buildTaxDecisionIdentity({ businessId: "a", taxYear: 2025, row: source, decisionType: "vehicle_method" }));
   assert.notEqual(base, buildTaxDecisionIdentity({ businessId: "a", taxYear: 2026, row: { ...source, qboAccountId: "other" }, decisionType: "vehicle_method" }));
   assert.notEqual(base, buildTaxDecisionIdentity({ businessId: "a", taxYear: 2026, row: source, decisionType: "business_use_percent" }));
-  assert.notEqual(base, buildTaxDecisionIdentity({ businessId: "a", taxYear: 2026, row: { ...source, ruleVersion: "v4" }, decisionType: "vehicle_method" }));
+  assert.equal(base, buildTaxDecisionIdentity({ businessId: "a", taxYear: 2026, row: { ...source, ruleVersion: "v4" }, decisionType: "vehicle_method" }));
 });
 
 test("14. duplicate click/id delivery is idempotent at the stable-identity projection boundary", () => {
@@ -247,4 +247,51 @@ test("19. lifecycle projection imports and runs without providers or mutations",
   const result = projection([]);
   assert.equal(result.canonicalCount, 0);
   assert.equal(result.conservation.isConserved, true);
+});
+
+test("20. equivalent rule versions merge into one semantic question with a duplicate-free union", () => {
+  const shared = { status: "needs_review", requiresReview: true, taxCategory: "business_meals", qboAccountId: "meals", qboAccountName: "Meals", taxTreatment: "ordinary_expense", deductiblePercent: 50, deductibilityStatus: "partially_deductible" };
+  const result = projection([
+    row("v3-a", { ...shared, ruleVersion: "bizzi-gl-2026-v3" }),
+    row("v4-a", { ...shared, ruleVersion: "bizzi-gl-2026-v4" }),
+  ]);
+  assert.equal(result.activeDecisionGroups.length, 1);
+  assert.deepEqual(result.activeDecisionGroups[0].ruleVersions, ["bizzi-gl-2026-v3", "bizzi-gl-2026-v4"]);
+  assert.equal(result.activeDecisionGroups[0].actionableTransactionCount, 2);
+  assert.equal(new Set(result.activeDecisionGroups[0].stableTransactionIds.actionable).size, 2);
+});
+
+test("21. semantic differences, GL accounts, and genuine subjects remain separate", () => {
+  const base = { status: "needs_review", requiresReview: true, taxCategory: "utilities", qboAccountName: "Utilities", taxTreatment: "utilities_review", deductibilityStatus: "needs_review", deductiblePercent: 0 };
+  const result = projection([
+    row("base", { ...base, qboAccountId: "utilities-a", allocationSubject: "office" }),
+    row("different-treatment", { ...base, qboAccountId: "utilities-a", allocationSubject: "office", taxTreatment: "utilities_special_review" }),
+    row("different-gl", { ...base, qboAccountId: "utilities-b", allocationSubject: "office" }),
+    row("different-subject", { ...base, qboAccountId: "utilities-a", allocationSubject: "home" }),
+  ]);
+  assert.equal(result.activeDecisionGroups.length, 4);
+});
+
+test("22. diagnosed 15 rule-version groups become 8 questions while conserving 315 unique memberships", () => {
+  const definitions = [
+    ["Meals", "business_meals", "ordinary_expense", 50, 90, 81],
+    ["Gas", "vehicle_expense", "vehicle_expense", 0, 56, 5],
+    ["Parking", "travel_transportation", "travel_transportation", 0, 36, 25],
+    ["Lyft/Uber", "travel_transportation", "travel_transportation", 0, 4, 4],
+    ["Electric", "utilities", "utilities_review", 0, 2, 2],
+    ["Phone Bill", "utilities", "utilities_review", 0, 3, 2],
+    ["Transportation", "travel_transportation", "travel_transportation", 0, 2, 1],
+  ];
+  const input = [];
+  for (const [account, category, treatment, percent, v4Count, v3Count] of definitions) {
+    for (const [version, count] of [["bizzi-gl-2026-v4", v4Count], ["bizzi-gl-2026-v3", v3Count]]) {
+      input.push(...rows(count, `${account}-${version}`, { status: "needs_review", requiresReview: true, qboAccountId: account, qboAccountName: account, taxCategory: category, taxTreatment: treatment, deductiblePercent: percent, deductibilityStatus: category === "business_meals" ? "partially_deductible" : "needs_review", ruleVersion: version }));
+    }
+  }
+  input.push(...rows(2, "Utilities-single", { status: "needs_review", requiresReview: true, qboAccountId: "Utilities", qboAccountName: "Utilities", taxCategory: "utilities", taxTreatment: "utilities_review", deductiblePercent: 0, deductibilityStatus: "needs_review", ruleVersion: "bizzi-gl-2026-v4" }));
+  const result = projection(input);
+  const memberships = result.activeDecisionGroups.flatMap((group) => group.stableTransactionIds.actionable);
+  assert.equal(result.activeDecisionGroups.length, 8);
+  assert.equal(memberships.length, 315);
+  assert.equal(new Set(memberships).size, 315);
 });

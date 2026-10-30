@@ -9,6 +9,7 @@ import {
   toTaxDeductionDecisionRule,
 } from "./taxDeductionDecisionRule.service.js";
 import { normalizeTaxYear } from "./taxDomain.js";
+import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
 import { buildGroupedDeductionDecisionFingerprint } from "./taxGroupedDeductionDecisionFingerprint.js";
 import {
   conflictError,
@@ -36,7 +37,9 @@ export async function applyGroupedTaxDeductionDecision({
       action: "refresh_tax_deductions",
     });
   }
-  if (!selectedRows.every((row) => isEligibleScopedDecisionRow(row, command.scope))) {
+  const semanticFingerprint = command.scope.semanticFingerprint || questionSemanticFingerprint(selectedRows[0], command.scope.decisionType, businessId, year);
+  const semanticScope = { ...command.scope, semanticFingerprint };
+  if (!selectedRows.every((row) => isEligibleScopedDecisionRow(row, semanticScope, businessId, year))) {
     const protectedAuthority = selectedRows.some((row) => row.user_override === true || row.cpa_override === true || ["user_confirmed", "bizzi_operator_confirmed", "cpa_confirmed"].includes(text(row.classification_status).toLowerCase()));
     throw conflictError(protectedAuthority ? "protected_authority_changed" : "scope_treatment_changed", "The selected transactions no longer match this deduction decision. Refresh before trying again.", {
       action: "refresh_tax_deductions",
@@ -44,7 +47,7 @@ export async function applyGroupedTaxDeductionDecision({
   }
   const canonicalPopulationTransactionIds = stableIds(
     (rows || [])
-      .filter((row) => isEligibleScopedDecisionRow(row, command.scope))
+      .filter((row) => isEligibleScopedDecisionRow(row, semanticScope, businessId, year))
       .map((row) => row.transaction_id),
   );
   if (!sameIdSet(command.expectedPopulationTransactionIds, canonicalPopulationTransactionIds)) {
@@ -59,8 +62,10 @@ export async function applyGroupedTaxDeductionDecision({
     taxCategory: command.scope.taxCategory,
     qboAccountId: command.scope.qboAccountId,
     decisionType: command.scope.decisionType,
+    semanticFingerprint: command.scope.semanticFingerprint,
     transactionIds: command.targetTransactionIds,
     expectedPopulationTransactionIds: command.expectedPopulationTransactionIds,
+    personalExceptionIds: command.personalExceptionIds,
     changes: command.changes,
     reason: command.reason,
   });
@@ -111,6 +116,7 @@ export async function applyGroupedTaxDeductionDecision({
       qbo_account_id: command.scope.qboAccountId,
       qbo_account_name: accountName,
       decision_type: command.scope.decisionType,
+      semantic_fingerprint: semanticFingerprint,
       expected_population_count: command.expectedPopulationTransactionIds.length,
     },
     p_scope_fingerprint: command.scopeFingerprint,
@@ -152,22 +158,30 @@ export async function getGroupedTaxDeductionDecisionOperation({ supabase, busine
 
 export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear } = {}) {
   const scope = input.scope && typeof input.scope === "object" ? input.scope : {};
-  const targetTransactionIds = [...new Set((Array.isArray(input.targetTransactionIds) ? input.targetTransactionIds : [])
-    .map((value) => String(value || "").trim())
-    .filter(Boolean))];
+  const rawTargetTransactionIds = (Array.isArray(input.targetTransactionIds) ? input.targetTransactionIds : []).map((value) => String(value || "").trim()).filter(Boolean);
+  if (new Set(rawTargetTransactionIds).size !== rawTargetTransactionIds.length) throw validationError("invalid_grouped_decision_targets", "Selected transactions must be unique.", { field: "targetTransactionIds" });
+  const targetTransactionIds = [...rawTargetTransactionIds];
   if (!targetTransactionIds.length || targetTransactionIds.length > MAX_GROUPED_DECISION_ROWS) {
     throw validationError("invalid_grouped_decision_targets", `A grouped deduction decision must contain 1 through ${MAX_GROUPED_DECISION_ROWS} transactions.`, { field: "targetTransactionIds" });
   }
-  const expectedPopulationTransactionIds = stableIds(input.expectedPopulationTransactionIds);
+  const rawExpectedPopulationTransactionIds = (Array.isArray(input.expectedPopulationTransactionIds) ? input.expectedPopulationTransactionIds : []).map((value) => String(value || "").trim()).filter(Boolean);
+  const rawPersonalExceptionIds = (Array.isArray(input.personalExceptionIds) ? input.personalExceptionIds : []).map((value) => String(value || "").trim()).filter(Boolean);
+  if (new Set(rawExpectedPopulationTransactionIds).size !== rawExpectedPopulationTransactionIds.length || new Set(rawPersonalExceptionIds).size !== rawPersonalExceptionIds.length) throw validationError("invalid_grouped_decision_population", "Decision memberships must be unique.", { field: "expectedPopulationTransactionIds" });
+  const expectedPopulationTransactionIds = stableIds(rawExpectedPopulationTransactionIds);
+  const personalExceptionIds = stableIds(rawPersonalExceptionIds);
   if (!expectedPopulationTransactionIds.length || expectedPopulationTransactionIds.length > MAX_GROUPED_DECISION_ROWS) {
     throw validationError("invalid_grouped_decision_population", `A grouped deduction decision must describe 1 through ${MAX_GROUPED_DECISION_ROWS} current transactions.`, { field: "expectedPopulationTransactionIds" });
   }
   if (!targetTransactionIds.every((id) => expectedPopulationTransactionIds.includes(id))) {
     throw validationError("invalid_grouped_decision_targets", "Selected transactions must belong to the displayed decision population.", { field: "targetTransactionIds" });
   }
+  if (!personalExceptionIds.every((id) => expectedPopulationTransactionIds.includes(id)) || personalExceptionIds.some((id) => targetTransactionIds.includes(id))) {
+    throw validationError("invalid_grouped_decision_exceptions", "Personal exceptions must be preserved outside the selected business transactions.", { field: "personalExceptionIds" });
+  }
   const taxCategory = text(scope.taxCategory);
   const qboAccountId = text(scope.qboAccountId);
   const decisionType = text(scope.decisionType);
+  const semanticFingerprint = text(scope.semanticFingerprint);
   if (!taxCategory || !qboAccountId || !decisionType) {
     throw validationError("invalid_grouped_decision_scope", "A tax category, QuickBooks GL account, and decision type are required.", { field: "scope" });
   }
@@ -189,7 +203,8 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
     idempotencyKey,
     targetTransactionIds,
     expectedPopulationTransactionIds,
-    scope: { taxCategory, qboAccountId, decisionType },
+    personalExceptionIds,
+    scope: { taxCategory, qboAccountId, decisionType, semanticFingerprint },
     scopeFingerprint,
     changes,
     reason,
@@ -200,7 +215,7 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
   };
 }
 
-function isEligibleScopedDecisionRow(row = {}, scope = {}) {
+function isEligibleScopedDecisionRow(row = {}, scope = {}, businessId, taxYear) {
   const accountId = text(row.source_qbo_account_id || row.metadata?.source_qbo_account_id);
   const status = text(row.classification_status).toLowerCase();
   return text(row.tax_category) === scope.taxCategory &&
@@ -208,7 +223,19 @@ function isEligibleScopedDecisionRow(row = {}, scope = {}) {
     status === "needs_review" &&
     row.requires_review === true &&
     row.user_override !== true &&
-    row.cpa_override !== true;
+    row.cpa_override !== true &&
+    (!scope.semanticFingerprint || questionSemanticFingerprint(row, scope.decisionType, businessId, taxYear) === scope.semanticFingerprint);
+}
+
+function questionSemanticFingerprint(row = {}, decisionType, businessId, taxYear) {
+  return buildTaxQuestionIdentity({ businessId, taxYear, decisionType, row: {
+    qboAccountId: row.source_qbo_account_id || row.metadata?.source_qbo_account_id,
+    taxCategory: row.tax_category,
+    taxTreatment: row.tax_treatment?.type || row.tax_treatment,
+    deductiblePercent: row.deductible_percent,
+    deductibilityStatus: row.deductibility_status,
+    metadata: row.metadata,
+  } }).semanticFingerprint;
 }
 
 function sourceAccountName(row = {}) {

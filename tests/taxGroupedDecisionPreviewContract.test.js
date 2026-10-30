@@ -77,6 +77,17 @@ test("preview response carries a bounded deployment contract and canonical scope
   assert.equal(preview.actionableCount, 1);
 });
 
+test("preview identity and population merge equivalent classifier rule versions", () => {
+  const v3 = { ...BASE, transaction_id: "txn-v3", rule_version: "bizzi-gl-2026-v3" };
+  const v4 = { ...BASE, transaction_id: "txn-v4", rule_version: "bizzi-gl-2026-v4" };
+  const groupId = previewTestables.decisionIdentity({ businessId: "business-1", taxYear: 2026, row: v3 });
+  assert.equal(groupId, previewTestables.decisionIdentity({ businessId: "business-1", taxYear: 2026, row: v4 }));
+  const preview = previewTestables.customerPreview({ id: "preview-merged", business_id: "business-1", tax_year: 2026, group_id: groupId, decision_type: "business_use_confirmation", expires_at: "2026-10-23T12:05:00.000Z" }, [v3, v4]);
+  assert.equal(preview.totalGroupCount, 2);
+  assert.equal(preview.actionableCount, 2);
+  assert.equal(preview.transactions.length, 2);
+});
+
 test("technical preview failure cannot be converted to resolved zero-population UI", () => {
   const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /setPreviewState\("preview_error"\)/);
