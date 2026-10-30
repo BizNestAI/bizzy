@@ -6,6 +6,7 @@ import { applyGroupedTaxDeductionDecision, getGroupedTaxDeductionDecisionOperati
 import { buildGroupedDecisionManifest, compareGroupedDecisionManifests, fingerprintGroupedDecisionManifest } from "./taxGroupedDecisionManifest.js";
 import { conflictError, forbiddenBusinessError, notFoundError, validationError } from "./taxErrors.js";
 import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
+import { vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
 
 const DEFAULT_PREVIEW_TTL_SECONDS = 10 * 60;
 
@@ -124,6 +125,13 @@ function taxDecisionTypeForClassification(row) {
 }
 
 function treatmentForAnswer(row, input) {
+  if (input.answer === "vehicle_method") {
+    try {
+      return vehicleTreatmentForAnswer({ taxCategory: row.tax_category, ...input });
+    } catch (error) {
+      throw validationError(error.code || "invalid_vehicle_decision", error.message);
+    }
+  }
   if (input.answer === "business_use_percent") {
     const percent = Number(input.businessUsePercent);
     if (!Number.isFinite(percent) || percent < 0 || percent > 100) throw validationError("invalid_business_use_percent", "Business use must be between 0 and 100.");
@@ -163,6 +171,8 @@ function previewTtlSeconds() { const value = Number(globalThis.process?.env?.TAX
 function fingerprintConfirmation(input = {}) {
   const payload = JSON.stringify({
     answer: text(input.answer),
+    vehicleMethod: text(input.vehicleMethod),
+    actualExpenseUse: text(input.actualExpenseUse),
     businessUsePercent: input.businessUsePercent == null ? null : Number(input.businessUsePercent),
     personalExceptionIds: [...new Set((input.personalExceptionIds || []).map(String))].sort(),
   });

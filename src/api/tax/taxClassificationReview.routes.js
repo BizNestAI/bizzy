@@ -165,6 +165,8 @@ router.post("/deduction-decisions/apply", async (req, res) => {
         previewId: req.body?.previewId,
         idempotencyKey: req.get?.("Idempotency-Key") || req.headers?.["idempotency-key"] || req.body?.idempotencyKey,
         answer: req.body?.answer,
+        vehicleMethod: req.body?.vehicleMethod,
+        actualExpenseUse: req.body?.actualExpenseUse,
         businessUsePercent: req.body?.businessUsePercent,
         personalExceptionIds: req.body?.personalExceptionIds,
       },

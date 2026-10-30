@@ -473,8 +473,8 @@ export function useTaxDeductions({
     },
     previewGroupedDeductionDecision: ({ groupId, signal } = {}) =>
       previewGroupedTaxDeductionDecision({ businessId, year, groupId, signal }),
-    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, businessUsePercent, personalExceptionIds, signal } = {}) => {
-      const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, businessUsePercent, personalExceptionIds, signal });
+    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal } = {}) => {
+      const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal });
       applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
       const questionSummary = await refreshAuthoritativeQuestionSummary({ signal });
       return { ...result, questionSummary };

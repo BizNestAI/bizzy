@@ -11,7 +11,7 @@ import { listTaxClassifications } from "./taxClassification.repository.js";
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
-export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.2-semantic-questions`;
+export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.3-vehicle-semantic-questions`;
 export const TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION = "signed-treatment-amounts-v1";
 const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;

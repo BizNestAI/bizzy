@@ -1,3 +1,5 @@
+import { VEHICLE_QUESTION_ANSWER_CONTRACT } from "./taxVehicleQuestionContract.js";
+
 // User-facing questions are grouped by answer semantics. Classifier
 // provenance, including rule version, deliberately remains on source rows.
 export function buildTaxQuestionSemanticManifest({ row = {}, decisionType } = {}) {
@@ -47,12 +49,7 @@ function answerContract(decisionType, current) {
     currentTreatment: current,
   };
   if (decisionType === "vehicle_method") return {
-    schema: { required: ["vehicleMethod"], vehicleMethod: { enum: ["standard_mileage", "actual_expense", "not_sure"] } },
-    outcomes: {
-      standard_mileage: { taxCategory: current.taxCategory, taxTreatment: "vehicle_standard_mileage", deductiblePercent: "method_derived" },
-      actual_expense: { taxCategory: current.taxCategory, taxTreatment: "vehicle_actual_expense", deductiblePercent: "method_derived" },
-      not_sure: { taxCategory: current.taxCategory, taxTreatment: "unchanged", deductiblePercent: "unchanged" },
-    },
+    ...VEHICLE_QUESTION_ANSWER_CONTRACT,
     currentTreatment: current,
   };
   return {

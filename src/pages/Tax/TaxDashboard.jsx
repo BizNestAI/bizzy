@@ -2161,7 +2161,7 @@ function decisionTransactionIds(rows = [], answer = "all_business", exceptionIds
 
 function decisionActionLabel(action, answer, accountName = "") {
   if (answer === "unsure") return "Leave unresolved";
-  if (action?.kind === "vehicle_method") return "Vehicle setup unavailable";
+  if (action?.kind === "vehicle_method") return "Apply vehicle decision";
   if (action?.kind === "business_use_percent" || action?.kind === "utility_allocation") return "Apply business-use percentage";
   if (answer === "some_personal") return "Save business-use decision";
   if (/meal/i.test(String(accountName))) return "Confirm business meals";
@@ -2262,6 +2262,8 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
 
 function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, onCheckOutcome, onScopeChanged, onPreview }) {
   const [businessUsePercent, setBusinessUsePercent] = useState("");
+  const [vehicleMethod, setVehicleMethod] = useState("");
+  const [actualExpenseUse, setActualExpenseUse] = useState("");
   const [dedicatedPremises, setDedicatedPremises] = useState(false);
   const [businessUseAnswer, setBusinessUseAnswer] = useState("all_business");
   const [confirmRetroactiveChange, setConfirmRetroactiveChange] = useState(false);
@@ -2283,6 +2285,8 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
 
   useEffect(() => {
     setBusinessUsePercent("");
+    setVehicleMethod("");
+    setActualExpenseUse("");
     setDedicatedPremises(false);
     setBusinessUseAnswer("all_business");
     setConfirmRetroactiveChange(false);
@@ -2378,12 +2382,28 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   const requiresPercent = action.kind === "business_use_percent" || (action.kind === "utility_allocation" && !dedicatedPremises);
   const hasPercentInput = dedicatedPremises || String(businessUsePercent).trim() !== "";
   const percentValue = dedicatedPremises ? 100 : Number(businessUsePercent);
+  const vehicleDecisionUnresolved = action.kind === "vehicle_method" && vehicleMethod === "not_sure";
+  const vehicleMixedPercentValid = /^\d{1,2}(?:\.\d{1,2})?$/.test(String(businessUsePercent)) && percentValue > 0 && percentValue < 100;
+  const vehicleDecisionValid = action.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && (
+    actualExpenseUse === "all_business" || actualExpenseUse === "not_business" || (actualExpenseUse === "mixed_use" && vehicleMixedPercentValid)
+  ));
   const changingReviewedEstimate = Boolean(group.completed && (action.kind === "business_use_percent" || action.kind === "utility_allocation"));
   const actionGrossTotal = Number(serverPreview?.grossAmountCents ?? group.actionableGrossAmountCents ?? 0) / 100;
   const actionEstimatedTotal = Number(serverPreview?.estimatedDeductionCents ?? group.actionableEstimatedDeductibleAmountCents ?? 0) / 100;
   const actionButtonLabel = decisionActionLabel(action, businessUseAnswer, group.qboAccountName);
+  const vehiclePreviewPercent = vehicleMethod === "standard_mileage" || actualExpenseUse === "not_business"
+    ? 0
+    : actualExpenseUse === "all_business"
+      ? 100
+      : actualExpenseUse === "mixed_use" && vehicleMixedPercentValid
+        ? percentValue
+        : null;
   const currentEstimate = action.kind === "vehicle_method"
-    ? "Not estimated yet"
+    ? vehicleMethod === "standard_mileage"
+      ? "$0 separate expense deduction"
+      : vehicleMethod === "not_sure" || vehiclePreviewPercent == null
+        ? "Not estimated yet"
+        : `${formatDeductiblePercent(vehiclePreviewPercent)} · ${formatCurrencyLocal(actionGrossTotal * vehiclePreviewPercent / 100)}`
     : actionEstimatedTotal > 0
       ? `${formatDeductiblePercent(group.deductiblePercent)} estimated · ${formatCurrencyLocal(actionEstimatedTotal)}`
       : action.kind === "business_use_percent" || action.kind === "utility_allocation"
@@ -2396,7 +2416,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   const scopeIdentityConserved = population.isConserved
     && expectedPopulationTransactionIds.length === population.actionableTransactionCount
     && new Set(expectedPopulationTransactionIds).size === expectedPopulationTransactionIds.length;
-  const canSubmit = previewState === "preview_ready" && !readOnly && Boolean(serverPreview?.previewId) && serverPreview.actionableCount > 0 && action.kind !== "vehicle_method" && group.canApply && businessUseAnswer !== "unsure" && selectedRows.length > 0 && hasCanonicalScopeAmounts && scopeIdentityConserved && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
+  const canSubmit = previewState === "preview_ready" && !readOnly && Boolean(serverPreview?.previewId) && serverPreview.actionableCount > 0 && group.canApply && businessUseAnswer !== "unsure" && !vehicleDecisionUnresolved && vehicleDecisionValid && selectedRows.length > 0 && hasCanonicalScopeAmounts && scopeIdentityConserved && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -2414,8 +2434,10 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
         command: {
           idempotencyKey,
           previewId: serverPreview.previewId,
-          answer: requiresPercent ? "business_use_percent" : businessUseAnswer,
-          businessUsePercent: requiresPercent ? percentValue : null,
+          answer: action.kind === "vehicle_method" ? "vehicle_method" : requiresPercent ? "business_use_percent" : businessUseAnswer,
+          vehicleMethod: action.kind === "vehicle_method" ? vehicleMethod : null,
+          actualExpenseUse: action.kind === "vehicle_method" && vehicleMethod === "actual_expense" ? actualExpenseUse : null,
+          businessUsePercent: action.kind === "vehicle_method" && actualExpenseUse === "mixed_use" ? businessUsePercent : requiresPercent ? percentValue : null,
           personalExceptionIds: businessUseAnswer === "some_personal" ? exceptionIds : [],
         },
       });
@@ -2516,11 +2538,22 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
               </label>
               {!dedicatedPremises ? <BusinessUsePercentField value={businessUsePercent} onChange={setBusinessUsePercent} label="Business use" /> : null}
             </div>
-          ) : (
-            <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm text-white/58">
-              <p>Vehicle setup is temporarily unavailable because these expenses are not linked to a verified vehicle for this tax year. They will remain in Needs input and no treatment will be saved.</p>
+          ) : action.kind === "vehicle_method" ? (
+            <div className="mt-3 space-y-3 rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
+              <div className="font-semibold text-white/84">How do you deduct these vehicle expenses?</div>
+              <DecisionOption checked={vehicleMethod === "standard_mileage"} onChange={() => { setVehicleMethod("standard_mileage"); setActualExpenseUse(""); setBusinessUsePercent(""); }} description="Keep these expenses in your books, but do not deduct them separately. This does not calculate a mileage deduction.">Standard mileage</DecisionOption>
+              <DecisionOption checked={vehicleMethod === "actual_expense"} onChange={() => setVehicleMethod("actual_expense")} description="Deduct the business-use share of the listed vehicle expenses.">Actual expenses</DecisionOption>
+              <DecisionOption checked={vehicleMethod === "not_sure"} onChange={() => { setVehicleMethod("not_sure"); setActualExpenseUse(""); setBusinessUsePercent(""); }} description="Keep every expense in Needs input. Nothing will be saved.">I’m not sure yet</DecisionOption>
+              {vehicleMethod === "actual_expense" ? <div className="space-y-2 border-t border-white/10 pt-3">
+                <div className="font-semibold text-white/84">How much was for business?</div>
+                <DecisionOption checked={actualExpenseUse === "all_business"} onChange={() => { setActualExpenseUse("all_business"); setBusinessUsePercent(""); }} description="Apply 100% business use.">Entirely for business</DecisionOption>
+                <DecisionOption checked={actualExpenseUse === "mixed_use"} onChange={() => setActualExpenseUse("mixed_use")} description="Enter the business-use share. Personal use is excluded.">Mixed business and personal use</DecisionOption>
+                {actualExpenseUse === "mixed_use" ? <BusinessUsePercentField value={businessUsePercent} onChange={setBusinessUsePercent} label="Business use" /> : null}
+                <DecisionOption checked={actualExpenseUse === "not_business"} onChange={() => { setActualExpenseUse("not_business"); setBusinessUsePercent(""); }} description="Apply 0% business use and exclude these as nonbusiness vehicle expenses.">Not for business</DecisionOption>
+              </div> : null}
+              {vehicleMethod === "not_sure" ? <p className="text-xs text-white/50">No transaction treatment or future default will change.</p> : null}
             </div>
-          )}
+          ) : null}
 
           {changingReviewedEstimate ? (
             <label className="mt-3 flex items-start gap-2 rounded-xl border border-amber-300/14 bg-amber-300/[0.04] px-3 py-2 text-xs text-amber-50/85">
@@ -2546,7 +2579,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
               />
             </>
           ) : null}
-          {action.kind !== "vehicle_method" && businessUseAnswer !== "unsure" ? (
+          {businessUseAnswer !== "unsure" && !vehicleDecisionUnresolved ? (
             <section className="mt-3 rounded-xl border border-emerald-300/14 bg-emerald-300/[0.045] px-3 py-2.5 text-xs leading-relaxed text-emerald-50/84" aria-label="Future deduction default">
               <div className="font-semibold text-emerald-50">Updates the currently listed {taxYear} transactions</div>
               <p className="mt-1">This also saves a default for future {group.qboAccountName || "this category"} transactions. You can change it later.</p>
@@ -2561,7 +2594,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
               ? "No changes will be made without a current preview"
               : businessUseAnswer === "some_personal"
               ? `${selectedRows.length} business expense${selectedRows.length === 1 ? "" : "s"} will receive this treatment`
-              : businessUseAnswer === "unsure"
+              : businessUseAnswer === "unsure" || vehicleDecisionUnresolved
                 ? "All expenses will remain in Needs input"
                 : `${rows.length} expense${rows.length === 1 ? "" : "s"} will receive this treatment`}
           </div>
@@ -2579,8 +2612,8 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
             ) : null}
             {previewState === "preview_ready" ? <button
               type="button"
-              onClick={businessUseAnswer === "unsure" ? onClose : submit}
-              disabled={scopeRefreshing || population.actionableTransactionCount === 0 || action.kind === "vehicle_method" || (businessUseAnswer === "unsure" ? outcomeUnknown : !canSubmit || saving || outcomeUnknown)}
+              onClick={businessUseAnswer === "unsure" || vehicleDecisionUnresolved ? onClose : submit}
+              disabled={scopeRefreshing || population.actionableTransactionCount === 0 || (businessUseAnswer === "unsure" || vehicleDecisionUnresolved ? outcomeUnknown : !canSubmit || saving || outcomeUnknown)}
               className="rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-[#120f04] hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {scopeRefreshing ? "Refreshing…" : saving ? `Saving your ${group.qboAccountName || "tax"} decision…` : actionButtonLabel}

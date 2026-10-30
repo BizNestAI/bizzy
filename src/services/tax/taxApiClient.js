@@ -574,7 +574,7 @@ function validateGroupedDecisionPreview(preview, { businessId, year, groupId, re
   });
 }
 
-export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, businessUsePercent, personalExceptionIds = [], signal } = {}) {
+export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds = [], signal } = {}) {
   requireBusinessId(businessId);
   requireValue(previewId, "previewId");
   requireValue(idempotencyKey, "idempotencyKey");
@@ -583,7 +583,7 @@ export async function confirmGroupedTaxDeductionDecision({ businessId, year, pre
     const result = unwrap(await request(`/api/tax/deduction-decisions/apply?${query({ businessId, year })}`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: compact({ previewId, answer, businessUsePercent, personalExceptionIds }),
+      body: compact({ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds }),
       signal: commandRequest.signal,
     }));
     clearBusinessCache(businessId);

@@ -1465,7 +1465,7 @@ test("review dialogs trap focus, close with Escape, and fail vehicle questions c
   assert.match(dashboard, /function ReviewDecisionModal/);
   assert.match(dashboard, /event\.key === "Escape"/);
   assert.match(dashboard, /const focusable = getFocusableElements\(modalRef\.current\)/);
-  assert.match(dashboard, /Vehicle setup unavailable/);
+  assert.match(dashboard, /Apply vehicle decision/);
   assert.match(dashboard, /not linked to a verified vehicle for this tax year/);
   assert.doesNotMatch(dashboard, /Continue to vehicle setup/);
   assert.doesNotMatch(dashboard, /Review vehicle transactions/);
