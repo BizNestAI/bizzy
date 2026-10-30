@@ -78,6 +78,61 @@ router.get("/workspace/transactions", async (req, res) => {
   }
 });
 
+router.get("/workspace/matrix-cell", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const db = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    assertNoConflictingBusinessIdentity(req, businessId);
+    const access = await assertTaxBusinessAccess({ req, businessId, supabase: db });
+    if (String(access.businessId) !== String(businessId)) throw safeError("tax_workspace_scope_conflict", 403, "Tax workspace scope does not match the authenticated business.");
+    if (!(await businessHasPaidEntitlement(businessId, { db }))) throw safeError("paid_entitlement_required", 403, "A paid subscription is required to view this Tax workspace.");
+    const taxYear = optionalTaxYear(req.query.year ?? req.query.taxYear, new Date().getFullYear());
+    const projectionVersion = String(req.query.projectionVersion || "");
+    const projectionId = String(req.query.projectionId || "");
+    const categoryKey = String(req.query.categoryKey || "");
+    const month = String(req.query.month || "");
+    const authority = String(req.query.authority || "");
+    if (projectionVersion !== TAX_WORKSPACE_PROJECTION_VERSION) throw safeError("tax_workspace_version_required", 422, `projectionVersion must be ${TAX_WORKSPACE_PROJECTION_VERSION}.`);
+    if (!projectionId || !categoryKey || !new RegExp(`^${taxYear}-\\d{2}$`).test(month) || !["reviewed", "standard_rule", "needs_input"].includes(authority)) {
+      throw safeError("tax_workspace_matrix_cell_scope_invalid", 422, "A valid projection, category, month, and treatment partition are required.");
+    }
+    const record = await getLatestTaxWorkspaceProjection({ supabase: db, businessId, taxYear, projectionVersion });
+    if (!record || String(record.id) !== projectionId) throw safeError("tax_workspace_projection_changed", 409, "The Tax workspace changed. Refresh and try again.");
+    const evidence = record.projection_data?.identityEvidence || {};
+    const treatmentKey = authority === "standard_rule" ? "estimated" : authority;
+    const categoryIds = new Set(evidence.categories?.[categoryKey] || []);
+    const monthIds = new Set(evidence.months?.[month] || []);
+    const treatmentIds = new Set(evidence.treatments?.[treatmentKey] || []);
+    const identities = [...categoryIds].filter((id) => monthIds.has(id) && treatmentIds.has(id));
+    const projectedMonth = record.projection_data?.matrix?.find((row) => row.categoryKey === categoryKey)?.months?.[month];
+    const expectedCount = Number(projectedMonth?.[`${treatmentKey === "needs_input" ? "needsInput" : treatmentKey}TransactionCount`] || 0);
+    if (!projectedMonth || identities.length !== expectedCount || new Set(identities).size !== identities.length) {
+      throw safeError("tax_workspace_matrix_cell_membership_invalid", 409, "The Tax workspace cell population is unavailable.");
+    }
+    const data = await listProjectionEvaluatedTransactions({
+      supabase: db,
+      businessId,
+      taxYear,
+      evaluatedIdentities: identities,
+      pagination: { limit: Math.max(1, identities.length), offset: 0 },
+    });
+    return sendTaxSuccess(res, {
+      rows: data.rows.map((row) => {
+        const safeRow = { ...row };
+        delete safeRow.rule_version;
+        delete safeRow.matched_rule_id;
+        delete safeRow.matched_rule_code;
+        return safeRow;
+      }),
+      pagination: data.pagination,
+      scope: { projectionId, projectionVersion, categoryKey, month, authority, transactionCount: expectedCount },
+    });
+  } catch (error) {
+    return sendTaxError(res, workspaceReadError(error), "tax_workspace_matrix_cell_failed");
+  }
+});
+
 router.post("/workspace/backfill", async (req, res) => {
   setTaxNoStore(res);
   try {

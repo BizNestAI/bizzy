@@ -15,7 +15,7 @@ import { useAuth } from "../../context/AuthContext.jsx";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
 import { useTaxOverview } from "../../hooks/tax/useTaxOverview.js";
 import { useTaxDeductions } from "../../hooks/tax/useTaxDeductions.js";
-import { resolveDeductionsRenderState, resolveQuestionsPanelState } from "../../components/Tax/Deductions/deductionsRequestState.js";
+import { TAX_WORKSPACE_DETAIL_TIMEOUT_MS, resolveDeductionsRenderState, resolveQuestionsPanelState, withBoundedWorkspaceRead } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import { useTaxPayments } from "../../hooks/tax/useTaxPayments.js";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
 import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/deductionsWorkspaceViewModel.js";
@@ -559,7 +559,9 @@ function resolveOverviewStatus(model, isDemo) {
 
 function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPending = false }) {
   const [selectedCell, setSelectedCell] = useState(null);
-  const [matrixDrilldown, setMatrixDrilldown] = useState({ loadingKey: null, error: null });
+  const [matrixDrilldown, setMatrixDrilldown] = useState({ loading: false, error: null });
+  const matrixCellCacheRef = useRef(new Map());
+  const matrixCellRequestRef = useRef({ sequence: 0, controller: null });
   const [workspaceView, setWorkspaceView] = useState("overview");
   const [classificationTab, setClassificationTab] = useState("all");
   const [focusedUpdatingIds, setFocusedUpdatingIds] = useState([]);
@@ -686,19 +688,52 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     hasAuthoritativeDetails: Boolean(deductions.workspaceProjection),
   });
   const questionsError = deductions.resourceErrors?.allTransactions || null;
-  const openPersistedMatrixCell = async ({ account, month, cell, authority }) => {
-    const loadingKey = `${account.key}:${month.key}:${authority}`;
-    setMatrixDrilldown({ loadingKey, error: null });
+  useEffect(() => {
+    matrixCellRequestRef.current.controller?.abort();
+    matrixCellRequestRef.current = { sequence: matrixCellRequestRef.current.sequence + 1, controller: null };
+    matrixCellCacheRef.current.clear();
+    setSelectedCell(null);
+    setMatrixDrilldown({ loading: false, error: null });
+  }, [businessId, year, deductions.workspaceProjectionId]);
+  const loadPersistedMatrixCell = async ({ account, month, cell, authority, cacheKey, refresh = false }) => {
+    matrixCellRequestRef.current.controller?.abort();
+    const controller = new AbortController();
+    const sequence = matrixCellRequestRef.current.sequence + 1;
+    matrixCellRequestRef.current = { sequence, controller };
+    setMatrixDrilldown({ loading: true, error: null });
     try {
-      const detailPopulation = deductions.allTransactions || await deductions.retryQuestions();
-      if (!detailPopulation) throw new Error("Transaction details are temporarily unavailable.");
-      const detailRows = buildClassificationWorkspaceRows({ ...deductions, allTransactions: detailPopulation });
-      const transactions = resolvePersistedMatrixDrilldown({ rows: detailRows, account, month, cell, authority, year });
+      const detail = await withBoundedWorkspaceRead(
+        (signal) => deductions.getMatrixCellDetail({ categoryKey: account.id, month: month.key, authority }, { refresh, signal }),
+        { signal: controller.signal, timeoutMs: TAX_WORKSPACE_DETAIL_TIMEOUT_MS, timeoutCode: "tax_workspace_matrix_cell_timeout" }
+      );
+      const transactions = normalizeRows(detail?.rows).map(mapDeductionTransactionRow).map(normalizeClassificationWorkspaceRow).filter(Boolean);
+      reconcilePersistedMatrixDrilldown({ transactions, cell, authority });
+      if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted) return;
+      matrixCellCacheRef.current.set(cacheKey, transactions);
       setSelectedCell(buildMatrixCellSelection({ account, month, cell, authority, transactions }));
-      setMatrixDrilldown({ loadingKey: null, error: null });
+      setMatrixDrilldown({ loading: false, error: null });
     } catch (error) {
-      setMatrixDrilldown({ loadingKey: null, error });
+      if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted) return;
+      setMatrixDrilldown({ loading: false, error });
     }
+  };
+  const openPersistedMatrixCell = ({ account, month, cell, authority }) => {
+    const cacheKey = `${businessId}:${year}:${deductions.workspaceProjectionId}:${account.id}:${month.key}:${authority}`;
+    const cached = matrixCellCacheRef.current.get(cacheKey);
+    setSelectedCell(buildPendingMatrixCellSelection({ account, month, cell, authority, transactions: cached || [], cacheKey }));
+    setMatrixDrilldown({ loading: !cached, error: null });
+    if (!cached) void loadPersistedMatrixCell({ account, month, cell, authority, cacheKey });
+  };
+  const closeMatrixCell = () => {
+    matrixCellRequestRef.current.controller?.abort();
+    matrixCellRequestRef.current = { sequence: matrixCellRequestRef.current.sequence + 1, controller: null };
+    setSelectedCell(null);
+    setMatrixDrilldown({ loading: false, error: null });
+  };
+  const retryMatrixCell = () => {
+    const scope = selectedCell?.drilldownScope;
+    if (!scope) return;
+    void loadPersistedMatrixCell({ ...scope, refresh: true });
   };
   useEffect(() => {
     if (workspaceView !== "all_transactions" || deductions.allTransactions || deductions.isDemo) return;
@@ -858,11 +893,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
             awaitingEvaluationCount={classificationSummary.missingEvaluationTotal}
           />}
           {!matrixIsLoading && !matrixIsUnavailable ? <DeductionMatrixLegend /> : null}
-          {matrixDrilldown.error ? (
-            <div className="mt-3 rounded-xl border border-rose-300/20 bg-rose-300/[0.07] px-3 py-2 text-sm text-rose-50" role="alert">
-              {matrixDrilldown.error.message || "Unable to load the transactions for this total."}
-            </div>
-          ) : null}
           {!matrixIsUnavailable ? (
             <DeductionAccountMatrix
               matrix={matrix}
@@ -871,7 +901,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
               onOpenDecision={setReviewDecision}
               decisionGroups={lifecycleProjection.activeDecisionGroups}
               onOpenPersistedCell={openPersistedMatrixCell}
-              persistedCellLoadingKey={matrixDrilldown.loadingKey}
             />
           ) : null}
           <div ref={rulesPanelRef} tabIndex={-1} className="scroll-mt-6 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
@@ -1028,7 +1057,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           <DeductionMonthDetailModal
             key={`${selectedCell.account?.key || "account"}:${selectedCell.month?.key || "month"}:${selectedCell.cell?.selectedAuthority || "all"}`}
             selection={selectedCell}
-            onClose={() => setSelectedCell(null)}
+            onClose={closeMatrixCell}
+            detailLoading={matrixDrilldown.loading}
+            detailError={matrixDrilldown.error}
+            onRetryDetail={retryMatrixCell}
             onAssignTaxClassification={deductions.assignTaxClassification}
             onOverrideClassification={deductions.overrideClassification}
             onBulkUpdateClassifications={deductions.bulkUpdateClassifications}
@@ -1753,7 +1785,7 @@ function formatLifecycleSummaryLine(projection) {
   return `${projection.canonicalCount} stable transaction identities = ${labels.join(" + ")}`;
 }
 
-function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenDecision, decisionGroups = [], onOpenPersistedCell, persistedCellLoadingKey = null }) {
+function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenDecision, decisionGroups = [], onOpenPersistedCell }) {
   const includedTransactionCount = Number(matrix?.transactionCount || 0);
   return (
     <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
@@ -1800,7 +1832,6 @@ function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenD
                         onOpenDecision={onOpenDecision}
                         decisionGroups={decisionGroups}
                         onOpenPersistedCell={onOpenPersistedCell}
-                        persistedCellLoadingKey={persistedCellLoadingKey}
                       />
                     </td>
                   ))}
@@ -1824,11 +1855,11 @@ function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenD
   );
 }
 
-function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisionGroups = [], onOpenPersistedCell, persistedCellLoadingKey = null }) {
+function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisionGroups = [], onOpenPersistedCell }) {
   if (!Number(cell?.transactionCount || cell?.transactions?.length || 0)) {
     return <span className="block px-2 py-1.5 text-[12px] text-white/22" role="img" aria-label="No activity">—</span>;
   }
-  if (cell.persisted) return <PersistedMatrixCell account={account} month={month} cell={cell} onOpen={onOpenPersistedCell} loadingKey={persistedCellLoadingKey} />;
+  if (cell.persisted) return <PersistedMatrixCell account={account} month={month} cell={cell} onOpen={onOpenPersistedCell} />;
   const openCell = (authority) => {
     const transactions = matrixTransactionsForAuthority(cell.transactions, authority);
     if (!transactions.length) return;
@@ -1947,20 +1978,18 @@ function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisi
   );
 }
 
-function PersistedMatrixCell({ account, month, cell, onOpen, loadingKey }) {
+function PersistedMatrixCell({ account, month, cell, onOpen }) {
   const button = (authority, count, className, content) => {
     if (!(count > 0)) return null;
-    const key = `${account.key}:${month.key}:${authority}`;
-    const loading = loadingKey === key;
     return (
       <button
         type="button"
-        disabled={loading || !onOpen}
+        disabled={!onOpen}
         onClick={() => onOpen?.({ account, month, cell, authority })}
-        className={`${className} transition hover:border-white/25 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-emerald-300/35 disabled:cursor-wait disabled:opacity-70`}
-        aria-busy={loading || undefined}
+        className={`${className} cursor-pointer transition hover:border-white/25 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-emerald-300/35 disabled:cursor-default disabled:opacity-70`}
+        aria-label={`${account.name}, ${month.longLabel}, ${formatCurrencyLocal(matrixAuthorityDisplayAmount(cell, authority))}, ${matrixAuthorityLabel(authority)}, ${count} transaction${count === 1 ? "" : "s"}`}
       >
-        {loading ? <span className="flex items-center justify-end gap-1.5"><Loader2 className="h-3 w-3 motion-safe:animate-spin" aria-hidden="true" />Loading…</span> : content}
+        {content}
       </button>
     );
   };
@@ -1993,6 +2022,19 @@ function matrixAuthorityTransactionCount(cell, authority) {
   return 0;
 }
 
+function matrixAuthorityDisplayAmount(cell, authority) {
+  if (authority === "reviewed") return Number(cell.reviewedDeductibleTotal || 0);
+  if (authority === "standard_rule") return Number(cell.standardRuleDeductibleTotal || 0);
+  if (authority === "needs_input") return Number(cell.needsInputGrossExpense || 0);
+  return 0;
+}
+
+function matrixAuthorityLabel(authority) {
+  if (authority === "reviewed") return "Reviewed deduction";
+  if (authority === "standard_rule") return "Estimated deduction";
+  return "Expenses awaiting input";
+}
+
 function resolvePersistedMatrixDrilldown({ rows, account, month, cell, authority, year }) {
   const categoryMonthRows = normalizeRows(rows).filter((row) => (
     taxCategorySelectValue(row) === account.id
@@ -2003,6 +2045,28 @@ function resolvePersistedMatrixDrilldown({ rows, account, month, cell, authority
     throw new Error("The saved total no longer matches the current transaction details. Refresh the tax workspace and try again.");
   }
   return transactions;
+}
+
+function reconcilePersistedMatrixDrilldown({ transactions, cell, authority }) {
+  if (transactions.length !== matrixAuthorityTransactionCount(cell, authority)) throw new Error("The saved total no longer matches the current transaction details. Refresh the tax workspace and try again.");
+  const actual = transactions.reduce((sum, row) => sum + normalizeMoney(authority === "needs_input" ? row.amount : resolveDeductibleAmount(row)), 0);
+  const expected = matrixAuthorityDisplayAmount(cell, authority);
+  if (Math.round(actual * 100) !== Math.round(expected * 100)) throw new Error("The saved amount no longer matches the current transaction details. Refresh the tax workspace and try again.");
+  return transactions;
+}
+
+function buildPendingMatrixCellSelection({ account, month, cell, authority, transactions, cacheKey }) {
+  return {
+    ...buildMatrixCellSelection({ account, month, cell, authority, transactions }),
+    drilldownScope: { account, month, cell, authority, cacheKey },
+    cell: {
+      ...cell,
+      transactions,
+      selectedAuthority: authority,
+      expectedTransactionCount: matrixAuthorityTransactionCount(cell, authority),
+      selectedDisplayAmount: matrixAuthorityDisplayAmount(cell, authority),
+    },
+  };
 }
 
 function buildMatrixCellSelection({ account, month, cell, authority, transactions }) {
@@ -3569,6 +3633,9 @@ function DeductionMonthDetailModal({
   onSetTaxProfileMemory,
   onSaveDeductionDecisionRule,
   onRefresh,
+  detailLoading = false,
+  detailError = null,
+  onRetryDetail,
   readOnly = false,
 }) {
   const prefersReducedMotion = useReducedMotion();
@@ -3581,7 +3648,13 @@ function DeductionMonthDetailModal({
   const month = useMemo(() => selection?.month || {}, [selection?.month]);
   const cell = useMemo(() => selection?.cell || { transactions: [] }, [selection?.cell]);
   const transactions = useMemo(() => normalizeRows(cell.transactions).filter(isTaxRecord), [cell]);
-  const aggregateStatus = useMemo(() => aggregateClassificationStatus(transactions), [transactions]);
+  const aggregateStatus = useMemo(() => {
+    if (transactions.length) return aggregateClassificationStatus(transactions);
+    if (cell.selectedAuthority === "reviewed") return { bucket: "user_confirmed", label: "Reviewed", tone: "green" };
+    if (cell.selectedAuthority === "standard_rule") return { bucket: "auto_classified", label: "Estimated", tone: "green" };
+    if (cell.selectedAuthority === "needs_input") return { bucket: "needs_review", label: "Needs input", tone: "amber" };
+    return aggregateClassificationStatus(transactions);
+  }, [cell.selectedAuthority, transactions]);
   const reviewContext = useMemo(() => detailReviewContextForSelection(selection), [selection]);
   const hasSelection = Boolean(selection);
   const selectionFocusKey = `${selection?.account?.key || "account"}:${selection?.month?.key || "month"}:${cell.selectedAuthority || "all"}`;
@@ -3937,7 +4010,7 @@ function DeductionMonthDetailModal({
               </DetailPill>
             </div>
             <p id="deduction-detail-description" className="mt-2 max-w-2xl text-sm leading-relaxed text-white/56">
-              {month.longLabel} · {transactions.length} {transactions.length === 1 ? "transaction" : "transactions"}
+              {month.longLabel} · {Number(cell.expectedTransactionCount ?? transactions.length)} {Number(cell.expectedTransactionCount ?? transactions.length) === 1 ? "transaction" : "transactions"}
             </p>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/46">
               {aggregateStatus.bucket === "auto_classified"
@@ -3958,8 +4031,8 @@ function DeductionMonthDetailModal({
 
         <div className="border-b border-white/10 px-4 py-3 sm:px-5">
           <div className="grid gap-2 md:grid-cols-3">
-            <DeductionDetailAmount label="Total expenses" value={cell.expenseTotal ?? transactions.reduce((sum, row) => sum + normalizeMoney(row.amount), 0)} />
-            <DeductionDetailAmount label={treatmentLabel} value={totalDeductible} tone={aggregateStatus.bucket === "auto_classified" ? "blue" : "green"} fallback={totalDeductible <= 0 ? "Not estimated yet" : null} />
+            <DeductionDetailAmount label={cell.selectedAuthority ? matrixAuthorityLabel(cell.selectedAuthority) : "Total expenses"} value={cell.selectedDisplayAmount ?? cell.expenseTotal ?? transactions.reduce((sum, row) => sum + normalizeMoney(row.amount), 0)} />
+            <DeductionDetailAmount label={treatmentLabel} value={detailLoading ? null : totalDeductible} tone={aggregateStatus.bucket === "auto_classified" ? "blue" : "green"} fallback={detailLoading ? "Loading transaction details…" : totalDeductible <= 0 ? "Not estimated yet" : null} />
             <DeductionDetailAmount
               label="Estimated percentage"
               value={displayedEstimatedPercentage == null ? null : `${Math.round(displayedEstimatedPercentage)}%`}
@@ -3970,6 +4043,19 @@ function DeductionMonthDetailModal({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 pb-8 sm:px-5 sm:pb-10">
+          {detailLoading ? (
+            <div className="space-y-3" role="status" aria-live="polite">
+              <div className="flex items-center gap-2 text-sm text-white/62"><Loader2 className="h-4 w-4 animate-spin text-emerald-200" aria-hidden="true" />Loading the transactions for this total…</div>
+              <div className="h-12 animate-pulse rounded-xl bg-white/[0.045]" />
+              <div className="h-12 animate-pulse rounded-xl bg-white/[0.035]" />
+            </div>
+          ) : detailError ? (
+            <div className="rounded-[14px] border border-rose-300/20 bg-rose-400/[0.08] px-4 py-3" role="alert">
+              <div className="text-sm font-semibold text-rose-50">Transaction details could not be loaded.</div>
+              <div className="mt-1 text-xs text-rose-100/72">{detailError.message || "Try again."}</div>
+              <button type="button" onClick={onRetryDetail} className="mt-3 rounded-full border border-rose-100/20 px-3 py-1.5 text-xs font-semibold text-rose-50 transition hover:bg-rose-100/10 focus:outline-none focus:ring-2 focus:ring-rose-200/30">Retry</button>
+            </div>
+          ) : <>
           {assignmentError ? (
             <div className="mb-3 rounded-[14px] border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-xs text-rose-100">
               {assignmentError}
@@ -4124,6 +4210,7 @@ function DeductionMonthDetailModal({
             </div>
           )}
           </details>
+          </>}
         </div>
         <footer className="flex flex-col gap-2 border-t border-white/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div className="text-xs font-semibold text-white/46">
@@ -5762,7 +5849,9 @@ export const __TaxDashboardTestInternals = {
   formatLifecycleSummaryLine,
   classificationBucket,
   matrixAuthorityTransactionCount,
+  matrixAuthorityDisplayAmount,
   matrixTransactionsForAuthority,
+  reconcilePersistedMatrixDrilldown,
   resolvePersistedMatrixDrilldown,
   customerQuestionActionLabel,
   customerQuestionPreview,

@@ -84,3 +84,16 @@ test("workspace browser route retains tenant, entitlement, and read-only boundar
   assert.doesNotMatch(detailRoute, /\.insert\(|\.update\(|\.upsert\(|\.delete\(|persist_tax_workspace_projection/);
   assert.doesNotMatch(client, /identityEvidence|identityManifest|service_role/);
 });
+
+test("matrix cell detail is projection-scoped, partitioned server-side, and read-only", () => {
+  const detailRoute = workspaceRoute.slice(workspaceRoute.indexOf('router.get("/workspace/matrix-cell"'), workspaceRoute.indexOf('router.post("/workspace/backfill"'));
+  assert.match(detailRoute, /assertTaxBusinessAccess/);
+  assert.match(detailRoute, /businessHasPaidEntitlement/);
+  assert.match(detailRoute, /String\(record\.id\) !== projectionId/);
+  assert.match(detailRoute, /evidence\.categories/);
+  assert.match(detailRoute, /evidence\.months/);
+  assert.match(detailRoute, /evidence\.treatments/);
+  assert.match(detailRoute, /listProjectionEvaluatedTransactions/);
+  assert.match(detailRoute, /delete safeRow\.rule_version/);
+  assert.doesNotMatch(detailRoute, /req\.(body|params).*transaction|\.insert\(|\.update\(|\.upsert\(|\.delete\(/);
+});

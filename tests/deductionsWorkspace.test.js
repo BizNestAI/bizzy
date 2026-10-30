@@ -824,7 +824,32 @@ test("persisted v2 monthly aggregates are drill-down buttons while empty months 
   assert.match(mayHtml, /Expenses awaiting input/);
   assert.equal((mayHtml.match(/<button/g) || []).length, 3);
   assert.doesNotMatch(mayHtml, /disabled=""/);
+  assert.doesNotMatch(mayHtml, /Loading|cursor-wait|cursor-progress/);
   assert.match(januaryHtml, /aria-label="No activity"/);
+});
+
+test("persisted matrix drill-down preserves signed totals and opens a localized loading surface", async () => {
+  const { DeductionMonthDetailModal, reconcilePersistedMatrixDrilldown } = await loadTaxDashboardInternals();
+  const cell = { reviewedTransactionCount: 2, reviewedDeductibleTotal: 75 };
+  const transactions = [
+    { id: "expense", amount: 100, deductibleAmount: 100 },
+    { id: "refund", amount: -25, deductibleAmount: -25 },
+  ];
+  assert.equal(reconcilePersistedMatrixDrilldown({ transactions, cell, authority: "reviewed" }), transactions);
+  assert.throws(() => reconcilePersistedMatrixDrilldown({ transactions: transactions.slice(0, 1), cell, authority: "reviewed" }), /saved total no longer matches/);
+  const html = renderToStaticMarkup(React.createElement(DeductionMonthDetailModal, {
+    selection: {
+      account: { key: "tax-category:business_meals", name: "Business Meals", sourceLabel: "Tax category" },
+      month: { key: "2026-05", longLabel: "May 2026" },
+      cell: { transactions: [], selectedAuthority: "reviewed", expectedTransactionCount: 2, selectedDisplayAmount: 75 },
+    },
+    detailLoading: true,
+    onClose: () => {},
+  }));
+  assert.match(html, /Business Meals/);
+  assert.match(html, /May 2026 · 2 transactions/);
+  assert.match(html, /Reviewed deduction/);
+  assert.match(html, /Loading the transactions for this total/);
 });
 
 test("persisted matrix drill-down resolves the exact category, month, and authority population", async () => {
@@ -1154,7 +1179,7 @@ test("standard-rule estimates stay in the matrix while factual questions, techni
 test("Tax Dashboard derives modal aggregate status from selected cell rows", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /function aggregateClassificationStatus\(rows = \[\]\)/);
-  assert.match(dashboard, /const aggregateStatus = useMemo\(\(\) => aggregateClassificationStatus\(transactions\), \[transactions\]\)/);
+  assert.match(dashboard, /if \(transactions\.length\) return aggregateClassificationStatus\(transactions\)/);
   assert.match(dashboard, /buckets\.length > 1[\s\S]{0,100}label: "Mixed treatment"/);
   assert.match(dashboard, /bucket === "needs_review"[\s\S]{0,100}label: "Needs input"/);
   assert.match(dashboard, /<DetailPill tone=\{aggregateStatus\.tone\}>/);

@@ -369,6 +369,19 @@ export async function getTaxWorkspaceTransactions({ businessId, year, limit, off
   return page;
 }
 
+export async function getTaxWorkspaceMatrixCell({ businessId, year, projectionId, categoryKey, month, authority, refresh = false, signal } = {}) {
+  requireBusinessId(businessId);
+  for (const [name, value] of Object.entries({ projectionId, categoryKey, month, authority })) requireValue(value, name);
+  const projectionVersion = "tax-workspace-v2";
+  const params = query({ businessId, year, projectionId, projectionVersion, categoryKey, month, authority });
+  const payload = await cachedGet(`/api/tax/workspace/matrix-cell?${params}`, { signal, bypassCache: refresh });
+  const data = unwrap(payload);
+  if (data?.scope?.projectionId !== projectionId || data?.scope?.categoryKey !== categoryKey || data?.scope?.month !== month || data?.scope?.authority !== authority || Number(data?.pagination?.total) !== Number(data?.scope?.transactionCount)) {
+    throw Object.assign(new Error("The Tax workspace cell population is incomplete."), { code: "tax_workspace_matrix_cell_mismatch", retryable: true });
+  }
+  return data;
+}
+
 export async function getTaxPostedTransactions({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit, offset, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
   const payload = await cachedGet(`/api/tax/transactions/posted?${query({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit: clampTaxDetailLimit(limit), offset })}`, { signal, bypassCache: refresh });

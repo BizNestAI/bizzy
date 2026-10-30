@@ -20,6 +20,7 @@ import {
   getTaxDeductionTransactionDetail,
   getTaxDeductionTransactions,
   getTaxWorkspace,
+  getTaxWorkspaceMatrixCell,
   getTaxWorkspaceTransactions,
   getTaxPostedTransactions,
   overrideTaxClassification,
@@ -48,6 +49,7 @@ export function useTaxDeductions({
   const initialCachedOverview = null;
   const [overview, setOverview] = useState(initialCachedOverview);
   const [workspaceProjection, setWorkspaceProjection] = useState(null);
+  const [workspaceProjectionId, setWorkspaceProjectionId] = useState(null);
   const [transactions, setTransactions] = useState(null);
   const [allTransactions, setAllTransactions] = useState(null);
   const [postedTransactions, setPostedTransactions] = useState(null);
@@ -117,6 +119,7 @@ export function useTaxDeductions({
     const cached = null;
     setOverview(cached);
     setWorkspaceProjection(null);
+    setWorkspaceProjectionId(null);
     setTransactions(null);
     setAllTransactions(null);
     setPostedTransactions(null);
@@ -175,6 +178,7 @@ export function useTaxDeductions({
           const workspace = overviewResult.value?.projection;
           const compatibleOverview = overviewFromWorkspace(workspace);
           setWorkspaceProjection(workspace);
+          setWorkspaceProjectionId(overviewResult.value?.projectionId || null);
           setRebuildPending(overviewResult.value?.state === "refreshing");
           // Initial loads may expose a verified summary while optional details
           // settle. A refresh keeps the prior completed workspace intact until
@@ -340,6 +344,7 @@ export function useTaxDeductions({
   return {
     overview,
     workspaceProjection,
+    workspaceProjectionId,
     transactions,
     allTransactions,
     postedTransactions,
@@ -364,6 +369,7 @@ export function useTaxDeductions({
     refetch: load,
     retryTransactionDetails: (options = {}) => loadSecondaryDetails({ ...options, refresh: true }),
     retryQuestions,
+    getMatrixCellDetail: (scope, options = {}) => getTaxWorkspaceMatrixCell({ businessId, year, projectionId: workspaceProjectionId, ...scope, ...options }),
     refresh: (options = {}) => {
       if (refreshInFlight.current) return refreshInFlight.current;
       setRefreshing(true);
