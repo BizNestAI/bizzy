@@ -23,6 +23,11 @@ const router = Router();
 
 router.get("/workspace", async (req, res) => {
   res.set("Cache-Control", "private, no-store");
+  const routeStartedAt = Date.now();
+  const stageTimings = {};
+  const requestController = new AbortController();
+  const abortRequest = () => requestController.abort();
+  req.once("aborted", abortRequest);
   try {
     const db = req.app?.locals?.supabase || defaultSupabase;
     const businessId = validateBusinessIdInput(req);
@@ -33,15 +38,21 @@ router.get("/workspace", async (req, res) => {
     const taxYear = optionalTaxYear(req.query.year ?? req.query.taxYear, new Date().getFullYear());
     const projectionVersion = String(req.query.projectionVersion || TAX_WORKSPACE_LEGACY_PROJECTION_VERSION);
     if (![TAX_WORKSPACE_LEGACY_PROJECTION_VERSION, TAX_WORKSPACE_PROJECTION_VERSION].includes(projectionVersion)) throw safeError("tax_workspace_version_unsupported", 422, "That Tax workspace version is not supported.");
+    const projectionReadStartedAt = Date.now();
+    const recordPromise = getLatestTaxWorkspaceProjection({ supabase: db, businessId, taxYear, projectionVersion })
+      .finally(() => { stageTimings.projection = Date.now() - projectionReadStartedAt; });
     const [record, refreshState] = await Promise.all([
-      getLatestTaxWorkspaceProjection({ supabase: db, businessId, taxYear, projectionVersion }),
+      recordPromise,
       getTaxWorkspaceRefreshState({ supabase: db, businessId, taxYear }),
     ]);
     if (!record) throw safeError("projection_unavailable", 503, "Your Tax workspace is not available yet.", { action: "retry" });
     const projection = projectionVersion === TAX_WORKSPACE_PROJECTION_VERSION
-      ? await reconcileTaxWorkspaceProjection({ supabase: db, record, businessId, taxYear })
+      ? await reconcileTaxWorkspaceProjection({
+        supabase: db, record, businessId, taxYear, signal: requestController.signal,
+        onStage: (name, durationMs) => { stageTimings[name] = durationMs; },
+      })
       : record.projection_data;
-    return sendTaxSuccess(res, {
+    const response = {
       state: refreshState,
       projectionId: record.id,
       projectionVersion: record.projection_version,
@@ -49,9 +60,17 @@ router.get("/workspace", async (req, res) => {
       sourceFingerprint: projection.sourceFingerprint || record.source_fingerprint,
       generatedAt: projection.generatedAt || record.generated_at,
       projection: publicTaxWorkspaceProjection(projection),
-    });
+    };
+    const serializationStartedAt = Date.now();
+    JSON.stringify(response);
+    stageTimings.serialization = Date.now() - serializationStartedAt;
+    stageTimings.total = Date.now() - routeStartedAt;
+    res.set("Server-Timing", Object.entries(stageTimings).map(([name, duration]) => `${name};dur=${duration}`).join(", "));
+    return sendTaxSuccess(res, response);
   } catch (error) {
     return sendTaxError(res, workspaceReadError(error), "tax_workspace_read_failed");
+  } finally {
+    req.removeListener("aborted", abortRequest);
   }
 });
 
@@ -103,7 +122,15 @@ router.get("/workspace/matrix-cell", async (req, res) => {
     }
     const record = await getLatestTaxWorkspaceProjection({ supabase: db, businessId, taxYear, projectionVersion });
     if (!record || String(record.id) !== projectionId) throw safeError("tax_workspace_projection_changed", 409, "The Tax workspace changed. Refresh and try again.");
-    const projection = await reconcileTaxWorkspaceProjection({ supabase: db, record, businessId, taxYear });
+    const requestController = new AbortController();
+    const abortRequest = () => requestController.abort();
+    req.once("aborted", abortRequest);
+    let projection;
+    try {
+      projection = await reconcileTaxWorkspaceProjection({ supabase: db, record, businessId, taxYear, signal: requestController.signal });
+    } finally {
+      req.removeListener("aborted", abortRequest);
+    }
     const evidence = projection.identityEvidence || {};
     const treatmentKey = authority === "standard_rule" ? "estimated" : authority;
     const categoryIds = new Set(evidence.categories?.[categoryKey] || []);

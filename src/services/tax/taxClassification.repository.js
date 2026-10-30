@@ -44,6 +44,7 @@ export async function listTaxClassifications({
   search,
   limit = 100,
   offset = 0,
+  signal,
 } = {}) {
   const year = requireTaxYear(taxYear);
   let query = supabase
@@ -58,6 +59,7 @@ export async function listTaxClassifications({
   if (taxCategory) query = query.eq("tax_category", taxCategory);
   if (requiresReview != null) query = query.eq("requires_review", requiresReview === true || requiresReview === "true");
   if (typeof query.range === "function") query = query.range(Number(offset || 0), Number(offset || 0) + Number(limit || 100) - 1);
+  if (signal && typeof query.abortSignal === "function") query = query.abortSignal(signal);
   const { data, error } = await query;
   if (error) throw error;
   const rows = (data || []).filter((row) => matchesSearch(row, search));

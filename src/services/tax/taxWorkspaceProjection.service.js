@@ -24,13 +24,51 @@ export async function buildAndPersistTaxWorkspaceProjection({ supabase, business
 
 // Recompute treatment-derived workspace sections from current classifications
 // while retaining the immutable projection's exact evaluated population.
-export async function reconcileTaxWorkspaceProjection({ supabase, record, businessId, taxYear, asOfDate } = {}) {
-  const baselineIds = record?.projection_data?.identityEvidence?.evaluated;
-  if (!Array.isArray(baselineIds) || !baselineIds.length) throw coded("tax_workspace_evaluated_identity_invalid");
-  const payload = await buildCurrentTaxWorkspacePayload({
-    supabase, businessId, taxYear, asOfDate, baselineEvaluatedIds: baselineIds,
+export async function reconcileTaxWorkspaceProjection({ supabase, record, businessId, taxYear, onStage, signal } = {}) {
+  if (!supabase || !businessId || !Number.isInteger(Number(taxYear))) throw coded("invalid_tax_workspace_scope");
+  const baselinePayload = record?.projection_data;
+  const evidence = baselinePayload?.identityEvidence || {};
+  const baseline = requiredUniqueSet(evidence.evaluated, "tax_workspace_evaluated_identity_invalid");
+  const matrix = requiredUniqueSet(evidence.matrixIncluded, "tax_workspace_matrix_identity_invalid");
+  const outside = requiredUniqueSet(evidence.outsideDeductions, "tax_workspace_outside_identity_invalid");
+  const classificationPage = await timedWorkspaceStage("live_classifications", onStage, () => listTaxClassifications({
+    supabase, businessId, taxYear: Number(taxYear), limit: 10_000, signal,
+  }));
+  const currentRows = (classificationPage.rows || []).filter((row) => baseline.has(String(row.transaction_id)));
+  const currentIds = requiredUniqueSet(currentRows.map((row) => row.transaction_id), "tax_workspace_live_population_mismatch");
+  if (!sameSet(currentIds, baseline)) throw coded("tax_workspace_live_population_mismatch");
+  const mapped = currentRows.map((row) => mapDeductionTransactionRow({
+    ...row,
+    taxScopeDisposition: matrix.has(String(row.transaction_id))
+      ? "expense_cogs_in_matrix"
+      : outside.has(String(row.transaction_id)) ? "posted_non_expense_outside_deductions" : null,
+  }));
+  const payload = await timedWorkspaceStage("in_memory_reconciliation", onStage, async () => {
+    const lifecycle = buildTaxDeductionsLifecycleProjection({ rows: mapped, businessId, taxYear: Number(taxYear) });
+    if (!lifecycle.conservation.isConserved) throw coded("tax_workspace_identity_not_conserved");
+    const generatedAt = new Date().toISOString();
+    const sourceFingerprint = createHash("sha256").update(JSON.stringify({
+      baseline: record.source_fingerprint || baselinePayload?.sourceFingerprint,
+      classifications: currentRows.map((row) => [row.transaction_id, row.classification_status, row.tax_category,
+        row.deductibility_status, row.deductible_percent, row.deductible_amount, row.updated_at]),
+    })).digest("hex");
+    return buildPayload({
+      overview: {
+        projection: { completeness: baselinePayload?.completeness || record?.completeness || "complete" },
+        warnings: baselinePayload?.warnings || [],
+      },
+      lifecycle, businessId, taxYear: Number(taxYear), sourceFingerprint, generatedAt,
+    });
   });
+  await timedWorkspaceStage("validation", onStage, async () => validatePayload(payload));
+  if (!sameSet(new Set(payload.identityEvidence.evaluated), baseline)) throw coded("tax_workspace_live_population_mismatch");
   return payload;
+}
+
+async function timedWorkspaceStage(name, onStage, work) {
+  const startedAt = Date.now();
+  try { return await work(); }
+  finally { onStage?.(name, Date.now() - startedAt); }
 }
 
 async function buildCurrentTaxWorkspacePayload({ supabase, businessId, taxYear, asOfDate, baselineEvaluatedIds = null } = {}) {
