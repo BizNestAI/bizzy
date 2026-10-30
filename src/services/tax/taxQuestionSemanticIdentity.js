@@ -4,12 +4,12 @@ export function buildTaxQuestionSemanticManifest({ row = {}, decisionType } = {}
   const taxCategory = normalizeTaxCategory(value(row.taxCategory, row.tax_category));
   const qboAccountId = text(value(row.qboAccountId, row.qbo_account_id, row.source_qbo_account_id, row.raw?.source_qbo_account_id, row.metadata?.source_qbo_account_id));
   const subject = semanticSubject({ row, decisionType, taxCategory, qboAccountId });
-  const current = {
+  const current = canonicalCurrentTreatment(decisionType, {
     taxCategory,
     taxTreatment: semantic(value(row.taxTreatment, row.tax_treatment, row.raw?.tax_treatment)),
     deductiblePercent: nullableNumber(value(row.deductiblePercent, row.deductible_percent, row.raw?.deductible_percent)),
     deductibilityStatus: text(value(row.deductibilityStatus, row.deductibility_status, row.raw?.deductibility_status)),
-  };
+  });
   return {
     version: 1,
     decisionType: text(decisionType),
@@ -67,7 +67,19 @@ function answerContract(decisionType, current) {
 
 function confirmedTreatment(current) {
   const meals = current.taxCategory === "business_meals";
-  return { taxCategory: current.taxCategory, taxTreatment: meals ? "business_meals_business_purpose_confirmed" : "business_purpose_confirmed", deductiblePercent: current.deductiblePercent == null ? (meals ? 50 : 100) : current.deductiblePercent, deductibilityStatus: current.deductibilityStatus || (meals ? "partially_deductible" : "fully_deductible") };
+  const unresolvedStatus = ["", "needs_review", "not_yet_determined"].includes(text(current.deductibilityStatus).toLowerCase());
+  return { taxCategory: current.taxCategory, taxTreatment: meals ? "business_meals_business_purpose_confirmed" : "business_purpose_confirmed", deductiblePercent: current.deductiblePercent == null ? (meals ? 50 : 100) : current.deductiblePercent, deductibilityStatus: unresolvedStatus ? (meals ? "partially_deductible" : "fully_deductible") : current.deductibilityStatus };
+}
+
+function canonicalCurrentTreatment(decisionType, current) {
+  const status = text(current.deductibilityStatus).toLowerCase();
+  const treatment = text(current.taxTreatment).toLowerCase();
+  const unresolved = ["", "needs_review", "not_yet_determined"].includes(status);
+  const placeholder = treatment === "needs_review"
+    || (decisionType === "vehicle_method" && treatment === "vehicle_expense")
+    || (decisionType === "business_use_percent" && treatment === "utilities_review");
+  if (!unresolved || !placeholder) return current;
+  return { ...current, taxTreatment: "needs_review", deductibilityStatus: "" };
 }
 
 function semanticSubject({ row, decisionType, taxCategory, qboAccountId }) {
@@ -87,4 +99,4 @@ function semantic(input) { return input && typeof input === "object" ? input.typ
 function stableJson(input) { if (Array.isArray(input)) return `[${input.map(stableJson).join(",")}]`; if (input && typeof input === "object") return `{${Object.keys(input).sort().map((key) => `${JSON.stringify(key)}:${stableJson(input[key])}`).join(",")}}`; return JSON.stringify(input ?? null); }
 function fnv1a64(input) { let hash = 0xcbf29ce484222325n; const prime = 0x100000001b3n; const mask = 0xffffffffffffffffn; for (let index = 0; index < input.length; index += 1) { hash ^= BigInt(input.charCodeAt(index)); hash = (hash * prime) & mask; } return hash.toString(16).padStart(16, "0"); }
 
-export const __testables = { answerContract, semanticSubject, stableJson };
+export const __testables = { answerContract, canonicalCurrentTreatment, semanticSubject, stableJson };
