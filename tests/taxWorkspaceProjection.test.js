@@ -84,7 +84,7 @@ test("same fingerprint and concurrent persistence create one complete projection
   const results = await Promise.all(Array.from({ length: 5 }, () => internals.persist({ supabase, payload })));
   assert.equal(store.tax_workspace_projections.length, 1);
   assert.equal(new Set(results.map((row) => row.id)).size, 1);
-  assert.equal((await getLatestTaxWorkspaceProjection({ supabase, businessId: BUSINESS, taxYear: 2026 })).projection_data.estimatedDeductibleAmount, 8524);
+  assert.equal((await getLatestTaxWorkspaceProjection({ supabase, businessId: BUSINESS, taxYear: 2026 })).projection_data.estimatedDeductibleAmount, 150);
 });
 
 test("failed validation cannot replace the prior complete projection", async () => {
@@ -197,6 +197,43 @@ test("browser response exposes safe monthly treatment aggregates without identit
   assert.equal(meals.needsInputGrossExpense, meals.needsReviewAmount);
   assert.equal(JSON.stringify(browser).includes("estimated-1"), false);
   assert.equal(JSON.stringify(browser).includes("reviewed-1"), false);
+});
+
+test("signed monthly amount contract keeps deductions separate from gross expenses awaiting input", () => {
+  const month = internals.aggregateMonth([
+    { id: "estimated", outcome: "standard_rule_applied", row: { signedAmount: -25, deductibleAmount: 20 } },
+    { id: "reviewed", outcome: "reviewed", row: { signedAmount: -15, deductibleAmount: 10 } },
+    { id: "unclassified", outcome: "ambiguous", row: { signedAmount: -11, deductibleAmount: null } },
+  ]);
+  assert.equal(month.bookExpenseAmount, 51);
+  assert.equal(month.estimatedDeductibleAmount, 20);
+  assert.equal(month.reviewedDeductibleAmount, 10);
+  assert.equal(month.deductibleAmount, 30);
+  assert.equal(month.needsInputGrossExpense, 11);
+  assert.equal(month.needsReviewAmount, 11);
+});
+
+test("needs-input null estimates retain signed gross and genuine contra-expenses may net to zero", () => {
+  const month = internals.aggregateMonth([
+    { id: "expense", outcome: "customer_input_required", row: { signedAmount: -11, deductibleAmount: null } },
+    { id: "contra", outcome: "customer_input_required", row: { signedAmount: 11, deductibleAmount: null } },
+  ]);
+  assert.equal(month.needsInputTransactionCount, 2);
+  assert.equal(month.needsInputGrossExpense, 0);
+  assert.equal(month.bookExpenseAmount, 0);
+  assert.equal(month.deductibleAmount, 0);
+});
+
+test("monthly signed aggregates reconcile exactly to category YTD and the top deduction estimate", () => {
+  const { overview, lifecycle } = source();
+  lifecycle.entries.push({ id: "question-2", outcome: "customer_input_required", actionOwner: "customer_fact_required", row: { transactionId: "question-2", taxScopeDisposition: "expense_cogs_in_matrix", taxCategory: "business_meals", taxCategoryLabel: "Meals", date: "2026-11-03", signedAmount: -40, deductibleAmount: null } });
+  const payload = internals.buildPayload({ overview, lifecycle, businessId: BUSINESS, taxYear: 2026, sourceFingerprint: "5".repeat(64), generatedAt: overview.meta.generatedAt });
+  const months = payload.matrix.flatMap((category) => Object.values(category.months));
+  const sum = (field) => Math.round(months.reduce((total, month) => total + Number(month[field] || 0), 0) * 100) / 100;
+  assert.equal(sum("deductibleAmount"), payload.estimatedDeductibleAmount);
+  assert.equal(sum("deductibleAmount"), sum("estimatedDeductibleAmount") + sum("reviewedDeductibleAmount"));
+  assert.equal(sum("needsInputGrossExpense"), 115);
+  assert.doesNotThrow(() => internals.validatePayload(payload));
 });
 
 test("v1 and v2 selection is explicit and cannot interchange records", async () => {

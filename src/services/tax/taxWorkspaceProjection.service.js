@@ -11,7 +11,8 @@ import { listTaxClassifications } from "./taxClassification.repository.js";
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
-export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2`;
+export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.1-signed-amounts`;
+export const TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION = "signed-treatment-amounts-v1";
 const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;
 
@@ -89,7 +90,7 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
     reviewed: matrixEntries.filter((entry) => [TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED, TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.EXCLUDED].includes(entry.outcome)),
     needs_input: matrixEntries.filter((entry) => ![TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_APPLIED, TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_ESTIMATED_NO_ACTION, TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED, TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.EXCLUDED].includes(entry.outcome)),
   };
-  const matrix = buildIdentityMatrix(matrixEntries, taxYear, overview.categories || []);
+  const matrix = buildIdentityMatrix(matrixEntries, taxYear);
   const questionGroups = lifecycle.activeDecisionGroups.slice(0, MAX_QUESTIONS).map((group) => ({
     id: group.id, decisionType: group.decisionType, qboAccountId: group.qboAccountId,
     qboAccountName: group.qboAccountName, ruleVersion: group.ruleVersion,
@@ -104,6 +105,7 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
   return {
     canonicalBusinessId: businessId, taxYear, projectionVersion: TAX_WORKSPACE_PROJECTION_VERSION,
     formulaVersion: TAX_WORKSPACE_FORMULA_VERSION, sourceFingerprint, status: "complete",
+    amountContractVersion: TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION,
     completeness: overview.projection?.completeness || "partial", generatedAt, refreshedAt: generatedAt,
     estimatedDeductibleAmount: matrix.reduce((sum, row) => sum + Object.values(row.months).reduce((monthSum, month) => monthSum + month.deductibleAmount, 0), 0),
     evaluatedTransactionCount: evaluatedIds.length, matrixIncludedCount: matrixEntries.length,
@@ -133,8 +135,7 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
   };
 }
 
-function buildIdentityMatrix(entries, taxYear, amountCategories = []) {
-  const amountByCategory = new Map(amountCategories.map((category) => [String(category.taxCategory), category]));
+function buildIdentityMatrix(entries, taxYear) {
   const categories = new Map();
   for (const entry of entries) {
     const row = entry.row || {};
@@ -150,33 +151,54 @@ function buildIdentityMatrix(entries, taxYear, amountCategories = []) {
   return [...categories.values()].sort((a,b)=>a.categoryLabel.localeCompare(b.categoryLabel)).map((category) => ({
     categoryKey: category.categoryKey, categoryLabel: category.categoryLabel, transactionCount: category.entries.length,
     identityManifest: sortedUnique(category.entries.map((entry) => entry.id)),
-    months: Object.fromEntries([...category.months.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([month, monthEntries]) => [month, aggregateMonth(monthEntries, amountByCategory.get(category.categoryKey)?.monthly?.[month])])),
+    months: Object.fromEntries([...category.months.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([month, monthEntries]) => [month, aggregateMonth(monthEntries)])),
   }));
 }
 
-function aggregateMonth(entries, authoritativeAmounts = null) {
+function aggregateMonth(entries) {
   const treatment = entries.reduce((totals, entry) => {
     const bucket = treatmentBucket(entry);
     totals[`${bucket}TransactionCount`] += 1;
-    if (bucket === "needsInput") return totals;
-    totals[`${bucket}DeductibleAmount`] += Number(entry?.row?.deductibleAmount ?? entry?.row?.deductible_amount ?? 0) || 0;
+    const grossExpenseAmount = signedExpenseAmount(entry?.row);
+    totals.bookExpenseAmount += grossExpenseAmount;
+    if (bucket === "needsInput") totals.needsInputGrossExpense += grossExpenseAmount;
+    else totals[`${bucket}DeductibleAmount`] += signedDeductibleAmount(entry?.row, grossExpenseAmount);
     return totals;
   }, {
     estimatedTransactionCount: 0, reviewedTransactionCount: 0, needsInputTransactionCount: 0,
     estimatedDeductibleAmount: 0, reviewedDeductibleAmount: 0,
+    bookExpenseAmount: 0, needsInputGrossExpense: 0,
   });
-  const authoritativeDeductibleAmount = round(authoritativeAmounts?.deductibleAmount || 0);
-  if (treatment.estimatedTransactionCount > 0 && treatment.reviewedTransactionCount === 0) treatment.estimatedDeductibleAmount = authoritativeDeductibleAmount;
-  if (treatment.reviewedTransactionCount > 0 && treatment.estimatedTransactionCount === 0) treatment.reviewedDeductibleAmount = authoritativeDeductibleAmount;
+  const deductibleAmount = round(treatment.estimatedDeductibleAmount + treatment.reviewedDeductibleAmount);
   return {
     transactionCount: entries.length,
     identityManifest: sortedUnique(entries.map((entry) => entry.id)),
-    bookExpenseAmount: round(authoritativeAmounts?.bookExpenseAmount || 0),
-    deductibleAmount: authoritativeDeductibleAmount,
-    needsReviewAmount: round(authoritativeAmounts?.needsReviewAmount || 0),
-    needsTaxReviewGrossExpense: round(authoritativeAmounts?.needsTaxReviewGrossExpense || 0),
+    bookExpenseAmount: round(treatment.bookExpenseAmount),
+    deductibleAmount,
+    needsReviewAmount: round(treatment.needsInputGrossExpense),
+    needsInputGrossExpense: round(treatment.needsInputGrossExpense),
+    needsTaxReviewGrossExpense: 0,
     ...Object.fromEntries(Object.entries(treatment).map(([key, value]) => [key, key.endsWith("Amount") ? round(value) : value])),
   };
+}
+
+function signedExpenseAmount(row = {}) {
+  const signed = nullableAmount(row.signedAmount ?? row.signed_amount);
+  if (signed != null) return -signed;
+  return Number(row.amount ?? row.absoluteAmount ?? row.absolute_amount ?? 0) || 0;
+}
+
+function signedDeductibleAmount(row = {}, grossExpenseAmount = signedExpenseAmount(row)) {
+  const amount = nullableAmount(row.deductibleAmount ?? row.deductible_amount);
+  if (amount == null) return 0;
+  if (grossExpenseAmount === 0) return 0;
+  return Math.abs(amount) * Math.sign(grossExpenseAmount);
+}
+
+function nullableAmount(value) {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function treatmentBucket(entry) {
@@ -196,13 +218,23 @@ function title(value) { return String(value).split("_").map((part)=>part ? part[
 function round(value) { return Math.round((Number(value)||0)*100)/100; }
 
 async function loadRows(args) { const rows=[]; for(let offset=0;;offset+=PAGE_SIZE){ const page=await listDeductionTransactions({...args,pagination:{limit:PAGE_SIZE,offset},filters:{}}); rows.push(...(page.rows||[])); if(!page.pagination?.hasMore) break; } return rows; }
-function fingerprint({ overview, rows, sourceRows = [], classificationRows = [] }) { return createHash("sha256").update(JSON.stringify({ engine: overview.meta?.engineVersion, bridge: overview.populationBridge?.identity_comparison, source: sourceRows.map((r)=>[r.transactionId,r.taxScopeDisposition,r.taxScopeReasonCode]), rows: rows.map((r)=>[r.transactionId,r.classificationStatus,r.taxCategory,r.deductibleAmount,r.ruleVersion,r.override?.lastChangedAt]), classifications: classificationRows.map((r)=>[r.transaction_id,r.rule_version,r.rule_code,r.updated_at]) })).digest("hex"); }
+function fingerprint({ overview, rows, sourceRows = [], classificationRows = [] }) { return createHash("sha256").update(JSON.stringify({ formulaVersion: TAX_WORKSPACE_FORMULA_VERSION, engine: overview.meta?.engineVersion, bridge: overview.populationBridge?.identity_comparison, source: sourceRows.map((r)=>[r.transactionId,r.taxScopeDisposition,r.taxScopeReasonCode,r.signedAmount]), rows: rows.map((r)=>[r.transactionId,r.classificationStatus,r.taxCategory,r.deductibleAmount,r.ruleVersion,r.override?.lastChangedAt]), classifications: classificationRows.map((r)=>[r.transaction_id,r.rule_version,r.rule_code,r.updated_at]) })).digest("hex"); }
 function validatePayload(p){
   const counts=[p.estimatedDeductibleAmount,p.evaluatedTransactionCount,p.matrixIncludedCount,p.outsideDeductionsCount,p.questionGroupCount];
   const matrixRows=Array.isArray(p.matrix)?p.matrix:[];
   const rowCount=matrixRows.reduce((sum,row)=>sum+Number(row?.transactionCount||0),0);
   const monthCount=matrixRows.reduce((sum,row)=>sum+Object.values(row?.months||{}).reduce((monthSum,month)=>monthSum+Number(month?.transactionCount||0),0),0);
-  if(counts.some((v)=>!Number.isFinite(v)) || !Array.isArray(p.matrix)) throw coded("invalid_tax_workspace_projection");
+  if(counts.some((v)=>!Number.isFinite(v)) || !Array.isArray(p.matrix) || p.amountContractVersion!==TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION) throw coded("invalid_tax_workspace_projection");
+  let matrixDeductibleAmount=0;
+  for(const row of matrixRows) for(const month of Object.values(row?.months||{})) {
+    const amountValues=[month?.bookExpenseAmount,month?.deductibleAmount,month?.estimatedDeductibleAmount,month?.reviewedDeductibleAmount,month?.needsInputGrossExpense];
+    if(amountValues.some((value)=>!Number.isFinite(Number(value)))) throw coded("tax_workspace_amount_invalid");
+    const treatmentCount=Number(month?.estimatedTransactionCount||0)+Number(month?.reviewedTransactionCount||0)+Number(month?.needsInputTransactionCount||0);
+    if(treatmentCount!==Number(month?.transactionCount||0)) throw coded("tax_workspace_month_treatment_count_mismatch");
+    if(!sameMoney(month?.deductibleAmount,Number(month?.estimatedDeductibleAmount||0)+Number(month?.reviewedDeductibleAmount||0))) throw coded("tax_workspace_deduction_amount_mismatch");
+    matrixDeductibleAmount+=Number(month?.deductibleAmount||0);
+  }
+  if(!sameMoney(p.estimatedDeductibleAmount,matrixDeductibleAmount)) throw coded("tax_workspace_estimate_amount_mismatch");
   const evidence=p.identityEvidence||{};
   const evaluated=requiredUniqueSet(evidence.evaluated,"tax_workspace_evaluated_identity_invalid");
   const matrix=requiredUniqueSet(evidence.matrixIncluded,"tax_workspace_matrix_identity_invalid");
@@ -235,6 +267,7 @@ function sameKeys(value,expected){const keys=Object.keys(value).sort();return ke
 function intersection(a,b){return new Set([...a].filter((id)=>b.has(id)));}
 function sameSet(a,b){return a.size===b.size&&[...a].every((id)=>b.has(id));}
 function hasOverlap(sets){const seen=new Set();for(const set of sets)for(const id of set){if(seen.has(id))return true;seen.add(id);}return false;}
+function sameMoney(a,b){return Math.round(Number(a||0)*100)===Math.round(Number(b||0)*100);}
 
 export function publicTaxWorkspaceProjection(payload) {
   if (!payload || payload.projectionVersion !== TAX_WORKSPACE_PROJECTION_VERSION) return payload;
@@ -274,4 +307,4 @@ export function publicTaxWorkspaceProjection(payload) {
 async function persist({supabase,payload}) { if(supabase.store){ supabase.store.tax_workspace_projections ||= []; let row=supabase.store.tax_workspace_projections.find((r)=>r.business_id===payload.canonicalBusinessId&&r.tax_year===payload.taxYear&&r.projection_version===payload.projectionVersion&&r.source_fingerprint===payload.sourceFingerprint); if(!row){row={id:randomUUID(),business_id:payload.canonicalBusinessId,tax_year:payload.taxYear,projection_version:payload.projectionVersion,formula_version:payload.formulaVersion,source_fingerprint:payload.sourceFingerprint,status:"complete",completeness:payload.completeness,projection_data:payload,generated_at:payload.generatedAt,created_at:new Date().toISOString()};supabase.store.tax_workspace_projections.push(row);} return row; } const {data,error}=await supabase.rpc("persist_tax_workspace_projection",{p_business_id:payload.canonicalBusinessId,p_tax_year:payload.taxYear,p_projection_version:payload.projectionVersion,p_formula_version:payload.formulaVersion,p_source_fingerprint:payload.sourceFingerprint,p_completeness:payload.completeness,p_payload:payload,p_generated_at:payload.generatedAt}); if(error)throw error; return data; }
 function coded(code){ return Object.assign(new Error("Tax workspace projection could not be built."),{code}); }
 
-export const __taxWorkspaceProjectionTestInternals = Object.freeze({ buildPayload, buildIdentityMatrix, fingerprint, validatePayload, persist, setFingerprint });
+export const __taxWorkspaceProjectionTestInternals = Object.freeze({ aggregateMonth, buildPayload, buildIdentityMatrix, fingerprint, signedExpenseAmount, validatePayload, persist, setFingerprint });
