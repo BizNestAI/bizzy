@@ -48,9 +48,7 @@ export default function TaxDashboard() {
   const prerequisites = resolveTaxWorkspacePrerequisites({
     authLoading: auth.loading,
     userId: auth.user?.id,
-    businessLoading: businessContext.loading,
     businessId: businessContext.businessId,
-    currentBusinessId: currentBusiness?.id,
     adminLoading: adminView.loading,
     adminActive: adminView.active,
     adminBusinessId: adminView.businessId,

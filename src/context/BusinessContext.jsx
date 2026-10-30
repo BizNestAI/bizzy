@@ -10,7 +10,7 @@ export const BusinessContext = createContext(null);
 export const BusinessProvider = ({ children }) => {
   const { user, loading: authLoading } = useAuth() || {};
   const adminView = useAdminView();
-  const [businessId, setBusinessIdState] = useState(readInitialBusinessId);
+  const [businessId, setBusinessIdState] = useState(null);
   const [currentBusiness, setCurrentBusiness] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
@@ -26,15 +26,9 @@ export const BusinessProvider = ({ children }) => {
     const url = new URL(window.location.href);
     const urlBusinessId = url.searchParams.get("business_id");
     const stored = urlBusinessId || localStorage.getItem("currentBusinessId") || localStorage.getItem("business_id");
-    if (stored) {
-      if (stored !== businessId) {
-        setLoading(true);
-        setBusinessIdState(stored);
-      }
-      return;
-    }
-    if (!authLoading) setLoading(false);
-  }, [adminView.active, authLoading, businessId]);
+    if (stored) setBusinessIdState(stored);
+    setLoading(false); // let UI render while we fetch profile below
+  }, [adminView.active]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -195,16 +189,6 @@ export const BusinessProvider = ({ children }) => {
 
   return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;
 };
-
-function readInitialBusinessId() {
-  if (typeof window === "undefined") return null;
-  try {
-    const urlBusinessId = new URL(window.location.href).searchParams.get("business_id");
-    return urlBusinessId || localStorage.getItem("currentBusinessId") || localStorage.getItem("business_id") || null;
-  } catch {
-    return localStorage.getItem("currentBusinessId") || localStorage.getItem("business_id") || null;
-  }
-}
 
 /* ---------------- Hooks ---------------- */
 

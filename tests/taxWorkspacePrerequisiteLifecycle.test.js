@@ -62,7 +62,14 @@ test("mounted hard-refresh lifecycle waits for auth and business, then requests 
     await render(root, {
       authLoading: true,
       userId: null,
-      businessLoading: true,
+      businessId: null,
+      adminLoading: false,
+    }, onWorkspaceRequest);
+    assert.deepEqual(requests, []);
+
+    await render(root, {
+      authLoading: false,
+      userId: "user-1",
       businessId: null,
       adminLoading: false,
     }, onWorkspaceRequest);
@@ -72,15 +79,6 @@ test("mounted hard-refresh lifecycle waits for auth and business, then requests 
       authLoading: false,
       userId: "user-1",
       businessLoading: true,
-      businessId: null,
-      adminLoading: false,
-    }, onWorkspaceRequest);
-    assert.deepEqual(requests, []);
-
-    await render(root, {
-      authLoading: false,
-      userId: "user-1",
-      businessLoading: false,
       businessId: "business-1",
       adminLoading: false,
     }, onWorkspaceRequest);
@@ -89,8 +87,8 @@ test("mounted hard-refresh lifecycle waits for auth and business, then requests 
     await render(root, {
       authLoading: false,
       userId: "user-1",
-      businessLoading: false,
       businessId: "business-1",
+      currentBusinessId: "business-1",
       adminLoading: false,
     }, onWorkspaceRequest);
     assert.deepEqual(requests, ["business-1"]);
@@ -103,7 +101,6 @@ test("SPA-ready scope and read-only Admin View resolve one authorized business",
   assert.deepEqual(resolveTaxWorkspacePrerequisites({
     authLoading: false,
     userId: "user-1",
-    businessLoading: false,
     businessId: "business-1",
     adminLoading: false,
   }), { pending: false, businessId: "business-1" });
@@ -111,7 +108,6 @@ test("SPA-ready scope and read-only Admin View resolve one authorized business",
   assert.deepEqual(resolveTaxWorkspacePrerequisites({
     authLoading: false,
     userId: "support-user",
-    businessLoading: false,
     businessId: "stale-customer-business",
     adminLoading: false,
     adminActive: true,
@@ -123,15 +119,38 @@ test("missing session or active business remains explicitly pending for the boun
   assert.equal(resolveTaxWorkspacePrerequisites({
     authLoading: false,
     userId: null,
-    businessLoading: false,
     businessId: "unverified-business",
     adminLoading: false,
   }).pending, true);
   assert.equal(resolveTaxWorkspacePrerequisites({
     authLoading: false,
     userId: "user-1",
-    businessLoading: false,
     businessId: null,
     adminLoading: false,
   }).pending, true);
+});
+
+test("Try again reevaluates a newly populated reactive business scope", async () => {
+  const requests = [];
+  const onWorkspaceRequest = (businessId) => requests.push(businessId);
+  const root = createEffectRoot();
+  try {
+    await render(root, {
+      authLoading: false,
+      userId: "user-1",
+      businessId: null,
+      adminLoading: false,
+    }, onWorkspaceRequest);
+    assert.deepEqual(requests, []);
+
+    await render(root, {
+      authLoading: false,
+      userId: "user-1",
+      businessId: "business-1",
+      adminLoading: false,
+    }, onWorkspaceRequest);
+    assert.deepEqual(requests, ["business-1"]);
+  } finally {
+    await act(async () => root.unmount());
+  }
 });
