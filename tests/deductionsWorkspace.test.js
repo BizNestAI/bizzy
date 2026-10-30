@@ -1426,6 +1426,14 @@ test("Tax review dialog loads an authoritative preview before rendering amounts 
   assert.deepEqual(decisionTransactionIds(group.rows, "unsure"), []);
 });
 
+test("Tax question modal animates open and closed with reduced-motion support", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /<AnimatePresence>\s*\{reviewDecision \? <ReviewDecisionModal/);
+  assert.match(dashboard, /function ReviewDecisionModal[\s\S]*?const prefersReducedMotion = useReducedMotion\(\)/);
+  assert.match(dashboard, /initial=\{prefersReducedMotion \? \{ opacity: 0 \} : \{ opacity: 0, scale: 0\.975, y: 12 \}\}/);
+  assert.match(dashboard, /exit=\{prefersReducedMotion \? \{ opacity: 0 \} : \{ opacity: 0, scale: 0\.985, y: 8 \}\}/);
+});
+
 test("auto-classified deduction detail uses estimated, customer-facing evidence and a bounded transaction list", async () => {
   const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
   const selection = makeReviewSelection({

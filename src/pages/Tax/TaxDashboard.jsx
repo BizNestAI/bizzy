@@ -926,7 +926,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
 
       {readOnly ? <TaxLifecycleConservationSummary projection={lifecycleProjection} legacy={legacyCoverageReconciliation} /> : null}
 
-      <ReviewDecisionModal
+      <AnimatePresence>
+      {reviewDecision ? <ReviewDecisionModal
+        key={reviewDecision.group?.key || "tax-review-decision"}
         decision={reviewDecision}
         businessId={businessId}
         taxYear={year}
@@ -943,6 +945,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
             previewId: command.previewId,
             idempotencyKey: command?.idempotencyKey,
             answer: command.answer,
+            vehicleMethod: command.vehicleMethod,
+            actualExpenseUse: command.actualExpenseUse,
             businessUsePercent: command.businessUsePercent,
             personalExceptionIds: command.personalExceptionIds,
           });
@@ -960,7 +964,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           }
           return operation;
         }}
-      />
+      /> : null}
+      </AnimatePresence>
 
       <DeductionDecisionRuleEditor
         rule={decisionRuleEditor}
@@ -2261,6 +2266,7 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
 }
 
 function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, onCheckOutcome, onScopeChanged, onPreview }) {
+  const prefersReducedMotion = useReducedMotion();
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [vehicleMethod, setVehicleMethod] = useState("");
   const [actualExpenseUse, setActualExpenseUse] = useState("");
@@ -2492,9 +2498,30 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
     }
   };
 
+  const backdropTransition = prefersReducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" };
   const modal = (
-    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex h-[100dvh] min-h-screen items-center justify-center overflow-hidden px-3 py-4 md:left-[var(--nav-w,0px)] sm:px-4 sm:py-6" role="presentation">
-      <section ref={modalRef} role="dialog" aria-modal="true" aria-label={`${group.qboAccountName} tax review`} tabIndex={-1} className="flex max-h-[calc(100dvh-32px)] w-full max-w-[760px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] text-white shadow-[0_24px_90px_rgba(0,0,0,0.68)] sm:max-h-[calc(100dvh-48px)]">
+    <Motion.div
+      className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex h-[100dvh] min-h-screen items-center justify-center overflow-hidden px-3 py-4 md:left-[var(--nav-w,0px)] sm:px-4 sm:py-6"
+      role="presentation"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={backdropTransition}
+    >
+      <Motion.section
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${group.qboAccountName} tax review`}
+        tabIndex={-1}
+        className="flex max-h-[calc(100dvh-32px)] w-full max-w-[760px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] text-white shadow-[0_24px_90px_rgba(0,0,0,0.68)] sm:max-h-[calc(100dvh-48px)]"
+        initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.975, y: 12 }}
+        animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+        exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.985, y: 8 }}
+        transition={prefersReducedMotion
+          ? { duration: 0 }
+          : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+      >
         <header className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
           <div className="min-w-0">
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-100/62">Tax question</div>
@@ -2620,8 +2647,8 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
             </button> : null}
           </div>
         </footer>
-      </section>
-    </div>
+      </Motion.section>
+    </Motion.div>
   );
   return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
 }
