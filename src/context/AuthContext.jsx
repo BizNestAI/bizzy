@@ -4,10 +4,22 @@ import { clearStoredAuthAndBusinessState, clearStoredBusinessState, markStoredSe
 
 const AuthContext = createContext();
 
+function readStoredSessionIdentity() {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage?.getItem("bizzy:session-user") || null;
+  } catch {
+    return null;
+  }
+}
+
 export const AuthProvider = ({ children }) => {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
-  const activeUserRef = useRef(null);
+  // Supabase may publish INITIAL_SESSION before getSession resolves. Seed the
+  // comparison from the last verified session identity so a same-user browser
+  // reload is not mistaken for an account switch that must clear business scope.
+  const activeUserRef = useRef(readStoredSessionIdentity());
 
   useEffect(() => {
     let mounted = true;
