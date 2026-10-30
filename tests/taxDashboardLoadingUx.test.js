@@ -98,5 +98,5 @@ test("Tax dashboard critical path uses one projection read and defers transactio
   const primary = deductionsHookSource.slice(deductionsHookSource.indexOf("const load = useCallback"), deductionsHookSource.indexOf("const loadSecondaryDetails"));
   assert.match(primary, /getTaxWorkspace/);
   assert.doesNotMatch(primary, /fetchAllDeductionTransactions|getTaxClassificationCoverage|fetchAllPostedTransactions|getTaxClassifications/);
-  assert.match(deductionsHookSource, /const retryQuestions[\s\S]*fetchAllDeductionTransactions/);
+  assert.match(deductionsHookSource, /const retryQuestions[\s\S]*fetchAllWorkspaceTransactions/);
 });

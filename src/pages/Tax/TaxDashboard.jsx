@@ -11,6 +11,7 @@ import TaxSetupWorkflow from "../../components/Tax/Setup/TaxSetupWorkflow.jsx";
 import RecordTaxPaymentModal from "../../components/Tax/Planning/RecordTaxPaymentModal.jsx";
 import { buildTaxDashboardViewModel } from "../../components/Tax/taxDashboardViewModel.js";
 import { useBusinessContext } from "../../context/BusinessContext";
+import { useAuth } from "../../context/AuthContext.jsx";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
 import { useTaxOverview } from "../../hooks/tax/useTaxOverview.js";
 import { useTaxDeductions } from "../../hooks/tax/useTaxDeductions.js";
@@ -32,6 +33,7 @@ import {
   taxActionOwnerForRow,
 } from "../../services/tax/taxDeductionsLifecycleProjection.js";
 import { buildTaxEvaluationNotice } from "../../services/tax/taxEvaluationNoticeProjection.js";
+import { resolveTaxWorkspacePrerequisites } from "./taxWorkspacePrerequisites.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
@@ -41,10 +43,21 @@ const TAX_BOOTSTRAP_TIMEOUT_MS = 20_000;
 export default function TaxDashboard() {
   const businessContext = useBusinessContext?.() || {};
   const { currentBusiness } = businessContext;
+  const auth = useAuth() || {};
   const adminView = useAdminView();
-  const contextPending = businessContext.loading || adminView.loading;
+  const prerequisites = resolveTaxWorkspacePrerequisites({
+    authLoading: auth.loading,
+    userId: auth.user?.id,
+    businessLoading: businessContext.loading,
+    businessId: businessContext.businessId,
+    currentBusinessId: currentBusiness?.id,
+    adminLoading: adminView.loading,
+    adminActive: adminView.active,
+    adminBusinessId: adminView.businessId,
+  });
+  const contextPending = prerequisites.pending;
   const readOnly = adminView.active && adminView.readOnly;
-  const businessId = contextPending ? null : (adminView.active ? adminView.businessId : currentBusiness?.id) || null;
+  const businessId = prerequisites.businessId;
   const navigate = useNavigate();
   const taxYear = CURRENT_YEAR;
   const taxLiabilityEstimateEnabled = isTaxLiabilityEstimateEnabled();
