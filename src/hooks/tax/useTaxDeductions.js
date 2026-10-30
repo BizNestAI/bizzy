@@ -13,7 +13,6 @@ import {
   excludeTaxClassification,
   exportTaxDeductions,
   getTaxClassificationStatus,
-  getTaxClassificationReviewSummary,
   getTaxClassifications,
   getTaxDeductionCategoryDetail,
   getGroupedTaxDeductionDecisionOperation,
@@ -88,30 +87,6 @@ export function useTaxDeductions({
   useEffect(() => {
     overviewRef.current = overview;
   }, [overview]);
-
-  // A completed grouped decision changes one bounded category/account scope,
-  // but the question summary is a cross-workspace authority. Refresh just that
-  // summary after the command is confirmed; do not optimistically clear other
-  // question groups or replace the annual matrix with mixed-age resources.
-  const refreshAuthoritativeQuestionSummary = useCallback(async ({ signal } = {}) => {
-    if (isDemo || !businessId) return { status: "not_applicable", summary: null };
-    const request = seq.current;
-    try {
-      const summary = await getTaxClassificationReviewSummary({ businessId, year, refresh: true, signal });
-      if (request !== seq.current) return { status: "superseded", summary: null };
-      setClassificationReviewSummary(summary);
-      setResourceErrors((current) => ({ ...(current || {}), classificationReviewSummary: null }));
-      return { status: "updated", summary };
-    } catch (summaryError) {
-      // The committed command remains authoritative even when this read-only
-      // refresh is unavailable. Keep the prior summary visible and clearly
-      // mark it stale instead of hiding unrelated questions.
-      if (request === seq.current) {
-        setResourceErrors((current) => ({ ...(current || {}), classificationReviewSummary: summaryError }));
-      }
-      return { status: "stale", summary: null };
-    }
-  }, [businessId, isDemo, year]);
 
   useEffect(() => {
     if (isDemo) return;
@@ -482,8 +457,8 @@ export function useTaxDeductions({
     confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal } = {}) => {
       const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal });
       applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
-      const questionSummary = await refreshAuthoritativeQuestionSummary({ signal });
-      return { ...result, questionSummary };
+      const refreshed = await load({ signal, refresh: true });
+      return { ...result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } };
     },
     getGroupedDeductionDecisionOperation: async ({ idempotencyKey, signal } = {}) => {
       const operation = await getGroupedTaxDeductionDecisionOperation({ businessId, year, idempotencyKey, signal });
@@ -495,7 +470,8 @@ export function useTaxDeductions({
           setClassificationRows,
           setDecisionRules,
         });
-        await refreshAuthoritativeQuestionSummary({ signal });
+        const refreshed = await load({ signal, refresh: true });
+        return { ...operation, result: { ...operation.result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } } };
       }
       return operation;
     },

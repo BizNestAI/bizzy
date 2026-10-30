@@ -7,6 +7,7 @@ import {
   getLatestTaxWorkspaceProjection,
   getTaxWorkspaceRefreshState,
   publicTaxWorkspaceProjection,
+  reconcileTaxWorkspaceProjection,
   TAX_WORKSPACE_LEGACY_PROJECTION_VERSION,
   TAX_WORKSPACE_PROJECTION_VERSION,
 } from "../../services/tax/taxWorkspaceProjection.service.js";
@@ -37,14 +38,17 @@ router.get("/workspace", async (req, res) => {
       getTaxWorkspaceRefreshState({ supabase: db, businessId, taxYear }),
     ]);
     if (!record) throw safeError("projection_unavailable", 503, "Your Tax workspace is not available yet.", { action: "retry" });
+    const projection = projectionVersion === TAX_WORKSPACE_PROJECTION_VERSION
+      ? await reconcileTaxWorkspaceProjection({ supabase: db, record, businessId, taxYear })
+      : record.projection_data;
     return sendTaxSuccess(res, {
       state: refreshState,
       projectionId: record.id,
       projectionVersion: record.projection_version,
       formulaVersion: record.formula_version,
-      sourceFingerprint: record.source_fingerprint,
-      generatedAt: record.generated_at,
-      projection: publicTaxWorkspaceProjection(record.projection_data),
+      sourceFingerprint: projection.sourceFingerprint || record.source_fingerprint,
+      generatedAt: projection.generatedAt || record.generated_at,
+      projection: publicTaxWorkspaceProjection(projection),
     });
   } catch (error) {
     return sendTaxError(res, workspaceReadError(error), "tax_workspace_read_failed");
@@ -99,13 +103,14 @@ router.get("/workspace/matrix-cell", async (req, res) => {
     }
     const record = await getLatestTaxWorkspaceProjection({ supabase: db, businessId, taxYear, projectionVersion });
     if (!record || String(record.id) !== projectionId) throw safeError("tax_workspace_projection_changed", 409, "The Tax workspace changed. Refresh and try again.");
-    const evidence = record.projection_data?.identityEvidence || {};
+    const projection = await reconcileTaxWorkspaceProjection({ supabase: db, record, businessId, taxYear });
+    const evidence = projection.identityEvidence || {};
     const treatmentKey = authority === "standard_rule" ? "estimated" : authority;
     const categoryIds = new Set(evidence.categories?.[categoryKey] || []);
     const monthIds = new Set(evidence.months?.[month] || []);
     const treatmentIds = new Set(evidence.treatments?.[treatmentKey] || []);
     const identities = [...categoryIds].filter((id) => monthIds.has(id) && treatmentIds.has(id));
-    const projectedMonth = record.projection_data?.matrix?.find((row) => row.categoryKey === categoryKey)?.months?.[month];
+    const projectedMonth = projection.matrix?.find((row) => row.categoryKey === categoryKey)?.months?.[month];
     const expectedCount = Number(projectedMonth?.[`${treatmentKey === "needs_input" ? "needsInput" : treatmentKey}TransactionCount`] || 0);
     if (!projectedMonth || identities.length !== expectedCount || new Set(identities).size !== identities.length) {
       throw safeError("tax_workspace_matrix_cell_membership_invalid", 409, "The Tax workspace cell population is unavailable.");

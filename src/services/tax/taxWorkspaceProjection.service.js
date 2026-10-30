@@ -17,10 +17,33 @@ const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;
 
 export async function buildAndPersistTaxWorkspaceProjection({ supabase, businessId, taxYear, asOfDate } = {}) {
+  const payload = await buildCurrentTaxWorkspacePayload({ supabase, businessId, taxYear, asOfDate });
+  const record = await persist({ supabase, payload });
+  return { projectionId: record.id, created: record.created_at === record.updated_at || false, payload };
+}
+
+// Recompute treatment-derived workspace sections from current classifications
+// while retaining the immutable projection's exact evaluated population.
+export async function reconcileTaxWorkspaceProjection({ supabase, record, businessId, taxYear, asOfDate } = {}) {
+  const baselineIds = record?.projection_data?.identityEvidence?.evaluated;
+  if (!Array.isArray(baselineIds) || !baselineIds.length) throw coded("tax_workspace_evaluated_identity_invalid");
+  const payload = await buildCurrentTaxWorkspacePayload({
+    supabase, businessId, taxYear, asOfDate, baselineEvaluatedIds: baselineIds,
+  });
+  return payload;
+}
+
+async function buildCurrentTaxWorkspacePayload({ supabase, businessId, taxYear, asOfDate, baselineEvaluatedIds = null } = {}) {
   if (!supabase || !businessId || !Number.isInteger(Number(taxYear))) throw coded("invalid_tax_workspace_scope");
-  const sourceRows = await listTaxPostingSourceRows({ supabase, businessId, taxYear: Number(taxYear) });
+  const allSourceRows = await listTaxPostingSourceRows({ supabase, businessId, taxYear: Number(taxYear) });
+  const baseline = baselineEvaluatedIds ? requiredUniqueSet(baselineEvaluatedIds, "tax_workspace_evaluated_identity_invalid") : null;
+  const sourceRows = baseline ? allSourceRows.filter((row) => baseline.has(String(row.transactionId))) : allSourceRows;
+  if (baseline && (sourceRows.length !== baseline.size || sourceRows.some((row) => !baseline.has(String(row.transactionId))))) {
+    throw coded("tax_workspace_live_population_mismatch");
+  }
   const overview = await getDeductionsOverview({ supabase, businessId, taxYear: Number(taxYear), asOfDate, authoritativeSourceRows: sourceRows });
-  const rows = await loadRows({ supabase, businessId, taxYear: Number(taxYear), asOfDate });
+  const allRows = await loadRows({ supabase, businessId, taxYear: Number(taxYear), asOfDate });
+  const rows = baseline ? allRows.filter((row) => baseline.has(String(row.transactionId))) : allRows;
   const classificationPage = await listTaxClassifications({ supabase, businessId, taxYear: Number(taxYear), limit: 10_000 });
   const classificationById = new Map((classificationPage.rows || []).map((row) => [String(row.transaction_id), row]));
   const scopeById = new Map(sourceRows.map((row) => [String(row.transactionId), row.taxScopeDisposition]));
@@ -41,8 +64,8 @@ export async function buildAndPersistTaxWorkspaceProjection({ supabase, business
   const generatedAt = overview.meta?.generatedAt || new Date().toISOString();
   const payload = buildPayload({ overview, lifecycle, businessId, taxYear: Number(taxYear), sourceFingerprint, generatedAt });
   validatePayload(payload);
-  const record = await persist({ supabase, payload });
-  return { projectionId: record.id, created: record.created_at === record.updated_at || false, payload };
+  if (baseline && !sameSet(new Set(payload.identityEvidence.evaluated), baseline)) throw coded("tax_workspace_live_population_mismatch");
+  return payload;
 }
 
 export async function getLatestTaxWorkspaceProjection({ supabase, businessId, taxYear, projectionVersion = TAX_WORKSPACE_PROJECTION_VERSION } = {}) {

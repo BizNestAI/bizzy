@@ -567,6 +567,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   const [focusedUpdatingIds, setFocusedUpdatingIds] = useState([]);
   const [reviewDecision, setReviewDecision] = useState(null);
   const [decisionNotice, setDecisionNotice] = useState(null);
+  const [decisionRefreshFailed, setDecisionRefreshFailed] = useState(false);
   const [decisionRuleEditor, setDecisionRuleEditor] = useState(null);
   const [deductionDefaultSetup, setDeductionDefaultSetup] = useState(null);
   const rulesPanelRef = useRef(null);
@@ -828,10 +829,16 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           <span>{decisionNotice}</span>
           <button
             type="button"
-            onClick={() => setDecisionNotice(null)}
+            onClick={decisionRefreshFailed ? async () => {
+              const refreshed = await deductions.refresh();
+              if (refreshed?.overview) {
+                setDecisionRefreshFailed(false);
+                setDecisionNotice("Decision saved. Workspace refreshed.");
+              }
+            } : () => setDecisionNotice(null)}
             className="shrink-0 rounded-full px-1.5 py-0.5 text-xs font-semibold text-emerald-50/78 hover:bg-emerald-100/10 hover:text-emerald-50"
           >
-            Dismiss
+            {decisionRefreshFailed ? "Retry workspace refresh" : "Dismiss"}
           </button>
         </div>
       ) : null}
@@ -1003,7 +1010,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
             personalExceptionIds: command.personalExceptionIds,
           });
           const savedCount = Number(result?.appliedCount || 0) + Number(result?.alreadyMatchingCount || 0);
-          setDecisionNotice(`${reviewDecision.group.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}.`);
+          const refreshFailed = result?.workspaceRefresh?.status !== "updated";
+          setDecisionRefreshFailed(refreshFailed);
+          setDecisionNotice(refreshFailed
+            ? `${reviewDecision.group.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}; workspace refresh failed.`
+            : `${reviewDecision.group.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}.`);
           setReviewDecision(null);
           return result;
         }}
@@ -1011,7 +1022,12 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           const operation = await deductions.getGroupedDeductionDecisionOperation({ idempotencyKey });
           if (operation?.status === "completed" && operation?.result) {
             const applied = Number(operation.result.appliedCount || 0) + Number(operation.result.alreadyMatchingCount || 0);
-            setDecisionNotice(`${reviewDecision?.group?.qboAccountName || "Tax"} decision saved for ${applied || operation.result.targetTransactionIds?.length || 0} transaction${(applied || operation.result.targetTransactionIds?.length || 0) === 1 ? "" : "s"}.`);
+            const savedCount = applied || operation.result.targetTransactionIds?.length || 0;
+            const refreshFailed = operation.result?.workspaceRefresh?.status !== "updated";
+            setDecisionRefreshFailed(refreshFailed);
+            setDecisionNotice(refreshFailed
+              ? `${reviewDecision?.group?.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}; workspace refresh failed.`
+              : `${reviewDecision?.group?.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}.`);
             setReviewDecision(null);
           }
           return operation;

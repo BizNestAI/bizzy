@@ -250,7 +250,7 @@ test("the 303 Meals population conserves 287 actionable and 16 already reviewed 
   assert.equal(new Set(group.stableTransactionIds.category).size, 303);
 });
 
-test("the client applies the returned scoped rows locally and does not reload the annual Tax workspace", () => {
+test("the client patches returned scoped rows and then reloads the authoritative Tax workspace", () => {
   const hook = readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(hook, /function patchTaxPageWithGroupedDecision/);
@@ -258,8 +258,8 @@ test("the client applies the returned scoped rows locally and does not reload th
   assert.match(dashboard, /confirmGroupedDeductionDecision/);
   assert.match(dashboard, /previewGroupedDeductionDecision/);
   assert.doesNotMatch(dashboard, /for \(let index = 0; index < ids\.length; index \+= 100\)/);
-  assert.match(hook, /refreshAuthoritativeQuestionSummary/);
-  assert.match(hook, /getTaxClassificationReviewSummary\(\{ businessId, year, refresh: true, signal \}\)/);
+  assert.match(hook, /confirmGroupedDeductionDecision:[\s\S]*load\(\{ signal, refresh: true \}\)/);
+  assert.doesNotMatch(hook, /refreshAuthoritativeQuestionSummary/);
   assert.match(dashboard, /previewId: serverPreview\.previewId/);
 });
 
