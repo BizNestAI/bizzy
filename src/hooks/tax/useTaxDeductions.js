@@ -182,7 +182,7 @@ export function useTaxDeductions({
           setOverview(compatibleOverview);
           setRequestStatus((current) => ({ ...current, scopeKey, overview: "success", matrix: "success", classification: "success" }));
           if (refresh) setLastRefreshedAt(workspace?.refreshedAt || workspace?.generatedAt || new Date().toISOString());
-        } else if (overviewResult.reason?.code !== "request_aborted") {
+        } else {
           setRequestStatus((current) => ({ ...current, scopeKey, overview: "error" }));
           if (!overviewRef.current) setError(overviewResult.reason);
         }

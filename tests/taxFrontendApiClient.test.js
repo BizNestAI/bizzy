@@ -27,6 +27,31 @@ function jsonResponse(body, init = {}) {
   });
 }
 
+function workspaceResponse(businessId = "business-1", year = 2026) {
+  return {
+    ok: true,
+    data: {
+      state: "complete",
+      projectionVersion: "tax-workspace-v2",
+      projection: {
+        projectionVersion: "tax-workspace-v2",
+        canonicalBusinessId: businessId,
+        taxYear: year,
+        estimatedDeductibleAmount: 10,
+        evaluatedTransactionCount: 1,
+        matrixIncludedCount: 1,
+        outsideDeductionsCount: 0,
+        treatmentCounts: { estimated: 1, reviewed: 0, needs_input: 0 },
+        questionMembershipSum: 0,
+        questionCoveredUniqueCount: 0,
+        questionMembershipOverlapCount: 0,
+        questionGroups: [],
+        matrix: [{ transactionCount: 1, months: { [`${year}-01`]: { transactionCount: 1 } } }],
+      },
+    },
+  };
+}
+
 test("authenticatedFetch uses Supabase session token and does not scan localStorage", async () => {
   const calls = [];
   global.localStorage = new Proxy({}, {
@@ -204,6 +229,83 @@ test("authenticatedFetch supports AbortSignal and blob exports", async () => {
   assert.equal(result.filename, "deductions.csv");
   assert.equal(result.contentType, "text/csv");
   assert.equal(await result.blob.text(), "a,b\n1,2");
+});
+
+test("a caller abort cannot poison a remounted tax-workspace-v2 read", async () => {
+  let release;
+  let fetchCount = 0;
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: { access_token: "session-token" } } }) } },
+    fetchImpl: async () => {
+      fetchCount += 1;
+      await new Promise((resolve) => { release = resolve; });
+      return jsonResponse(workspaceResponse());
+    },
+  });
+  taxClient.clearTaxApiCache();
+
+  const firstController = new AbortController();
+  const firstMount = taxClient.getTaxWorkspace({ businessId: "business-1", year: 2026, signal: firstController.signal });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  firstController.abort();
+  const remount = taxClient.getTaxWorkspace({ businessId: "business-1", year: 2026 });
+  release();
+
+  await assert.rejects(firstMount, (error) => error.code === "request_aborted");
+  const workspace = await remount;
+  assert.equal(workspace.projection.projectionVersion, "tax-workspace-v2");
+  assert.equal(fetchCount, 1);
+});
+
+test("a direct-route workspace read waits for delayed session hydration and then settles", async () => {
+  let releaseSession;
+  let fetchCount = 0;
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: {
+      auth: {
+        getSession: () => new Promise((resolve) => { releaseSession = () => resolve({ data: { session: { access_token: "session-token" } } }); }),
+      },
+    },
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return jsonResponse(workspaceResponse());
+    },
+  });
+  taxClient.clearTaxApiCache();
+
+  const directRoute = taxClient.getTaxWorkspace({ businessId: "business-1", year: 2026 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(fetchCount, 0);
+  releaseSession();
+
+  const workspace = await directRoute;
+  assert.equal(workspace.projection.canonicalBusinessId, "business-1");
+  assert.equal(fetchCount, 1);
+});
+
+test("a rejected tax workspace read is removed before a successful Retry", async () => {
+  let fetchCount = 0;
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: { access_token: "session-token" } } }) } },
+    fetchImpl: async () => {
+      fetchCount += 1;
+      if (fetchCount === 1) throw new Error("temporary network failure");
+      return jsonResponse(workspaceResponse());
+    },
+  });
+  taxClient.clearTaxApiCache();
+
+  await assert.rejects(
+    () => taxClient.getTaxWorkspace({ businessId: "business-1", year: 2026 }),
+    (error) => error.code === "network_error"
+  );
+  const retried = await taxClient.getTaxWorkspace({ businessId: "business-1", year: 2026, refresh: true });
+
+  assert.equal(retried.projection.matrixIncludedCount, 1);
+  assert.equal(fetchCount, 2);
 });
 
 test("tax client serializes overview query and validates include values", async () => {

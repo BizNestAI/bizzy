@@ -122,7 +122,7 @@ test("background refresh retains authoritative values and exposes an updating st
   );
 });
 
-test("idle or aborted initialization without a verified overview remains loading instead of rendering zero data", () => {
+test("idle initialization without a verified overview remains loading instead of rendering zero data", () => {
   for (const overview of ["idle", "loading"]) {
     const state = resolveDeductionsRenderState({
       sectionStatus: { overview, matrix: "idle", classification: "idle" },
@@ -206,6 +206,33 @@ test("initial workspace projection resolves without detail hydration while refre
   assert.match(source, /reason\?\.code !== "request_aborted"/);
   assert.match(source, /setOverview\(compatibleOverview\)/);
   assert.doesNotMatch(source.slice(source.indexOf("const load = useCallback"), source.indexOf("const loadSecondaryDetails")), /fetchAllDeductionTransactions/);
+});
+
+test("cold-route context hydration starts the v2 read and every current terminal outcome leaves loading", () => {
+  const source = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
+  const loadBlock = source.slice(source.indexOf("const load = useCallback"), source.indexOf("const loadSecondaryDetails"));
+  const initialEffect = source.slice(source.indexOf("useEffect(() => {", source.indexOf("const retryQuestions")));
+
+  assert.match(source, /const requestEnabled = enabled && Boolean\(businessId\)/);
+  assert.match(source, /scopeKey = `\$\{businessId \|\| ""\}:\$\{year \|\| ""\}:\$\{asOfDate \|\| ""\}:\$\{enabled \? "enabled" : "disabled"\}`/);
+  assert.match(initialEffect, /load\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\)/);
+  assert.match(initialEffect, /\[asOfDate, businessId, load, year\]/);
+  assert.match(loadBlock, /if \(!enabled \|\| !businessId\) return null/);
+  assert.match(loadBlock, /if \(request === seq\.current\)/);
+  assert.match(loadBlock, /setRequestStatus\(\(current\) => \(\{ \.\.\.current, scopeKey, overview: "error" \}\)\)/);
+  assert.doesNotMatch(loadBlock, /else if \(overviewResult\.reason\?\.code !== "request_aborted"\)/);
+  assert.match(loadBlock, /finally \{\s*if \(request === seq\.current\) setLoading\(false\)/);
+});
+
+test("the bounded initial failure state exposes Retry through the same workspace read", () => {
+  const dashboard = fs.readFileSync(new URL("../src/pages/Tax/TaxDashboard.jsx", import.meta.url), "utf8");
+  const hook = fs.readFileSync(new URL("../src/hooks/tax/useTaxDeductions.js", import.meta.url), "utf8");
+
+  assert.match(dashboard, /initialDeductionsError \? \(/);
+  assert.match(dashboard, /onClick=\{refreshDeductions\}/);
+  assert.match(dashboard, />\s*Retry\s*</);
+  assert.match(hook, /refresh: \(options = \{\}\) => \{[\s\S]*load\(\{ \.\.\.options, refresh: true \}\)/);
+  assert.doesNotMatch(hook, /refresh: \(options = \{\}\) => \{[\s\S]{0,500}(prepareTaxClassifications|runTaxClassification)/);
 });
 
 test("persisted projection renders the matrix without transaction hydration", () => {
