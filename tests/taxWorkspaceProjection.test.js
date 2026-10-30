@@ -290,6 +290,9 @@ test("canary validator is read-only, selects exact IDs, and validates browser re
   assert.match(validator, /readWorkspace\(""\)/);
   assert.match(validator, /projectionVersion=\$\{encodeURIComponent\(TAX_WORKSPACE_PROJECTION_VERSION\)\}/);
   assert.match(validator, /assertNoIdentityManifests/);
+  assert.match(validator, /validateTaxWorkspaceV2AmountContract/);
+  assert.match(validator, /awaitingInputSignedGross/);
+  assert.doesNotMatch(validator, /8523\.81/);
   assert.doesNotMatch(validator, /\.insert\(|\.upsert\(|\.update\(|\.delete\(|buildAndPersist|provider/i);
 });
 

@@ -24,6 +24,10 @@ const {
   TAX_WORKSPACE_LEGACY_PROJECTION_VERSION,
   TAX_WORKSPACE_PROJECTION_VERSION,
 } = await import("../../src/services/tax/taxWorkspaceProjection.service.js");
+const {
+  EXPECTED_TAX_WORKSPACE_V2_AMOUNT_CONTRACT,
+  validateTaxWorkspaceV2AmountContract,
+} = await import("./taxWorkspaceV2AmountContract.js");
 
 const ONE_MIB = 1024 * 1024;
 const apiBaseUrl = requiredEnv("BIZZI_API_URL").replace(/\/+$/, "");
@@ -60,7 +64,7 @@ assertEqual(payload.questionMembershipOverlapCount, 0, "question overlap");
 assertEqual(unionSize(Object.values(payload.identityEvidence.categories || {})), 690, "category identity union");
 assertEqual(unionSize(Object.values(payload.identityEvidence.months || {})), 690, "monthly identity union");
 assertEqual((payload.identityEvidence.categories?.income || payload.identityEvidence.categories?.Income || []).length, 0, "Income matrix identities");
-assertEqual(payload.estimatedDeductibleAmount, 8523.81, "estimated deductible amount");
+const amountValidation = validateTaxWorkspaceV2AmountContract(payload, EXPECTED_TAX_WORKSPACE_V2_AMOUNT_CONTRACT);
 const payloadBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
 assert(payloadBytes < ONE_MIB, `payload is ${payloadBytes} bytes, not below 1 MiB`);
 
@@ -98,7 +102,14 @@ console.log(JSON.stringify({
     categoryIdentityUnion: 690,
     monthlyIdentityUnion: 690,
     incomeMatrixIdentities: 0,
-    amount: payload.estimatedDeductibleAmount,
+    amounts: {
+      estimatedDeduction: amountValidation.estimatedDeductibleAmount,
+      reviewedDeduction: amountValidation.reviewedDeductibleAmount,
+      deductibleTotal: amountValidation.deductibleAmount,
+      awaitingInputSignedGross: amountValidation.needsInputGrossExpense,
+      signedBookTotal: amountValidation.bookExpenseAmount,
+      monthlyTransactionCount: amountValidation.transactionCount,
+    },
     fingerprintsValidated: true,
     browserIdentityManifestsExposed: false,
   },
