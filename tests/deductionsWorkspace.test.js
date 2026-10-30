@@ -839,6 +839,34 @@ test("duplicate-named projected questions remain distinct and receive safe scope
   assert.match(html, /3 transactions need your input/);
 });
 
+test("All Transactions filter counts use accepted v2 partitions and hide zero updating", async () => {
+  const { buildCustomerDeductionsWorkflow } = await loadTaxDashboardInternals();
+  const workflow = buildCustomerDeductionsWorkflow([], { counts: {}, entries: [], activeDecisionGroups: [] }, {
+    projectionVersion: "tax-workspace-v2",
+    treatmentCounts: { estimated: 276, reviewed: 43, needs_input: 371 },
+    actionOwnerCounts: {
+      customer_fact_required: 315,
+      bookkeeping_review_required: 0,
+      bizzi_tax_mapping_required: 63,
+      professional_review_required: 5,
+      terminal_system_failure: 0,
+      system_processing: 0,
+      system_retry: 0,
+    },
+    outsideDeductionsCount: 24,
+  });
+  assert.deepEqual(workflow.filterCounts, {
+    auto_classified: 276,
+    reviewed: 43,
+    needs_answer: 315,
+    follow_up: 68,
+    outside_deductions: 24,
+    updating: 0,
+  });
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /CLASSIFICATION_TABS\.filter\(\(tab\) => tab\.value !== "updating" \|\| Number\(customerWorkflow\.filterCounts\?\.updating \|\| 0\) > 0\)/);
+});
+
 test("Tax matrix launch labels retain accessible details and grouped decision navigation", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
 

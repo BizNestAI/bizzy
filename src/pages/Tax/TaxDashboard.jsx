@@ -578,8 +578,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     [businessId, workspaceRows, year]
   );
   const customerWorkflow = useMemo(
-    () => buildCustomerDeductionsWorkflow(workspaceRows, lifecycleProjection),
-    [lifecycleProjection, workspaceRows]
+    () => buildCustomerDeductionsWorkflow(workspaceRows, lifecycleProjection, deductions.workspaceProjection),
+    [deductions.workspaceProjection, lifecycleProjection, workspaceRows]
   );
   const attentionGroups = useMemo(
     () => buildAttentionReviewGroups([], { lifecycleProjection }),
@@ -887,7 +887,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
         <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
           <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Tax classification filters">
-              {CLASSIFICATION_TABS.map((tab) => (
+              {CLASSIFICATION_TABS.filter((tab) => tab.value !== "updating" || Number(customerWorkflow.filterCounts?.updating || 0) > 0).map((tab) => (
                 <FilterTabButton
                   key={tab.value}
                   tab={tab}
@@ -3032,7 +3032,7 @@ function hasStandardRuleTaxTreatment(row = {}) {
   return classificationBucket(row) === "auto_classified" || isStandardRuleProposal(row);
 }
 
-function buildCustomerDeductionsWorkflow(rows = [], projection = null) {
+function buildCustomerDeductionsWorkflow(rows = [], projection = null, workspaceProjection = null) {
   const lifecycle = projection || buildTaxDeductionsLifecycleProjection({ rows });
   const counts = lifecycle.counts || {};
   const outcome = (name) => Number(counts[name] || 0);
@@ -3045,6 +3045,10 @@ function buildCustomerDeductionsWorkflow(rows = [], projection = null) {
   const ownerCounts = Object.values(TAX_ACTION_OWNERS).reduce((acc, owner) => ({ ...acc, [owner]: 0 }), {});
   for (const entry of lifecycle.entries || []) ownerCounts[entry.actionOwner] = Number(ownerCounts[entry.actionOwner] || 0) + 1;
   const followUpCount = ownerCounts.bookkeeping_review_required + ownerCounts.bizzi_tax_mapping_required + ownerCounts.professional_review_required + ownerCounts.terminal_system_failure;
+  const persistedTreatmentCounts = workspaceProjection?.projectionVersion === "tax-workspace-v2" ? workspaceProjection.treatmentCounts || {} : null;
+  const persistedOwnerCounts = workspaceProjection?.projectionVersion === "tax-workspace-v2" ? workspaceProjection.actionOwnerCounts || {} : null;
+  const persistedOwner = (name) => Number(persistedOwnerCounts?.[name] || 0);
+  const persistedFollowUpCount = persistedOwner("bookkeeping_review_required") + persistedOwner("bizzi_tax_mapping_required") + persistedOwner("professional_review_required") + persistedOwner("terminal_system_failure");
   return {
     lifecycle,
     reviewedCount,
@@ -3059,10 +3063,12 @@ function buildCustomerDeductionsWorkflow(rows = [], projection = null) {
     followUpCount,
     ownerCounts,
     filterCounts: {
-      reviewed: reviewedCount,
-      needs_answer: ownerCounts.customer_fact_required,
-      follow_up: followUpCount,
-      updating: ownerCounts.system_processing + ownerCounts.system_retry,
+      auto_classified: persistedTreatmentCounts ? Number(persistedTreatmentCounts.estimated || 0) : standardRuleAppliedCount + standardRuleEstimatedNoActionCount,
+      reviewed: persistedTreatmentCounts ? Number(persistedTreatmentCounts.reviewed || 0) : reviewedCount,
+      needs_answer: persistedOwnerCounts ? persistedOwner("customer_fact_required") : ownerCounts.customer_fact_required,
+      follow_up: persistedOwnerCounts ? persistedFollowUpCount : followUpCount,
+      outside_deductions: workspaceProjection?.projectionVersion === "tax-workspace-v2" ? Number(workspaceProjection.outsideDeductionsCount || 0) : outcome(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.OUTSIDE_DEDUCTIONS),
+      updating: persistedOwnerCounts ? persistedOwner("system_processing") + persistedOwner("system_retry") : ownerCounts.system_processing + ownerCounts.system_retry,
     },
     outsideDeductionsCount: outcome(TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.OUTSIDE_DEDUCTIONS),
   };
