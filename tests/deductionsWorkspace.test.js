@@ -852,6 +852,19 @@ test("persisted matrix drill-down preserves signed totals and opens a localized 
   assert.match(html, /Loading the transactions for this total/);
 });
 
+test("persisted matrix modal selection survives matrix recomputation before and after detail commit", async () => {
+  const { preserveProjectionDrilldownSelection } = await loadTaxDashboardInternals();
+  const pending = {
+    account: { key: "tax-category:business_meals" },
+    month: { key: "2026-06" },
+    cell: { transactions: [], selectedAuthority: "needs_input" },
+    drilldownScope: { cacheKey: "business:2026:projection:business_meals:2026-06:needs_input" },
+  };
+  const loaded = { ...pending, cell: { ...pending.cell, transactions: [{ id: "txn-1" }] } };
+  assert.equal(preserveProjectionDrilldownSelection(pending), pending);
+  assert.equal(preserveProjectionDrilldownSelection(loaded), loaded);
+});
+
 test("persisted matrix drill-down resolves the exact category, month, and authority population", async () => {
   const { resolvePersistedMatrixDrilldown } = await loadTaxDashboardInternals();
   const context = {

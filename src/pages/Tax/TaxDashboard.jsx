@@ -710,7 +710,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
       reconcilePersistedMatrixDrilldown({ transactions, cell, authority });
       if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted) return;
       matrixCellCacheRef.current.set(cacheKey, transactions);
-      setSelectedCell(buildMatrixCellSelection({ account, month, cell, authority, transactions }));
+      setSelectedCell(buildPendingMatrixCellSelection({ account, month, cell, authority, transactions, cacheKey }));
       setMatrixDrilldown({ loading: false, error: null });
     } catch (error) {
       if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted) return;
@@ -769,6 +769,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     setSelectedCell((current) => {
       if (!current) return current;
       if (current.cell?.selectedAuthority === "vehicle_method_group") return current;
+      if (preserveProjectionDrilldownSelection(current)) return current;
       const account = matrix.accounts.find((item) => item.key === current.account?.key);
       const month = matrix.months.find((item) => item.key === current.month?.key);
       const cell = account && month ? account.months?.[month.key] : null;
@@ -2067,6 +2068,10 @@ function buildPendingMatrixCellSelection({ account, month, cell, authority, tran
       selectedDisplayAmount: matrixAuthorityDisplayAmount(cell, authority),
     },
   };
+}
+
+function preserveProjectionDrilldownSelection(selection) {
+  return selection?.drilldownScope ? selection : null;
 }
 
 function buildMatrixCellSelection({ account, month, cell, authority, transactions }) {
@@ -5853,6 +5858,7 @@ export const __TaxDashboardTestInternals = {
   matrixTransactionsForAuthority,
   reconcilePersistedMatrixDrilldown,
   resolvePersistedMatrixDrilldown,
+  preserveProjectionDrilldownSelection,
   customerQuestionActionLabel,
   customerQuestionPreview,
   customerQuestionSummaryText,
