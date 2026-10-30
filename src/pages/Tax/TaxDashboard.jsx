@@ -2376,8 +2376,8 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
                 />
               ) : null}
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold text-white/78">{row.vendor || "Transaction"}</span>
-                <span className="block truncate text-xs text-white/42">{formatDateLocal(row.date)} · {formatCurrencyLocal(row.amount)} · {accountName}</span>
+                <span className="block truncate text-sm font-semibold text-white/78">{row.vendor || row.description || "Vendor unavailable"}</span>
+                <span className="block truncate text-xs text-white/42">{row.date ? formatDateLocal(row.date) : "Date unavailable"} · {Number.isFinite(row.signedAmount) ? formatCurrencyLocal(row.signedAmount) : "Amount unavailable"} · {row.qboAccountName || accountName}</span>
               </span>
               <span className="shrink-0 text-right text-xs text-white/54">
                 {showExceptions && isException ? "Personal — unchanged" : treatment}

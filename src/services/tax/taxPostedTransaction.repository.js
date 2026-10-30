@@ -141,6 +141,43 @@ export async function listTaxPostingSourceRows({
   return rows.sort(compareTaxRows);
 }
 
+// Bounded, tenant/year-scoped hydration for an already-authoritative population.
+// Callers must still reconcile the returned identities before exposing data.
+export async function listTaxPostingSourceRowsByIds({ supabase, businessId, taxYear, transactionIds } = {}) {
+  if (!supabase) throw new Error("Supabase client required");
+  if (!businessId) throw validationError("missing_business_id", "businessId is required.");
+  const range = resolveDateRange({ taxYear });
+  const ids = (transactionIds || []).map(String);
+  const uniqueIds = [...new Set(ids)];
+  if (!ids.length || uniqueIds.length !== ids.length) {
+    throw dataUnavailableError("The Tax question transaction population is unavailable.", { reason: "invalid_question_membership" });
+  }
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const bankRows = [];
+  for (const chunk of chunks(uniqueIds, CHUNK_SIZE)) {
+    let query = supabase.from("bank_transactions").select(BANK_SELECT)
+      .eq("business_id", businessId)
+      .gte("date", range.dateFrom)
+      .lte("date", range.dateTo)
+      .eq("is_archived", false)
+      .eq("pending", false)
+      .in("id", chunk);
+    query = applyActiveBookkeepingScope(query, bookkeepingStartDate);
+    const { data, error } = await query;
+    if (error) throw error;
+    bankRows.push(...(data || []));
+  }
+  const returnedIds = bankRows.map((row) => String(row.id));
+  if (new Set(returnedIds).size !== uniqueIds.length || returnedIds.some((id) => !uniqueIds.includes(id))) {
+    throw dataUnavailableError("The Tax question transaction population is unavailable.", { reason: "question_source_population_mismatch" });
+  }
+  const rows = (await hydrateRows({ supabase, businessId, bankRows })).filter((row) => row.isEligible);
+  if (rows.length !== uniqueIds.length || rows.some((row) => !uniqueIds.includes(String(row.transactionId)))) {
+    throw dataUnavailableError("The Tax question transaction population is unavailable.", { reason: "question_hydration_incomplete" });
+  }
+  return rows.sort(compareTaxRows);
+}
+
 export async function listUnclassifiedPostedTransactions({ supabase, businessId, taxYear, limit = DEFAULT_LIMIT, offset = 0, cursor } = {}) {
   const year = requireTaxYear(taxYear);
   const snapshot = await getTaxClassificationSourceSnapshot({ supabase, businessId, taxYear: year });

@@ -51,7 +51,12 @@ test("account-scoped vehicle question remains actionable without a vehicle profi
     group_id: identity.id,
     decision_type: "vehicle_method",
     expires_at: "2026-10-30T12:05:00.000Z",
-  }, [GAS]);
+  }, [GAS], new Map([[GAS.transaction_id, {
+    transactionId: GAS.transaction_id, date: "2026-07-14", description: "Fuel purchase", merchantName: "Fuel merchant",
+    counterpartyName: null, signedAmount: GAS.book_amount, qboAccountId: GAS.source_qbo_account_id,
+    qboAccountName: GAS.source_qbo_account_name, taxCategory: GAS.tax_category,
+    classificationStatus: GAS.classification_status, requiresReview: GAS.requires_review,
+  }]]));
   assert.equal(preview.actionableCount, 1, "the authoritative preview resolves without vehicle identity");
 
   assert.deepEqual(previewTestables.treatmentForAnswer(GAS, {

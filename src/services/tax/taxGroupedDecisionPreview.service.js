@@ -7,6 +7,8 @@ import { buildGroupedDecisionManifest, compareGroupedDecisionManifests, fingerpr
 import { conflictError, forbiddenBusinessError, notFoundError, validationError } from "./taxErrors.js";
 import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
 import { vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
+import { listTaxPostingSourceRowsByIds } from "./taxPostedTransaction.repository.js";
+import { safeTaxTransactionSummary } from "./taxDeductionsApi.service.js";
 
 const DEFAULT_PREVIEW_TTL_SECONDS = 10 * 60;
 
@@ -40,7 +42,15 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
   };
   const { error } = await supabase.from("tax_grouped_deduction_decision_previews").insert(record);
   if (error) throw error;
-  return customerPreview(record, rows);
+  const sourceRows = actionable.length ? await listTaxPostingSourceRowsByIds({
+    supabase, businessId, taxYear, transactionIds: record.actionable_transaction_ids,
+  }) : [];
+  const classificationById = new Map(actionable.map((row) => [String(row.transaction_id), row]));
+  const summaries = new Map(sourceRows.map((source) => {
+    const id = String(source.transactionId);
+    return [id, questionTransactionSummary(safeTaxTransactionSummary(source, classificationById.get(id)))];
+  }));
+  return customerPreview(record, rows, summaries);
 }
 
 export async function confirmGroupedDecisionPreview({ supabase, businessId, taxYear, input = {}, actor = {}, now = new Date() } = {}) {
@@ -141,14 +151,23 @@ function treatmentForAnswer(row, input) {
   return { taxCategory: row.tax_category, deductibilityStatus: row.deductibility_status || (percent === 100 ? "fully_deductible" : "partially_deductible"), deductiblePercent: percent, taxTreatment: row.tax_treatment || (String(row.tax_category).includes("meal") ? "business_meals_business_purpose_confirmed" : "business_purpose_confirmed") };
 }
 
-function customerPreview(record, rows) {
+function customerPreview(record, rows, summaries = null) {
   const actionable = rows.filter(isActionable);
+  const actionableIds = actionable.map((row) => String(row.transaction_id));
+  if (actionableIds.length && (!(summaries instanceof Map) || summaries.size !== actionableIds.length || actionableIds.some((id) => !summaries.has(id)))) {
+    throw conflictError("grouped_decision_preview_hydration_incomplete", "These transaction details could not be loaded completely.");
+  }
+  const transactions = actionableIds.map((id) => summaries.get(id)).sort(compareQuestionTransactions);
+  const signedGrossAmountCents = actionable.reduce((sum, row) => sum + Math.round(Number(row.book_amount || 0) * 100), 0);
+  if (transactions.reduce((sum, row) => sum + Math.round(Number(row.signedAmount) * 100), 0) !== signedGrossAmountCents) {
+    throw conflictError("grouped_decision_preview_amount_mismatch", "These transaction details no longer match this question.");
+  }
   return { previewVersion: "tax-grouped-decision-preview-v1", previewId: record.id, canonicalBusinessId: record.business_id,
     taxYear: Number(record.tax_year), groupId: record.group_id, decisionType: record.decision_type, expiresAt: record.expires_at,
     totalGroupCount: rows.length, actionableCount: actionable.length, previouslyReviewedCount: rows.length - actionable.length,
-    grossAmountCents: actionable.reduce((sum, row) => sum + Math.abs(Math.round(Number(row.book_amount || 0) * 100)), 0),
-    estimatedDeductionCents: actionable.reduce((sum, row) => sum + Math.round(Math.abs(Number(row.book_amount || 0) * 100) * Number(row.deductible_percent || 0) / 100), 0),
-    transactions: actionable.map((row) => ({ transactionId: String(row.transaction_id), grossAmountCents: Math.abs(Math.round(Number(row.book_amount || 0) * 100)) })),
+    grossAmountCents: signedGrossAmountCents,
+    estimatedDeductionCents: actionable.reduce((sum, row) => sum + Math.round(Number(row.book_amount || 0) * 100 * Number(row.deductible_percent || 0) / 100), 0),
+    transactions,
     proposedTreatment: actionable[0] ? {
       taxCategory: actionable[0].tax_category,
       taxTreatment: actionable[0].tax_treatment,
@@ -161,6 +180,30 @@ function customerPreview(record, rows) {
     },
     futureDefaultScope: { accountScoped: true, taxYear: record.tax_year },
   };
+}
+
+function questionTransactionSummary(row) {
+  return {
+    transactionId: row.transactionId,
+    date: row.date,
+    description: row.description,
+    merchantName: row.merchantName,
+    counterpartyName: row.counterpartyName,
+    signedAmount: row.signedAmount,
+    qboAccountId: row.qboAccountId,
+    qboAccountName: row.qboAccountName,
+    taxCategory: row.taxCategory,
+    taxTreatment: row.taxTreatment,
+    deductibilityStatus: row.deductibilityStatus,
+    deductiblePercent: row.deductiblePercent,
+    classificationStatus: row.classificationStatus,
+    requiresReview: row.requiresReview,
+    override: row.override,
+  };
+}
+
+function compareQuestionTransactions(a, b) {
+  return String(b.date || "").localeCompare(String(a.date || "")) || String(a.transactionId).localeCompare(String(b.transactionId));
 }
 
 function requireCustomerActor(actor) { if (!actor.userId || actor.source !== "user" || actor.tenantMode === "admin_view") throw forbiddenBusinessError("Customer authorization is required for this decision."); }

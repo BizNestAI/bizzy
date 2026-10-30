@@ -568,6 +568,16 @@ export async function previewGroupedTaxDeductionDecision({ businessId, year, gro
 }
 
 function validateGroupedDecisionPreview(preview, { businessId, year, groupId, requestId = null } = {}) {
+  const transactionIds = Array.isArray(preview?.transactions) ? preview.transactions.map((row) => String(row?.transactionId || "")) : [];
+  const transactionsValid = Array.isArray(preview?.transactions)
+    && preview.transactions.every((row) => row
+      && typeof row.transactionId === "string" && row.transactionId.length > 0
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(row.date || ""))
+      && Number.isFinite(Number(row.signedAmount))
+      && typeof row.qboAccountId === "string" && row.qboAccountId.length > 0
+      && typeof row.taxCategory === "string" && row.taxCategory.length > 0)
+    && new Set(transactionIds).size === transactionIds.length
+    && preview.transactions.reduce((sum, row) => sum + Math.round(Number(row.signedAmount) * 100), 0) === preview?.grossAmountCents;
   const valid = preview
     && preview.previewVersion === "tax-grouped-decision-preview-v1"
     && typeof preview.previewId === "string"
@@ -577,7 +587,7 @@ function validateGroupedDecisionPreview(preview, { businessId, year, groupId, re
     && String(preview.groupId || "") === String(groupId || "")
     && Number.isInteger(preview.actionableCount)
     && preview.actionableCount >= 0
-    && Array.isArray(preview.transactions)
+    && transactionsValid
     && preview.transactions.length === preview.actionableCount
     && (preview.actionableCount === 0 || (preview.proposedTreatment && typeof preview.proposedTreatment === "object"));
   if (valid) return preview;

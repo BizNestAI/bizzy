@@ -179,7 +179,7 @@ export async function listProjectionEvaluatedTransactions({
   };
 }
 
-function projectionEvaluatedTransactionRow(source = {}, classification = null) {
+export function safeTaxTransactionSummary(source = {}, classification = null) {
   const signedAmount = Number(classification?.book_amount ?? source.signedAmount ?? source.signed_amount ?? 0);
   const transactionId = String(source.transactionId);
   return {
@@ -222,6 +222,10 @@ function projectionEvaluatedTransactionRow(source = {}, classification = null) {
     },
     updatedAt: classification?.updated_at || null,
   };
+}
+
+function projectionEvaluatedTransactionRow(source = {}, classification = null) {
+  return safeTaxTransactionSummary(source, classification);
 }
 
 function compareProjectionSourceRows(a, b) {

@@ -14,6 +14,16 @@ const BASE = {
   metadata: { customer_facts: { business_purpose: null }, classified_at: "old", classification_run_id: "run-1" },
 };
 
+function summariesFor(rows) {
+  return new Map(rows.map((row, index) => [String(row.transaction_id), {
+    transactionId: String(row.transaction_id), date: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
+    description: `Authoritative transaction ${index + 1}`, merchantName: `Merchant ${index + 1}`, counterpartyName: null,
+    signedAmount: Number(row.book_amount), qboAccountId: row.source_qbo_account_id,
+    qboAccountName: row.source_qbo_account_name || "Meals", taxCategory: row.tax_category,
+    classificationStatus: row.classification_status, requiresReview: row.requires_review,
+  }]));
+}
+
 test("server semantic manifest is deterministic and ignores operational ordering/timestamps", () => {
   const first = buildGroupedDecisionManifest({ businessId: "business-1", taxYear: 2026, rows: [BASE, { ...BASE, transaction_id: "txn-2" }] });
   const second = buildGroupedDecisionManifest({ businessId: "business-1", taxYear: 2026, rows: [{ ...BASE, transaction_id: "txn-2", metadata: { ...BASE.metadata, classified_at: "new", classification_run_id: "run-2" } }, BASE] });
@@ -69,7 +79,7 @@ test("preview response carries a bounded deployment contract and canonical scope
     group_id: "decision:meals",
     decision_type: "business_use_confirmation",
     expires_at: "2026-10-23T12:05:00.000Z",
-  }, [{ ...BASE }]);
+  }, [{ ...BASE }], summariesFor([BASE]));
   assert.equal(preview.previewVersion, "tax-grouped-decision-preview-v1");
   assert.equal(preview.canonicalBusinessId, "business-1");
   assert.equal(preview.taxYear, 2026);
@@ -77,15 +87,96 @@ test("preview response carries a bounded deployment contract and canonical scope
   assert.equal(preview.actionableCount, 1);
 });
 
+test("question preview serializes real authoritative transaction summaries instead of placeholders", () => {
+  const preview = previewTestables.customerPreview({
+    id: "preview-phone",
+    business_id: "business-1",
+    tax_year: 2026,
+    group_id: "decision:phone",
+    decision_type: "business_use_percent",
+    expires_at: "2026-10-23T12:05:00.000Z",
+  }, [{ ...BASE, transaction_id: "phone-1", book_amount: 41.17 }], new Map([["phone-1", {
+    transactionId: "phone-1",
+    date: "2026-07-14",
+    description: "Monthly wireless service",
+    merchantName: "Real Wireless",
+    counterpartyName: null,
+    signedAmount: 41.17,
+    qboAccountId: "qbo-phone",
+    qboAccountName: "Phone Bill",
+    taxCategory: "utilities_phone",
+    classificationStatus: "needs_review",
+    requiresReview: true,
+  }]]));
+  assert.deepEqual(preview.transactions[0], {
+    transactionId: "phone-1",
+    date: "2026-07-14",
+    description: "Monthly wireless service",
+    merchantName: "Real Wireless",
+    counterpartyName: null,
+    signedAmount: 41.17,
+    qboAccountId: "qbo-phone",
+    qboAccountName: "Phone Bill",
+    taxCategory: "utilities_phone",
+    classificationStatus: "needs_review",
+    requiresReview: true,
+  });
+  assert.equal(preview.grossAmountCents, 4117);
+});
+
 test("preview identity and population merge equivalent classifier rule versions", () => {
   const v3 = { ...BASE, transaction_id: "txn-v3", rule_version: "bizzi-gl-2026-v3" };
   const v4 = { ...BASE, transaction_id: "txn-v4", rule_version: "bizzi-gl-2026-v4" };
   const groupId = previewTestables.decisionIdentity({ businessId: "business-1", taxYear: 2026, row: v3 });
   assert.equal(groupId, previewTestables.decisionIdentity({ businessId: "business-1", taxYear: 2026, row: v4 }));
-  const preview = previewTestables.customerPreview({ id: "preview-merged", business_id: "business-1", tax_year: 2026, group_id: groupId, decision_type: "business_use_confirmation", expires_at: "2026-10-23T12:05:00.000Z" }, [v3, v4]);
+  const preview = previewTestables.customerPreview({ id: "preview-merged", business_id: "business-1", tax_year: 2026, group_id: groupId, decision_type: "business_use_confirmation", expires_at: "2026-10-23T12:05:00.000Z" }, [v3, v4], summariesFor([v3, v4]));
   assert.equal(preview.totalGroupCount, 2);
   assert.equal(preview.actionableCount, 2);
   assert.equal(preview.transactions.length, 2);
+});
+
+test("incomplete question hydration fails closed rather than emitting placeholder rows", () => {
+  assert.throws(() => previewTestables.customerPreview({
+    id: "preview-incomplete", business_id: "business-1", tax_year: 2026, group_id: "decision:meals",
+    decision_type: "business_use_confirmation", expires_at: "2026-10-23T12:05:00.000Z",
+  }, [BASE], new Map()), (error) => error.code === "grouped_decision_preview_hydration_incomplete");
+});
+
+for (const [label, decisionType, count] of [
+  ["Phone Bill", "business_use_percent", 5],
+  ["Electric", "business_use_percent", 4],
+  ["Utilities", "business_use_percent", 2],
+  ["Gas", "vehicle_method", 61],
+  ["Meals", "business_use_confirmation", 171],
+  ["Parking", "business_use_confirmation", 61],
+  ["Lyft/Uber", "business_use_confirmation", 8],
+  ["Transportation", "business_use_confirmation", 3],
+]) test(`${label} preview exposes a complete unique signed actionable population`, () => {
+  const rows = Array.from({ length: count }, (_, index) => ({
+    ...BASE,
+    transaction_id: `${label.toLowerCase().replace(/\W+/g, "-")}-${index}`,
+    book_amount: index === 0 ? -2.5 : 10 + index / 100,
+  }));
+  const preview = previewTestables.customerPreview({
+    id: `preview-${label}`, business_id: "business-1", tax_year: 2026, group_id: `decision:${label}`,
+    decision_type: decisionType, expires_at: "2026-10-23T12:05:00.000Z",
+  }, rows, summariesFor(rows));
+  assert.equal(preview.transactions.length, count);
+  assert.equal(new Set(preview.transactions.map((row) => row.transactionId)).size, count);
+  assert.equal(preview.transactions.reduce((sum, row) => sum + Math.round(row.signedAmount * 100), 0), preview.grossAmountCents);
+  assert.ok(preview.transactions.every((row) => row.date !== "2026-12-31" && row.merchantName && row.signedAmount !== 0));
+});
+
+test("reviewed and protected members stay out of the actionable transaction summaries", () => {
+  const actionable = { ...BASE, transaction_id: "actionable" };
+  const protectedRow = { ...BASE, transaction_id: "protected", classification_status: "user_confirmed", requires_review: false, user_override: true };
+  const preview = previewTestables.customerPreview({
+    id: "preview-authority", business_id: "business-1", tax_year: 2026, group_id: "decision:authority",
+    decision_type: "business_use_confirmation", expires_at: "2026-10-23T12:05:00.000Z",
+  }, [actionable, protectedRow], summariesFor([actionable]));
+  assert.equal(preview.totalGroupCount, 2);
+  assert.equal(preview.actionableCount, 1);
+  assert.deepEqual(preview.transactions.map((row) => row.transactionId), ["actionable"]);
 });
 
 test("technical preview failure cannot be converted to resolved zero-population UI", () => {
