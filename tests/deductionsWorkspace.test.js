@@ -799,7 +799,7 @@ test("Tax deduction summary uses the bridge population, keeps workflow counts se
   assert.match(zeroQuestionTabs, /aria-label="Questions for you, no questions requiring an answer"/);
 });
 
-test("persisted v2 monthly aggregates render treatment amounts while empty months remain dashes", async () => {
+test("persisted v2 monthly aggregates are drill-down buttons while empty months remain dashes", async () => {
   const { buildPersistedWorkspaceMatrix, MatrixCell } = await loadTaxDashboardInternals();
   const matrix = buildPersistedWorkspaceMatrix({
     matrixIncludedCount: 3,
@@ -814,7 +814,7 @@ test("persisted v2 monthly aggregates render treatment amounts while empty month
   const account = matrix.accounts[0];
   const may = matrix.months.find((month) => month.key === "2026-05");
   const january = matrix.months.find((month) => month.key === "2026-01");
-  const mayHtml = renderToStaticMarkup(React.createElement(MatrixCell, { account, month: may, cell: account.months[may.key] }));
+  const mayHtml = renderToStaticMarkup(React.createElement(MatrixCell, { account, month: may, cell: account.months[may.key], onOpenPersistedCell: () => {} }));
   const januaryHtml = renderToStaticMarkup(React.createElement(MatrixCell, { account, month: january, cell: account.months[january.key] }));
   assert.match(mayHtml, /\$25/);
   assert.match(mayHtml, /Reviewed deduction/);
@@ -822,7 +822,31 @@ test("persisted v2 monthly aggregates render treatment amounts while empty month
   assert.match(mayHtml, /Estimated deduction/);
   assert.match(mayHtml, /\$100/);
   assert.match(mayHtml, /Expenses awaiting input/);
+  assert.equal((mayHtml.match(/<button/g) || []).length, 3);
+  assert.doesNotMatch(mayHtml, /disabled=""/);
   assert.match(januaryHtml, /aria-label="No activity"/);
+});
+
+test("persisted matrix drill-down resolves the exact category, month, and authority population", async () => {
+  const { resolvePersistedMatrixDrilldown } = await loadTaxDashboardInternals();
+  const context = {
+    account: { id: "business_meals" },
+    month: { key: "2026-05" },
+    cell: { reviewedTransactionCount: 1 },
+    authority: "reviewed",
+    year: 2026,
+  };
+  const rows = [
+    { id: "included", date: "2026-05-02", taxCategory: "business_meals", status: "user_confirmed", amount: 25 },
+    { id: "wrong-month", date: "2026-06-02", taxCategory: "business_meals", status: "user_confirmed", amount: 25 },
+    { id: "wrong-category", date: "2026-05-02", taxCategory: "utilities", status: "user_confirmed", amount: 25 },
+    { id: "wrong-authority", date: "2026-05-02", taxCategory: "business_meals", status: "auto_classified", amount: 25 },
+  ];
+  assert.deepEqual(resolvePersistedMatrixDrilldown({ ...context, rows }).map((row) => row.id), ["included"]);
+  assert.throws(
+    () => resolvePersistedMatrixDrilldown({ ...context, rows: rows.filter((row) => row.id !== "included") }),
+    /saved total no longer matches/
+  );
 });
 
 test("duplicate-named projected questions remain distinct and receive safe scope subtitles", async () => {
