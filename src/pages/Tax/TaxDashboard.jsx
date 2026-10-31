@@ -34,6 +34,7 @@ import {
 } from "../../services/tax/taxDeductionsLifecycleProjection.js";
 import { buildTaxEvaluationNotice } from "../../services/tax/taxEvaluationNoticeProjection.js";
 import { resolveTaxWorkspacePrerequisites } from "./taxWorkspacePrerequisites.js";
+import { showTaxDecisionSuccess } from "./taxDecisionToast.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
@@ -696,10 +697,19 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     setSelectedCell(null);
     setMatrixDrilldown({ loading: false, error: null });
   }, [businessId, year, deductions.workspaceProjectionId]);
+  useEffect(() => {
+    if (!deductionsUpdating) return;
+    matrixCellRequestRef.current.controller?.abort();
+    matrixCellRequestRef.current = { sequence: matrixCellRequestRef.current.sequence + 1, controller: null };
+    matrixCellCacheRef.current.clear();
+    setSelectedCell(null);
+    setMatrixDrilldown({ loading: false, error: null });
+  }, [deductionsUpdating]);
   const loadPersistedMatrixCell = async ({ account, month, cell, authority, cacheKey, refresh = false }) => {
     matrixCellRequestRef.current.controller?.abort();
     const controller = new AbortController();
     const sequence = matrixCellRequestRef.current.sequence + 1;
+    const requestedProjectionId = deductions.workspaceProjectionId;
     matrixCellRequestRef.current = { sequence, controller };
     setMatrixDrilldown({ loading: true, error: null });
     try {
@@ -709,7 +719,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
       );
       const transactions = normalizeRows(detail?.rows).map(mapDeductionTransactionRow).map(normalizeClassificationWorkspaceRow).filter(Boolean);
       reconcilePersistedMatrixDrilldown({ transactions, cell, authority });
-      if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted) return;
+      if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted || !deductions.isCurrentWorkspaceProjection(requestedProjectionId)) return;
       matrixCellCacheRef.current.set(cacheKey, transactions);
       setSelectedCell(buildPendingMatrixCellSelection({ account, month, cell, authority, transactions, cacheKey }));
       setMatrixDrilldown({ loading: false, error: null });
@@ -719,6 +729,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     }
   };
   const openPersistedMatrixCell = ({ account, month, cell, authority }) => {
+    if (deductionsUpdating) return;
     const cacheKey = `${businessId}:${year}:${deductions.workspaceProjectionId}:${account.id}:${month.key}:${authority}`;
     const cached = matrixCellCacheRef.current.get(cacheKey);
     setSelectedCell(buildPendingMatrixCellSelection({ account, month, cell, authority, transactions: cached || [], cacheKey }));
@@ -833,7 +844,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
               const refreshed = await deductions.refresh();
               if (refreshed?.overview) {
                 setDecisionRefreshFailed(false);
-                setDecisionNotice("Decision saved. Workspace refreshed.");
+                setDecisionNotice(null);
+                showTaxDecisionSuccess("Decision saved. Workspace refreshed.");
               }
             } : () => setDecisionNotice(null)}
             className="shrink-0 rounded-full px-1.5 py-0.5 text-xs font-semibold text-emerald-50/78 hover:bg-emerald-100/10 hover:text-emerald-50"
@@ -908,7 +920,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
               onSelectCell={setSelectedCell}
               onOpenDecision={setReviewDecision}
               decisionGroups={lifecycleProjection.activeDecisionGroups}
-              onOpenPersistedCell={openPersistedMatrixCell}
+              onOpenPersistedCell={deductionsUpdating ? null : openPersistedMatrixCell}
             />
           ) : null}
           <div ref={rulesPanelRef} tabIndex={-1} className="scroll-mt-6 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-300/35">
@@ -1011,10 +1023,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           });
           const savedCount = Number(result?.appliedCount || 0) + Number(result?.alreadyMatchingCount || 0);
           const refreshFailed = result?.workspaceRefresh?.status !== "updated";
+          const successMessage = `${reviewDecision.group.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}.`;
           setDecisionRefreshFailed(refreshFailed);
-          setDecisionNotice(refreshFailed
-            ? `${reviewDecision.group.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}; workspace refresh failed.`
-            : `${reviewDecision.group.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}.`);
+          setDecisionNotice(refreshFailed ? `${successMessage.slice(0, -1)}; workspace refresh failed.` : null);
+          if (!refreshFailed) showTaxDecisionSuccess(successMessage, command?.idempotencyKey);
           setReviewDecision(null);
           return result;
         }}
@@ -1024,10 +1036,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
             const applied = Number(operation.result.appliedCount || 0) + Number(operation.result.alreadyMatchingCount || 0);
             const savedCount = applied || operation.result.targetTransactionIds?.length || 0;
             const refreshFailed = operation.result?.workspaceRefresh?.status !== "updated";
+            const successMessage = `${reviewDecision?.group?.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}.`;
             setDecisionRefreshFailed(refreshFailed);
-            setDecisionNotice(refreshFailed
-              ? `${reviewDecision?.group?.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}; workspace refresh failed.`
-              : `${reviewDecision?.group?.qboAccountName || "Tax"} decision saved for ${savedCount} transaction${savedCount === 1 ? "" : "s"}.`);
+            setDecisionNotice(refreshFailed ? `${successMessage.slice(0, -1)}; workspace refresh failed.` : null);
+            if (!refreshFailed) showTaxDecisionSuccess(successMessage, idempotencyKey);
             setReviewDecision(null);
           }
           return operation;

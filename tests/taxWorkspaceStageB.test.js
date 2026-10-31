@@ -72,7 +72,8 @@ test("bounded requests and sequence guards protect hard refresh, SPA return, and
   assert.match(hook, /if \(request !== seq\.current\) return null/);
   assert.match(hook, /if \(questionsRetryInFlight\.current\) return questionsRetryInFlight\.current/);
   assert.match(hook, /return \(\) => controller\.abort\(\)/);
-  assert.match(hook, /setWorkspaceProjection\(null\)/);
+  assert.match(hook, /setWorkspaceSnapshot\(emptyWorkspace\)/);
+  assert.match(hook, /workspaceSnapshotRef\.current = emptyWorkspace/);
   assert.match(hook, /if \(!overviewRef\.current\) setLoading\(true\)/);
 });
 

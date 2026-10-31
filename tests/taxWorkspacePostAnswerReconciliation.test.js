@@ -445,7 +445,7 @@ function productionSparseOverlayFixture({ missingId = "missing-nonactionable", i
 
 test("saved decision with a failed workspace refresh remains saved and exposes a retry", () => {
   const dashboard = read("src/pages/Tax/TaxDashboard.jsx");
-  assert.match(dashboard, /decision saved[^\n]*workspace refresh failed/i);
+  assert.match(dashboard, /successMessage\.slice\(0, -1\)[^\n]*workspace refresh failed/);
   assert.match(dashboard, /Retry workspace refresh/);
 });
 

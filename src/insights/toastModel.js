@@ -1,4 +1,5 @@
 export const TOAST_DEFAULT_TIMEOUT = 4500;
+export const TOAST_VISIBLE_LIMIT = 3;
 export const TOAST_SEVERITIES = new Set(["success", "warning", "error", "info"]);
 
 export function normalizeToast(detail = {}, id = "toast") {
@@ -15,7 +16,7 @@ export function normalizeToast(detail = {}, id = "toast") {
     title: detail.title || "Notice",
     description: detail.description ?? detail.body ?? "",
     action,
-    timeout: detail.timeout ?? TOAST_DEFAULT_TIMEOUT,
+    timeout: detail.timeout ?? (severity === "error" ? 0 : TOAST_DEFAULT_TIMEOUT),
     dedupeKey: detail.dedupeKey || [severity, detail.operationId, detail.transactionId, detail.title, detail.description ?? detail.body].filter(Boolean).join(":"),
   };
 }
@@ -53,5 +54,9 @@ export function createToastCountdown({ timeout, onElapsed, now = Date.now, setTi
 }
 
 export function appendUniqueToast(current, toast) {
-  return current.some((item) => item.dedupeKey === toast.dedupeKey) ? current : [...current, toast];
+  if (current.some((item) => item.dedupeKey === toast.dedupeKey)) return current;
+  const next = [...current, toast];
+  const persistent = next.filter((item) => Number(item.timeout) <= 0);
+  const timed = next.filter((item) => Number(item.timeout) > 0);
+  return [...persistent, ...timed.slice(-Math.max(0, TOAST_VISIBLE_LIMIT - persistent.length))];
 }

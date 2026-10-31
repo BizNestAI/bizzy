@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   TOAST_DEFAULT_TIMEOUT,
+  TOAST_VISIBLE_LIMIT,
   appendUniqueToast,
   createToastCountdown,
   normalizeToast,
@@ -38,6 +39,21 @@ test("duplicate completed operations are suppressed", () => {
   const duplicate = normalizeToast({ title: "Done again", dedupeKey: "operation:1" }, "two");
   const current = appendUniqueToast([], first);
   assert.strictEqual(appendUniqueToast(current, duplicate), current);
+});
+
+test("toast stacking is capped and errors remain persistent", () => {
+  let current = [];
+  for (let index = 0; index < TOAST_VISIBLE_LIMIT + 2; index += 1) {
+    current = appendUniqueToast(current, normalizeToast({ title: `Saved ${index}`, dedupeKey: `save:${index}` }, `toast-${index}`));
+  }
+  assert.equal(current.length, TOAST_VISIBLE_LIMIT);
+  assert.deepEqual(current.map((toast) => toast.title), ["Saved 2", "Saved 3", "Saved 4"]);
+  const persistentError = normalizeToast({ severity: "error", title: "Try again", dedupeKey: "error:one" }, "error-one");
+  assert.equal(persistentError.timeout, 0);
+  current = appendUniqueToast(current, persistentError);
+  current = appendUniqueToast(current, normalizeToast({ title: "Newest", dedupeKey: "save:newest" }, "newest"));
+  assert.equal(current.some((toast) => toast.id === "error-one"), true);
+  assert.equal(current.length, TOAST_VISIBLE_LIMIT);
 });
 
 test("countdown dismisses automatically and pauses while interaction is active", () => {

@@ -47,8 +47,10 @@ export function useTaxDeductions({
   const paginationKey = useMemo(() => JSON.stringify(stableObject(pagination)), [pagination]);
   const initialCachedOverview = null;
   const [overview, setOverview] = useState(initialCachedOverview);
-  const [workspaceProjection, setWorkspaceProjection] = useState(null);
-  const [workspaceProjectionId, setWorkspaceProjectionId] = useState(null);
+  const [workspaceSnapshot, setWorkspaceSnapshot] = useState({ projection: null, projectionId: null });
+  const workspaceSnapshotRef = useRef(workspaceSnapshot);
+  const workspaceProjection = workspaceSnapshot.projection;
+  const workspaceProjectionId = workspaceSnapshot.projectionId;
   const [transactions, setTransactions] = useState(null);
   const [allTransactions, setAllTransactions] = useState(null);
   const [postedTransactions, setPostedTransactions] = useState(null);
@@ -93,8 +95,9 @@ export function useTaxDeductions({
     seq.current += 1;
     const cached = null;
     setOverview(cached);
-    setWorkspaceProjection(null);
-    setWorkspaceProjectionId(null);
+    const emptyWorkspace = { projection: null, projectionId: null };
+    workspaceSnapshotRef.current = emptyWorkspace;
+    setWorkspaceSnapshot(emptyWorkspace);
     setTransactions(null);
     setAllTransactions(null);
     setPostedTransactions(null);
@@ -152,8 +155,12 @@ export function useTaxDeductions({
         if (overviewResult.status === "fulfilled") {
           const workspace = overviewResult.value?.projection;
           const compatibleOverview = overviewFromWorkspace(workspace);
-          setWorkspaceProjection(workspace);
-          setWorkspaceProjectionId(overviewResult.value?.projectionId || null);
+          const nextWorkspace = {
+            projection: workspace,
+            projectionId: overviewResult.value?.projectionId || null,
+          };
+          workspaceSnapshotRef.current = nextWorkspace;
+          setWorkspaceSnapshot(nextWorkspace);
           setRebuildPending(overviewResult.value?.state === "refreshing");
           // Initial loads may expose a verified summary while optional details
           // settle. A refresh keeps the prior completed workspace intact until
@@ -344,7 +351,11 @@ export function useTaxDeductions({
     refetch: load,
     retryTransactionDetails: (options = {}) => loadSecondaryDetails({ ...options, refresh: true }),
     retryQuestions,
-    getMatrixCellDetail: (scope, options = {}) => getTaxWorkspaceMatrixCell({ businessId, year, projectionId: workspaceProjectionId, ...scope, ...options }),
+    getMatrixCellDetail: (scope, options = {}) => {
+      const projectionId = workspaceSnapshotRef.current.projectionId;
+      return getTaxWorkspaceMatrixCell({ businessId, year, ...scope, projectionId, ...options });
+    },
+    isCurrentWorkspaceProjection: (projectionId) => String(workspaceSnapshotRef.current.projectionId || "") === String(projectionId || ""),
     refresh: (options = {}) => {
       if (refreshInFlight.current) return refreshInFlight.current;
       setRefreshing(true);
@@ -457,7 +468,13 @@ export function useTaxDeductions({
     confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal } = {}) => {
       const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal });
       applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
-      const refreshed = await load({ signal, refresh: true });
+      setRefreshing(true);
+      let refreshed;
+      try {
+        refreshed = await load({ signal, refresh: true });
+      } finally {
+        setRefreshing(false);
+      }
       return { ...result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } };
     },
     getGroupedDeductionDecisionOperation: async ({ idempotencyKey, signal } = {}) => {
@@ -470,7 +487,13 @@ export function useTaxDeductions({
           setClassificationRows,
           setDecisionRules,
         });
-        const refreshed = await load({ signal, refresh: true });
+        setRefreshing(true);
+        let refreshed;
+        try {
+          refreshed = await load({ signal, refresh: true });
+        } finally {
+          setRefreshing(false);
+        }
         return { ...operation, result: { ...operation.result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } } };
       }
       return operation;

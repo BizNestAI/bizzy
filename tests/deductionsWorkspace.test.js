@@ -490,7 +490,8 @@ test("deductions hook stages cold loading and keeps cached data visible during r
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(hook, /getTaxWorkspace\(\{ businessId, year, refresh, signal \}\)/);
-  assert.match(hook, /setWorkspaceProjection\(workspace\)/);
+  assert.match(hook, /setWorkspaceSnapshot\(nextWorkspace\)/);
+  assert.match(hook, /workspaceSnapshotRef\.current = nextWorkspace/);
   assert.match(hook, /const loadSecondaryDetails = useCallback/);
   assert.match(hook, /fetchAllPostedTransactions/);
   assert.match(hook, /getTaxClassifications/);

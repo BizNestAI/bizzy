@@ -14,12 +14,14 @@ function ToastCard({ toast, onDismiss }) {
   const variant = VARIANTS[toast.severity] || VARIANTS.info;
   const { Icon } = variant;
   const countdownRef = useRef(null);
+  const exitTimerRef = useRef(null);
   const [exiting, setExiting] = useState(false);
   const reduceMotion = shouldReduceToastMotion();
 
   const finishDismiss = useCallback(() => {
     setExiting(true);
-    window.setTimeout(() => onDismiss(toast.id), reduceMotion ? 0 : 150);
+    if (exitTimerRef.current !== null) window.clearTimeout(exitTimerRef.current);
+    exitTimerRef.current = window.setTimeout(() => onDismiss(toast.id), reduceMotion ? 0 : 150);
   }, [onDismiss, reduceMotion, toast.id]);
 
   const resume = useCallback(() => {
@@ -34,7 +36,10 @@ function ToastCard({ toast, onDismiss }) {
     const countdown = createToastCountdown({ timeout: toast.timeout, onElapsed: finishDismiss, setTimer: window.setTimeout, clearTimer: window.clearTimeout });
     countdownRef.current = countdown;
     countdown.resume();
-    return () => countdown.cancel();
+    return () => {
+      countdown.cancel();
+      if (exitTimerRef.current !== null) window.clearTimeout(exitTimerRef.current);
+    };
   }, [finishDismiss, toast.timeout]);
 
   const role = toast.severity === "error" ? "alert" : "status";
