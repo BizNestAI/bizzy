@@ -28,6 +28,14 @@ export function workspaceReadError(error) {
       { action: "retry" },
     );
   }
+  if (error instanceof TypeError || error?.name === "TypeError") {
+    return safeError(
+      "tax_workspace_internal_failure",
+      500,
+      "Your Tax workspace could not be loaded right now.",
+      { action: "retry" },
+    );
+  }
   const implementationFailure = status === 400 || status === 414 || status === 431 ||
     code === "42703" || code === "42601" || code === "22P02" || /^PGRST(?!000)/.test(code);
   if (implementationFailure) {

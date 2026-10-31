@@ -92,6 +92,7 @@ function logWorkspaceReadFailure(req, error, stageTimings) {
     message: String(error?.message || "").slice(0, 300) || null,
     details: String(error?.details || "").slice(0, 300) || null,
     hint: String(error?.hint || "").slice(0, 300) || null,
+    stack: String(error?.stack || "").slice(0, 4_000) || null,
     stages: stageTimings,
   });
 }

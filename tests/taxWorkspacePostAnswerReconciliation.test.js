@@ -10,6 +10,7 @@ import {
 import { createClient } from "@supabase/supabase-js";
 import { listTaxWorkspaceClassificationSnapshot } from "../src/services/tax/taxClassification.repository.js";
 import { workspaceReadError } from "../src/api/tax/taxWorkspaceErrors.js";
+import { sendTaxSuccess } from "../src/api/tax/taxHttp.js";
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -192,6 +193,12 @@ test("classification snapshot preserves upstream query errors, rejects invalid s
     (error) => error.code === "42703" && error.status === 400
   );
   assert.equal(workspaceReadError({ code: "42703", status: 400, message: "column does not exist" }).code, "tax_workspace_internal_failure");
+  const typeError = workspaceReadError(new TypeError("Cannot read properties of undefined (reading 'includes')"));
+  assert.deepEqual([typeError.code, typeError.status, typeError.message], [
+    "tax_workspace_internal_failure", 500, "Your Tax workspace could not be loaded right now.",
+  ]);
+  assert.equal(typeError.message.includes("includes"), false);
+  assert.match(read("src/api/tax/taxWorkspace.routes.js"), /stack: String\(error\?\.stack/);
   assert.equal(workspaceReadError({ code: "08006", status: 503, message: "connection failure" }).code, "tax_workspace_database_unavailable");
   await assert.rejects(
     listTaxWorkspaceClassificationSnapshot({ supabase: failingClient, businessId: null, taxYear: 2026 }),
@@ -303,6 +310,31 @@ test("a sparse 713-row live overlay preserves the immutable 714-member productio
   assert.equal(browserProjection.matrix.reduce((sum, row) => sum + row.transactionCount, 0), 690);
 });
 
+test("a persisted-only sparse partition survives the complete v2 route response shape", async () => {
+  const { baseline, classifications, missingId } = productionSparseOverlayFixture({ isolatedMissingPartition: true });
+  const query = {
+    select() { return this; }, eq() { return this; }, limit() { return this; },
+    then(resolve) { return Promise.resolve(resolve({ data: classifications, error: null })); },
+  };
+  const reconciled = await reconcileTaxWorkspaceProjection({
+    supabase: { from() { return query; } },
+    record: { id: "projection-sparse", source_fingerprint: baseline.sourceFingerprint, projection_data: baseline },
+    businessId: "business-a", taxYear: 2026, diagnosticLogger() {}, metricLogger() {},
+  });
+  const response = {
+    state: "complete", projectionId: "projection-sparse", projectionVersion: "tax-workspace-v2",
+    projection: publicTaxWorkspaceProjection(reconciled),
+  };
+  const serialized = JSON.stringify(response);
+  assert.doesNotThrow(() => JSON.parse(serialized));
+  assert.equal(serialized.includes("projection_baseline_fallback"), false);
+  const http = { statusCode: 200, json(body) { this.body = body; return this; } };
+  sendTaxSuccess(http, response);
+  assert.deepEqual([http.statusCode, http.body.ok, http.body.data.projection.evaluatedTransactionCount], [200, true, 714]);
+  assert.ok(reconciled.identityEvidence.categories.isolated_persisted_category.includes(missingId));
+  assert.equal(Object.values(reconciled.identityEvidence.questionGroups).flat().includes(missingId), false);
+});
+
 test("sparse overlay isolates actionable, outside, and extra membership without weakening invariant failures", async () => {
   const reconcileFixture = async (fixture, mutate = () => {}) => {
     mutate(fixture.classifications);
@@ -326,6 +358,15 @@ test("sparse overlay isolates actionable, outside, and extra membership without 
   assert.deepEqual([outside.evaluatedTransactionCount, outside.matrixIncludedCount, outside.outsideDeductionsCount], [714, 690, 24]);
   assert.doesNotThrow(() => projection.validatePayload(outside));
 
+  for (const [missingId, treatment] of [
+    ["estimated-0", "estimated"], ["reviewed-0", "reviewed"], ["missing-nonactionable", "needs_input"],
+  ]) {
+    const structural = await reconcileFixture(productionSparseOverlayFixture({ missingId }));
+    assert.ok(structural.identityEvidence.treatments[treatment].includes(missingId));
+    assert.equal(structural.identityEvidence.evaluated.filter((id) => id === missingId).length, 1);
+    assert.doesNotThrow(() => projection.validatePayload(structural));
+  }
+
   const extra = await reconcileFixture(productionSparseOverlayFixture(), (rows) => rows.push({
     ...rows[0], transaction_id: "live-extra", source_qbo_txn_id: "live-extra",
   }));
@@ -342,7 +383,7 @@ test("sparse overlay isolates actionable, outside, and extra membership without 
   }
 });
 
-function productionSparseOverlayFixture({ missingId = "missing-nonactionable" } = {}) {
+function productionSparseOverlayFixture({ missingId = "missing-nonactionable", isolatedMissingPartition = false } = {}) {
   const entries = [];
   const add = (id, outcome, { scope = "expense_cogs_in_matrix", category = "supplies", amount = 10, account = "Supplies" } = {}) => entries.push({
     id, outcome, actionOwner: outcome === "customer_input_required" ? "customer_fact_required" : "none",
@@ -361,7 +402,11 @@ function productionSparseOverlayFixture({ missingId = "missing-nonactionable" } 
   otherQuestionIds.forEach((id, index) => add(id, "customer_input_required", {
     category: "travel_transportation", account: `Transportation ${boundaries.findIndex((boundary) => index < boundary) + 1}`,
   }));
-  add("missing-nonactionable", "ambiguous", { amount: 37 });
+  add("missing-nonactionable", "ambiguous", {
+    amount: 37,
+    category: isolatedMissingPartition ? "isolated_persisted_category" : "supplies",
+    account: isolatedMissingPartition ? "Persisted-only category" : "Supplies",
+  });
   for (let index = 0; index < 55; index += 1) add(`other-input-${index}`, "ambiguous");
   for (let index = 0; index < 24; index += 1) add(`outside-${index}`, "outside_deductions", {
     scope: "posted_non_expense_outside_deductions", category: "income", amount: 20,

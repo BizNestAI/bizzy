@@ -89,22 +89,21 @@ function restoreSparseProjectionMembers({ payload, baselinePayload, mappedRows, 
   const baselineEvidence = baselinePayload.identityEvidence || {};
   const resultEvidence = result.identityEvidence || {};
   const mappedById = new Map(mappedRows.map((row) => [String(row.id || row.transactionId || row.transaction_id), row]));
-  const missingMatrix = setIntersection(missingIds, matrix);
-  const missingOutside = setIntersection(missingIds, outside);
+  const fallbackMembers = [...missingIds].map((id) => normalizeProjectionBaselineFallbackMember({
+    id, baselinePayload, matrix, outside,
+  }));
+  const missingMatrix = new Set(fallbackMembers.filter((member) => member.scope === "matrix").map((member) => member.id));
 
-  for (const id of missingMatrix) {
-    addUnique(resultEvidence.evaluated, id);
-    addUnique(resultEvidence.matrixIncluded, id);
-    const categoryKey = uniqueMembershipKey(baselineEvidence.categories, id, "tax_workspace_category_membership_invalid");
-    const month = uniqueMembershipKey(baselineEvidence.months, id, "tax_workspace_month_membership_invalid");
-    const treatment = uniqueMembershipKey(baselineEvidence.treatments, id, "tax_workspace_treatment_partition_invalid");
-    addUnique(resultEvidence.categories[categoryKey], id);
-    addUnique(resultEvidence.months[month], id);
-    addUnique(resultEvidence.treatments[treatment], id);
+  for (const member of fallbackMembers.filter((candidate) => candidate.scope === "matrix")) {
+    addUnique(resultEvidence.evaluated, member.id);
+    addUnique(resultEvidence.matrixIncluded, member.id);
+    addUnique(ensureIdentityPartition(resultEvidence.categories, member.categoryKey), member.id);
+    addUnique(ensureIdentityPartition(resultEvidence.months, member.month), member.id);
+    addUnique(ensureIdentityPartition(resultEvidence.treatments, member.treatment), member.id);
   }
-  for (const id of missingOutside) {
-    addUnique(resultEvidence.evaluated, id);
-    addUnique(resultEvidence.outsideDeductions, id);
+  for (const member of fallbackMembers.filter((candidate) => candidate.scope === "outside_deductions")) {
+    addUnique(resultEvidence.evaluated, member.id);
+    addUnique(resultEvidence.outsideDeductions, member.id);
   }
 
   const affectedCells = new Map();
@@ -152,7 +151,7 @@ function restoreSparseProjectionMembers({ payload, baselinePayload, mappedRows, 
     resultRow.transactionCount += missingCellIds.length;
   }
   result.matrix.sort((left, right) => String(left.categoryLabel).localeCompare(String(right.categoryLabel)));
-  restoreMissingQuestionMemberships({ result, baselinePayload, mappedById, missingIds });
+  restoreMissingQuestionMemberships({ result, baselinePayload, mappedById, missingIds, fallbackMembers });
   result.identityEvidence = resultEvidence;
   result.evaluatedTransactionCount = resultEvidence.evaluated.length;
   result.matrixIncludedCount = resultEvidence.matrixIncluded.length;
@@ -167,6 +166,52 @@ function restoreSparseProjectionMembers({ payload, baselinePayload, mappedRows, 
   return result;
 }
 
+// Persisted projections intentionally do not contain live classification rows. This adapter
+// reconstructs only the immutable read-model memberships that the projection proves, while
+// retaining explicit provenance and never inventing live authority or a user decision.
+function normalizeProjectionBaselineFallbackMember({ id, baselinePayload, matrix, outside }) {
+  const memberId = canonicalIdentifier(id);
+  if (!memberId) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+  const evidence = baselinePayload?.identityEvidence || {};
+  const inMatrix = matrix.has(memberId);
+  const inOutside = outside.has(memberId);
+  if (inMatrix === inOutside) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+  const questionGroupIds = Object.entries(evidence.questionGroups || {})
+    .filter(([, ids]) => Array.isArray(ids) && ids.map(String).includes(memberId))
+    .map(([groupId]) => groupId).sort();
+  if (questionGroupIds.length > 1) throw coded("tax_workspace_question_membership_overlap");
+  if (inOutside) {
+    if (questionGroupIds.length) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+    return Object.freeze({
+      id: memberId, source: "projection_baseline_fallback", scope: "outside_deductions",
+      categoryKey: null, month: null, treatment: null, questionGroupIds: Object.freeze([]),
+    });
+  }
+  const categoryKey = uniqueMembershipKey(evidence.categories, memberId, "tax_workspace_category_membership_invalid");
+  const month = uniqueMembershipKey(evidence.months, memberId, "tax_workspace_month_membership_invalid");
+  const treatment = uniqueMembershipKey(evidence.treatments, memberId, "tax_workspace_treatment_partition_invalid");
+  if (!["estimated", "reviewed", "needs_input"].includes(treatment)) {
+    throw coded("tax_workspace_treatment_partition_invalid");
+  }
+  const matrixRow = baselinePayload.matrix?.find((row) => row.categoryKey === categoryKey);
+  const matrixMonth = matrixRow?.months?.[month];
+  if (!matrixRow || !Array.isArray(matrixRow.identityManifest) || !matrixRow.identityManifest.map(String).includes(memberId) ||
+      !matrixMonth || !Array.isArray(matrixMonth.identityManifest) || !matrixMonth.identityManifest.map(String).includes(memberId)) {
+    throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+  }
+  return Object.freeze({
+    id: memberId, source: "projection_baseline_fallback", scope: "matrix", categoryKey, month, treatment,
+    questionGroupIds: Object.freeze(questionGroupIds),
+  });
+}
+
+function ensureIdentityPartition(partitions, key) {
+  if (!partitions || typeof partitions !== "object" || !key) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+  if (partitions[key] === undefined) partitions[key] = [];
+  if (!Array.isArray(partitions[key])) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+  return partitions[key];
+}
+
 function emptyMatrixMonth() {
   return { transactionCount: 0, identityManifest: [], bookExpenseAmount: 0, deductibleAmount: 0,
     needsReviewAmount: 0, needsInputGrossExpense: 0, needsTaxReviewGrossExpense: 0,
@@ -174,11 +219,17 @@ function emptyMatrixMonth() {
     estimatedDeductibleAmount: 0, reviewedDeductibleAmount: 0 };
 }
 
-function restoreMissingQuestionMemberships({ result, baselinePayload, mappedById, missingIds }) {
+function restoreMissingQuestionMemberships({ result, baselinePayload, mappedById, missingIds, fallbackMembers }) {
   const baselineGroups = baselinePayload.identityEvidence?.questionGroups || {};
+  const fallbackById = new Map(fallbackMembers.map((member) => [member.id, member]));
   result.identityEvidence.questionGroups ||= {};
   for (const [groupId, baselineMembers] of Object.entries(baselineGroups)) {
-    const unresolved = baselineMembers.filter((id) => missingIds.has(String(id)));
+    const unresolved = baselineMembers.filter((id) => {
+      if (!missingIds.has(String(id))) return false;
+      const fallbackMember = fallbackById.get(String(id));
+      if (!fallbackMember) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+      return fallbackMember.questionGroupIds.includes(groupId);
+    });
     if (!unresolved.length) continue;
     let group = result.questionGroups.find((candidate) => candidate.id === groupId);
     const baselineGroup = baselinePayload.questionGroups.find((candidate) => candidate.id === groupId);
