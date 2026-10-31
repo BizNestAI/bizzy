@@ -2237,3 +2237,17 @@ test("Tax deductions keep editable defaults collapsed below the monthly workspac
   assert.match(dashboard, /future posted transactions/);
   assert.match(dashboard, /transaction-specific exception can still be reviewed separately/);
 });
+
+test("business-use percentage fields release focus when the user clicks outside", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const field = dashboard.slice(
+    dashboard.indexOf("function BusinessUsePercentField"),
+    dashboard.indexOf("function DecisionOption"),
+  );
+
+  assert.match(field, /document\.addEventListener\("pointerdown", handleOutsidePointerDown, true\)/);
+  assert.match(field, /fieldRef\.current\?\.contains\(event\.target\)/);
+  assert.match(field, /document\.activeElement === inputRef\.current/);
+  assert.match(field, /inputRef\.current\.blur\(\)/);
+  assert.match(field, /document\.removeEventListener\("pointerdown", handleOutsidePointerDown, true\)/);
+});

@@ -34,6 +34,7 @@ import {
   setTaxProfileMemory,
   updateTaxDeductionDecisionRule,
 } from "../../services/tax/taxApiClient.js";
+import { createWorkspaceOperationTracker } from "./workspaceOperationTracker.js";
 
 export function useTaxDeductions({
   businessId,
@@ -78,6 +79,10 @@ export function useTaxDeductions({
   const pollInFlight = useRef(false);
   const refreshInFlight = useRef(null);
   const questionsRetryInFlight = useRef(null);
+  const workspaceOperationTrackerRef = useRef(null);
+  if (!workspaceOperationTrackerRef.current) {
+    workspaceOperationTrackerRef.current = createWorkspaceOperationTracker(setRefreshing);
+  }
   const isDemo = shouldUseDemoData();
   const scopeKey = `${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`;
   const requestEnabled = enabled && Boolean(businessId);
@@ -116,7 +121,14 @@ export function useTaxDeductions({
     setError(null);
     setRefreshError(null);
     setRebuildPending(false);
+    refreshInFlight.current = null;
+    workspaceOperationTrackerRef.current.reset();
   }, [scopeKey, isDemo, businessId, year, asOfDate, enabled]);
+
+  useEffect(() => {
+    workspaceOperationTrackerRef.current.activate();
+    return () => workspaceOperationTrackerRef.current.dispose();
+  }, []);
 
   const load = useCallback(async ({ signal, refresh = false } = {}) => {
     if (isDemo) {
@@ -269,11 +281,13 @@ export function useTaxDeductions({
   useEffect(() => {
     const controller = new AbortController();
     const hasSavedOverview = Boolean(overviewRef.current);
-    if (hasSavedOverview) setRefreshing(true);
+    const operationOwner = hasSavedOverview
+      ? workspaceOperationTrackerRef.current.acquire("workspace-revalidation")
+      : null;
     // The verified overview and every optional detail population start together.
     // No transaction-row request is allowed to gate first overview paint.
     Promise.resolve(load({ signal: controller.signal, refresh: hasSavedOverview })).finally(() => {
-      if (!controller.signal.aborted && hasSavedOverview) setRefreshing(false);
+      if (operationOwner) workspaceOperationTrackerRef.current.release(operationOwner);
     });
     return () => controller.abort();
   }, [asOfDate, businessId, load, year]);
@@ -358,7 +372,7 @@ export function useTaxDeductions({
     isCurrentWorkspaceProjection: (projectionId) => String(workspaceSnapshotRef.current.projectionId || "") === String(projectionId || ""),
     refresh: (options = {}) => {
       if (refreshInFlight.current) return refreshInFlight.current;
-      setRefreshing(true);
+      const operationOwner = workspaceOperationTrackerRef.current.acquire("manual-workspace-refresh");
       setRefreshError(null);
       const operation = load({ ...options, refresh: true })
         .catch((err) => {
@@ -366,8 +380,8 @@ export function useTaxDeductions({
           throw err;
         })
         .finally(() => {
-          refreshInFlight.current = null;
-          setRefreshing(false);
+          if (refreshInFlight.current === operation) refreshInFlight.current = null;
+          workspaceOperationTrackerRef.current.release(operationOwner);
         });
       refreshInFlight.current = operation;
       return operation;
@@ -466,35 +480,33 @@ export function useTaxDeductions({
     previewGroupedDeductionDecision: ({ groupId, signal } = {}) =>
       previewGroupedTaxDeductionDecision({ businessId, year, groupId, signal }),
     confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal } = {}) => {
-      const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal });
-      applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
-      setRefreshing(true);
-      let refreshed;
+      const operationOwner = workspaceOperationTrackerRef.current.acquire("grouped-decision-reconciliation");
       try {
-        refreshed = await load({ signal, refresh: true });
+        const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal });
+        applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
+        const refreshed = await load({ signal, refresh: true });
+        return { ...result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } };
       } finally {
-        setRefreshing(false);
+        workspaceOperationTrackerRef.current.release(operationOwner);
       }
-      return { ...result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } };
     },
     getGroupedDeductionDecisionOperation: async ({ idempotencyKey, signal } = {}) => {
       const operation = await getGroupedTaxDeductionDecisionOperation({ businessId, year, idempotencyKey, signal });
       if (operation?.status === "completed" && operation?.result) {
-        applyGroupedDecisionResult({
-          result: operation.result,
-          setTransactions,
-          setAllTransactions,
-          setClassificationRows,
-          setDecisionRules,
-        });
-        setRefreshing(true);
-        let refreshed;
+        const operationOwner = workspaceOperationTrackerRef.current.acquire("grouped-decision-outcome-reconciliation");
         try {
-          refreshed = await load({ signal, refresh: true });
+          applyGroupedDecisionResult({
+            result: operation.result,
+            setTransactions,
+            setAllTransactions,
+            setClassificationRows,
+            setDecisionRules,
+          });
+          const refreshed = await load({ signal, refresh: true });
+          return { ...operation, result: { ...operation.result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } } };
         } finally {
-          setRefreshing(false);
+          workspaceOperationTrackerRef.current.release(operationOwner);
         }
-        return { ...operation, result: { ...operation.result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } } };
       }
       return operation;
     },

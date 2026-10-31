@@ -574,7 +574,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   const rulesPanelRef = useRef(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 }, enabled: !contextPending && Boolean(businessId) });
   const refreshDeductions = deductions.refresh;
-  const deductionsUpdating = deductions.refreshing || deductions.rebuildPending;
+  // A server-side rebuild hint is not an owned client request and must not
+  // retain the interaction lock after an authoritative projection commits.
+  const deductionsUpdating = deductions.refreshing;
   const populationBridge = deductions.overview?.populationBridge || null;
   const classificationSummary = useMemo(
     () => buildDeductionClassificationSummary(deductions, populationBridge),
@@ -2852,12 +2854,25 @@ function createGroupedDecisionIdempotencyKey() {
 }
 
 function BusinessUsePercentField({ value, onChange, label = "Business use" }) {
+  const fieldRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    const handleOutsidePointerDown = (event) => {
+      if (fieldRef.current?.contains(event.target)) return;
+      if (document.activeElement === inputRef.current) inputRef.current.blur();
+    };
+    document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+    return () => document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+  }, []);
+
   return (
-    <label className="block rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3">
+    <label ref={fieldRef} className="block rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3">
       <span className="text-sm font-semibold text-white/78">{label}</span>
       <span className="mt-1 block text-xs text-white/46">Enter the portion used for business. Personal or commuting use is not included.</span>
       <span className="relative mt-3 inline-flex items-center">
         <input
+          ref={inputRef}
           type="number"
           min="0"
           max="100"
