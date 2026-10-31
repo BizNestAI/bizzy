@@ -68,11 +68,32 @@ router.get("/workspace", async (req, res) => {
     res.set("Server-Timing", Object.entries(stageTimings).map(([name, duration]) => `${name};dur=${duration}`).join(", "));
     return sendTaxSuccess(res, response);
   } catch (error) {
+    stageTimings.total = Date.now() - routeStartedAt;
+    stageTimings.serialization ??= 0;
+    res.set("Server-Timing", workspaceServerTiming(stageTimings));
+    logWorkspaceReadFailure(req, error, stageTimings);
     return sendTaxError(res, workspaceReadError(error), "tax_workspace_read_failed");
   } finally {
     req.removeListener("aborted", abortRequest);
   }
 });
+
+function workspaceServerTiming(timings = {}) {
+  return Object.entries(timings).map(([name, duration]) => `${name};dur=${Number(duration) || 0}`).join(", ");
+}
+
+function logWorkspaceReadFailure(req, error, stageTimings) {
+  console.error("[tax-workspace-read] failed", {
+    requestId: String(req?.id || req?.headers?.["x-request-id"] || "unknown").slice(0, 100),
+    code: String(error?.code || error?.name || "unknown").slice(0, 80),
+    status: Number(error?.status || error?.statusCode || 0) || null,
+    statusText: String(error?.statusText || "").slice(0, 120) || null,
+    message: String(error?.message || "").slice(0, 300) || null,
+    details: String(error?.details || "").slice(0, 300) || null,
+    hint: String(error?.hint || "").slice(0, 300) || null,
+    stages: stageTimings,
+  });
+}
 
 router.get("/workspace/transactions", async (req, res) => {
   setTaxNoStore(res);

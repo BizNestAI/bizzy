@@ -3,6 +3,13 @@ import { TAX_CLASSIFICATION_STATUSES, normalizeTaxYear } from "./taxDomain.js";
 import { validationError } from "./taxErrors.js";
 
 const CLASSIFICATION_SELECT = "*";
+const WORKSPACE_SNAPSHOT_SELECT = [
+  "transaction_id", "transaction_date", "tax_category", "tax_treatment", "deductibility_status",
+  "deductible_percent", "book_amount", "deductible_amount", "classification_status", "confidence_score",
+  "confidence_level", "rule_code", "rule_version", "reason", "source", "requires_review",
+  "source_qbo_txn_id", "source_qbo_txn_type", "source_qbo_account_id", "source_qbo_account_name",
+  "user_override", "cpa_override", "metadata", "updated_at",
+].join(",");
 const AUTHORITATIVE_OUTCOME_STATUSES = new Set([
   TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED,
   TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
@@ -64,6 +71,37 @@ export async function listTaxClassifications({
   if (error) throw error;
   const rows = (data || []).filter((row) => matchesSearch(row, search));
   return { rows, pagination: { limit: Number(limit || 100), offset: Number(offset || 0), returned: rows.length } };
+}
+
+// Read-only workspace reconciliation snapshot. This deliberately avoids the
+// ordered, select-all customer list contract and relies only on the indexed
+// tenant/year scope; immutable projection membership is intersected in memory.
+export async function listTaxWorkspaceClassificationSnapshot({ supabase, businessId, taxYear, signal } = {}) {
+  if (!supabase || !businessId) throw validationError("invalid_workspace_classification_scope", "A valid workspace classification scope is required.");
+  if (signal?.aborted) throw abortedSnapshotError(signal.reason);
+  const year = requireTaxYear(taxYear);
+  let query = supabase
+    .from("transaction_tax_classifications")
+    .select(WORKSPACE_SNAPSHOT_SELECT)
+    .eq("business_id", businessId)
+    .eq("tax_year", year);
+  if (typeof query.limit === "function") query = query.limit(10_000);
+  if (signal && typeof query.abortSignal === "function") query = query.abortSignal(signal);
+  const { data, error, status, statusText } = await query;
+  if (error) {
+    if (signal?.aborted) throw abortedSnapshotError(signal.reason);
+    if (status != null && error.status == null) error.status = status;
+    if (statusText && error.statusText == null) error.statusText = statusText;
+    throw error;
+  }
+  return { rows: data || [], queryShape: "business_year_snapshot_v1" };
+}
+
+function abortedSnapshotError(reason) {
+  const error = new Error("Tax workspace classification snapshot was cancelled.", reason instanceof Error ? { cause: reason } : undefined);
+  error.name = "AbortError";
+  error.code = "ABORT_ERR";
+  return error;
 }
 
 export async function upsertTaxClassification({ supabase, classification, force = false } = {}) {

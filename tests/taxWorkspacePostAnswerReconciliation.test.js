@@ -5,6 +5,9 @@ import {
   __taxWorkspaceProjectionTestInternals as projection,
   reconcileTaxWorkspaceProjection,
 } from "../src/services/tax/taxWorkspaceProjection.service.js";
+import { createClient } from "@supabase/supabase-js";
+import { listTaxWorkspaceClassificationSnapshot } from "../src/services/tax/taxClassification.repository.js";
+import { workspaceReadError } from "../src/api/tax/taxWorkspaceErrors.js";
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -30,11 +33,51 @@ test("normal v2 reconciliation uses one bounded classification snapshot and neve
     service.indexOf("export async function reconcileTaxWorkspaceProjection"),
     service.indexOf("async function buildCurrentTaxWorkspacePayload")
   );
-  assert.match(reconciliation, /listTaxClassifications/);
+  assert.match(reconciliation, /listTaxWorkspaceClassificationSnapshot/);
   assert.doesNotMatch(reconciliation, /buildCurrentTaxWorkspacePayload/);
   assert.doesNotMatch(reconciliation, /listTaxPostingSourceRows/);
   assert.doesNotMatch(reconciliation, /getDeductionsOverview/);
   assert.doesNotMatch(reconciliation, /loadRows/);
+});
+
+test("production-shaped classification snapshot serializes as a narrow indexed PostgREST query", async () => {
+  let requestUrl = null;
+  const client = createClient("https://example.supabase.co", "test-anon-key", {
+    global: { fetch: async (url) => {
+      requestUrl = String(url);
+      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    } },
+  });
+  await listTaxWorkspaceClassificationSnapshot({ supabase: client, businessId: "business-a", taxYear: 2026 });
+  const url = new URL(requestUrl);
+  assert.notEqual(url.searchParams.get("select"), "*");
+  assert.equal(url.searchParams.has("order"), false);
+  assert.equal(url.searchParams.has("transaction_id"), false);
+  assert.ok(requestUrl.length < 2_000);
+});
+
+test("classification snapshot preserves upstream query errors, rejects invalid scope, and separates cancellation", async () => {
+  const failingClient = createClient("https://example.supabase.co", "test-anon-key", {
+    global: { fetch: async () => new Response(JSON.stringify({
+      code: "42703", message: "column does not exist", details: null, hint: null,
+    }), { status: 400, statusText: "Bad Request", headers: { "content-type": "application/json" } }) },
+  });
+  await assert.rejects(
+    listTaxWorkspaceClassificationSnapshot({ supabase: failingClient, businessId: "business-a", taxYear: 2026 }),
+    (error) => error.code === "42703" && error.status === 400
+  );
+  assert.equal(workspaceReadError({ code: "42703", status: 400, message: "column does not exist" }).code, "tax_workspace_internal_failure");
+  assert.equal(workspaceReadError({ code: "08006", status: 503, message: "connection failure" }).code, "tax_workspace_database_unavailable");
+  await assert.rejects(
+    listTaxWorkspaceClassificationSnapshot({ supabase: failingClient, businessId: null, taxYear: 2026 }),
+    (error) => error.code === "invalid_workspace_classification_scope"
+  );
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    listTaxWorkspaceClassificationSnapshot({ supabase: failingClient, businessId: "business-a", taxYear: 2026, signal: controller.signal }),
+    (error) => error.name === "AbortError" && error.code === "ABORT_ERR"
+  );
 });
 
 test("a 714-row production-shaped workspace reconciles with one database read under the workspace deadline", async () => {
@@ -78,7 +121,7 @@ test("a 714-row production-shaped workspace reconciles with one database read un
   }));
   let reads = 0;
   const query = {
-    select() { return this; }, eq() { return this; }, order() { return this; }, range() { return this; },
+    select() { return this; }, eq() { return this; }, limit() { return this; },
     then(resolve) { reads += 1; return Promise.resolve(resolve({ data: classifications, error: null })); },
   };
   const startedAt = performance.now();

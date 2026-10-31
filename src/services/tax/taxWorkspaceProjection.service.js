@@ -7,7 +7,7 @@ import {
 } from "./taxDeductionsLifecycleProjection.js";
 import { TAX_DEDUCTIONS_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { listTaxPostingSourceRows } from "./taxPostedTransaction.repository.js";
-import { listTaxClassifications } from "./taxClassification.repository.js";
+import { listTaxClassifications, listTaxWorkspaceClassificationSnapshot } from "./taxClassification.repository.js";
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
@@ -31,8 +31,8 @@ export async function reconcileTaxWorkspaceProjection({ supabase, record, busine
   const baseline = requiredUniqueSet(evidence.evaluated, "tax_workspace_evaluated_identity_invalid");
   const matrix = requiredUniqueSet(evidence.matrixIncluded, "tax_workspace_matrix_identity_invalid");
   const outside = requiredUniqueSet(evidence.outsideDeductions, "tax_workspace_outside_identity_invalid");
-  const classificationPage = await timedWorkspaceStage("live_classifications", onStage, () => listTaxClassifications({
-    supabase, businessId, taxYear: Number(taxYear), limit: 10_000, signal,
+  const classificationPage = await timedWorkspaceStage("live_classifications", onStage, () => listTaxWorkspaceClassificationSnapshot({
+    supabase, businessId, taxYear: Number(taxYear), signal,
   }));
   const currentRows = (classificationPage.rows || []).filter((row) => baseline.has(String(row.transaction_id)));
   const currentIds = requiredUniqueSet(currentRows.map((row) => row.transaction_id), "tax_workspace_live_population_mismatch");
