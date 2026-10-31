@@ -17,7 +17,12 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf
 test("successful grouped apply refreshes the complete authoritative v2 workspace", () => {
   const hook = read("src/hooks/tax/useTaxDeductions.js");
   const confirm = hook.slice(hook.indexOf("confirmGroupedDeductionDecision:"), hook.indexOf("getGroupedDeductionDecisionOperation:"));
-  assert.match(confirm, /load\(\{[^}]*refresh:\s*true/);
+  assert.match(confirm, /reconcileGroupedDecisionWorkspace\(result, \{ signal \}\)/);
+  const reconcileStart = hook.indexOf("const reconcileGroupedDecisionWorkspace");
+  const reconcile = hook.slice(reconcileStart, hook.indexOf("\n\n  return {", reconcileStart));
+  assert.match(reconcile, /result\?\.authoritativeWorkspace/);
+  assert.match(reconcile, /commitWorkspaceSnapshot\(result\.authoritativeWorkspace\)/);
+  assert.match(reconcile, /load\(\{ signal, refresh: true \}\)/);
   assert.doesNotMatch(confirm, /refreshAuthoritativeQuestionSummary/);
 });
 

@@ -324,7 +324,8 @@ test("the client patches returned scoped rows and then reloads the authoritative
   assert.match(dashboard, /confirmGroupedDeductionDecision/);
   assert.match(dashboard, /previewGroupedDeductionDecision/);
   assert.doesNotMatch(dashboard, /for \(let index = 0; index < ids\.length; index \+= 100\)/);
-  assert.match(hook, /confirmGroupedDeductionDecision:[\s\S]*load\(\{ signal, refresh: true \}\)/);
+  assert.match(hook, /confirmGroupedDeductionDecision:[\s\S]*reconcileGroupedDecisionWorkspace\(result, \{ signal \}\)/);
+  assert.match(hook, /result\?\.authoritativeWorkspace[\s\S]*commitWorkspaceSnapshot\(result\.authoritativeWorkspace\)[\s\S]*load\(\{ signal, refresh: true \}\)/);
   assert.doesNotMatch(hook, /refreshAuthoritativeQuestionSummary/);
   assert.match(dashboard, /previewId: serverPreview\.previewId/);
 });

@@ -20,8 +20,9 @@ test("post-answer replacement invalidates prior details, disables clicks, and re
   assert.match(dashboard, /if \(!deductionsUpdating\) return;[\s\S]*matrixCellCacheRef\.current\.clear\(\);[\s\S]*setSelectedCell\(null\)/);
   assert.match(dashboard, /onOpenPersistedCell=\{deductionsUpdating \? null : openPersistedMatrixCell\}/);
   assert.match(dashboard, /requestedProjectionId = deductions\.workspaceProjectionId/);
-  assert.match(dashboard, /!deductions\.isCurrentWorkspaceProjection\(requestedProjectionId\)/);
-  assert.match(dashboard, /businessId}:\$\{year}:\$\{deductions\.workspaceProjectionId}/);
+  assert.match(dashboard, /!deductions\.isCurrentWorkspaceProjection\(resolvedScope\.projectionId\)/);
+  assert.match(dashboard, /matrixCellCacheKey\(\{ businessId, year, snapshot:/);
+  assert.match(dashboard, /projectionVersion:[\s\S]*projectionId:[\s\S]*sourceFingerprint:/);
 });
 
 test("the protected matrix-cell endpoint rejects revision A with the safe 409 contract", () => {

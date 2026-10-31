@@ -48,7 +48,7 @@ export function useTaxDeductions({
   const paginationKey = useMemo(() => JSON.stringify(stableObject(pagination)), [pagination]);
   const initialCachedOverview = null;
   const [overview, setOverview] = useState(initialCachedOverview);
-  const [workspaceSnapshot, setWorkspaceSnapshot] = useState({ projection: null, projectionId: null });
+  const [workspaceSnapshot, setWorkspaceSnapshot] = useState({ projection: null, projectionId: null, projectionVersion: null, sourceFingerprint: null });
   const workspaceSnapshotRef = useRef(workspaceSnapshot);
   const workspaceProjection = workspaceSnapshot.projection;
   const workspaceProjectionId = workspaceSnapshot.projectionId;
@@ -100,7 +100,7 @@ export function useTaxDeductions({
     seq.current += 1;
     const cached = null;
     setOverview(cached);
-    const emptyWorkspace = { projection: null, projectionId: null };
+    const emptyWorkspace = { projection: null, projectionId: null, projectionVersion: null, sourceFingerprint: null };
     workspaceSnapshotRef.current = emptyWorkspace;
     setWorkspaceSnapshot(emptyWorkspace);
     setTransactions(null);
@@ -129,6 +129,26 @@ export function useTaxDeductions({
     workspaceOperationTrackerRef.current.activate();
     return () => workspaceOperationTrackerRef.current.dispose();
   }, []);
+
+  const commitWorkspaceSnapshot = useCallback((value) => {
+    const projection = value?.projection;
+    const projectionId = value?.projectionId || null;
+    if (!projection || !projectionId) return null;
+    const nextWorkspace = {
+      projection,
+      projectionId,
+      projectionVersion: value?.projectionVersion || projection?.projectionVersion || null,
+      formulaVersion: value?.formulaVersion || projection?.formulaVersion || null,
+      sourceFingerprint: value?.sourceFingerprint || projection?.sourceFingerprint || null,
+      generatedAt: value?.generatedAt || projection?.generatedAt || null,
+    };
+    // The ref is committed before React can re-enable matrix interaction.
+    workspaceSnapshotRef.current = nextWorkspace;
+    setWorkspaceSnapshot(nextWorkspace);
+    setOverview(overviewFromWorkspace(projection));
+    setRequestStatus((current) => ({ ...current, scopeKey, overview: "success", matrix: "success", classification: "success" }));
+    return nextWorkspace;
+  }, [scopeKey]);
 
   const load = useCallback(async ({ signal, refresh = false } = {}) => {
     if (isDemo) {
@@ -166,19 +186,11 @@ export function useTaxDeductions({
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") {
           const workspace = overviewResult.value?.projection;
-          const compatibleOverview = overviewFromWorkspace(workspace);
-          const nextWorkspace = {
-            projection: workspace,
-            projectionId: overviewResult.value?.projectionId || null,
-          };
-          workspaceSnapshotRef.current = nextWorkspace;
-          setWorkspaceSnapshot(nextWorkspace);
+          commitWorkspaceSnapshot(overviewResult.value);
           setRebuildPending(overviewResult.value?.state === "refreshing");
           // Initial loads may expose a verified summary while optional details
           // settle. A refresh keeps the prior completed workspace intact until
           // its replacement matrix succeeds, preventing mixed generations.
-          setOverview(compatibleOverview);
-          setRequestStatus((current) => ({ ...current, scopeKey, overview: "success", matrix: "success", classification: "success" }));
           if (refresh) setLastRefreshedAt(workspace?.refreshedAt || workspace?.generatedAt || new Date().toISOString());
         } else {
           setRequestStatus((current) => ({ ...current, scopeKey, overview: "error" }));
@@ -190,6 +202,7 @@ export function useTaxDeductions({
       if (request === seq.current && refresh) setRefreshError(primaryError);
       return {
         overview: overviewResult.status === "fulfilled" ? overviewFromWorkspace(overviewResult.value?.projection) : null,
+        workspaceSnapshot: overviewResult.status === "fulfilled" ? workspaceSnapshotRef.current : null,
         transactions: null,
         allTransactions: null,
         postedTransactions: null,
@@ -205,7 +218,7 @@ export function useTaxDeductions({
     } finally {
       if (request === seq.current) setLoading(false);
     }
-  }, [businessId, year, enabled, isDemo, scopeKey]);
+  }, [businessId, year, enabled, isDemo, scopeKey, commitWorkspaceSnapshot]);
 
   const loadSecondaryDetails = useCallback(async ({ signal, refresh = false } = {}) => {
     if (isDemo || !enabled || !businessId) return null;
@@ -337,6 +350,21 @@ export function useTaxDeductions({
     };
   }, [businessId, classificationCoverage?.jobStatus?.pollAfterMs, classificationJobStatus?.pollAfterMs, enabled, isDemo, load, loadSecondaryDetails, shouldPollClassification, year]);
 
+  const reconcileGroupedDecisionWorkspace = useCallback(async (result, { signal } = {}) => {
+    if (result?.authoritativeWorkspace) {
+      const committed = commitWorkspaceSnapshot(result.authoritativeWorkspace);
+      if (!committed) {
+        throw Object.assign(new Error("The authoritative Tax workspace response was incomplete."), {
+          code: "tax_workspace_authoritative_projection_invalid",
+        });
+      }
+      return { overview: overviewFromWorkspace(committed.projection), workspaceSnapshot: committed };
+    }
+    // Completed operation recovery and mixed-version deployments do one final
+    // authoritative read through the same commit path.
+    return load({ signal, refresh: true });
+  }, [commitWorkspaceSnapshot, load]);
+
   return {
     overview,
     workspaceProjection,
@@ -366,9 +394,10 @@ export function useTaxDeductions({
     retryTransactionDetails: (options = {}) => loadSecondaryDetails({ ...options, refresh: true }),
     retryQuestions,
     getMatrixCellDetail: (scope, options = {}) => {
-      const projectionId = workspaceSnapshotRef.current.projectionId;
+      const projectionId = options.projectionId || workspaceSnapshotRef.current.projectionId;
       return getTaxWorkspaceMatrixCell({ businessId, year, ...scope, projectionId, ...options });
     },
+    refreshWorkspaceSnapshot: (options = {}) => load({ ...options, refresh: true }),
     isCurrentWorkspaceProjection: (projectionId) => String(workspaceSnapshotRef.current.projectionId || "") === String(projectionId || ""),
     refresh: (options = {}) => {
       if (refreshInFlight.current) return refreshInFlight.current;
@@ -484,7 +513,7 @@ export function useTaxDeductions({
       try {
         const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal });
         applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
-        const refreshed = await load({ signal, refresh: true });
+        const refreshed = await reconcileGroupedDecisionWorkspace(result, { signal });
         return { ...result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } };
       } finally {
         workspaceOperationTrackerRef.current.release(operationOwner);
@@ -502,7 +531,7 @@ export function useTaxDeductions({
             setClassificationRows,
             setDecisionRules,
           });
-          const refreshed = await load({ signal, refresh: true });
+          const refreshed = await reconcileGroupedDecisionWorkspace(operation.result, { signal });
           return { ...operation, result: { ...operation.result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } } };
         } finally {
           workspaceOperationTrackerRef.current.release(operationOwner);

@@ -25,6 +25,11 @@ import {
 } from "../../services/tax/taxGroupedDeductionDecision.service.js";
 import { createGroupedDecisionPreview, confirmGroupedDecisionPreview } from "../../services/tax/taxGroupedDecisionPreview.service.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../services/tax/taxChangeEvents.js";
+import {
+  buildAndPersistTaxWorkspaceProjection,
+  publicTaxWorkspaceProjection,
+  TAX_WORKSPACE_PROJECTION_VERSION,
+} from "../../services/tax/taxWorkspaceProjection.service.js";
 import { forbiddenBusinessError, validationError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
 import {
@@ -172,6 +177,23 @@ router.post("/deduction-decisions/apply", async (req, res) => {
       },
       actor,
     });
+    // A grouped answer can update classifications and create a future rule in
+    // one command. Materialize the one final workspace identity before the
+    // browser is allowed to leave its busy state; otherwise the async change
+    // event below can make an immediately-following matrix-detail request stale.
+    const authoritativeWorkspaceResult = await buildAndPersistTaxWorkspaceProjection({
+      supabase: ctx.supabase,
+      businessId: ctx.businessId,
+      taxYear: ctx.taxYear,
+    });
+    const authoritativeWorkspace = {
+      projectionId: authoritativeWorkspaceResult.projectionId,
+      projectionVersion: TAX_WORKSPACE_PROJECTION_VERSION,
+      formulaVersion: authoritativeWorkspaceResult.payload?.formulaVersion || null,
+      sourceFingerprint: authoritativeWorkspaceResult.payload?.sourceFingerprint || null,
+      generatedAt: authoritativeWorkspaceResult.payload?.generatedAt || null,
+      projection: publicTaxWorkspaceProjection(authoritativeWorkspaceResult.payload),
+    };
     // Deliberately emit a classification change rather than BUSINESS_RULE_CREATED:
     // the saved GL rule is forward-looking and this completed command must not
     // enqueue an unrelated full-year classifier pass.
@@ -187,7 +209,7 @@ router.post("/deduction-decisions/apply", async (req, res) => {
         groupedDecision: true,
       },
     });
-    return sendTaxSuccess(res, data);
+    return sendTaxSuccess(res, { ...data, authoritativeWorkspace });
   } catch (err) {
     logGroupedDecisionFailure({ req, ctx, err });
     return sendTaxError(res, err, "tax_grouped_deduction_decision_failed");

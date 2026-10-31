@@ -35,6 +35,7 @@ import {
 import { buildTaxEvaluationNotice } from "../../services/tax/taxEvaluationNoticeProjection.js";
 import { resolveTaxWorkspacePrerequisites } from "./taxWorkspacePrerequisites.js";
 import { showTaxDecisionSuccess } from "./taxDecisionToast.js";
+import { loadMatrixCellWithProjectionRecovery } from "./matrixCellProjectionRecovery.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
@@ -563,6 +564,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   const [matrixDrilldown, setMatrixDrilldown] = useState({ loading: false, error: null });
   const matrixCellCacheRef = useRef(new Map());
   const matrixCellRequestRef = useRef({ sequence: 0, controller: null });
+  const matrixCellRecoveryRef = useRef(null);
   const [workspaceView, setWorkspaceView] = useState("overview");
   const [classificationTab, setClassificationTab] = useState("all");
   const [focusedUpdatingIds, setFocusedUpdatingIds] = useState([]);
@@ -693,11 +695,15 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   });
   const questionsError = deductions.resourceErrors?.allTransactions || null;
   useEffect(() => {
-    matrixCellRequestRef.current.controller?.abort();
-    matrixCellRequestRef.current = { sequence: matrixCellRequestRef.current.sequence + 1, controller: null };
     matrixCellCacheRef.current.clear();
-    setSelectedCell(null);
-    setMatrixDrilldown({ loading: false, error: null });
+    if (matrixCellRecoveryRef.current) {
+      matrixCellRecoveryRef.current = null;
+    } else {
+      matrixCellRequestRef.current.controller?.abort();
+      matrixCellRequestRef.current = { sequence: matrixCellRequestRef.current.sequence + 1, controller: null };
+      setSelectedCell(null);
+      setMatrixDrilldown({ loading: false, error: null });
+    }
   }, [businessId, year, deductions.workspaceProjectionId]);
   useEffect(() => {
     if (!deductionsUpdating) return;
@@ -707,7 +713,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     setSelectedCell(null);
     setMatrixDrilldown({ loading: false, error: null });
   }, [deductionsUpdating]);
-  const loadPersistedMatrixCell = async ({ account, month, cell, authority, cacheKey, refresh = false }) => {
+  const loadPersistedMatrixCell = async ({ account, month, cell, authority, refresh = false }) => {
     matrixCellRequestRef.current.controller?.abort();
     const controller = new AbortController();
     const sequence = matrixCellRequestRef.current.sequence + 1;
@@ -715,32 +721,83 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     matrixCellRequestRef.current = { sequence, controller };
     setMatrixDrilldown({ loading: true, error: null });
     try {
-      const detail = await withBoundedWorkspaceRead(
-        (signal) => deductions.getMatrixCellDetail({ categoryKey: account.id, month: month.key, authority }, { refresh, signal }),
+      const loaded = await withBoundedWorkspaceRead(
+        (signal) => loadMatrixCellWithProjectionRecovery({
+          initialScope: {
+            account,
+            month,
+            cell,
+            authority,
+            projectionId: requestedProjectionId,
+            projectionVersion: deductions.workspaceProjection?.projectionVersion || null,
+            sourceFingerprint: deductions.workspaceProjection?.sourceFingerprint || null,
+          },
+          signal,
+          loadDetail: (scope, detailSignal) => deductions.getMatrixCellDetail(
+            { categoryKey: scope.account.id, month: scope.month.key, authority: scope.authority },
+            { refresh: refresh || scope.projectionId !== requestedProjectionId, projectionId: scope.projectionId, signal: detailSignal }
+          ),
+          refreshWorkspace: async (refreshSignal) => {
+            matrixCellRecoveryRef.current = { sequence };
+            const refreshed = await deductions.refreshWorkspaceSnapshot({ signal: refreshSignal });
+            return refreshed?.workspaceSnapshot || null;
+          },
+          resolveScope: (snapshot) => {
+            if (!snapshot?.projection || !snapshot?.projectionId) return null;
+            const refreshedMatrix = buildPersistedWorkspaceMatrix(snapshot.projection, year);
+            const refreshedAccount = refreshedMatrix.accounts.find((candidate) => String(candidate.id) === String(account.id));
+            const refreshedMonth = refreshedMatrix.months.find((candidate) => candidate.key === month.key);
+            const refreshedCell = refreshedAccount?.months?.[month.key];
+            return refreshedAccount && refreshedMonth && matrixAuthorityTransactionCount(refreshedCell, authority) > 0
+              ? {
+                  account: refreshedAccount,
+                  month: refreshedMonth,
+                  cell: refreshedCell,
+                  authority,
+                  projectionId: snapshot.projectionId,
+                  projectionVersion: snapshot.projectionVersion,
+                  sourceFingerprint: snapshot.sourceFingerprint,
+                }
+              : null;
+          },
+        }),
         { signal: controller.signal, timeoutMs: TAX_WORKSPACE_DETAIL_TIMEOUT_MS, timeoutCode: "tax_workspace_matrix_cell_timeout" }
       );
+      const { detail, scope: resolvedScope } = loaded;
       const transactions = normalizeRows(detail?.rows).map(mapDeductionTransactionRow).map(normalizeClassificationWorkspaceRow).filter(Boolean);
-      reconcilePersistedMatrixDrilldown({ transactions, cell, authority });
-      if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted || !deductions.isCurrentWorkspaceProjection(requestedProjectionId)) return;
-      matrixCellCacheRef.current.set(cacheKey, transactions);
-      setSelectedCell(buildPendingMatrixCellSelection({ account, month, cell, authority, transactions, cacheKey }));
+      reconcilePersistedMatrixDrilldown({ transactions, cell: resolvedScope.cell, authority });
+      if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted || !deductions.isCurrentWorkspaceProjection(resolvedScope.projectionId)) return;
+      const resolvedCacheKey = matrixCellCacheKey({ businessId, year, snapshot: {
+        projectionId: resolvedScope.projectionId,
+        projectionVersion: resolvedScope.projectionVersion,
+        sourceFingerprint: resolvedScope.sourceFingerprint,
+      }, categoryKey: resolvedScope.account.id, month: resolvedScope.month.key, authority });
+      matrixCellCacheRef.current.set(resolvedCacheKey, transactions);
+      setSelectedCell(buildPendingMatrixCellSelection({ ...resolvedScope, transactions, cacheKey: resolvedCacheKey }));
       setMatrixDrilldown({ loading: false, error: null });
     } catch (error) {
       if (matrixCellRequestRef.current.sequence !== sequence || controller.signal.aborted) return;
       setMatrixDrilldown({ loading: false, error });
+    } finally {
+      if (matrixCellRecoveryRef.current?.sequence === sequence) matrixCellRecoveryRef.current = null;
     }
   };
   const openPersistedMatrixCell = ({ account, month, cell, authority }) => {
     if (deductionsUpdating) return;
-    const cacheKey = `${businessId}:${year}:${deductions.workspaceProjectionId}:${account.id}:${month.key}:${authority}`;
+    const cacheKey = matrixCellCacheKey({ businessId, year, snapshot: {
+      projectionId: deductions.workspaceProjectionId,
+      projectionVersion: deductions.workspaceProjection?.projectionVersion,
+      sourceFingerprint: deductions.workspaceProjection?.sourceFingerprint,
+    }, categoryKey: account.id, month: month.key, authority });
     const cached = matrixCellCacheRef.current.get(cacheKey);
     setSelectedCell(buildPendingMatrixCellSelection({ account, month, cell, authority, transactions: cached || [], cacheKey }));
     setMatrixDrilldown({ loading: !cached, error: null });
-    if (!cached) void loadPersistedMatrixCell({ account, month, cell, authority, cacheKey });
+    if (!cached) void loadPersistedMatrixCell({ account, month, cell, authority });
   };
   const closeMatrixCell = () => {
     matrixCellRequestRef.current.controller?.abort();
     matrixCellRequestRef.current = { sequence: matrixCellRequestRef.current.sequence + 1, controller: null };
+    matrixCellRecoveryRef.current = null;
     setSelectedCell(null);
     setMatrixDrilldown({ loading: false, error: null });
   };
@@ -2800,9 +2857,13 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
               type="button"
               onClick={businessUseAnswer === "unsure" || vehicleDecisionUnresolved ? onClose : submit}
               disabled={scopeRefreshing || population.actionableTransactionCount === 0 || (businessUseAnswer === "unsure" || vehicleDecisionUnresolved ? outcomeUnknown : !canSubmit || saving || outcomeUnknown)}
-              className="rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-[#120f04] hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-busy={saving ? "true" : "false"}
+              className="inline-flex min-w-[9.5rem] items-center justify-center gap-2 rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-[#120f04] transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {scopeRefreshing ? "Refreshing…" : saving ? `Saving your ${group.qboAccountName || "tax"} decision…` : actionButtonLabel}
+              {saving ? <Loader2 className="h-4 w-4 shrink-0 motion-safe:animate-spin" aria-hidden="true" /> : null}
+              <span aria-live="polite">
+                {scopeRefreshing ? "Refreshing…" : saving ? "Saving decision…" : actionButtonLabel}
+              </span>
             </button> : null}
           </div>
         </footer>
@@ -5409,6 +5470,19 @@ function buildPersistedWorkspaceMatrix(workspace, year) {
     };
   });
   return { months, accounts, transactionCount: Number(workspace?.matrixIncludedCount || 0), persisted: true };
+}
+
+function matrixCellCacheKey({ businessId, year, snapshot, categoryKey, month, authority }) {
+  return [
+    businessId,
+    year,
+    snapshot?.projectionVersion || "",
+    snapshot?.projectionId || "",
+    snapshot?.sourceFingerprint || "",
+    categoryKey,
+    month,
+    authority,
+  ].map((value) => String(value ?? "")).join(":");
 }
 
 function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all" } = {}) {

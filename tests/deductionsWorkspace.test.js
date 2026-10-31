@@ -1497,6 +1497,17 @@ test("Tax question modal animates open and closed with reduced-motion support", 
   assert.match(dashboard, /exit=\{prefersReducedMotion \? \{ opacity: 0 \} : \{ opacity: 0, scale: 0\.985, y: 8 \}\}/);
 });
 
+test("Tax question confirmation shows an accessible saving animation and prevents duplicate submission", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const modal = dashboard.slice(dashboard.indexOf("function ReviewDecisionModal"), dashboard.indexOf("function GroupedDecisionPreviewState"));
+
+  assert.match(modal, /setSaving\(true\)[\s\S]*?await onApply/);
+  assert.match(modal, /disabled=\{[^}]*!canSubmit \|\| saving \|\| outcomeUnknown/);
+  assert.match(modal, /aria-busy=\{saving \? "true" : "false"\}/);
+  assert.match(modal, /saving \? <Loader2 className="h-4 w-4 shrink-0 motion-safe:animate-spin" aria-hidden="true" \/> : null/);
+  assert.match(modal, /<span aria-live="polite">[\s\S]*?saving \? "Saving decision…" : actionButtonLabel/);
+});
+
 test("auto-classified deduction detail uses estimated, customer-facing evidence and a bounded transaction list", async () => {
   const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
   const selection = makeReviewSelection({
