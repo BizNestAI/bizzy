@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   __taxWorkspaceProjectionTestInternals as projection,
+  buildPopulationMismatchDiagnostic,
   reconcileTaxWorkspaceProjection,
 } from "../src/services/tax/taxWorkspaceProjection.service.js";
 import { createClient } from "@supabase/supabase-js";
@@ -38,6 +39,126 @@ test("normal v2 reconciliation uses one bounded classification snapshot and neve
   assert.doesNotMatch(reconciliation, /listTaxPostingSourceRows/);
   assert.doesNotMatch(reconciliation, /getDeductionsOverview/);
   assert.doesNotMatch(reconciliation, /loadRows/);
+});
+
+test("population mismatch diagnostic is complete, aggregate-only, and non-throwing", () => {
+  const rawTransactionId = "raw-transaction-id-must-not-appear";
+  const rawDescription = "private vendor description must not appear";
+  const diagnostic = buildPopulationMismatchDiagnostic({
+    requestId: "request-safe",
+    record: {
+      id: "projection-safe",
+      projection_version: "tax-workspace-v2",
+      formula_version: "identity-contract-v2.3-vehicle-semantic-questions",
+    },
+    evidence: {
+      evaluated: [rawTransactionId, "matrix-missing", "outside-missing"],
+      matrixIncluded: [rawTransactionId, "matrix-missing"],
+      outsideDeductions: ["outside-missing"],
+    },
+    liveRows: [{
+      transaction_id: rawTransactionId,
+      description: rawDescription,
+      source_qbo_account_name: "Phone Bill",
+      classification_status: "user_confirmed",
+      deductibility_status: "partially_deductible",
+      source: "user",
+    }, {
+      transaction_id: rawTransactionId,
+      description: rawDescription,
+      classification_status: "auto_classified",
+      deductibility_status: "fully_deductible",
+      source: "rule_engine",
+      metadata: { superseded_at: "2026-10-29T00:00:00.000Z" },
+    }, {
+      transaction_id: "live-extra-id-must-not-appear",
+      classification_status: "auto_classified",
+      deductibility_status: "fully_deductible",
+      source: "rule_engine",
+    }],
+  });
+  const requiredFields = [
+    "event", "requestId", "projectionId", "projectionVersion", "projectionFormulaVersion",
+    "projectionEvaluatedRawCount", "projectionEvaluatedDistinctCanonicalIdCount",
+    "projectionMatrixRawCount", "projectionMatrixDistinctCount",
+    "projectionOutsideDeductionsRawCount", "projectionOutsideDeductionsDistinctCount",
+    "projectionNullMalformedIdentifierCount", "projectionDuplicateIdentifierCount",
+    "liveRawRowCount", "liveCanonicalDistinctIdCount", "liveNullMalformedIdentifierCount",
+    "liveDuplicateIdentifierCount", "liveDuplicateExcessRowCount", "liveActiveCurrentCount",
+    "liveSupersededHistoryCount", "liveCountByTreatmentStatus", "liveCountByAuthority",
+    "liveCountBySource", "intersectionDistinctCount", "projectionIdsMissingFromLiveCount",
+    "projectionMatrixIdsMissingFromLiveCount", "projectionOutsideDeductionsIdsMissingFromLiveCount",
+    "liveIdsOutsideProjectionCount", "projectionMembersWithMultipleEquallyAuthoritativeCurrentRowsCount",
+    "projectionMembersResolvedByNormalAuthorityPrecedenceCount",
+    "phoneBillProjectionMembersCurrentlyReviewedCount", "canonicalKeySourceCounts",
+    "populationMismatchReason", "fingerprints",
+  ];
+  requiredFields.forEach((field) => assert.ok(Object.hasOwn(diagnostic, field), field));
+  assert.deepEqual(Object.keys(diagnostic.fingerprints).sort(), [
+    "extra", "intersection", "liveDistinct", "missing", "projectionEvaluated", "projectionMatrix", "projectionOutside",
+  ]);
+  assert.deepEqual(Object.keys(diagnostic.canonicalKeySourceCounts).sort(), [
+    "another_established_field", "missing_key", "qbo_transaction_id", "source_transaction_id", "transaction_id",
+  ]);
+  assert.equal(diagnostic.liveRawRowCount, 3);
+  assert.equal(diagnostic.liveDuplicateIdentifierCount, 1);
+  assert.equal(diagnostic.liveDuplicateExcessRowCount, 1);
+  assert.equal(diagnostic.phoneBillProjectionMembersCurrentlyReviewedCount, 1);
+  const serialized = JSON.stringify(diagnostic);
+  assert.doesNotMatch(serialized, new RegExp(rawTransactionId));
+  assert.doesNotMatch(serialized, new RegExp(rawDescription));
+  assert.doesNotMatch(serialized, /live-extra-id-must-not-appear/);
+  assert.doesNotThrow(() => buildPopulationMismatchDiagnostic({
+    requestId: { toString() { throw new Error("unsafe"); } },
+    record: new Proxy({}, { get() { throw new Error("unsafe getter"); } }),
+    evidence: { evaluated: null, matrixIncluded: {}, outsideDeductions: "invalid" },
+    liveRows: [null, "invalid"],
+  }));
+});
+
+test("population mismatch logs once without another database call and preserves the fail-closed response", async () => {
+  let reads = 0;
+  const logs = [];
+  const query = {
+    select() { return this; }, eq() { return this; }, limit() { return this; },
+    then(resolve) {
+      reads += 1;
+      return Promise.resolve(resolve({ data: [{ transaction_id: "present", classification_status: "auto_classified" }], error: null }));
+    },
+  };
+  const record = {
+    id: "projection-safe",
+    projection_version: "tax-workspace-v2",
+    formula_version: "identity-contract-v2.3-vehicle-semantic-questions",
+    projection_data: { identityEvidence: {
+      evaluated: ["present", "missing"], matrixIncluded: ["present", "missing"], outsideDeductions: [],
+    } },
+  };
+  let failure;
+  try {
+    await reconcileTaxWorkspaceProjection({
+      supabase: { from() { return query; } }, record, businessId: "business-a", taxYear: 2026,
+      requestId: "request-safe", diagnosticLogger: (...args) => logs.push(args),
+    });
+  } catch (error) { failure = error; }
+  assert.equal(failure?.code, "tax_workspace_live_population_mismatch");
+  assert.equal(reads, 1);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], "tax_workspace_live_population_mismatch_diagnostic");
+  assert.equal(logs[0][1].event, "tax_workspace_live_population_mismatch_diagnostic");
+  const browserError = workspaceReadError(failure);
+  assert.deepEqual([browserError.code, browserError.status, browserError.message], [
+    "tax_workspace_database_unavailable", 503, "Your Tax workspace could not be loaded right now.",
+  ]);
+
+  await assert.rejects(
+    reconcileTaxWorkspaceProjection({
+      supabase: { from() { return query; } }, record, businessId: "business-a", taxYear: 2026,
+      diagnosticLogger() { throw new Error("logging unavailable"); },
+    }),
+    (error) => error.code === "tax_workspace_live_population_mismatch",
+  );
+  assert.equal(reads, 2);
 });
 
 test("production-shaped classification snapshot serializes as a narrow indexed PostgREST query", async () => {

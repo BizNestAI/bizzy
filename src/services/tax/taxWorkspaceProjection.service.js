@@ -24,7 +24,7 @@ export async function buildAndPersistTaxWorkspaceProjection({ supabase, business
 
 // Recompute treatment-derived workspace sections from current classifications
 // while retaining the immutable projection's exact evaluated population.
-export async function reconcileTaxWorkspaceProjection({ supabase, record, businessId, taxYear, onStage, signal } = {}) {
+export async function reconcileTaxWorkspaceProjection({ supabase, record, businessId, taxYear, onStage, signal, requestId, diagnosticLogger = console.error } = {}) {
   if (!supabase || !businessId || !Number.isInteger(Number(taxYear))) throw coded("invalid_tax_workspace_scope");
   const baselinePayload = record?.projection_data;
   const evidence = baselinePayload?.identityEvidence || {};
@@ -34,9 +34,14 @@ export async function reconcileTaxWorkspaceProjection({ supabase, record, busine
   const classificationPage = await timedWorkspaceStage("live_classifications", onStage, () => listTaxWorkspaceClassificationSnapshot({
     supabase, businessId, taxYear: Number(taxYear), signal,
   }));
-  const currentRows = (classificationPage.rows || []).filter((row) => baseline.has(String(row.transaction_id)));
-  const currentIds = requiredUniqueSet(currentRows.map((row) => row.transaction_id), "tax_workspace_live_population_mismatch");
-  if (!sameSet(currentIds, baseline)) throw coded("tax_workspace_live_population_mismatch");
+  const liveRows = classificationPage.rows || [];
+  const currentRows = liveRows.filter((row) => baseline.has(String(row.transaction_id)));
+  const currentMembership = inspectCanonicalValues(currentRows.map((row) => row.transaction_id));
+  const currentIds = currentMembership.distinct;
+  if (currentMembership.nullCount || currentMembership.duplicateCount || !sameSet(currentIds, baseline)) {
+    emitPopulationMismatchDiagnostic({ diagnosticLogger, requestId, record, evidence, liveRows });
+    throw coded("tax_workspace_live_population_mismatch");
+  }
   const mapped = currentRows.map((row) => mapDeductionTransactionRow({
     ...row,
     taxScopeDisposition: matrix.has(String(row.transaction_id))
@@ -61,8 +66,254 @@ export async function reconcileTaxWorkspaceProjection({ supabase, record, busine
     });
   });
   await timedWorkspaceStage("validation", onStage, async () => validatePayload(payload));
-  if (!sameSet(new Set(payload.identityEvidence.evaluated), baseline)) throw coded("tax_workspace_live_population_mismatch");
+  if (!sameSet(new Set(payload.identityEvidence.evaluated), baseline)) {
+    emitPopulationMismatchDiagnostic({ diagnosticLogger, requestId, record, evidence, liveRows });
+    throw coded("tax_workspace_live_population_mismatch");
+  }
   return payload;
+}
+
+function emitPopulationMismatchDiagnostic(input) {
+  try {
+    input.diagnosticLogger?.("tax_workspace_live_population_mismatch_diagnostic", buildPopulationMismatchDiagnostic(input));
+  } catch {
+    // Diagnostics must never replace or mask the authoritative fail-closed error.
+  }
+}
+
+export function buildPopulationMismatchDiagnostic({ requestId, record, evidence = {}, liveRows = [] } = {}) {
+  try {
+    const projected = inspectCanonicalValues(evidence.evaluated);
+    const matrix = inspectCanonicalValues(evidence.matrixIncluded);
+    const outside = inspectCanonicalValues(evidence.outsideDeductions);
+    const live = inspectLiveRows(liveRows);
+    const intersection = setIntersection(projected.distinct, live.distinct);
+    const missing = setDifference(projected.distinct, live.distinct);
+    const extra = setDifference(live.distinct, projected.distinct);
+    const matrixMissing = setDifference(matrix.distinct, live.distinct);
+    const outsideMissing = setDifference(outside.distinct, live.distinct);
+    const duplicateAuthority = duplicateAuthorityCounts(live.rowsById, projected.distinct);
+    return {
+      event: "tax_workspace_live_population_mismatch_diagnostic",
+      requestId: safeDiagnosticText(requestId),
+      projectionId: safeDiagnosticText(record?.id),
+      projectionVersion: safeDiagnosticText(record?.projection_version || record?.projection_data?.projectionVersion),
+      projectionFormulaVersion: safeDiagnosticText(record?.formula_version || record?.projection_data?.formulaVersion),
+      projectionEvaluatedRawCount: projected.rawCount,
+      projectionEvaluatedDistinctCanonicalIdCount: projected.distinct.size,
+      projectionMatrixRawCount: matrix.rawCount,
+      projectionMatrixDistinctCount: matrix.distinct.size,
+      projectionOutsideDeductionsRawCount: outside.rawCount,
+      projectionOutsideDeductionsDistinctCount: outside.distinct.size,
+      projectionNullMalformedIdentifierCount: projected.nullCount,
+      projectionDuplicateIdentifierCount: projected.duplicateCount,
+      liveRawRowCount: live.rawCount,
+      liveCanonicalDistinctIdCount: live.distinct.size,
+      liveNullMalformedIdentifierCount: live.nullCount,
+      liveDuplicateIdentifierCount: live.duplicateIdCount,
+      liveDuplicateExcessRowCount: live.duplicateExcessRowCount,
+      liveActiveCurrentCount: live.activeCount,
+      liveSupersededHistoryCount: live.supersededCount,
+      liveCountByTreatmentStatus: live.byTreatment,
+      liveCountByAuthority: live.byAuthority,
+      liveCountBySource: live.bySource,
+      intersectionDistinctCount: intersection.size,
+      projectionIdsMissingFromLiveCount: missing.size,
+      projectionMatrixIdsMissingFromLiveCount: matrixMissing.size,
+      projectionOutsideDeductionsIdsMissingFromLiveCount: outsideMissing.size,
+      liveIdsOutsideProjectionCount: extra.size,
+      projectionMembersWithMultipleEquallyAuthoritativeCurrentRowsCount: duplicateAuthority.ambiguous,
+      projectionMembersResolvedByNormalAuthorityPrecedenceCount: duplicateAuthority.resolved,
+      phoneBillProjectionMembersCurrentlyReviewedCount: live.phoneBillReviewedProjectionIds(projected.distinct).size,
+      canonicalKeySourceCounts: live.keySources,
+      populationMismatchReason: populationMismatchReason({ projected, live, missing, extra, matrixMissing, outsideMissing, duplicateAuthority }),
+      fingerprints: {
+        projectionEvaluated: setFingerprint([...projected.distinct]),
+        projectionMatrix: setFingerprint([...matrix.distinct]),
+        projectionOutside: setFingerprint([...outside.distinct]),
+        liveDistinct: setFingerprint([...live.distinct]),
+        intersection: setFingerprint([...intersection]),
+        missing: setFingerprint([...missing]),
+        extra: setFingerprint([...extra]),
+      },
+    };
+  } catch {
+    // Keep the builder itself total even when diagnostic inputs contain hostile getters.
+    return emptyPopulationMismatchDiagnostic(null, null);
+  }
+}
+
+function inspectCanonicalValues(values) {
+  const input = Array.isArray(values) ? values : [];
+  const counts = new Map();
+  let nullCount = 0;
+  for (const value of input) {
+    const id = canonicalIdentifier(value);
+    if (!id) { nullCount += 1; continue; }
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  return {
+    rawCount: input.length,
+    distinct: new Set(counts.keys()),
+    nullCount,
+    duplicateCount: [...counts.values()].filter((count) => count > 1).length,
+  };
+}
+
+function inspectLiveRows(rows) {
+  const input = Array.isArray(rows) ? rows : [];
+  const rowsById = new Map();
+  const keySources = emptyKeySourceCounts();
+  const byTreatment = emptyEnumCounts(TREATMENT_STATUS_VALUES);
+  const byAuthority = emptyEnumCounts(AUTHORITY_STATUS_VALUES);
+  const bySource = emptyEnumCounts(CLASSIFICATION_SOURCE_VALUES);
+  let nullCount = 0;
+  let activeCount = 0;
+  let supersededCount = 0;
+  for (const candidate of input) {
+    const row = candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate : {};
+    const key = liveCanonicalKey(row);
+    keySources[key.source] += 1;
+    incrementSafeEnum(byTreatment, row.deductibility_status, TREATMENT_STATUS_VALUES);
+    incrementSafeEnum(byAuthority, row.classification_status, AUTHORITY_STATUS_VALUES);
+    incrementSafeEnum(bySource, row.source || row.classification_source, CLASSIFICATION_SOURCE_VALUES);
+    if (isHistoricalRow(row)) supersededCount += 1;
+    else activeCount += 1;
+    if (!key.id) { nullCount += 1; continue; }
+    const matching = rowsById.get(key.id) || [];
+    matching.push(row);
+    rowsById.set(key.id, matching);
+  }
+  const duplicateCounts = [...rowsById.values()].map((matching) => matching.length).filter((count) => count > 1);
+  const phoneBillReviewedIds = new Set([...rowsById].filter(([, matching]) => matching.some(isReviewedPhoneBillRow)).map(([id]) => id));
+  return {
+    rawCount: input.length,
+    distinct: new Set(rowsById.keys()),
+    nullCount,
+    duplicateIdCount: duplicateCounts.length,
+    duplicateExcessRowCount: duplicateCounts.reduce((sum, count) => sum + count - 1, 0),
+    activeCount,
+    supersededCount,
+    byTreatment,
+    byAuthority,
+    bySource,
+    keySources,
+    rowsById,
+    phoneBillReviewedProjectionIds(projected) { return setIntersection(phoneBillReviewedIds, projected); },
+  };
+}
+
+const TREATMENT_STATUS_VALUES = Object.freeze([
+  "fully_deductible", "partially_deductible", "nondeductible", "capitalizable",
+  "balance_sheet", "needs_review", "not_yet_determined", "excluded",
+]);
+const AUTHORITY_STATUS_VALUES = Object.freeze([
+  "auto_classified", "needs_review", "needs_tax_review", "user_confirmed",
+  "bizzi_operator_confirmed", "cpa_confirmed", "excluded",
+]);
+const CLASSIFICATION_SOURCE_VALUES = Object.freeze([
+  "rule_engine", "user", "cpa", "bizzi_operator", "system", "manual", "imported",
+]);
+
+function emptyEnumCounts(allowed) { return Object.fromEntries([...allowed, "unknown"].map((value) => [value, 0])); }
+function incrementSafeEnum(counts, raw, allowed) {
+  const value = String(raw || "").trim().toLowerCase();
+  counts[allowed.includes(value) ? value : "unknown"] += 1;
+}
+function emptyKeySourceCounts() {
+  return { transaction_id: 0, source_transaction_id: 0, qbo_transaction_id: 0, another_established_field: 0, missing_key: 0 };
+}
+function liveCanonicalKey(row) {
+  const candidates = [
+    ["transaction_id", row.transaction_id],
+    ["source_transaction_id", row.source_transaction_id],
+    ["qbo_transaction_id", row.qbo_transaction_id ?? row.source_qbo_txn_id],
+    ["another_established_field", row.transactionId],
+  ];
+  for (const [source, value] of candidates) {
+    const id = canonicalIdentifier(value);
+    if (id) return { id, source };
+  }
+  return { id: null, source: "missing_key" };
+}
+function canonicalIdentifier(value) {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const text = String(value).trim();
+  return text && text.length <= 500 ? text : null;
+}
+function isHistoricalRow(row) {
+  const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata : {};
+  return row.is_current === false || Boolean(row.superseded_at || metadata.superseded_at || metadata.neutralized_at);
+}
+function isReviewedPhoneBillRow(row) {
+  const account = String(row.source_qbo_account_name || row.metadata?.source_qbo_account_name || "").trim().toLowerCase();
+  return account === "phone bill" && ["user_confirmed", "bizzi_operator_confirmed", "cpa_confirmed"].includes(String(row.classification_status || "").toLowerCase());
+}
+function setIntersection(left, right) { return new Set([...left].filter((id) => right.has(id))); }
+function setDifference(left, right) { return new Set([...left].filter((id) => !right.has(id))); }
+
+function duplicateAuthorityCounts(rowsById, projected) {
+  let ambiguous = 0;
+  let resolved = 0;
+  for (const [id, rows] of rowsById) {
+    if (!projected.has(id)) continue;
+    const current = rows.filter((row) => !isHistoricalRow(row));
+    if (current.length < 2) continue;
+    const ranks = current.map(authorityRank);
+    const maximum = Math.max(...ranks);
+    if (ranks.filter((rank) => rank === maximum).length > 1) ambiguous += 1;
+    else resolved += 1;
+  }
+  return { ambiguous, resolved };
+}
+function authorityRank(row) {
+  return ({ cpa_confirmed: 5, bizzi_operator_confirmed: 4, user_confirmed: 3, excluded: 3, auto_classified: 2, needs_tax_review: 1, needs_review: 1 })[String(row.classification_status || "").toLowerCase()] || 0;
+}
+function populationMismatchReason({ projected, live, missing, extra, matrixMissing, outsideMissing, duplicateAuthority }) {
+  if (duplicateAuthority.ambiguous) return "genuinely_ambiguous_current_rows";
+  if (live.supersededCount && live.duplicateIdCount) return "historical_duplicate_revisions";
+  if (live.keySources.source_transaction_id || live.keySources.qbo_transaction_id || live.keySources.another_established_field || live.keySources.missing_key || projected.nullCount) return "canonical_identifier_mismatch";
+  if (matrixMissing.size) return "missing_overlay_eligible_matrix_members";
+  if (outsideMissing.size && !matrixMissing.size && !extra.size) return "intentionally_absent_outside_deduction_live_rows";
+  if (extra.size && !missing.size) return "harmless_extra_live_rows";
+  return "exact_population_equality_failure";
+}
+function safeDiagnosticText(value) {
+  const text = typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+  return text ? text.slice(0, 200) : null;
+}
+function emptyPopulationMismatchDiagnostic(requestId, record) {
+  const emptyFingerprint = setFingerprint([]);
+  return {
+    event: "tax_workspace_live_population_mismatch_diagnostic",
+    requestId: safeDiagnosticText(requestId),
+    projectionId: safeDiagnosticText(record?.id),
+    projectionVersion: safeDiagnosticText(record?.projection_version || record?.projection_data?.projectionVersion),
+    projectionFormulaVersion: safeDiagnosticText(record?.formula_version || record?.projection_data?.formulaVersion),
+    projectionEvaluatedRawCount: 0, projectionEvaluatedDistinctCanonicalIdCount: 0,
+    projectionMatrixRawCount: 0, projectionMatrixDistinctCount: 0,
+    projectionOutsideDeductionsRawCount: 0, projectionOutsideDeductionsDistinctCount: 0,
+    projectionNullMalformedIdentifierCount: 0, projectionDuplicateIdentifierCount: 0,
+    liveRawRowCount: 0, liveCanonicalDistinctIdCount: 0, liveNullMalformedIdentifierCount: 0,
+    liveDuplicateIdentifierCount: 0, liveDuplicateExcessRowCount: 0,
+    liveActiveCurrentCount: 0, liveSupersededHistoryCount: 0,
+    liveCountByTreatmentStatus: emptyEnumCounts(TREATMENT_STATUS_VALUES),
+    liveCountByAuthority: emptyEnumCounts(AUTHORITY_STATUS_VALUES),
+    liveCountBySource: emptyEnumCounts(CLASSIFICATION_SOURCE_VALUES),
+    intersectionDistinctCount: 0, projectionIdsMissingFromLiveCount: 0,
+    projectionMatrixIdsMissingFromLiveCount: 0, projectionOutsideDeductionsIdsMissingFromLiveCount: 0,
+    liveIdsOutsideProjectionCount: 0,
+    projectionMembersWithMultipleEquallyAuthoritativeCurrentRowsCount: 0,
+    projectionMembersResolvedByNormalAuthorityPrecedenceCount: 0,
+    phoneBillProjectionMembersCurrentlyReviewedCount: 0,
+    canonicalKeySourceCounts: emptyKeySourceCounts(),
+    populationMismatchReason: "diagnostic_generation_failed",
+    fingerprints: {
+      projectionEvaluated: emptyFingerprint, projectionMatrix: emptyFingerprint,
+      projectionOutside: emptyFingerprint, liveDistinct: emptyFingerprint,
+      intersection: emptyFingerprint, missing: emptyFingerprint, extra: emptyFingerprint,
+    },
+  };
 }
 
 async function timedWorkspaceStage(name, onStage, work) {

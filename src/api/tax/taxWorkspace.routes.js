@@ -49,6 +49,7 @@ router.get("/workspace", async (req, res) => {
     const projection = projectionVersion === TAX_WORKSPACE_PROJECTION_VERSION
       ? await reconcileTaxWorkspaceProjection({
         supabase: db, record, businessId, taxYear, signal: requestController.signal,
+        requestId: req.id || req.headers?.["x-request-id"],
         onStage: (name, durationMs) => { stageTimings[name] = durationMs; },
       })
       : record.projection_data;
@@ -148,7 +149,10 @@ router.get("/workspace/matrix-cell", async (req, res) => {
     req.once("aborted", abortRequest);
     let projection;
     try {
-      projection = await reconcileTaxWorkspaceProjection({ supabase: db, record, businessId, taxYear, signal: requestController.signal });
+      projection = await reconcileTaxWorkspaceProjection({
+        supabase: db, record, businessId, taxYear, signal: requestController.signal,
+        requestId: req.id || req.headers?.["x-request-id"],
+      });
     } finally {
       req.removeListener("aborted", abortRequest);
     }
