@@ -24,7 +24,7 @@ export async function buildAndPersistTaxWorkspaceProjection({ supabase, business
 
 // Recompute treatment-derived workspace sections from current classifications
 // while retaining the immutable projection's exact evaluated population.
-export async function reconcileTaxWorkspaceProjection({ supabase, record, businessId, taxYear, onStage, signal, requestId, diagnosticLogger = console.error } = {}) {
+export async function reconcileTaxWorkspaceProjection({ supabase, record, businessId, taxYear, onStage, signal, requestId, diagnosticLogger = console.error, metricLogger = console.warn } = {}) {
   if (!supabase || !businessId || !Number.isInteger(Number(taxYear))) throw coded("invalid_tax_workspace_scope");
   const baselinePayload = record?.projection_data;
   const evidence = baselinePayload?.identityEvidence || {};
@@ -35,13 +35,18 @@ export async function reconcileTaxWorkspaceProjection({ supabase, record, busine
     supabase, businessId, taxYear: Number(taxYear), signal,
   }));
   const liveRows = classificationPage.rows || [];
+  const malformedLiveRows = liveRows.filter((row) => !canonicalIdentifier(row?.transaction_id));
+  const crossScopeRows = liveRows.filter((row) => (row?.business_id && String(row.business_id) !== String(businessId)) ||
+    (row?.tax_year != null && Number(row.tax_year) !== Number(taxYear)));
   const currentRows = liveRows.filter((row) => baseline.has(String(row.transaction_id)));
   const currentMembership = inspectCanonicalValues(currentRows.map((row) => row.transaction_id));
   const currentIds = currentMembership.distinct;
-  if (currentMembership.nullCount || currentMembership.duplicateCount || !sameSet(currentIds, baseline)) {
+  if (malformedLiveRows.length || crossScopeRows.length || currentMembership.nullCount || currentMembership.duplicateCount) {
     emitPopulationMismatchDiagnostic({ diagnosticLogger, requestId, record, evidence, liveRows });
     throw coded("tax_workspace_live_population_mismatch");
   }
+  const missingIds = setDifference(baseline, currentIds);
+  const extraIds = setDifference(inspectCanonicalValues(liveRows.map((row) => row.transaction_id)).distinct, baseline);
   const mapped = currentRows.map((row) => mapDeductionTransactionRow({
     ...row,
     taxScopeDisposition: matrix.has(String(row.transaction_id))
@@ -57,20 +62,185 @@ export async function reconcileTaxWorkspaceProjection({ supabase, record, busine
       classifications: currentRows.map((row) => [row.transaction_id, row.classification_status, row.tax_category,
         row.deductibility_status, row.deductible_percent, row.deductible_amount, row.updated_at]),
     })).digest("hex");
-    return buildPayload({
+    const currentPayload = buildPayload({
       overview: {
         projection: { completeness: baselinePayload?.completeness || record?.completeness || "complete" },
         warnings: baselinePayload?.warnings || [],
       },
       lifecycle, businessId, taxYear: Number(taxYear), sourceFingerprint, generatedAt,
     });
+    return missingIds.size
+      ? restoreSparseProjectionMembers({ payload: currentPayload, baselinePayload, mappedRows: mapped, missingIds, matrix, outside })
+      : currentPayload;
   });
   await timedWorkspaceStage("validation", onStage, async () => validatePayload(payload));
   if (!sameSet(new Set(payload.identityEvidence.evaluated), baseline)) {
     emitPopulationMismatchDiagnostic({ diagnosticLogger, requestId, record, evidence, liveRows });
     throw coded("tax_workspace_live_population_mismatch");
   }
+  if (missingIds.size || extraIds.size) emitSparseOverlayMetric({
+    metricLogger, requestId, record, missingIds, extraIds, evidence,
+  });
   return payload;
+}
+
+function restoreSparseProjectionMembers({ payload, baselinePayload, mappedRows, missingIds, matrix, outside }) {
+  const result = structuredClone(payload);
+  const baselineEvidence = baselinePayload.identityEvidence || {};
+  const resultEvidence = result.identityEvidence || {};
+  const mappedById = new Map(mappedRows.map((row) => [String(row.id || row.transactionId || row.transaction_id), row]));
+  const missingMatrix = setIntersection(missingIds, matrix);
+  const missingOutside = setIntersection(missingIds, outside);
+
+  for (const id of missingMatrix) {
+    addUnique(resultEvidence.evaluated, id);
+    addUnique(resultEvidence.matrixIncluded, id);
+    const categoryKey = uniqueMembershipKey(baselineEvidence.categories, id, "tax_workspace_category_membership_invalid");
+    const month = uniqueMembershipKey(baselineEvidence.months, id, "tax_workspace_month_membership_invalid");
+    const treatment = uniqueMembershipKey(baselineEvidence.treatments, id, "tax_workspace_treatment_partition_invalid");
+    addUnique(resultEvidence.categories[categoryKey], id);
+    addUnique(resultEvidence.months[month], id);
+    addUnique(resultEvidence.treatments[treatment], id);
+  }
+  for (const id of missingOutside) {
+    addUnique(resultEvidence.evaluated, id);
+    addUnique(resultEvidence.outsideDeductions, id);
+  }
+
+  const affectedCells = new Map();
+  for (const id of missingMatrix) {
+    const categoryKey = uniqueMembershipKey(baselineEvidence.categories, id, "tax_workspace_category_membership_invalid");
+    const month = uniqueMembershipKey(baselineEvidence.months, id, "tax_workspace_month_membership_invalid");
+    affectedCells.set(`${categoryKey}\u0000${month}`, { categoryKey, month });
+  }
+  for (const { categoryKey, month } of affectedCells.values()) {
+    const baselineRow = baselinePayload.matrix.find((row) => row.categoryKey === categoryKey);
+    const baselineMonth = baselineRow?.months?.[month];
+    if (!baselineRow || !baselineMonth || !Array.isArray(baselineMonth.identityManifest)) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+    const baselineIds = new Set(baselineMonth.identityManifest.map(String));
+    const missingCellIds = [...missingMatrix].filter((id) => baselineIds.has(id));
+    const presentCellIds = [...baselineIds].filter((id) => !missingIds.has(id));
+    const baselineTreatmentById = new Map(presentCellIds.map((id) => [id,
+      uniqueMembershipKey(baselineEvidence.treatments, id, "tax_workspace_treatment_partition_invalid")]));
+    const presentRows = presentCellIds.map((id) => mappedById.get(id));
+    if (presentRows.some((row) => !row)) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+    const presentBook = presentRows.reduce((sum, row) => sum + signedExpenseAmount(row), 0);
+    const presentEstimated = presentCellIds.reduce((sum, id) => sum + (baselineTreatmentById.get(id) === "estimated" ? signedDeductibleAmount(mappedById.get(id)) : 0), 0);
+    const presentReviewed = presentCellIds.reduce((sum, id) => sum + (baselineTreatmentById.get(id) === "reviewed" ? signedDeductibleAmount(mappedById.get(id)) : 0), 0);
+    const presentNeedsInput = presentCellIds.reduce((sum, id) => sum + (baselineTreatmentById.get(id) === "needs_input" ? signedExpenseAmount(mappedById.get(id)) : 0), 0);
+    const missingCounts = { estimated: 0, reviewed: 0, needs_input: 0 };
+    missingCellIds.forEach((id) => { missingCounts[uniqueMembershipKey(baselineEvidence.treatments, id, "tax_workspace_treatment_partition_invalid")] += 1; });
+    let resultRow = result.matrix.find((row) => row.categoryKey === categoryKey);
+    if (!resultRow) {
+      resultRow = { categoryKey, categoryLabel: baselineRow.categoryLabel, transactionCount: 0, identityManifest: [], months: {} };
+      result.matrix.push(resultRow);
+    }
+    const resultMonth = resultRow.months[month] || emptyMatrixMonth();
+    resultMonth.transactionCount += missingCellIds.length;
+    resultMonth.identityManifest = sortedUnique([...(resultMonth.identityManifest || []), ...missingCellIds]);
+    resultMonth.bookExpenseAmount = round(resultMonth.bookExpenseAmount + Number(baselineMonth.bookExpenseAmount || 0) - presentBook);
+    resultMonth.estimatedTransactionCount += missingCounts.estimated;
+    resultMonth.reviewedTransactionCount += missingCounts.reviewed;
+    resultMonth.needsInputTransactionCount += missingCounts.needs_input;
+    resultMonth.estimatedDeductibleAmount = round(resultMonth.estimatedDeductibleAmount + Number(baselineMonth.estimatedDeductibleAmount || 0) - presentEstimated);
+    resultMonth.reviewedDeductibleAmount = round(resultMonth.reviewedDeductibleAmount + Number(baselineMonth.reviewedDeductibleAmount || 0) - presentReviewed);
+    resultMonth.needsInputGrossExpense = round(resultMonth.needsInputGrossExpense + Number(baselineMonth.needsInputGrossExpense || 0) - presentNeedsInput);
+    resultMonth.needsReviewAmount = resultMonth.needsInputGrossExpense;
+    resultMonth.deductibleAmount = round(resultMonth.estimatedDeductibleAmount + resultMonth.reviewedDeductibleAmount);
+    resultRow.months[month] = resultMonth;
+    resultRow.identityManifest = sortedUnique([...(resultRow.identityManifest || []), ...missingCellIds]);
+    resultRow.transactionCount += missingCellIds.length;
+  }
+  result.matrix.sort((left, right) => String(left.categoryLabel).localeCompare(String(right.categoryLabel)));
+  restoreMissingQuestionMemberships({ result, baselinePayload, mappedById, missingIds });
+  result.identityEvidence = resultEvidence;
+  result.evaluatedTransactionCount = resultEvidence.evaluated.length;
+  result.matrixIncludedCount = resultEvidence.matrixIncluded.length;
+  result.outsideDeductionsCount = resultEvidence.outsideDeductions.length;
+  result.treatmentCounts = Object.fromEntries(Object.entries(resultEvidence.treatments).map(([key, ids]) => [key, ids.length]));
+  result.estimatedDeductibleAmount = round(result.matrix.reduce((sum, row) => sum + Object.values(row.months).reduce((monthSum, value) => monthSum + Number(value.deductibleAmount || 0), 0), 0));
+  refreshIdentityFingerprints(result);
+  result.warnings = [...(result.warnings || []), {
+    code: "tax_workspace_sparse_live_overlay", severity: "low",
+    message: `${missingIds.size} persisted workspace member${missingIds.size === 1 ? "" : "s"} retained immutable projection treatment because no current live overlay was available.`,
+  }];
+  return result;
+}
+
+function emptyMatrixMonth() {
+  return { transactionCount: 0, identityManifest: [], bookExpenseAmount: 0, deductibleAmount: 0,
+    needsReviewAmount: 0, needsInputGrossExpense: 0, needsTaxReviewGrossExpense: 0,
+    estimatedTransactionCount: 0, reviewedTransactionCount: 0, needsInputTransactionCount: 0,
+    estimatedDeductibleAmount: 0, reviewedDeductibleAmount: 0 };
+}
+
+function restoreMissingQuestionMemberships({ result, baselinePayload, mappedById, missingIds }) {
+  const baselineGroups = baselinePayload.identityEvidence?.questionGroups || {};
+  result.identityEvidence.questionGroups ||= {};
+  for (const [groupId, baselineMembers] of Object.entries(baselineGroups)) {
+    const unresolved = baselineMembers.filter((id) => missingIds.has(String(id)));
+    if (!unresolved.length) continue;
+    let group = result.questionGroups.find((candidate) => candidate.id === groupId);
+    const baselineGroup = baselinePayload.questionGroups.find((candidate) => candidate.id === groupId);
+    if (!baselineGroup) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
+    if (!group) {
+      group = { ...structuredClone(baselineGroup), transactionCount: 0, actionableTransactionCount: 0,
+        actionableGrossAmountCents: 0, actionableEstimatedDeductibleAmountCents: 0 };
+      result.questionGroups.push(group);
+      result.identityEvidence.questionGroups[groupId] = [];
+    }
+    const presentBaselineGrossCents = baselineMembers.filter((id) => !missingIds.has(String(id))).reduce((sum, id) => {
+      const row = mappedById.get(String(id));
+      return sum + (row ? Math.round(Math.abs(signedExpenseAmount(row)) * 100) : 0);
+    }, 0);
+    result.identityEvidence.questionGroups[groupId] = sortedUnique([
+      ...(result.identityEvidence.questionGroups[groupId] || []), ...unresolved,
+    ]);
+    group.transactionCount += unresolved.length;
+    group.actionableTransactionCount += unresolved.length;
+    group.actionableGrossAmountCents += Math.max(0, Number(baselineGroup.actionableGrossAmountCents || 0) - presentBaselineGrossCents);
+    group.state = "temporarily_unavailable";
+    group.liveOverlayMissingCount = unresolved.length;
+  }
+  result.questionGroups.sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const memberships = Object.values(result.identityEvidence.questionGroups);
+  result.questionGroupCount = result.questionGroups.length;
+  result.questionMembershipSum = memberships.reduce((sum, ids) => sum + ids.length, 0);
+  const union = sortedUnique(memberships.flat());
+  result.questionCoveredUniqueCount = union.length;
+  result.questionMembershipOverlapCount = result.questionMembershipSum - union.length;
+}
+
+function uniqueMembershipKey(partitions, id, code) {
+  const keys = Object.entries(partitions || {}).filter(([, ids]) => Array.isArray(ids) && ids.map(String).includes(String(id))).map(([key]) => key);
+  if (keys.length !== 1) throw coded(code);
+  return keys[0];
+}
+function addUnique(values, id) { if (!values.includes(id)) values.push(id); values.sort(); }
+function refreshIdentityFingerprints(payload) {
+  const evidence = payload.identityEvidence;
+  const questionCovered = sortedUnique(Object.values(evidence.questionGroups || {}).flat());
+  payload.identityFingerprints = {
+    evaluated: setFingerprint(evidence.evaluated), matrixIncluded: setFingerprint(evidence.matrixIncluded),
+    outsideDeductions: setFingerprint(evidence.outsideDeductions), estimated: setFingerprint(evidence.treatments.estimated),
+    reviewed: setFingerprint(evidence.treatments.reviewed), needsInput: setFingerprint(evidence.treatments.needs_input),
+    questionCovered: setFingerprint(questionCovered),
+  };
+}
+
+function emitSparseOverlayMetric({ metricLogger, requestId, record, missingIds, extraIds, evidence }) {
+  try {
+    const treatmentCounts = Object.fromEntries(Object.entries(evidence.treatments || {}).map(([key, ids]) =>
+      [key, ids.filter((id) => missingIds.has(String(id))).length]));
+    metricLogger?.("tax_workspace_sparse_live_overlay", {
+      event: "tax_workspace_sparse_live_overlay", requestId: safeDiagnosticText(requestId),
+      projectionId: safeDiagnosticText(record?.id), missingOverlayCount: missingIds.size,
+      extraOverlayCount: extraIds.size, ambiguousCount: 0, missingTreatmentCounts: treatmentCounts,
+      missingFingerprint: setFingerprint([...missingIds]), extraFingerprint: setFingerprint([...extraIds]),
+    });
+  } catch {
+    // Metrics must never affect the read model.
+  }
 }
 
 function emitPopulationMismatchDiagnostic(input) {

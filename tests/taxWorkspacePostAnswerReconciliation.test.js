@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   __taxWorkspaceProjectionTestInternals as projection,
   buildPopulationMismatchDiagnostic,
+  publicTaxWorkspaceProjection,
   reconcileTaxWorkspaceProjection,
 } from "../src/services/tax/taxWorkspaceProjection.service.js";
 import { createClient } from "@supabase/supabase-js";
@@ -123,7 +124,10 @@ test("population mismatch logs once without another database call and preserves 
     select() { return this; }, eq() { return this; }, limit() { return this; },
     then(resolve) {
       reads += 1;
-      return Promise.resolve(resolve({ data: [{ transaction_id: "present", classification_status: "auto_classified" }], error: null }));
+      return Promise.resolve(resolve({ data: [
+        { transaction_id: "present", classification_status: "auto_classified" },
+        { transaction_id: "present", classification_status: "auto_classified" },
+      ], error: null }));
     },
   };
   const record = {
@@ -148,7 +152,7 @@ test("population mismatch logs once without another database call and preserves 
   assert.equal(logs[0][1].event, "tax_workspace_live_population_mismatch_diagnostic");
   const browserError = workspaceReadError(failure);
   assert.deepEqual([browserError.code, browserError.status, browserError.message], [
-    "tax_workspace_database_unavailable", 503, "Your Tax workspace could not be loaded right now.",
+    "tax_workspace_reconciliation_failed", 409, "Your Tax workspace could not be reconciled with current tax data.",
   ]);
 
   await assert.rejects(
@@ -258,6 +262,141 @@ test("a 714-row production-shaped workspace reconciles with one database read un
   assert.equal(reconciled.outsideDeductionsCount, 24);
   assert.ok(performance.now() - startedAt < 1_000);
 });
+
+test("a sparse 713-row live overlay preserves the immutable 714-member production population", async () => {
+  const { baseline, classifications, missingId, phoneIds } = productionSparseOverlayFixture();
+  let reads = 0;
+  const query = {
+    select() { return this; }, eq() { return this; }, limit() { return this; },
+    then(resolve) { reads += 1; return Promise.resolve(resolve({ data: classifications, error: null })); },
+  };
+  const startedAt = performance.now();
+  const reconciled = await reconcileTaxWorkspaceProjection({
+    supabase: { from() { return query; } },
+    record: { id: "projection-sparse", source_fingerprint: baseline.sourceFingerprint, projection_data: baseline },
+    businessId: "business-a", taxYear: 2026, diagnosticLogger() {}, metricLogger() {},
+  });
+  assert.ok(performance.now() - startedAt < 5_000);
+  assert.equal(reads, 1);
+  assert.deepEqual([
+    reconciled.evaluatedTransactionCount, reconciled.matrixIncludedCount, reconciled.outsideDeductionsCount,
+  ], [714, 690, 24]);
+  assert.deepEqual(reconciled.treatmentCounts, { estimated: 276, reviewed: 48, needs_input: 366 });
+  assert.deepEqual([
+    reconciled.questionGroupCount, reconciled.questionMembershipSum,
+    reconciled.questionCoveredUniqueCount, reconciled.questionMembershipOverlapCount,
+  ], [7, 310, 310, 0]);
+  assert.ok(reconciled.identityEvidence.treatments.needs_input.includes(missingId));
+  assert.ok(Object.values(reconciled.identityEvidence.categories).some((ids) => ids.includes(missingId)));
+  assert.ok(Object.values(reconciled.identityEvidence.months).some((ids) => ids.includes(missingId)));
+  assert.ok(phoneIds.every((id) => reconciled.identityEvidence.treatments.reviewed.includes(id)));
+  assert.ok(phoneIds.every((id) => !Object.values(reconciled.identityEvidence.questionGroups).flat().includes(id)));
+  const matrixSum = (payload, field) => payload.matrix.reduce((sum, row) => sum + Object.values(row.months)
+    .reduce((monthSum, value) => monthSum + Number(value[field] || 0), 0), 0);
+  assert.equal(matrixSum(reconciled, "bookExpenseAmount"), matrixSum(baseline, "bookExpenseAmount"));
+  assert.equal(reconciled.estimatedDeductibleAmount, baseline.estimatedDeductibleAmount + 260);
+  assert.equal(matrixSum(reconciled, "needsInputGrossExpense"), matrixSum(baseline, "needsInputGrossExpense") - 260);
+  assert.doesNotThrow(() => projection.validatePayload(reconciled));
+  const browserProjection = publicTaxWorkspaceProjection(reconciled);
+  assert.doesNotThrow(() => JSON.stringify({ ok: true, data: { state: "complete", projectionVersion: "tax-workspace-v2", projection: browserProjection } }));
+  assert.equal(browserProjection.identityEvidence, undefined);
+  assert.equal(browserProjection.matrix.reduce((sum, row) => sum + row.transactionCount, 0), 690);
+});
+
+test("sparse overlay isolates actionable, outside, and extra membership without weakening invariant failures", async () => {
+  const reconcileFixture = async (fixture, mutate = () => {}) => {
+    mutate(fixture.classifications);
+    let reads = 0;
+    const query = { select() { return this; }, eq() { return this; }, limit() { return this; },
+      then(resolve) { reads += 1; return Promise.resolve(resolve({ data: fixture.classifications, error: null })); } };
+    const value = await reconcileTaxWorkspaceProjection({ supabase: { from() { return query; } },
+      record: { id: "projection-sparse", projection_data: fixture.baseline }, businessId: "business-a", taxYear: 2026,
+      diagnosticLogger() {}, metricLogger() {} });
+    assert.equal(reads, 1);
+    return value;
+  };
+
+  const actionable = await reconcileFixture(productionSparseOverlayFixture({ missingId: "question-0" }));
+  assert.deepEqual([actionable.evaluatedTransactionCount, actionable.matrixIncludedCount, actionable.outsideDeductionsCount], [714, 690, 24]);
+  assert.equal(actionable.questionMembershipSum, 310);
+  assert.ok(actionable.questionGroups.some((group) => group.state === "temporarily_unavailable" && group.liveOverlayMissingCount === 1));
+  assert.doesNotThrow(() => projection.validatePayload(actionable));
+
+  const outside = await reconcileFixture(productionSparseOverlayFixture({ missingId: "outside-0" }));
+  assert.deepEqual([outside.evaluatedTransactionCount, outside.matrixIncludedCount, outside.outsideDeductionsCount], [714, 690, 24]);
+  assert.doesNotThrow(() => projection.validatePayload(outside));
+
+  const extra = await reconcileFixture(productionSparseOverlayFixture(), (rows) => rows.push({
+    ...rows[0], transaction_id: "live-extra", source_qbo_txn_id: "live-extra",
+  }));
+  assert.deepEqual([extra.evaluatedTransactionCount, extra.matrixIncludedCount, extra.outsideDeductionsCount], [714, 690, 24]);
+
+  for (const mutate of [
+    (rows) => rows.push({ ...rows[0] }),
+    (rows) => rows.push({ ...rows[0], transaction_id: null, source_qbo_txn_id: null }),
+    (rows) => rows.push({ ...rows[0], transaction_id: "cross-tenant", business_id: "business-b" }),
+    (rows) => rows.push({ ...rows[0], transaction_id: "cross-year", tax_year: 2025 }),
+  ]) {
+    await assert.rejects(reconcileFixture(productionSparseOverlayFixture(), mutate),
+      (error) => error.code === "tax_workspace_live_population_mismatch");
+  }
+});
+
+function productionSparseOverlayFixture({ missingId = "missing-nonactionable" } = {}) {
+  const entries = [];
+  const add = (id, outcome, { scope = "expense_cogs_in_matrix", category = "supplies", amount = 10, account = "Supplies" } = {}) => entries.push({
+    id, outcome, actionOwner: outcome === "customer_input_required" ? "customer_fact_required" : "none",
+    row: { transactionId: id, date: "2026-07-15", taxScopeDisposition: scope, taxCategory: category,
+      taxCategoryLabel: category === "utilities" ? "Utilities" : category === "income" ? "Income" : "Supplies",
+      qboAccountId: account, qboAccountName: account, signedAmount: scope === "expense_cogs_in_matrix" ? -amount : amount,
+      deductibleAmount: outcome === "customer_input_required" || scope !== "expense_cogs_in_matrix" ? null : amount },
+  });
+  for (let index = 0; index < 276; index += 1) add(`estimated-${index}`, "standard_rule_applied");
+  for (let index = 0; index < 43; index += 1) add(`reviewed-${index}`, "reviewed");
+  const phoneIds = Array.from({ length: 5 }, (_, index) => `phone-${index}`);
+  phoneIds.forEach((id, index) => add(id, "customer_input_required", { category: "utilities", amount: 50 + index, account: "Phone Bill" }));
+  const otherQuestionIds = Array.from({ length: 310 }, (_, index) => `question-${index}`);
+  const counts = [171, 61, 61, 8, 4, 3, 2];
+  const boundaries = counts.reduce((values, count) => [...values, (values.at(-1) || 0) + count], []);
+  otherQuestionIds.forEach((id, index) => add(id, "customer_input_required", {
+    category: "travel_transportation", account: `Transportation ${boundaries.findIndex((boundary) => index < boundary) + 1}`,
+  }));
+  add("missing-nonactionable", "ambiguous", { amount: 37 });
+  for (let index = 0; index < 55; index += 1) add(`other-input-${index}`, "ambiguous");
+  for (let index = 0; index < 24; index += 1) add(`outside-${index}`, "outside_deductions", {
+    scope: "posted_non_expense_outside_deductions", category: "income", amount: 20,
+  });
+  const group = (id, ids, account = id) => ({ id, decisionType: "business_use_confirmation", qboAccountId: account,
+    qboAccountName: account, semanticFingerprint: `semantic-${id}`, semanticManifest: { version: 1, id }, ruleVersions: ["v4"],
+    transactionCount: ids.length, actionableTransactionCount: ids.length, months: ["2026-07"],
+    actionableGrossAmountCents: ids.reduce((sum, memberId) => sum + Math.abs(entries.find((entry) => entry.id === memberId).row.signedAmount) * 100, 0),
+    actionableEstimatedDeductibleAmountCents: 0, state: "needs_input", stableTransactionIds: { actionable: ids } });
+  let offset = 0;
+  const groups = [group("phone", phoneIds, "Phone Bill"), ...counts.map((count, index) => {
+    const ids = otherQuestionIds.slice(offset, offset + count); offset += count; return group(`group-${index}`, ids);
+  })];
+  const baseline = projection.buildPayload({ overview: { projection: { completeness: "complete" }, warnings: [] },
+    lifecycle: { entries, activeDecisionGroups: groups }, businessId: "business-a", taxYear: 2026,
+    sourceFingerprint: "d".repeat(64), generatedAt: "2026-10-30T12:00:00.000Z" });
+  const classifications = entries.filter((entry) => entry.id !== missingId).map((entry) => {
+    const phoneReviewed = phoneIds.includes(entry.id);
+    return {
+      business_id: "business-a", tax_year: 2026, transaction_id: entry.id, transaction_date: entry.row.date,
+      tax_category: entry.row.taxCategory, classification_status: phoneReviewed ? "user_confirmed"
+        : entry.outcome === "reviewed" ? "user_confirmed" : entry.outcome === "standard_rule_applied" ? "auto_classified" : "needs_review",
+      deductibility_status: phoneReviewed || entry.outcome === "reviewed" || entry.outcome === "standard_rule_applied" ? "fully_deductible" : "needs_review",
+      deductible_percent: phoneReviewed || entry.outcome === "reviewed" || entry.outcome === "standard_rule_applied" ? 100 : null,
+      book_amount: entry.row.signedAmount, deductible_amount: phoneReviewed ? -entry.row.signedAmount : entry.row.deductibleAmount,
+      source_qbo_account_id: entry.row.qboAccountId, source_qbo_account_name: entry.row.qboAccountName,
+      rule_code: entry.outcome === "customer_input_required" ? "business_use_review"
+        : entry.outcome === "ambiguous" ? null : "standard",
+      rule_version: "v4", requires_review: entry.outcome === "customer_input_required" || entry.outcome === "ambiguous",
+      source: phoneReviewed ? "user" : entry.outcome === "ambiguous" ? null : "rule_engine",
+      metadata: { tax_scope_disposition: entry.row.taxScopeDisposition },
+    };
+  });
+  return { baseline, classifications, missingId, phoneIds };
+}
 
 test("saved decision with a failed workspace refresh remains saved and exposes a retry", () => {
   const dashboard = read("src/pages/Tax/TaxDashboard.jsx");

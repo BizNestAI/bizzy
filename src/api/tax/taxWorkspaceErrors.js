@@ -20,6 +20,14 @@ export function workspaceReadError(error) {
       { action: "retry" },
     );
   }
+  if (code === "tax_workspace_live_population_mismatch") {
+    return safeError(
+      "tax_workspace_reconciliation_failed",
+      409,
+      "Your Tax workspace could not be reconciled with current tax data.",
+      { action: "retry" },
+    );
+  }
   const implementationFailure = status === 400 || status === 414 || status === 431 ||
     code === "42703" || code === "42601" || code === "22P02" || /^PGRST(?!000)/.test(code);
   if (implementationFailure) {

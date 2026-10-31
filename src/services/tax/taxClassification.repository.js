@@ -4,7 +4,7 @@ import { validationError } from "./taxErrors.js";
 
 const CLASSIFICATION_SELECT = "*";
 const WORKSPACE_SNAPSHOT_SELECT = [
-  "transaction_id", "transaction_date", "tax_category", "tax_treatment", "deductibility_status",
+  "business_id", "tax_year", "transaction_id", "transaction_date", "tax_category", "tax_treatment", "deductibility_status",
   "deductible_percent", "book_amount", "deductible_amount", "classification_status", "confidence_score",
   "confidence_level", "rule_code", "rule_version", "reason", "source", "requires_review",
   "source_qbo_txn_id", "source_qbo_txn_type", "source_qbo_account_id", "source_qbo_account_name",
