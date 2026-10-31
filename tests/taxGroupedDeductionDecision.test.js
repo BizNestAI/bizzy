@@ -18,6 +18,72 @@ const MEALS_SCOPE = {
   decisionType: "confirm_business_purpose",
 };
 
+test("a completed Transportation answer atomically updates three rows and saves one complete future rule", async () => {
+  const rows = [1, 2, 3].map((index) => ({
+    ...mealsClassification(index),
+    transaction_id: `transportation-${index}`,
+    tax_category: "travel_transportation",
+    deductibility_status: "needs_review",
+    deductible_percent: 0,
+    tax_treatment: { type: "travel_transportation", business_purpose_required: true },
+    book_amount: [-25, -53, -4][index - 1],
+    deductible_amount: 0,
+    nondeductible_amount: [-25, -53, -4][index - 1],
+    source_qbo_account_id: "qbo-transportation",
+    source_qbo_account_name: "Transportation",
+    metadata: { direction: "OUTFLOW", source_qbo_account_id: "qbo-transportation", source_qbo_account_name: "Transportation" },
+  }));
+  const transactionIds = rows.map((row) => row.transaction_id);
+  const changes = {
+    taxCategory: "travel_transportation",
+    deductibilityStatus: "fully_deductible",
+    deductiblePercent: 100,
+    taxTreatment: "business_purpose_confirmed",
+  };
+  const scope = {
+    taxCategory: "travel_transportation",
+    qboAccountId: "qbo-transportation",
+    decisionType: "business_use_confirmation",
+  };
+  const reason = "Customer confirmed business purpose for matching expense category.";
+  const supabase = makeGroupedDecisionSupabase(rows);
+
+  const result = await applyGroupedTaxDeductionDecision({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: YEAR,
+    actor: { userId: "user-1", source: "user" },
+    input: {
+      idempotencyKey: "transportation-decision-test-command-0001",
+      scope,
+      scopeFingerprint: buildGroupedDeductionDecisionFingerprint({
+        businessId: BUSINESS_ID,
+        taxYear: YEAR,
+        ...scope,
+        transactionIds,
+        expectedPopulationTransactionIds: transactionIds,
+        changes,
+        reason,
+      }),
+      targetTransactionIds: transactionIds,
+      expectedPopulationTransactionIds: transactionIds,
+      personalExceptionIds: [],
+      changes,
+      reason,
+    },
+  });
+
+  assert.equal(supabase.writeExecutions, 1);
+  assert.equal(result.appliedCount, 3);
+  assert.deepEqual(result.targetTransactionIds, transactionIds);
+  assert.equal(supabase.lastRpcParams.p_items.length, 3);
+  assert.ok(supabase.lastRpcParams.p_items.every((item) => item.deductibility_status === "fully_deductible" && item.deductible_percent === 100 && item.tax_treatment === "business_purpose_confirmed"));
+  assert.equal(supabase.lastRpcParams.p_rule.tax_category, "travel_transportation");
+  assert.equal(supabase.lastRpcParams.p_rule.deductibility_status, "fully_deductible");
+  assert.equal(supabase.lastRpcParams.p_rule.default_deductible_percent, 100);
+  assert.deepEqual(supabase.lastRpcParams.p_rule.treatment, { type: "business_purpose_confirmed" });
+});
+
 test("a 287-row Meals decision performs one bounded write and returns its exact target identity set", async () => {
   const rows = Array.from({ length: 287 }, (_, index) => mealsClassification(index + 1));
   const supabase = makeGroupedDecisionSupabase(rows);
@@ -406,6 +472,7 @@ function makeGroupedDecisionSupabase(rows, { failWrite = false, failStage = null
     async rpc(name, params) {
       assert.equal(name, "apply_grouped_tax_deduction_decision");
       this.rpcCount += 1;
+      this.lastRpcParams = params;
       const prior = store.operations.get(params.p_idempotency_key);
       if (prior) {
         if (prior.scope_fingerprint !== params.p_scope_fingerprint) {

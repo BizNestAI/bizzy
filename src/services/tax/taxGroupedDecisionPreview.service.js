@@ -147,8 +147,25 @@ function treatmentForAnswer(row, input) {
     if (!Number.isFinite(percent) || percent < 0 || percent > 100) throw validationError("invalid_business_use_percent", "Business use must be between 0 and 100.");
     return { taxCategory: row.tax_category, deductibilityStatus: percent === 100 ? "fully_deductible" : percent === 0 ? "nondeductible" : "partially_deductible", deductiblePercent: percent, taxTreatment: "business_use_allocation" };
   }
-  const percent = Number(row.deductible_percent ?? (String(row.tax_category).includes("meal") ? 50 : 100));
-  return { taxCategory: row.tax_category, deductibilityStatus: row.deductibility_status || (percent === 100 ? "fully_deductible" : "partially_deductible"), deductiblePercent: percent, taxTreatment: row.tax_treatment || (String(row.tax_category).includes("meal") ? "business_meals_business_purpose_confirmed" : "business_purpose_confirmed") };
+  if (!["all_business", "some_personal"].includes(input.answer)) {
+    throw validationError("non_decisive_grouped_decision", "This answer does not complete a tax treatment.");
+  }
+  return completedBusinessPurposeTreatment(row);
+}
+
+// Business-purpose review answers complete the classifier's provisional
+// treatment. Keep this server-owned mapping shared by preview and apply so a
+// browser can never promote `needs_review` (or choose its own percentage) into
+// a future automatic rule.
+function completedBusinessPurposeTreatment(row = {}) {
+  const taxCategory = text(row.tax_category);
+  const meals = taxCategory === "business_meals";
+  return {
+    taxCategory,
+    deductibilityStatus: meals ? "partially_deductible" : "fully_deductible",
+    deductiblePercent: meals ? 50 : 100,
+    taxTreatment: meals ? "business_meals_business_purpose_confirmed" : "business_purpose_confirmed",
+  };
 }
 
 function customerPreview(record, rows, summaries = null) {
@@ -168,12 +185,16 @@ function customerPreview(record, rows, summaries = null) {
     grossAmountCents: signedGrossAmountCents,
     estimatedDeductionCents: actionable.reduce((sum, row) => sum + Math.round(Number(row.book_amount || 0) * 100 * Number(row.deductible_percent || 0) / 100), 0),
     transactions,
-    proposedTreatment: actionable[0] ? {
-      taxCategory: actionable[0].tax_category,
-      taxTreatment: actionable[0].tax_treatment,
-      deductibilityStatus: actionable[0].deductibility_status,
-      deductiblePercent: Number(actionable[0].deductible_percent || 0),
-    } : null,
+    proposedTreatment: actionable[0]
+      ? record.decision_type === "business_use_confirmation"
+        ? completedBusinessPurposeTreatment(actionable[0])
+        : {
+            taxCategory: actionable[0].tax_category,
+            taxTreatment: actionable[0].tax_treatment,
+            deductibilityStatus: actionable[0].deductibility_status,
+            deductiblePercent: Number(actionable[0].deductible_percent || 0),
+          }
+      : null,
     authorityBreakdown: {
       actionable: actionable.length,
       protected: rows.length - actionable.length,
@@ -223,4 +244,4 @@ function fingerprintConfirmation(input = {}) {
 }
 function text(value) { return value == null ? "" : String(value).trim(); }
 
-export const __testables = { decisionIdentity, taxDecisionTypeForClassification, treatmentForAnswer, customerPreview, fingerprintConfirmation };
+export const __testables = { decisionIdentity, taxDecisionTypeForClassification, treatmentForAnswer, completedBusinessPurposeTreatment, customerPreview, fingerprintConfirmation };

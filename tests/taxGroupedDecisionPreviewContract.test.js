@@ -179,6 +179,51 @@ test("reviewed and protected members stay out of the actionable transaction summ
   assert.deepEqual(preview.transactions.map((row) => row.transactionId), ["actionable"]);
 });
 
+test("Transportation confirmation resolves one complete treatment for preview and apply", () => {
+  const transportation = {
+    ...BASE,
+    transaction_id: "transportation-1",
+    source_qbo_account_id: "qbo-transportation",
+    source_qbo_account_name: "Transportation",
+    tax_category: "travel_transportation",
+    tax_treatment: { type: "travel_transportation", business_purpose_required: true },
+    deductibility_status: "needs_review",
+    deductible_percent: 0,
+    rule_code: "parking_tolls_transportation_review_gl_v3",
+  };
+  const preview = previewTestables.customerPreview({
+    id: "preview-transportation",
+    business_id: "business-1",
+    tax_year: 2026,
+    group_id: "decision:transportation",
+    decision_type: "business_use_confirmation",
+    expires_at: "2026-10-23T12:05:00.000Z",
+  }, [transportation], summariesFor([transportation]));
+  const expected = {
+    taxCategory: "travel_transportation",
+    deductibilityStatus: "fully_deductible",
+    deductiblePercent: 100,
+    taxTreatment: "business_purpose_confirmed",
+  };
+
+  assert.deepEqual(preview.proposedTreatment, expected);
+  assert.deepEqual(previewTestables.treatmentForAnswer(transportation, { answer: "all_business" }), expected);
+  assert.deepEqual(previewTestables.treatmentForAnswer(transportation, { answer: "some_personal" }), expected);
+  assert.throws(
+    () => previewTestables.treatmentForAnswer(transportation, { answer: "not_sure" }),
+    (error) => error.code === "non_decisive_grouped_decision",
+  );
+});
+
+test("Meals confirmation retains the established fifty-percent treatment", () => {
+  assert.deepEqual(previewTestables.treatmentForAnswer(BASE, { answer: "all_business" }), {
+    taxCategory: "business_meals",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: 50,
+    taxTreatment: "business_meals_business_purpose_confirmed",
+  });
+});
+
 test("technical preview failure cannot be converted to resolved zero-population UI", () => {
   const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /setPreviewState\("preview_error"\)/);
