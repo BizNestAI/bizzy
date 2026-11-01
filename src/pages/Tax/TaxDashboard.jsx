@@ -945,6 +945,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           <div className="mt-3 space-y-1 text-xs text-white/58" aria-label="Tax workspace reconciliation">
             <p>{evaluatedTransactionCount} posted transactions evaluated · {authoritativeMatrixIncludedCount} deductible-expense transactions included · {outsideDeductionsCount} outside deductions</p>
             <p>{authoritativeMatrixIncludedCount} matrix transactions = {Number(treatmentCounts.estimated || 0)} estimated + {Number(treatmentCounts.reviewed || 0)} reviewed + {Number(treatmentCounts.needs_input || 0)} needing input</p>
+            {Number(deductions.workspaceProjection?.vehicleMileageDeductionAmount || 0) > 0 ? <p>
+              Total = {formatCurrencyLocal(deductions.workspaceProjection?.postedTransactionDeductionAmount || 0)} posted-transaction deductions + {formatCurrencyLocal(deductions.workspaceProjection.vehicleMileageDeductionAmount)} standard-mileage deduction
+            </p> : null}
           </div>
         </div>
         <ClassificationProgressSummary summary={classificationSummary} onViewTransactions={(transactionIds) => {
@@ -954,6 +957,14 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           requestAnimationFrame(() => document.querySelector("[data-tax-classification-workspace]")?.scrollIntoView({ behavior: "smooth", block: "start" }));
         }} />
       </section>
+
+      <BusinessMileagePanel
+        workflows={deductions.workspaceProjection?.vehicleDeductions}
+        tasks={deductions.workspaceProjection?.nonTransactionTasks}
+        readOnly={readOnly}
+        onPreview={(input) => deductions.previewVehicleMileage(input)}
+        onSave={(input) => deductions.saveVehicleMileage(input)}
+      />
 
       <WorkspaceViewTabs
         value={workspaceView}
@@ -1069,6 +1080,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           await deductions.refresh();
         }}
         onOpenVehicleWorkflow={openVehicleWorkflow}
+        onCreateVehicle={(input) => deductions.createVehicle(input)}
         onApply={async ({ command }) => {
           if (!reviewDecision || readOnly) return null;
           const result = await deductions.confirmGroupedDeductionDecision({
@@ -1079,6 +1091,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
             actualExpenseUse: command.actualExpenseUse,
             businessUsePercent: command.businessUsePercent,
             personalExceptionIds: command.personalExceptionIds,
+            vehicleId: command.vehicleId,
+            expectedActiveElectionId: command.expectedActiveElectionId,
+            eligibility: command.eligibility,
           });
           const savedCount = Number(result?.appliedCount || 0) + Number(result?.alreadyMatchingCount || 0);
           const refreshFailed = result?.workspaceRefresh?.status !== "updated";
@@ -1705,6 +1720,61 @@ function describeOutsideMatrixActivity(dispositions = {}) {
   if (!categories.length) return "Outside the matrix is handled separately from deductible expenses.";
   if (categories.length === 1) return `Outside the matrix includes ${categories[0]}.`;
   return `Outside the matrix includes ${categories.slice(0, -1).join(", ")}, and ${categories[categories.length - 1]}.`;
+}
+
+function BusinessMileagePanel({ workflows, tasks = [], readOnly, onPreview, onSave }) {
+  const standardVehicles = (workflows?.vehicles || []).filter((vehicle) => vehicle?.election?.method === "standard_mileage");
+  const legacySetup = tasks.find((task) => task.kind === "vehicle_setup");
+  if (!standardVehicles.length && !legacySetup) return null;
+  return <section className="mt-4 rounded-2xl border border-sky-300/15 bg-sky-300/[0.035] p-4" aria-label="Business mileage">
+    <div className="text-sm font-semibold text-white/88">Business mileage</div>
+    <p className="mt-1 text-xs text-white/50">Mileage is a separate deduction from posted vehicle costs. Rates are selected by date and each period is counted once.</p>
+    {legacySetup ? <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-xs text-amber-50">Vehicle setup is required before the existing Standard Mileage choice can produce a mileage deduction. The posted vehicle costs remain excluded from separate deduction.</div> : null}
+    <div className="mt-3 space-y-3">{standardVehicles.map((vehicle) => <BusinessMileageVehicle key={vehicle.id} vehicle={vehicle} readOnly={readOnly} onPreview={onPreview} onSave={onSave} />)}</div>
+  </section>;
+}
+
+function BusinessMileageVehicle({ vehicle, readOnly, onPreview, onSave }) {
+  const rates = vehicle.availableRates || [];
+  const [miles, setMiles] = useState(() => Object.fromEntries(rates.map((rate) => [`${rate.effectiveStart}:${rate.effectiveEnd}`, ""])));
+  const [preview, setPreview] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [error, setError] = useState("");
+  const entries = rates.map((rate) => ({
+    periodStart: rate.effectiveStart,
+    periodEnd: rate.effectiveEnd,
+    businessMiles: Number(miles[`${rate.effectiveStart}:${rate.effectiveEnd}`] || 0),
+  })).filter((entry) => entry.businessMiles > 0);
+  const previewMileage = async () => {
+    setStatus("previewing"); setError(""); setPreview(null);
+    try { setPreview(await onPreview({ vehicleId: vehicle.id, entries })); }
+    catch (caught) { setError(caught?.message || "Mileage could not be previewed."); }
+    finally { setStatus("idle"); }
+  };
+  const saveMileage = async () => {
+    setStatus("saving"); setError("");
+    try { await onSave({ vehicleId: vehicle.id, expectedElectionId: vehicle.election.id, entries }); setPreview(null); }
+    catch (caught) { setError(caught?.message || "Mileage could not be saved."); }
+    finally { setStatus("idle"); }
+  };
+  return <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div><div className="text-sm font-semibold text-white/82">{vehicle.displayName}</div><div className="text-xs text-white/46">{vehicle.mileage?.businessMiles || 0} saved business miles · {formatCurrencyLocal(vehicle.mileage?.deductionAmount || 0)} deduction</div></div>
+      {vehicle.election?.finalized ? <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] uppercase tracking-wide text-white/50">Finalized</span> : null}
+    </div>
+    {!readOnly && !vehicle.election?.finalized ? <div className="mt-3 grid gap-2 sm:grid-cols-2">
+      {rates.map((rate) => { const key = `${rate.effectiveStart}:${rate.effectiveEnd}`; return <label key={key} className="text-xs text-white/55">
+        {rate.effectiveStart}–{rate.effectiveEnd} · {Number(rate.amountPerMile).toFixed(3)}/mile
+        <input type="number" min="0" step="0.1" value={miles[key] || ""} onChange={(event) => { setMiles((value) => ({ ...value, [key]: event.target.value })); setPreview(null); }} placeholder="Business miles" className="mt-1 w-full rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-white" />
+      </label>; })}
+    </div> : null}
+    {error ? <div className="mt-2 text-xs text-rose-200">{error}</div> : null}
+    {preview ? <div className="mt-2 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.05] px-3 py-2 text-xs text-emerald-50">Preview: {preview.totalBusinessMiles} miles · {formatCurrencyLocal(preview.totalDeduction)} deduction. This replaces {preview.replacesExistingActiveEntries} active mileage period{preview.replacesExistingActiveEntries === 1 ? "" : "s"}.</div> : null}
+    {!readOnly && !vehicle.election?.finalized ? <div className="mt-3 flex justify-end gap-2">
+      <button type="button" disabled={!entries.length || status !== "idle"} onClick={previewMileage} className="rounded-full border border-white/12 px-3 py-1.5 text-xs font-semibold disabled:opacity-50">{status === "previewing" ? "Previewing…" : "Preview deduction"}</button>
+      <button type="button" disabled={!preview || status !== "idle"} onClick={saveMileage} className="rounded-full bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-black disabled:opacity-50">{status === "saving" ? "Saving…" : "Save mileage"}</button>
+    </div> : null}
+  </div>;
 }
 
 function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null, workspaceProjection = null, updating = false, awaitingEvaluationCount = null }) {
@@ -2481,10 +2551,14 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
   );
 }
 
-function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, onCheckOutcome, onScopeChanged, onPreview }) {
+function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, onCheckOutcome, onScopeChanged, onPreview, onCreateVehicle }) {
   const prefersReducedMotion = useReducedMotion();
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [vehicleMethod, setVehicleMethod] = useState("");
+  const [vehicleId, setVehicleId] = useState("");
+  const [newVehicleName, setNewVehicleName] = useState("");
+  const [creatingVehicle, setCreatingVehicle] = useState(false);
+  const [vehicleEligibility, setVehicleEligibility] = useState({ ownedOrLeased: false, firstYearAvailable: false, fleetUnderFive: false, allTransactionsAttributed: false });
   const [actualExpenseUse, setActualExpenseUse] = useState("");
   const [dedicatedPremises, setDedicatedPremises] = useState(false);
   const [businessUseAnswer, setBusinessUseAnswer] = useState("all_business");
@@ -2508,6 +2582,9 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   useEffect(() => {
     setBusinessUsePercent("");
     setVehicleMethod("");
+    setVehicleId("");
+    setNewVehicleName("");
+    setVehicleEligibility({ ownedOrLeased: false, firstYearAvailable: false, fleetUnderFive: false, allTransactionsAttributed: false });
     setActualExpenseUse("");
     setDedicatedPremises(false);
     setBusinessUseAnswer("all_business");
@@ -2523,6 +2600,14 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
     setPreviewRequestId(null);
     idempotencyKeyRef.current = null;
   }, [decisionGroupKey, decision?.scope, decision?.selectedMonth]);
+
+  const vehicleWorkflows = useMemo(() => serverPreview?.vehicleContext?.vehicles || [], [serverPreview?.vehicleContext?.vehicles]);
+  useEffect(() => {
+    if (!vehicleId && vehicleWorkflows.length === 1) {
+      setVehicleId(String(vehicleWorkflows[0].id));
+      setVehicleEligibility((value) => ({ ...value, allTransactionsAttributed: true }));
+    }
+  }, [vehicleId, vehicleWorkflows]);
 
   const onPreviewRef = useRef(onPreview);
   const onScopeChangedRef = useRef(onScopeChanged);
@@ -2606,9 +2691,11 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   const percentValue = dedicatedPremises ? 100 : Number(businessUsePercent);
   const vehicleDecisionUnresolved = action.kind === "vehicle_method" && vehicleMethod === "not_sure";
   const vehicleMixedPercentValid = /^\d{1,2}(?:\.\d{1,2})?$/.test(String(businessUsePercent)) && percentValue > 0 && percentValue < 100;
-  const vehicleDecisionValid = action.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && (
+  const standardMileageEligible = vehicleEligibility.ownedOrLeased && vehicleEligibility.firstYearAvailable && vehicleEligibility.fleetUnderFive;
+  const vehicleAttributionConfirmed = vehicleWorkflows.length <= 1 || vehicleEligibility.allTransactionsAttributed;
+  const vehicleDecisionValid = action.kind !== "vehicle_method" || (Boolean(vehicleId) && vehicleAttributionConfirmed && ((vehicleMethod === "standard_mileage" && standardMileageEligible) || (vehicleMethod === "actual_expense" && (
     actualExpenseUse === "all_business" || actualExpenseUse === "not_business" || (actualExpenseUse === "mixed_use" && vehicleMixedPercentValid)
-  ));
+  ))));
   const changingReviewedEstimate = Boolean(group.completed && (action.kind === "business_use_percent" || action.kind === "utility_allocation"));
   const actionGrossTotal = Number(serverPreview?.grossAmountCents ?? group.actionableGrossAmountCents ?? 0) / 100;
   const actionEstimatedTotal = Number(serverPreview?.estimatedDeductionCents ?? group.actionableEstimatedDeductibleAmountCents ?? 0) / 100;
@@ -2622,7 +2709,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
         : null;
   const currentEstimate = action.kind === "vehicle_method"
     ? vehicleMethod === "standard_mileage"
-      ? "$0 separate expense deduction"
+      ? "Business mileage needed"
       : vehicleMethod === "not_sure" || vehiclePreviewPercent == null
         ? "Not estimated yet"
         : `${formatDeductiblePercent(vehiclePreviewPercent)} · ${formatCurrencyLocal(actionGrossTotal * vehiclePreviewPercent / 100)}`
@@ -2661,6 +2748,11 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
           actualExpenseUse: action.kind === "vehicle_method" && vehicleMethod === "actual_expense" ? actualExpenseUse : null,
           businessUsePercent: action.kind === "vehicle_method" && actualExpenseUse === "mixed_use" ? businessUsePercent : requiresPercent ? percentValue : null,
           personalExceptionIds: businessUseAnswer === "some_personal" ? exceptionIds : [],
+          vehicleId: action.kind === "vehicle_method" ? vehicleId : null,
+          expectedActiveElectionId: action.kind === "vehicle_method"
+            ? vehicleWorkflows.find((vehicle) => String(vehicle.id) === String(vehicleId))?.election?.id || null
+            : null,
+          eligibility: action.kind === "vehicle_method" ? vehicleEligibility : null,
         },
       });
     } catch (saveError) {
@@ -2784,7 +2876,40 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
           ) : action.kind === "vehicle_method" ? (
             <div className="mt-3 space-y-3 rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
               <div className="font-semibold text-white/84">How do you deduct these vehicle expenses?</div>
-              <DecisionOption checked={vehicleMethod === "standard_mileage"} onChange={() => { setVehicleMethod("standard_mileage"); setActualExpenseUse(""); setBusinessUsePercent(""); }} description="Keep these expenses in your books, but do not deduct them separately. This does not calculate a mileage deduction.">Standard mileage</DecisionOption>
+              {vehicleWorkflows.length ? (
+                <label className="block text-xs text-white/60">Vehicle
+                  <select value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="mt-1 block w-full rounded-xl border border-white/12 bg-black/30 px-3 py-2 text-sm text-white">
+                    <option value="">Select a vehicle</option>
+                    {vehicleWorkflows.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.displayName}</option>)}
+                  </select>
+                </label>
+              ) : (
+                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <div className="text-xs font-semibold text-white/80">Add the vehicle these expenses belong to</div>
+                  <div className="mt-2 flex gap-2">
+                    <input value={newVehicleName} onChange={(event) => setNewVehicleName(event.target.value)} placeholder="Vehicle name" className="min-w-0 flex-1 rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-white" />
+                    <button type="button" disabled={!newVehicleName.trim() || creatingVehicle} onClick={async () => {
+                      setCreatingVehicle(true); setError("");
+                      try { await onCreateVehicle?.({ displayName: newVehicleName.trim() }); setPreviewAttempt((value) => value + 1); }
+                      catch (vehicleError) { setError(vehicleError?.message || "We couldn’t add this vehicle."); }
+                      finally { setCreatingVehicle(false); }
+                    }} className="rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold disabled:opacity-50">{creatingVehicle ? "Adding…" : "Add"}</button>
+                  </div>
+                </div>
+              )}
+              {vehicleWorkflows.length > 1 ? <label className="flex items-start gap-2 rounded-xl border border-white/10 bg-black/20 p-3 text-xs">
+                <input type="checkbox" checked={vehicleEligibility.allTransactionsAttributed} onChange={(event) => setVehicleEligibility((value) => ({ ...value, allTransactionsAttributed: event.target.checked }))} />
+                <span>I confirm every transaction listed in this question belongs to the selected vehicle. If these costs cover more than one vehicle, I’ll separate their vehicle attribution before choosing a method.</span>
+              </label> : null}
+              <DecisionOption checked={vehicleMethod === "standard_mileage"} onChange={() => { setVehicleMethod("standard_mileage"); setActualExpenseUse(""); setBusinessUsePercent(""); }} description="Keep these costs in your books without deducting them separately. Bizzi will ask for business mileage and apply the effective IRS rate.">Standard mileage</DecisionOption>
+              {vehicleMethod === "standard_mileage" ? <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3 text-xs">
+                <div className="font-semibold text-white/82">Confirm standard-mileage eligibility</div>
+                {[
+                  ["ownedOrLeased", "I owned or leased this vehicle during the tax year."],
+                  ["firstYearAvailable", "Standard mileage was chosen when this vehicle was first available for business use."],
+                  ["fleetUnderFive", "I did not operate five or more vehicles at the same time."],
+                ].map(([key, label]) => <label key={key} className="flex items-start gap-2"><input type="checkbox" checked={vehicleEligibility[key]} onChange={(event) => setVehicleEligibility((value) => ({ ...value, [key]: event.target.checked }))} /><span>{label}</span></label>)}
+              </div> : null}
               <DecisionOption checked={vehicleMethod === "actual_expense"} onChange={() => setVehicleMethod("actual_expense")} description="Deduct the business-use share of the listed vehicle expenses.">Actual expenses</DecisionOption>
               <DecisionOption checked={vehicleMethod === "not_sure"} onChange={() => { setVehicleMethod("not_sure"); setActualExpenseUse(""); setBusinessUsePercent(""); }} description="Keep every expense in Needs input. Nothing will be saved.">I’m not sure yet</DecisionOption>
               {vehicleMethod === "actual_expense" ? <div className="space-y-2 border-t border-white/10 pt-3">

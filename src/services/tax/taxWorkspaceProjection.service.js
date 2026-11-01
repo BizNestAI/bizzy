@@ -8,10 +8,11 @@ import {
 import { TAX_DEDUCTIONS_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { listTaxPostingSourceRows } from "./taxPostedTransaction.repository.js";
 import { listTaxClassifications, listTaxWorkspaceClassificationSnapshot } from "./taxClassification.repository.js";
+import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js";
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
-export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.3-vehicle-semantic-questions`;
+export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.4-vehicle-deductions`;
 export const TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION = "signed-treatment-amounts-v1";
 const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;
@@ -57,17 +58,21 @@ export async function reconcileTaxWorkspaceProjection({ supabase, record, busine
     const lifecycle = buildTaxDeductionsLifecycleProjection({ rows: mapped, businessId, taxYear: Number(taxYear) });
     if (!lifecycle.conservation.isConserved) throw coded("tax_workspace_identity_not_conserved");
     const generatedAt = new Date().toISOString();
+    const vehicleDeductions = baselinePayload?.vehicleDeductions?.liveRefreshSupported
+      ? await listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) })
+      : baselinePayload?.vehicleDeductions;
     const sourceFingerprint = createHash("sha256").update(JSON.stringify({
       baseline: record.source_fingerprint || baselinePayload?.sourceFingerprint,
       classifications: currentRows.map((row) => [row.transaction_id, row.classification_status, row.tax_category,
         row.deductibility_status, row.deductible_percent, row.deductible_amount, row.updated_at]),
+      vehicleDeductions,
     })).digest("hex");
     const currentPayload = buildPayload({
       overview: {
         projection: { completeness: baselinePayload?.completeness || record?.completeness || "complete" },
         warnings: baselinePayload?.warnings || [],
       },
-      lifecycle, businessId, taxYear: Number(taxYear), sourceFingerprint, generatedAt,
+      lifecycle, businessId, taxYear: Number(taxYear), sourceFingerprint, generatedAt, vehicleDeductions,
     });
     return missingIds.size
       ? restoreSparseProjectionMembers({ payload: currentPayload, baselinePayload, mappedRows: mapped, missingIds, matrix, outside })
@@ -157,7 +162,10 @@ function restoreSparseProjectionMembers({ payload, baselinePayload, mappedRows, 
   result.matrixIncludedCount = resultEvidence.matrixIncluded.length;
   result.outsideDeductionsCount = resultEvidence.outsideDeductions.length;
   result.treatmentCounts = Object.fromEntries(Object.entries(resultEvidence.treatments).map(([key, ids]) => [key, ids.length]));
-  result.estimatedDeductibleAmount = round(result.matrix.reduce((sum, row) => sum + Object.values(row.months).reduce((monthSum, value) => monthSum + Number(value.deductibleAmount || 0), 0), 0));
+  result.postedTransactionDeductionAmount = round(result.matrix.reduce((sum, row) => sum + Object.values(row.months).reduce((monthSum, value) => monthSum + Number(value.deductibleAmount || 0), 0), 0));
+  result.estimatedDeductibleAmount = round(result.postedTransactionDeductionAmount
+    + Number(result.vehicleMileageDeductionAmount || 0)
+    + Number(result.otherNonTransactionDeductionAmount || 0));
   refreshIdentityFingerprints(result);
   result.warnings = [...(result.warnings || []), {
     code: "tax_workspace_sparse_live_overlay", severity: "low",
@@ -570,9 +578,10 @@ async function buildCurrentTaxWorkspacePayload({ supabase, businessId, taxYear, 
   });
   const lifecycle = buildTaxDeductionsLifecycleProjection({ rows: mapped, businessId, taxYear: Number(taxYear) });
   if (!lifecycle.conservation.isConserved) throw coded("tax_workspace_identity_not_conserved");
-  const sourceFingerprint = fingerprint({ overview, rows, sourceRows, classificationRows: classificationPage.rows || [] });
+  const vehicleDeductions = await listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) });
+  const sourceFingerprint = fingerprint({ overview, rows, sourceRows, classificationRows: classificationPage.rows || [], vehicleDeductions });
   const generatedAt = overview.meta?.generatedAt || new Date().toISOString();
-  const payload = buildPayload({ overview, lifecycle, businessId, taxYear: Number(taxYear), sourceFingerprint, generatedAt });
+  const payload = buildPayload({ overview, lifecycle, businessId, taxYear: Number(taxYear), sourceFingerprint, generatedAt, vehicleDeductions });
   validatePayload(payload);
   if (baseline && !sameSet(new Set(payload.identityEvidence.evaluated), baseline)) throw coded("tax_workspace_live_population_mismatch");
   return payload;
@@ -613,7 +622,7 @@ export async function enqueueTaxWorkspaceProjection({ supabase, businessId, taxY
   return data;
 }
 
-function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerprint, generatedAt }) {
+function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerprint, generatedAt, vehicleDeductions = null }) {
   const entries = lifecycle.entries || [];
   const evaluatedIds = entries.map((entry) => entry.id);
   const matrixEntries = entries.filter((entry) => entryScope(entry) === "expense_cogs_in_matrix");
@@ -636,12 +645,27 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
   const questionMembershipSum = Object.values(questionMemberships).reduce((sum, ids) => sum + ids.length, 0);
   const questionUnion = sortedUnique(Object.values(questionMemberships).flat());
   const actionOwnerCounts = Object.fromEntries(matrixEntries.reduce((counts, entry) => counts.set(entry.actionOwner, (counts.get(entry.actionOwner) || 0) + 1), new Map()));
+  const postedTransactionDeductionAmount = round(matrix.reduce((sum, row) => sum + Object.values(row.months).reduce((monthSum, month) => monthSum + month.deductibleAmount, 0), 0));
+  const vehicleMileageDeductionAmount = round((vehicleDeductions?.vehicles || []).reduce((sum, vehicle) => sum + Number(vehicle?.mileage?.deductionAmount || 0), 0));
+  const vehicleWorkflows = vehicleDeductions?.vehicles || [];
+  const nonTransactionTasks = vehicleWorkflows
+    .filter((vehicle) => vehicle?.election?.method === "standard_mileage" && vehicle?.mileage?.status === "needed")
+    .map((vehicle) => ({ kind: "business_mileage", vehicleId: vehicle.id, label: vehicle.displayName, status: "needs_input" }));
+  const legacyStandardMileageCount = matrixEntries.filter((entry) => String(entry?.row?.taxTreatment || entry?.row?.tax_treatment || "") === "vehicle_standard_mileage_no_separate_gas").length;
+  if (legacyStandardMileageCount > 0 && !vehicleWorkflows.some((vehicle) => vehicle?.election?.method === "standard_mileage")) {
+    nonTransactionTasks.push({ kind: "vehicle_setup", status: "needs_input", legacyTransactionCount: legacyStandardMileageCount });
+  }
   return {
     canonicalBusinessId: businessId, taxYear, projectionVersion: TAX_WORKSPACE_PROJECTION_VERSION,
     formulaVersion: TAX_WORKSPACE_FORMULA_VERSION, sourceFingerprint, status: "complete",
     amountContractVersion: TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION,
     completeness: overview.projection?.completeness || "partial", generatedAt, refreshedAt: generatedAt,
-    estimatedDeductibleAmount: matrix.reduce((sum, row) => sum + Object.values(row.months).reduce((monthSum, month) => monthSum + month.deductibleAmount, 0), 0),
+    estimatedDeductibleAmount: round(postedTransactionDeductionAmount + vehicleMileageDeductionAmount),
+    postedTransactionDeductionAmount,
+    vehicleMileageDeductionAmount,
+    otherNonTransactionDeductionAmount: 0,
+    vehicleDeductions: vehicleDeductions || { contractVersion: "vehicle-deduction-v1", taxYear, rates: [], vehicles: [] },
+    nonTransactionTasks,
     evaluatedTransactionCount: evaluatedIds.length, matrixIncludedCount: matrixEntries.length,
     outsideDeductionsCount: outsideEntries.length,
     treatmentCounts: Object.fromEntries(Object.entries(treatmentEntries).map(([key, value]) => [key, value.length])),
@@ -752,7 +776,7 @@ function title(value) { return String(value).split("_").map((part)=>part ? part[
 function round(value) { return Math.round((Number(value)||0)*100)/100; }
 
 async function loadRows(args) { const rows=[]; for(let offset=0;;offset+=PAGE_SIZE){ const page=await listDeductionTransactions({...args,pagination:{limit:PAGE_SIZE,offset},filters:{}}); rows.push(...(page.rows||[])); if(!page.pagination?.hasMore) break; } return rows; }
-function fingerprint({ overview, rows, sourceRows = [], classificationRows = [] }) { return createHash("sha256").update(JSON.stringify({ formulaVersion: TAX_WORKSPACE_FORMULA_VERSION, engine: overview.meta?.engineVersion, bridge: overview.populationBridge?.identity_comparison, source: sourceRows.map((r)=>[r.transactionId,r.taxScopeDisposition,r.taxScopeReasonCode,r.signedAmount]), rows: rows.map((r)=>[r.transactionId,r.classificationStatus,r.taxCategory,r.deductibleAmount,r.ruleVersion,r.override?.lastChangedAt]), classifications: classificationRows.map((r)=>[r.transaction_id,r.rule_version,r.rule_code,r.updated_at]) })).digest("hex"); }
+function fingerprint({ overview, rows, sourceRows = [], classificationRows = [], vehicleDeductions = null }) { return createHash("sha256").update(JSON.stringify({ formulaVersion: TAX_WORKSPACE_FORMULA_VERSION, engine: overview.meta?.engineVersion, bridge: overview.populationBridge?.identity_comparison, source: sourceRows.map((r)=>[r.transactionId,r.taxScopeDisposition,r.taxScopeReasonCode,r.signedAmount]), rows: rows.map((r)=>[r.transactionId,r.classificationStatus,r.taxCategory,r.deductibleAmount,r.ruleVersion,r.override?.lastChangedAt]), classifications: classificationRows.map((r)=>[r.transaction_id,r.rule_version,r.rule_code,r.updated_at]), vehicleDeductions })).digest("hex"); }
 function validatePayload(p){
   const counts=[p.estimatedDeductibleAmount,p.evaluatedTransactionCount,p.matrixIncludedCount,p.outsideDeductionsCount,p.questionGroupCount];
   const matrixRows=Array.isArray(p.matrix)?p.matrix:[];
@@ -768,7 +792,9 @@ function validatePayload(p){
     if(!sameMoney(month?.deductibleAmount,Number(month?.estimatedDeductibleAmount||0)+Number(month?.reviewedDeductibleAmount||0))) throw coded("tax_workspace_deduction_amount_mismatch");
     matrixDeductibleAmount+=Number(month?.deductibleAmount||0);
   }
-  if(!sameMoney(p.estimatedDeductibleAmount,matrixDeductibleAmount)) throw coded("tax_workspace_estimate_amount_mismatch");
+  if(!sameMoney(p.postedTransactionDeductionAmount ?? matrixDeductibleAmount,matrixDeductibleAmount)) throw coded("tax_workspace_posted_estimate_amount_mismatch");
+  const composedTotal=Number(p.postedTransactionDeductionAmount??matrixDeductibleAmount)+Number(p.vehicleMileageDeductionAmount||0)+Number(p.otherNonTransactionDeductionAmount||0);
+  if(!sameMoney(p.estimatedDeductibleAmount,composedTotal)) throw coded("tax_workspace_estimate_amount_mismatch");
   const evidence=p.identityEvidence||{};
   const evaluated=requiredUniqueSet(evidence.evaluated,"tax_workspace_evaluated_identity_invalid");
   const matrix=requiredUniqueSet(evidence.matrixIncluded,"tax_workspace_matrix_identity_invalid");

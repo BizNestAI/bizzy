@@ -106,7 +106,7 @@ for (const [name, input] of [
 test("browser apply payload cannot supply treatment, scope, membership, subject, or authority", () => {
   const client = readFileSync("src/services/tax/taxApiClient.js", "utf8");
   const route = readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
-  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds \}\)/);
+  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility \}\)/);
   assert.doesNotMatch(client, /compact\(\{[^}]*taxTreatment/);
   assert.doesNotMatch(route.slice(route.indexOf('router.post("/deduction-decisions/apply"')), /req\.body\?\.(?:taxTreatment|deductibilityStatus|deductiblePercent|targetTransactionIds|expectedPopulationTransactionIds|scope|groupId|vehicleSubject|authority)/);
 });

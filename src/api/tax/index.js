@@ -23,6 +23,7 @@ import taxRecalculationRouter from "./taxRecalculation.routes.js";
 import taxSchedulerRouter from "./taxScheduler.routes.js";
 import taxLegacyHistoryRouter from "./taxLegacyHistory.routes.js";
 import taxWorkspaceRouter from "./taxWorkspace.routes.js";
+import taxVehicleDeductionRouter from "./taxVehicleDeduction.routes.js";
 import { taxSecurityMiddleware } from "./taxSecurity.js";
 
 const router = Router();
@@ -58,6 +59,7 @@ router.use("/", taxRecalculationRouter);
 router.use("/", taxSchedulerRouter);
 router.use("/", taxLegacyHistoryRouter);
 router.use("/", taxWorkspaceRouter);
+router.use("/", taxVehicleDeductionRouter);
 router.use("/", taxRoutes);
 router.use("/deductions", taxDeductionsRouter);
 

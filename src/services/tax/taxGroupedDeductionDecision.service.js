@@ -103,7 +103,9 @@ export async function applyGroupedTaxDeductionDecision({
     actor,
   });
 
-  const rpcName = command.previewId ? "apply_grouped_tax_deduction_decision_from_preview" : "apply_grouped_tax_deduction_decision";
+  const rpcName = command.previewId
+    ? command.vehicleElection ? "apply_grouped_tax_vehicle_decision_from_preview" : "apply_grouped_tax_deduction_decision_from_preview"
+    : "apply_grouped_tax_deduction_decision";
   const rpcParams = {
     p_business_id: businessId,
     p_tax_year: year,
@@ -129,6 +131,7 @@ export async function applyGroupedTaxDeductionDecision({
     rpcParams.p_preview_id = command.previewId;
     rpcParams.p_confirmation_fingerprint = command.confirmationFingerprint;
   }
+  if (command.vehicleElection) rpcParams.p_vehicle_election = command.vehicleElection;
   const { data, error } = await supabase.rpc(rpcName, rpcParams);
   if (error) throw mapGroupedDecisionRpcError(error);
   return normalizeGroupedDecisionResult(data, { fallbackRule: rule });
@@ -198,6 +201,19 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
   const reason = text(input.reason) || "User applied a grouped deduction decision.";
   const previewId = text(input.previewId) || null;
   const confirmationFingerprint = text(input.confirmationFingerprint) || null;
+  const vehicleElection = input.vehicleElection && typeof input.vehicleElection === "object" ? {
+    vehicle_id: text(input.vehicleElection.vehicleId),
+    method: text(input.vehicleElection.method),
+    expected_active_election_id: text(input.vehicleElection.expectedActiveElectionId),
+    business_use_percent: input.vehicleElection.businessUsePercent == null ? null : Number(input.vehicleElection.businessUsePercent),
+    eligibility: input.vehicleElection.eligibility && typeof input.vehicleElection.eligibility === "object" ? input.vehicleElection.eligibility : {},
+  } : null;
+  if (vehicleElection && (!vehicleElection.vehicle_id || !["standard_mileage", "actual_expense", "actual_expenses"].includes(vehicleElection.method))) {
+    throw validationError("invalid_vehicle_election", "A valid vehicle and vehicle method are required.");
+  }
+  if (vehicleElection?.method === "standard_mileage" && !standardMileageEligibilityConfirmed(vehicleElection.eligibility)) {
+    throw validationError("standard_mileage_eligibility_unconfirmed", "Confirm standard-mileage eligibility before choosing this method.");
+  }
   if (previewId && !confirmationFingerprint) throw validationError("missing_confirmation_fingerprint", "A server confirmation fingerprint is required.");
   return {
     idempotencyKey,
@@ -210,9 +226,14 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
     reason,
     previewId,
     confirmationFingerprint,
+    vehicleElection,
     businessId,
     taxYear,
   };
+}
+
+function standardMileageEligibilityConfirmed(value = {}) {
+  return value?.ownedOrLeased === true && value?.firstYearAvailable === true && value?.fleetUnderFive === true;
 }
 
 function isEligibleScopedDecisionRow(row = {}, scope = {}, businessId, taxYear) {

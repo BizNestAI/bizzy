@@ -597,16 +597,15 @@ function validateGroupedDecisionPreview(preview, { businessId, year, groupId, re
   });
 }
 
-export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds = [], signal } = {}) {
+export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds = [], vehicleId, expectedActiveElectionId, eligibility, signal } = {}) {
   requireBusinessId(businessId);
   requireValue(previewId, "previewId");
-  requireValue(idempotencyKey, "idempotencyKey");
   const commandRequest = withBoundedCommandSignal(signal, { timeoutMs: 20_000 });
   try {
     const result = unwrap(await request(`/api/tax/deduction-decisions/apply?${query({ businessId, year })}`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: compact({ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds }),
+      body: compact({ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility }),
       signal: commandRequest.signal,
     }));
     clearBusinessCache(businessId);
@@ -638,6 +637,29 @@ export async function confirmGroupedTaxDeductionDecision({ businessId, year, pre
   } finally {
     commandRequest.cleanup();
   }
+}
+
+export async function createTaxVehicle({ businessId, year, displayName, ownershipType, modelYear, make, model, placedInServiceOn, signal } = {}) {
+  requireBusinessId(businessId);
+  return unwrap(await request(`/api/tax/vehicles?${query({ businessId, year })}`, {
+    method: "POST", body: compact({ displayName, ownershipType, modelYear, make, model, placedInServiceOn }), signal,
+  }));
+}
+
+export async function previewTaxVehicleMileage({ businessId, year, vehicleId, entries, signal } = {}) {
+  requireBusinessId(businessId);
+  return unwrap(await request(`/api/tax/vehicle-mileage/preview?${query({ businessId, year })}`, {
+    method: "POST", body: { vehicleId, entries }, signal,
+  }));
+}
+
+export async function saveTaxVehicleMileage({ businessId, year, vehicleId, expectedElectionId, entries, mileageBasis = "records", substantiationStatus = "unsubstantiated", signal } = {}) {
+  requireBusinessId(businessId);
+  const result = unwrap(await request(`/api/tax/vehicle-mileage/apply?${query({ businessId, year })}`, {
+    method: "POST", body: { vehicleId, expectedElectionId, entries, mileageBasis, substantiationStatus }, signal,
+  }));
+  clearBusinessCache(businessId);
+  return result;
 }
 
 export async function getGroupedTaxDeductionDecisionOperation({ businessId, year, idempotencyKey, signal } = {}) {

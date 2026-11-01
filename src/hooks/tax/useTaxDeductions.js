@@ -8,6 +8,7 @@ import {
 } from "../../components/Tax/Deductions/deductionsRequestState.js";
 import {
   confirmGroupedTaxDeductionDecision,
+  createTaxVehicle,
   bulkUpdateTaxClassifications,
   confirmTaxClassification,
   excludeTaxClassification,
@@ -25,11 +26,13 @@ import {
   overrideTaxClassification,
   prepareTaxClassifications,
   previewGroupedTaxDeductionDecision,
+  previewTaxVehicleMileage,
   previewTaxClassificationBackfill,
   rejectTaxClassification,
   restoreTaxClassification,
   runTaxClassification,
   saveTaxDeductionDecisionRule,
+  saveTaxVehicleMileage,
   sendTaxClassificationsToReview,
   setTaxProfileMemory,
   updateTaxDeductionDecisionRule,
@@ -508,16 +511,27 @@ export function useTaxDeductions({
     },
     previewGroupedDeductionDecision: ({ groupId, signal } = {}) =>
       previewGroupedTaxDeductionDecision({ businessId, year, groupId, signal }),
-    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal } = {}) => {
+    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, signal } = {}) => {
       const operationOwner = workspaceOperationTrackerRef.current.acquire("grouped-decision-reconciliation");
       try {
-        const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, signal });
+        const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, signal });
         applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
         const refreshed = await reconcileGroupedDecisionWorkspace(result, { signal });
         return { ...result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } };
       } finally {
         workspaceOperationTrackerRef.current.release(operationOwner);
       }
+    },
+    createVehicle: async (input = {}) => {
+      const result = await createTaxVehicle({ businessId, year, ...input });
+      await load();
+      return result;
+    },
+    previewVehicleMileage: (input = {}) => previewTaxVehicleMileage({ businessId, year, ...input }),
+    saveVehicleMileage: async (input = {}) => {
+      const result = await saveTaxVehicleMileage({ businessId, year, ...input });
+      await load();
+      return result;
     },
     getGroupedDeductionDecisionOperation: async ({ idempotencyKey, signal } = {}) => {
       const operation = await getGroupedTaxDeductionDecisionOperation({ businessId, year, idempotencyKey, signal });

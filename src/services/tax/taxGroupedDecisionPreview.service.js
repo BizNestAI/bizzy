@@ -9,6 +9,7 @@ import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
 import { vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
 import { listTaxPostingSourceRowsByIds } from "./taxPostedTransaction.repository.js";
 import { safeTaxTransactionSummary } from "./taxDeductionsApi.service.js";
+import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js";
 
 const DEFAULT_PREVIEW_TTL_SECONDS = 10 * 60;
 
@@ -50,7 +51,12 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
     const id = String(source.transactionId);
     return [id, questionTransactionSummary(safeTaxTransactionSummary(source, classificationById.get(id)))];
   }));
-  return customerPreview(record, rows, summaries);
+  const result = customerPreview(record, rows, summaries);
+  if (record.decision_type !== "vehicle_method") return result;
+  return {
+    ...result,
+    vehicleContext: await listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) }),
+  };
 }
 
 export async function confirmGroupedDecisionPreview({ supabase, businessId, taxYear, input = {}, actor = {}, now = new Date() } = {}) {
@@ -99,6 +105,13 @@ async function applyFromPreview({ supabase, businessId, taxYear, preview, input,
   return applyGroupedTaxDeductionDecision({ supabase, businessId, taxYear, actor, input: {
     idempotencyKey: input.idempotencyKey, previewId: preview.id, confirmationFingerprint, scope, scopeFingerprint, targetTransactionIds: targetIds,
     expectedPopulationTransactionIds: [...actionableIds], personalExceptionIds: [...exceptions], changes, reason,
+    vehicleElection: input.answer === "vehicle_method" ? {
+      vehicleId: input.vehicleId,
+      method: input.vehicleMethod,
+      expectedActiveElectionId: input.expectedActiveElectionId,
+      businessUsePercent: changes.deductiblePercent,
+      eligibility: input.eligibility,
+    } : null,
   } });
 }
 
@@ -238,6 +251,9 @@ function fingerprintConfirmation(input = {}) {
     vehicleMethod: text(input.vehicleMethod),
     actualExpenseUse: text(input.actualExpenseUse),
     businessUsePercent: input.businessUsePercent == null ? null : Number(input.businessUsePercent),
+    vehicleId: text(input.vehicleId),
+    expectedActiveElectionId: text(input.expectedActiveElectionId),
+    eligibility: input.eligibility && typeof input.eligibility === "object" ? input.eligibility : {},
     personalExceptionIds: [...new Set((input.personalExceptionIds || []).map(String))].sort(),
   });
   return `gdc-v1-${createHash("sha256").update(payload).digest("hex")}`;
