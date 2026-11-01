@@ -1074,8 +1074,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
         businessId={businessId}
         taxYear={year}
         readOnly={readOnly}
+        workspaceReconciling={deductions.refreshing}
         onClose={() => setReviewDecision(null)}
-        onPreview={({ groupId }) => deductions.previewGroupedDeductionDecision({ groupId })}
+        onPreview={(input) => deductions.previewGroupedDeductionDecision(input)}
         onScopeChanged={async () => {
           await deductions.refresh();
         }}
@@ -2551,7 +2552,65 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
   );
 }
 
-function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, onCheckOutcome, onScopeChanged, onPreview, onCreateVehicle }) {
+function groupedDecisionSubmitEligibility({
+  previewState,
+  serverPreview,
+  previewRows = [],
+  answer,
+  personalExceptionIds = [],
+  selectedRowCount = 0,
+  readOnly = false,
+  saving = false,
+  workspaceReconciling = false,
+  scopeRefreshing = false,
+  outcomeUnknown = false,
+  vehicleDecisionUnresolved = false,
+  vehicleDecisionValid = true,
+  requiresPercent = false,
+  percentValid = true,
+  changingReviewedEstimate = false,
+  confirmRetroactiveChange = false,
+} = {}) {
+  if (readOnly) return { canSubmit: false, reason: "workspace_read_only" };
+  if (workspaceReconciling || scopeRefreshing) return { canSubmit: false, reason: "workspace_reconciling" };
+  if (saving || outcomeUnknown) return { canSubmit: false, reason: "submission_in_flight" };
+  if (previewState === "preview_loading") return { canSubmit: false, reason: "preview_loading" };
+  if (previewState !== "preview_ready") return { canSubmit: false, reason: "preview_failed" };
+  if (!serverPreview?.previewId) return { canSubmit: false, reason: "projection_identity_missing" };
+  if (!Number.isInteger(serverPreview.actionableCount) || serverPreview.actionableCount <= 0) {
+    return { canSubmit: false, reason: "membership_empty" };
+  }
+  const previewIds = previewRows.map(taxRowId).filter(Boolean);
+  if (previewIds.length !== serverPreview.actionableCount || new Set(previewIds).size !== previewIds.length) {
+    return { canSubmit: false, reason: "membership_changed" };
+  }
+  if (!answer) return { canSubmit: false, reason: "no_answer_selected" };
+  if (answer === "some_personal" && personalExceptionIds.length === 0) {
+    return { canSubmit: false, reason: "personal_exception_required" };
+  }
+  if (answer === "unsure" || vehicleDecisionUnresolved) return { canSubmit: false, reason: "answer_keeps_needs_input" };
+  if (!vehicleDecisionValid || (requiresPercent && !percentValid)) return { canSubmit: false, reason: "answer_incomplete" };
+  if (selectedRowCount <= 0) return { canSubmit: false, reason: "membership_empty" };
+  if (changingReviewedEstimate && !confirmRetroactiveChange) return { canSubmit: false, reason: "confirmation_required" };
+  return { canSubmit: true, reason: null };
+}
+
+const GROUPED_DECISION_DISABLED_COPY = {
+  workspace_read_only: "This workspace is read-only.",
+  workspace_reconciling: "Wait for the current Tax workspace update to finish.",
+  submission_in_flight: "Your decision is being saved.",
+  preview_loading: "Wait for the current transaction preview to load.",
+  preview_failed: "Reload this question preview before saving.",
+  projection_identity_missing: "Reload this question to get a current Tax projection.",
+  membership_empty: "This question no longer has eligible transactions.",
+  membership_changed: "The transaction list changed. Reload this question before saving.",
+  no_answer_selected: "Select an answer to continue.",
+  personal_exception_required: "Select at least one personal expense.",
+  answer_incomplete: "Complete the selected answer to continue.",
+  confirmation_required: "Confirm the reviewed-estimate change to continue.",
+};
+
+function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling = false, onClose, onApply, onCheckOutcome, onScopeChanged, onPreview, onCreateVehicle }) {
   const prefersReducedMotion = useReducedMotion();
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [vehicleMethod, setVehicleMethod] = useState("");
@@ -2561,7 +2620,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   const [vehicleEligibility, setVehicleEligibility] = useState({ ownedOrLeased: false, firstYearAvailable: false, fleetUnderFive: false, allTransactionsAttributed: false });
   const [actualExpenseUse, setActualExpenseUse] = useState("");
   const [dedicatedPremises, setDedicatedPremises] = useState(false);
-  const [businessUseAnswer, setBusinessUseAnswer] = useState("all_business");
+  const [businessUseAnswer, setBusinessUseAnswer] = useState("");
   const [confirmRetroactiveChange, setConfirmRetroactiveChange] = useState(false);
   const [exceptionIds, setExceptionIds] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -2577,6 +2636,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   const closeButtonRef = useRef(null);
   const previousFocusRef = useRef(null);
   const idempotencyKeyRef = useRef(null);
+  const previewRequestRef = useRef(0);
   const decisionGroupKey = decision?.group?.key || null;
 
   useEffect(() => {
@@ -2587,7 +2647,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
     setVehicleEligibility({ ownedOrLeased: false, firstYearAvailable: false, fleetUnderFive: false, allTransactionsAttributed: false });
     setActualExpenseUse("");
     setDedicatedPremises(false);
-    setBusinessUseAnswer("all_business");
+    setBusinessUseAnswer("");
     setConfirmRetroactiveChange(false);
     setExceptionIds([]);
     setSaving(false);
@@ -2619,17 +2679,21 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
   useEffect(() => {
     if (!decisionGroupKey || readOnly || !onPreviewRef.current) return undefined;
     const controller = new AbortController();
+    const requestSequence = previewRequestRef.current + 1;
+    previewRequestRef.current = requestSequence;
     setScopeRefreshing(true);
     setPreviewState("preview_loading");
     setPreviewRequestId(null);
     setError("");
     onPreviewRef.current({ groupId: decisionGroupKey, signal: controller.signal })
       .then((preview) => {
+        if (previewRequestRef.current !== requestSequence || controller.signal.aborted) return;
         setServerPreview(preview);
         setPreviewState(preview.actionableCount === 0 ? "preview_resolved" : "preview_ready");
         if (preview.actionableCount === 0) void onScopeChangedRef.current?.();
       })
       .catch((previewError) => {
+        if (previewRequestRef.current !== requestSequence) return;
         if (previewError?.name === "AbortError" || previewError?.code === "request_aborted") return;
         setServerPreview(null);
         setPreviewRequestId(previewError?.requestId || null);
@@ -2640,7 +2704,9 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
           setPreviewState("preview_error");
         }
       })
-      .finally(() => setScopeRefreshing(false));
+      .finally(() => {
+        if (previewRequestRef.current === requestSequence) setScopeRefreshing(false);
+      });
     return () => controller.abort();
   }, [decisionGroupKey, previewAttempt, readOnly]);
 
@@ -2719,20 +2785,30 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
         ? "Not estimated yet"
         : `${formatDeductiblePercent(group.deductiblePercent)} deductible`;
 
-  const expectedPopulationTransactionIds = decisionTransactionIds(rows, "all_business", []);
-  const hasCanonicalScopeAmounts = Number.isInteger(group.actionableGrossAmountCents)
-    && Number.isInteger(group.actionableEstimatedDeductibleAmountCents);
-  const scopeIdentityConserved = population.isConserved
-    && expectedPopulationTransactionIds.length === population.actionableTransactionCount
-    && new Set(expectedPopulationTransactionIds).size === expectedPopulationTransactionIds.length;
-  const canSubmit = previewState === "preview_ready" && !readOnly && Boolean(serverPreview?.previewId) && serverPreview.actionableCount > 0 && group.canApply && businessUseAnswer !== "unsure" && !vehicleDecisionUnresolved && vehicleDecisionValid && selectedRows.length > 0 && hasCanonicalScopeAmounts && scopeIdentityConserved && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100)) && (!changingReviewedEstimate || confirmRetroactiveChange);
+  const submitEligibility = groupedDecisionSubmitEligibility({
+    previewState,
+    serverPreview,
+    previewRows: rows,
+    answer: businessUseAnswer,
+    personalExceptionIds: exceptionIds,
+    selectedRowCount: selectedRows.length,
+    readOnly,
+    saving,
+    workspaceReconciling,
+    scopeRefreshing,
+    outcomeUnknown,
+    vehicleDecisionUnresolved,
+    vehicleDecisionValid,
+    requiresPercent,
+    percentValid: hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100,
+    changingReviewedEstimate,
+    confirmRetroactiveChange,
+  });
+  const { canSubmit } = submitEligibility;
+  const disabledReason = GROUPED_DECISION_DISABLED_COPY[submitEligibility.reason] || null;
 
   const submit = async () => {
     if (!canSubmit) return;
-    if (!scopeIdentityConserved || !hasCanonicalScopeAmounts) {
-      setError("These transactions changed while you were reviewing them. Close and reopen this question to review the current amounts.");
-      return;
-    }
     setSaving(true);
     setError("");
     setOutcomeUnknown(false);
@@ -2878,9 +2954,9 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
               <div className="font-semibold text-white/84">How do you deduct these vehicle expenses?</div>
               {vehicleWorkflows.length ? (
                 <label className="block text-xs text-white/60">Vehicle
-                  <select value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} className="mt-1 block w-full rounded-xl border border-white/12 bg-black/30 px-3 py-2 text-sm text-white">
-                    <option value="">Select a vehicle</option>
-                    {vehicleWorkflows.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.displayName}</option>)}
+                  <select data-deduction-modal-select value={vehicleId} onChange={(event) => setVehicleId(event.target.value)} style={{ colorScheme: "dark" }} className="dark-dropdown mt-1 block w-full rounded-xl border border-white/12 bg-black/30 px-3 py-2 text-sm text-white [color-scheme:dark]">
+                    <option className="bg-[#0f1312] text-white" value="">Select a vehicle</option>
+                    {vehicleWorkflows.map((vehicle) => <option className="bg-[#0f1312] text-white" key={vehicle.id} value={vehicle.id}>{vehicle.displayName}</option>)}
                   </select>
                 </label>
               ) : (
@@ -2930,7 +3006,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
             </label>
           ) : null}
 
-          {businessUseAnswer !== "unsure" ? (
+          {businessUseAnswer && businessUseAnswer !== "unsure" ? (
             <>
               {action.kind === "confirm_business_purpose" && businessUseAnswer === "some_personal" ? (
                 <p className="mt-3 text-xs leading-relaxed text-white/48">Every eligible row is included by default. Check only a personal exception to leave it unchanged; selection here is not a persisted review status.</p>
@@ -2947,7 +3023,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
               />
             </>
           ) : null}
-          {businessUseAnswer !== "unsure" && !vehicleDecisionUnresolved ? (
+          {businessUseAnswer && businessUseAnswer !== "unsure" && !vehicleDecisionUnresolved ? (
             <section className="mt-3 rounded-xl border border-emerald-300/14 bg-emerald-300/[0.045] px-3 py-2.5 text-xs leading-relaxed text-emerald-50/84" aria-label="Future deduction default">
               <div className="font-semibold text-emerald-50">Updates the currently listed {taxYear} transactions</div>
               <p className="mt-1">This also saves a default for future {group.qboAccountName || "this category"} transactions. You can change it later.</p>
@@ -2965,6 +3041,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
               : businessUseAnswer === "unsure" || vehicleDecisionUnresolved
                 ? "All expenses will remain in Needs input"
                 : `${rows.length} expense${rows.length === 1 ? "" : "s"} will receive this treatment`}
+            {disabledReason ? <span className="mt-1 block text-amber-100/72" role="status">{disabledReason}</span> : null}
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} disabled={saving || outcomeUnknown} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/10 disabled:opacity-50">Cancel</button>
@@ -2981,7 +3058,9 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, onClose, onApply, on
             {previewState === "preview_ready" ? <button
               type="button"
               onClick={businessUseAnswer === "unsure" || vehicleDecisionUnresolved ? onClose : submit}
-              disabled={scopeRefreshing || population.actionableTransactionCount === 0 || (businessUseAnswer === "unsure" || vehicleDecisionUnresolved ? outcomeUnknown : !canSubmit || saving || outcomeUnknown)}
+              disabled={businessUseAnswer === "unsure" || vehicleDecisionUnresolved ? outcomeUnknown : !canSubmit}
+              aria-disabled={businessUseAnswer === "unsure" || vehicleDecisionUnresolved ? outcomeUnknown : !canSubmit}
+              data-disabled-reason={submitEligibility.reason || undefined}
               aria-busy={saving ? "true" : "false"}
               className="inline-flex min-w-[9.5rem] items-center justify-center gap-2 rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-[#120f04] transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -6088,6 +6167,7 @@ export const __TaxDashboardTestInternals = {
   buildCustomerDeductionsWorkflow,
   buildAttentionReviewGroups,
   decisionPopulation,
+  groupedDecisionSubmitEligibility,
   decisionRowsForAnswer,
   decisionTransactionIds,
   toDecisionActionGroup,

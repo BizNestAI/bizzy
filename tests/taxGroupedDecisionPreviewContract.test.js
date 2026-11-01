@@ -229,7 +229,8 @@ test("technical preview failure cannot be converted to resolved zero-population 
   assert.match(dashboard, /setPreviewState\("preview_error"\)/);
   assert.match(dashboard, /previewError\?\.code === "grouped_decision_group_not_found"/);
   assert.match(dashboard, /preview\.actionableCount === 0 \? "preview_resolved" : "preview_ready"/);
-  assert.match(dashboard, /previewState === "preview_ready"[^\n]*serverPreview\.actionableCount > 0/);
+  assert.match(dashboard, /previewState !== "preview_ready"/);
+  assert.match(dashboard, /serverPreview\.actionableCount\) \|\| serverPreview\.actionableCount <= 0/);
   assert.match(dashboard, /We couldn’t load this question\. No changes were made\./);
   assert.doesNotMatch(dashboard, /setServerPreview\(\{[^}]*actionableCount:\s*0/);
 });
@@ -287,7 +288,7 @@ test("customer ownership and expiry are rejected before classifications or write
 test("browser confirmation cannot submit authoritative IDs, counts, amounts, authority, or treatment", () => {
   const client = readFileSync("src/services/tax/taxApiClient.js", "utf8");
   const route = readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
-  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds \}\)/);
+  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility \}\)/);
   assert.doesNotMatch(client, /confirmGroupedTaxDeductionDecision[\s\S]{0,500}(targetTransactionIds|scopeFingerprint|grossAmountCents)/);
   assert.match(route, /canonicalMutationBusinessId/);
   assert.match(route, /tenantContext\?\.mode === "admin_view"/);

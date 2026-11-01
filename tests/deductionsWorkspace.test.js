@@ -1489,6 +1489,29 @@ test("Tax review dialog loads an authoritative preview before rendering amounts 
   assert.deepEqual(decisionTransactionIds(group.rows, "unsure"), []);
 });
 
+test("grouped Meals eligibility is owned by the current server preview, not stale card or vehicle state", async () => {
+  const { groupedDecisionSubmitEligibility } = await loadTaxDashboardInternals();
+  const rows = Array.from({ length: 171 }, (_, index) => ({ id: `meal-${index + 1}` }));
+  const ready = {
+    previewState: "preview_ready",
+    serverPreview: { previewId: "preview-meals-current", actionableCount: 171 },
+    previewRows: rows,
+    answer: "all_business",
+    selectedRowCount: 171,
+  };
+
+  assert.deepEqual(groupedDecisionSubmitEligibility(ready), { canSubmit: true, reason: null });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, answer: "" }), { canSubmit: false, reason: "no_answer_selected" });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, answer: "some_personal", personalExceptionIds: [] }), { canSubmit: false, reason: "personal_exception_required" });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, answer: "some_personal", personalExceptionIds: ["meal-1"], selectedRowCount: 170 }), { canSubmit: true, reason: null });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, previewState: "preview_loading" }), { canSubmit: false, reason: "preview_loading" });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, previewState: "preview_error" }), { canSubmit: false, reason: "preview_failed" });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, saving: true }), { canSubmit: false, reason: "submission_in_flight" });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, workspaceReconciling: true }), { canSubmit: false, reason: "workspace_reconciling" });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, serverPreview: { actionableCount: 171 } }), { canSubmit: false, reason: "projection_identity_missing" });
+  assert.deepEqual(groupedDecisionSubmitEligibility({ ...ready, previewRows: rows.slice(0, 170) }), { canSubmit: false, reason: "membership_changed" });
+});
+
 test("Tax question modal animates open and closed with reduced-motion support", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /<AnimatePresence>\s*\{reviewDecision \? <ReviewDecisionModal/);
@@ -1502,7 +1525,8 @@ test("Tax question confirmation shows an accessible saving animation and prevent
   const modal = dashboard.slice(dashboard.indexOf("function ReviewDecisionModal"), dashboard.indexOf("function GroupedDecisionPreviewState"));
 
   assert.match(modal, /setSaving\(true\)[\s\S]*?await onApply/);
-  assert.match(modal, /disabled=\{[^}]*!canSubmit \|\| saving \|\| outcomeUnknown/);
+  assert.match(modal, /disabled=\{businessUseAnswer === "unsure" \|\| vehicleDecisionUnresolved \? outcomeUnknown : !canSubmit\}/);
+  assert.match(modal, /data-disabled-reason=\{submitEligibility\.reason \|\| undefined\}/);
   assert.match(modal, /aria-busy=\{saving \? "true" : "false"\}/);
   assert.match(modal, /saving \? <Loader2 className="h-4 w-4 shrink-0 motion-safe:animate-spin" aria-hidden="true" \/> : null/);
   assert.match(modal, /<span aria-live="polite">[\s\S]*?saving \? "Saving decision…" : actionButtonLabel/);
