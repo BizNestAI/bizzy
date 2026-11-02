@@ -87,6 +87,26 @@ test("preview response carries a bounded deployment contract and canonical scope
   assert.equal(preview.actionableCount, 1);
 });
 
+test("grouped preview accepts only the current immutable workspace projection identity", async () => {
+  const supabase = { store: { tax_workspace_projections: [{
+    id: "projection-p2", business_id: "business-1", tax_year: 2026,
+    projection_version: "tax-workspace-v2", source_fingerprint: "fingerprint-p2",
+    status: "complete", generated_at: "2026-11-01T22:00:00.000Z",
+  }] } };
+  const current = await previewTestables.requireCurrentWorkspaceProjection({
+    supabase, businessId: "business-1", taxYear: 2026,
+    projectionId: "projection-p2", sourceFingerprint: "fingerprint-p2",
+  });
+  assert.equal(current.id, "projection-p2");
+  await assert.rejects(
+    () => previewTestables.requireCurrentWorkspaceProjection({
+      supabase, businessId: "business-1", taxYear: 2026,
+      projectionId: "projection-p1", sourceFingerprint: "fingerprint-p1",
+    }),
+    (error) => error.status === 409 && error.code === "grouped_decision_projection_stale",
+  );
+});
+
 test("question preview serializes real authoritative transaction summaries instead of placeholders", () => {
   const preview = previewTestables.customerPreview({
     id: "preview-phone",
@@ -146,7 +166,7 @@ for (const [label, decisionType, count] of [
   ["Phone Bill", "business_use_percent", 5],
   ["Electric", "business_use_percent", 4],
   ["Utilities", "business_use_percent", 2],
-  ["Gas", "vehicle_method", 61],
+  ["Gas", "vehicle_method", 76],
   ["Meals", "business_use_confirmation", 171],
   ["Parking", "business_use_confirmation", 61],
   ["Lyft/Uber", "business_use_confirmation", 8],
@@ -234,8 +254,25 @@ test("technical preview failure cannot be converted to resolved zero-population 
   assert.match(dashboard, /This question was updated because the underlying transactions changed\./);
   assert.match(dashboard, /previewState !== "preview_ready"/);
   assert.match(dashboard, /serverPreview\.actionableCount\) \|\| serverPreview\.actionableCount <= 0/);
-  assert.match(dashboard, /We couldn’t load this question\. No changes were made\./);
+  assert.match(dashboard, /This question couldn’t be loaded\./);
+  assert.match(dashboard, /No changes were made\. Try again\./);
   assert.doesNotMatch(dashboard, /setServerPreview\(\{[^}]*actionableCount:\s*0/);
+});
+
+test("every grouped question modal uses the bounded finite preview lifecycle", () => {
+  const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const client = readFileSync("src/services/tax/taxApiClient.js", "utf8");
+  const hook = readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  assert.match(client, /timeoutMs = 12_000/);
+  assert.match(client, /code: "grouped_decision_preview_timeout"/);
+  assert.match(hook, /projectionId: workspaceSnapshotRef\.current\.projectionId/);
+  assert.match(hook, /sourceFingerprint: workspaceSnapshotRef\.current\.sourceFingerprint/);
+  assert.match(dashboard, /setPreviewState\("preview_timed_out"\)/);
+  assert.match(dashboard, /setPreviewState\("preview_stale_refreshing"\)/);
+  assert.match(dashboard, /stalePreviewRetryRef\.current < 1/);
+  assert.match(dashboard, /return \(\) => controller\.abort\(\)/);
+  assert.match(dashboard, /This question couldn’t be loaded\./);
+  assert.match(dashboard, /setPreviewAttempt\(\(current\) => current \+ 1\)/);
 });
 
 test("preview persistence is service-role-only, short-lived, and atomic confirmation locks semantics", () => {

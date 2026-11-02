@@ -562,20 +562,32 @@ export async function saveTaxDeductionDecisionRule({ businessId, year, transacti
   return result;
 }
 
-export async function previewGroupedTaxDeductionDecision({ businessId, year, groupId, signal } = {}) {
+export async function previewGroupedTaxDeductionDecision({ businessId, year, groupId, projectionId, sourceFingerprint, signal, timeoutMs = 12_000 } = {}) {
   requireBusinessId(businessId);
   requireValue(groupId, "groupId");
-  const payload = await request(`/api/tax/deduction-decisions/preview?${query({ businessId, year })}`, {
-    method: "POST",
-    body: { businessId, year, groupId },
-    signal,
-  });
-  return validateGroupedDecisionPreview(unwrap(payload), {
-    businessId,
-    year,
-    groupId,
-    requestId: taxRequestId(payload),
-  });
+  const previewRequest = withBoundedCommandSignal(signal, { timeoutMs });
+  try {
+    const payload = await request(`/api/tax/deduction-decisions/preview?${query({ businessId, year })}`, {
+      method: "POST",
+      body: compact({ businessId, year, groupId, projectionId, sourceFingerprint }),
+      signal: previewRequest.signal,
+    });
+    return validateGroupedDecisionPreview(unwrap(payload), {
+      businessId,
+      year,
+      groupId,
+      requestId: taxRequestId(payload),
+    });
+  } catch (error) {
+    if (!previewRequest.timedOut()) throw error;
+    throw Object.assign(new Error("This question couldn’t be loaded in time."), {
+      code: "grouped_decision_preview_timeout",
+      requestId: error?.requestId || null,
+      retryable: true,
+    });
+  } finally {
+    previewRequest.cleanup();
+  }
 }
 
 function validateGroupedDecisionPreview(preview, { businessId, year, groupId, requestId = null } = {}) {

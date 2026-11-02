@@ -593,7 +593,7 @@ test("Tax Dashboard embeds classification workspace controls in Deductions", () 
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   assert.match(dashboard, /Deduction estimate summary/);
-  assert.match(dashboard, /Based on \{authoritativeMatrixIncludedCount\} expense transaction/);
+  assert.match(dashboard, /\{coverage\.denominator \?\? "—"\} included transactions/);
   assert.doesNotMatch(dashboard, />Update deductions</);
   assert.match(dashboard, /deductionsUpdating \? "Updating" : "Refresh"/);
   assert.match(dashboard, /Estimated/);
@@ -623,7 +623,7 @@ test("Tax Dashboard uses hydrated posted transactions and keeps matrix layout se
 test("Tax Dashboard renders a single estimate summary before the matrix-first Deductions workspace", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const summaryShell = dashboard.slice(
-    dashboard.indexOf('<section className="mt-5 rounded-2xl border border-emerald-300/10'),
+    dashboard.indexOf('<section className="relative mt-6 overflow-hidden'),
     dashboard.indexOf("<WorkspaceViewTabs")
   );
   assert.match(dashboard, /Deductions overview/);
@@ -633,11 +633,11 @@ test("Tax Dashboard renders a single estimate summary before the matrix-first De
   assert.match(dashboard, /workspaceView === "needs_attention"/);
   assert.match(dashboard, /DeductionsIncludedDisclosure/);
   assert.match(dashboard, /DeductionAccountMatrix/);
-  assert.match(summaryShell, /Estimated deductible expenses/);
+  assert.match(summaryShell, /Estimated deductions/);
   assert.match(summaryShell, /formatCurrencyLocal\(estimatedDeductibleExpenses\)/);
-  assert.match(summaryShell, /authoritativeMatrixIncludedCount/);
+  assert.match(summaryShell, /coverage\.denominator/);
   assert.doesNotMatch(summaryShell, /customerWorkflow\.technicalCount/);
-  assert.doesNotMatch(summaryShell, /Reviewed|Standard estimates|Questions for you/);
+  assert.doesNotMatch(summaryShell, /Standard estimates|Questions for you/);
   assert.match(dashboard, /posted transactions evaluated · \$\{matrixIncludedCount\} expense transactions included in the deductions matrix/);
 });
 
@@ -673,7 +673,7 @@ test("Tax launch overview keeps customer copy concise and puts the matrix before
   const rulesIndex = customerShell.indexOf("<DeductionDecisionRulesPanel");
 
   assert.match(customerShell, /Preliminary bookkeeping estimate—not a tax return\./);
-  assert.match(customerShell, /Estimates are based on expenses posted to QuickBooks\. Items that need more information are excluded until reviewed\./);
+  assert.match(customerShell, /The current estimate excludes transactions that still need information\./);
   assert.match(customerShell, /Updated \{formatDateLocal\(updatedAt\)\}/);
   assert.match(customerShell, /projectedQuestionGroups/);
   assert.match(customerShell, /Transaction details are temporarily unavailable/);
@@ -1473,7 +1473,8 @@ test("Tax review dialog loads an authoritative preview before rendering amounts 
     requestId: "safe-request-1",
     onRetry: () => {},
   }));
-  assert.match(technicalFailure, /We couldn’t load this question\. No changes were made\./);
+  assert.match(technicalFailure, /This question couldn’t be loaded\./);
+  assert.match(technicalFailure, /No changes were made\. Try again\./);
   assert.match(technicalFailure, /Request ID: safe-request-1/);
   assert.match(technicalFailure, /Retry/);
   assert.doesNotMatch(technicalFailure, /no longer needs an answer/);

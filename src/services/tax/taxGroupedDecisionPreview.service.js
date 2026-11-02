@@ -10,11 +10,13 @@ import { vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
 import { listTaxPostingSourceRowsByIds } from "./taxPostedTransaction.repository.js";
 import { safeTaxTransactionSummary } from "./taxDeductionsApi.service.js";
 import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js";
+import { getLatestTaxWorkspaceProjection } from "./taxWorkspaceProjection.service.js";
 
 const DEFAULT_PREVIEW_TTL_SECONDS = 10 * 60;
 
-export async function createGroupedDecisionPreview({ supabase, businessId, taxYear, groupId, actor = {}, now = new Date() } = {}) {
+export async function createGroupedDecisionPreview({ supabase, businessId, taxYear, groupId, projectionId = null, sourceFingerprint = null, actor = {}, now = new Date() } = {}) {
   requireCustomerActor(actor);
+  const workspaceProjection = await requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint });
   const rows = await decisionGroupRows({ supabase, businessId, taxYear, groupId });
   if (!rows.length) throw notFoundError("grouped_decision_group_not_found", "This Tax question is no longer available.");
   const manifest = buildGroupedDecisionManifest({ businessId, taxYear, rows });
@@ -33,6 +35,8 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
       tax_category: first.tax_category,
       qbo_account_id: accountId(first),
       semantic_fingerprint: questionIdentity({ businessId, taxYear, row: first }).semanticFingerprint,
+      workspace_projection_id: workspaceProjection?.id || null,
+      workspace_source_fingerprint: workspaceProjection?.source_fingerprint || null,
       rule_versions: [...new Set(rows.map(ruleVersion).filter(Boolean))].sort(),
     },
     semantic_manifest: manifest,
@@ -194,6 +198,8 @@ function customerPreview(record, rows, summaries = null) {
   }
   return { previewVersion: "tax-grouped-decision-preview-v1", previewId: record.id, canonicalBusinessId: record.business_id,
     taxYear: Number(record.tax_year), groupId: record.group_id, decisionType: record.decision_type, expiresAt: record.expires_at,
+    projectionId: record.scope?.workspace_projection_id || null,
+    sourceFingerprint: record.scope?.workspace_source_fingerprint || null,
     totalGroupCount: rows.length, actionableCount: actionable.length, previouslyReviewedCount: rows.length - actionable.length,
     grossAmountCents: signedGrossAmountCents,
     estimatedDeductionCents: actionable.reduce((sum, row) => sum + Math.round(Number(row.book_amount || 0) * 100 * Number(row.deductible_percent || 0) / 100), 0),
@@ -214,6 +220,19 @@ function customerPreview(record, rows, summaries = null) {
     },
     futureDefaultScope: { accountScoped: true, taxYear: record.tax_year },
   };
+}
+
+async function requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint }) {
+  if (!projectionId && !sourceFingerprint) return null;
+  const projection = await getLatestTaxWorkspaceProjection({ supabase, businessId, taxYear });
+  if (!projection
+    || (projectionId && String(projection.id) !== String(projectionId))
+    || (sourceFingerprint && String(projection.source_fingerprint) !== String(sourceFingerprint))) {
+    throw conflictError("grouped_decision_projection_stale", "This Tax question changed. Refresh and try again.", {
+      action: "refresh_tax_deductions",
+    });
+  }
+  return projection;
 }
 
 function questionTransactionSummary(row) {
@@ -260,4 +279,4 @@ function fingerprintConfirmation(input = {}) {
 }
 function text(value) { return value == null ? "" : String(value).trim(); }
 
-export const __testables = { decisionIdentity, taxDecisionTypeForClassification, treatmentForAnswer, completedBusinessPurposeTreatment, customerPreview, fingerprintConfirmation };
+export const __testables = { decisionIdentity, taxDecisionTypeForClassification, treatmentForAnswer, completedBusinessPurposeTreatment, customerPreview, fingerprintConfirmation, requireCurrentWorkspaceProjection };

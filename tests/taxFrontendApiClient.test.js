@@ -134,11 +134,39 @@ test("grouped Tax preview uses the canonical POST route and rejects route 404 as
     },
   });
   await assert.rejects(
-    () => taxClient.previewGroupedTaxDeductionDecision({ businessId: "business-1", year: 2026, groupId: "decision:meals" }),
+    () => taxClient.previewGroupedTaxDeductionDecision({ businessId: "business-1", year: 2026, groupId: "decision:meals", projectionId: "projection-p2", sourceFingerprint: "fingerprint-p2" }),
     (error) => error.status === 404 && error.requestId === "preview-route-404" && error.code !== "grouped_decision_group_not_found",
   );
   assert.equal(calls[0].url, "https://api.example.test/api/tax/deduction-decisions/preview?businessId=business-1&year=2026");
   assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    businessId: "business-1",
+    year: 2026,
+    groupId: "decision:meals",
+    projectionId: "projection-p2",
+    sourceFingerprint: "fingerprint-p2",
+  });
+});
+
+test("grouped Tax preview has a bounded timeout and preserves parent abort semantics", async () => {
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: null } }) } },
+    fetchImpl: async (_url, init) => new Promise((resolve, reject) => {
+      const abort = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      if (init.signal.aborted) abort();
+      else init.signal.addEventListener("abort", abort, { once: true });
+    }),
+  });
+  await assert.rejects(
+    () => taxClient.previewGroupedTaxDeductionDecision({ businessId: "business-1", year: 2026, groupId: "decision:gas", timeoutMs: 5 }),
+    (error) => error.code === "grouped_decision_preview_timeout" && error.retryable === true,
+  );
+
+  const controller = new AbortController();
+  const pending = taxClient.previewGroupedTaxDeductionDecision({ businessId: "business-1", year: 2026, groupId: "decision:gas", signal: controller.signal, timeoutMs: 100 });
+  controller.abort();
+  await assert.rejects(pending, (error) => error.code === "request_aborted");
 });
 
 test("grouped Tax preview accepts only the matching versioned server scope", async () => {
@@ -149,7 +177,11 @@ test("grouped Tax preview accepts only the matching versioned server scope", asy
     taxYear: 2026,
     groupId: "decision:meals",
     actionableCount: 1,
-    transactions: [{ transactionId: "txn-1" }],
+    grossAmountCents: 1000,
+    transactions: [{
+      transactionId: "txn-1", date: "2026-11-01", signedAmount: 10,
+      qboAccountId: "qbo-meals", taxCategory: "business_meals",
+    }],
     proposedTreatment: { type: "business_meals_business_purpose_confirmed" },
   };
   authMod.__setAuthenticatedFetchTestDeps({

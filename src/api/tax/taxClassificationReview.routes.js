@@ -30,7 +30,7 @@ import {
   publicTaxWorkspaceProjection,
   TAX_WORKSPACE_PROJECTION_VERSION,
 } from "../../services/tax/taxWorkspaceProjection.service.js";
-import { forbiddenBusinessError, validationError } from "../../services/tax/taxErrors.js";
+import { dataUnavailableError, forbiddenBusinessError, validationError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
 import {
   optionalMoney,
@@ -145,17 +145,36 @@ router.post("/deduction-decisions/preview", async (req, res) => {
   try {
     ctx = await routeContext(req, { requireServerBusinessContext: true });
     assertTaxMutationAllowed(req);
-    const data = await createGroupedDecisionPreview({
+    const data = await withGroupedPreviewTimeout(createGroupedDecisionPreview({
       ...ctx,
       groupId: String(req.body?.groupId || "").trim(),
+      projectionId: String(req.body?.projectionId || "").trim() || null,
+      sourceFingerprint: String(req.body?.sourceFingerprint || "").trim() || null,
       actor: actorFromRequest(req),
-    });
+    }));
     return sendTaxSuccess(res, data);
   } catch (err) {
     logGroupedDecisionFailure({ req, ctx, err });
     return sendTaxError(res, err, "tax_grouped_deduction_preview_failed");
   }
 });
+
+async function withGroupedPreviewTimeout(operation, timeoutMs = 11_000) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(dataUnavailableError(
+          "This question couldn’t be loaded in time.",
+          { code: "grouped_decision_preview_timeout", retryable: true },
+        )), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 router.post("/deduction-decisions/apply", async (req, res) => {
   setTaxNoStore(res);

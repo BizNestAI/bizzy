@@ -540,8 +540,14 @@ export function useTaxDeductions({
       if (options.skipReload !== true) await load();
       return result;
     },
-    previewGroupedDeductionDecision: ({ groupId, signal } = {}) =>
-      previewGroupedTaxDeductionDecision({ businessId, year, groupId, signal }),
+    previewGroupedDeductionDecision: ({ groupId, signal } = {}) => previewGroupedTaxDeductionDecision({
+      businessId,
+      year,
+      groupId,
+      projectionId: workspaceSnapshotRef.current.projectionId,
+      sourceFingerprint: workspaceSnapshotRef.current.sourceFingerprint,
+      signal,
+    }),
     confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, signal } = {}) => {
       const operationOwner = workspaceOperationTrackerRef.current.acquire("grouped-decision-reconciliation");
       try {

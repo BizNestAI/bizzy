@@ -2690,6 +2690,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
   const previousFocusRef = useRef(null);
   const idempotencyKeyRef = useRef(null);
   const previewRequestRef = useRef(0);
+  const stalePreviewRetryRef = useRef(0);
   const decisionGroupKey = decision?.group?.key || null;
 
   useEffect(() => {
@@ -2711,6 +2712,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
     setServerPreview(null);
     setPreviewState("preview_loading");
     setPreviewRequestId(null);
+    stalePreviewRetryRef.current = 0;
     idempotencyKeyRef.current = null;
   }, [decisionGroupKey, decision?.scope, decision?.selectedMonth]);
 
@@ -2752,14 +2754,30 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
           }
         }
       })
-      .catch((previewError) => {
+      .catch(async (previewError) => {
         if (previewRequestRef.current !== requestSequence) return;
         if (previewError?.name === "AbortError" || previewError?.code === "request_aborted") return;
         setServerPreview(null);
         setPreviewRequestId(previewError?.requestId || null);
-        if (previewError?.code === "grouped_decision_group_not_found") {
+        if (previewError?.code === "grouped_decision_projection_stale" && stalePreviewRetryRef.current < 1) {
+          stalePreviewRetryRef.current += 1;
+          setPreviewState("preview_stale_refreshing");
+          try {
+            await withBoundedModalTask(() => onScopeChangedRef.current?.(), 12_000);
+            if (previewRequestRef.current === requestSequence && !controller.signal.aborted) {
+              setPreviewAttempt((current) => current + 1);
+            }
+          } catch (refreshError) {
+            if (previewRequestRef.current === requestSequence && !controller.signal.aborted) {
+              setPreviewRequestId(refreshError?.requestId || previewError?.requestId || null);
+              setPreviewState("preview_error");
+            }
+          }
+        } else if (["grouped_decision_group_not_found", "grouped_decision_projection_stale"].includes(previewError?.code)) {
           setPreviewState("preview_stale");
-          void onScopeChangedRef.current?.();
+          if (previewError?.code === "grouped_decision_group_not_found") void onScopeChangedRef.current?.();
+        } else if (previewError?.code === "grouped_decision_preview_timeout") {
+          setPreviewState("preview_timed_out");
         } else {
           setPreviewState("preview_error");
         }
@@ -3137,14 +3155,30 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
   return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
 }
 
+async function withBoundedModalTask(task, timeoutMs) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(task),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error("The Tax workspace refresh took too long."), {
+          code: "tax_workspace_refresh_timeout",
+        })), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function GroupedDecisionPreviewState({ state, requestId, onRetry }) {
-  if (state === "preview_loading") {
+  if (["preview_loading", "preview_stale_refreshing"].includes(state)) {
     return (
       <div className="flex min-h-52 items-center justify-center text-center" role="status" aria-live="polite" aria-busy="true">
         <div>
           <Loader2 className="mx-auto h-6 w-6 text-emerald-200 motion-safe:animate-spin motion-reduce:hidden" />
           <span className="mx-auto hidden h-2.5 w-2.5 rounded-full bg-emerald-200 motion-reduce:block" />
-          <p className="mt-3 text-sm font-semibold text-white/82">Loading this question…</p>
+          <p className="mt-3 text-sm font-semibold text-white/82">{state === "preview_stale_refreshing" ? "Refreshing this question…" : "Loading this question…"}</p>
         </div>
       </div>
     );
@@ -3153,9 +3187,11 @@ function GroupedDecisionPreviewState({ state, requestId, onRetry }) {
     return <div className="rounded-xl border border-emerald-300/18 bg-emerald-300/[0.06] px-3 py-3 text-sm text-emerald-50" role="status">This question no longer needs an answer.</div>;
   }
   const stale = state === "preview_stale";
+  const timedOut = state === "preview_timed_out";
   return (
     <div className="rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-3 text-sm text-rose-100" role="alert">
-      <p className="font-semibold">{stale ? "This question changed while you were viewing it." : "We couldn’t load this question. No changes were made."}</p>
+      <p className="font-semibold">{stale ? "This question changed while you were viewing it." : "This question couldn’t be loaded."}</p>
+      <p className="mt-1 text-rose-100/72">{timedOut ? "The transaction preview took too long. Try again." : "No changes were made. Try again."}</p>
       {requestId ? <p className="mt-1 font-mono text-xs text-rose-100/60">Request ID: {requestId}</p> : null}
       <button type="button" onClick={onRetry} className="mt-3 rounded-full border border-rose-200/25 px-3 py-1.5 text-xs font-semibold hover:bg-rose-100/10">Retry</button>
     </div>
