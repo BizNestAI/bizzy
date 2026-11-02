@@ -2024,7 +2024,7 @@ function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenD
                 {matrix.months.map((month) => (
                   <th key={month.key} className="w-[68px] px-2 py-3 text-right font-semibold">{month.shortLabel}</th>
                 ))}
-                <th className="w-[128px] px-3 py-3 text-right font-semibold">YTD</th>
+                <th className="sticky right-0 z-20 w-[128px] min-w-[128px] border-l border-white/[0.08] bg-[#111614] px-3 py-3 text-right font-semibold shadow-[-12px_0_18px_-16px_rgba(0,0,0,0.95)]">YTD</th>
               </tr>
             </thead>
             <tbody>
@@ -2047,7 +2047,7 @@ function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenD
                       />
                     </td>
                   ))}
-                  <td className="px-3 py-3 text-right align-middle text-sm tabular-nums">
+                  <td className="sticky right-0 z-10 w-[128px] min-w-[128px] border-l border-white/[0.08] bg-[#111614] px-3 py-3 text-right align-middle text-sm tabular-nums shadow-[-12px_0_18px_-16px_rgba(0,0,0,0.95)]">
                     <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.reviewedDeductibleTotal + account.standardRuleDeductibleTotal)}</div>
                     {account.reviewedTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-emerald-100/76">{formatCurrencyLocal(account.reviewedDeductibleTotal)} reviewed</div> : null}
                     {account.standardRuleTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-sky-100/76">{formatCurrencyLocal(account.standardRuleDeductibleTotal)} estimated</div> : null}

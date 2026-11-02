@@ -948,6 +948,18 @@ test("Tax matrix launch labels retain accessible details and grouped decision na
   assert.match(dashboard, /onOpenDecision\(\{ group, scope: "account_year", selectedMonth: month\.key \}\)/);
 });
 
+test("Tax matrix keeps the YTD totals column visible during horizontal scrolling", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const matrix = dashboard.slice(
+    dashboard.indexOf("function DeductionAccountMatrix"),
+    dashboard.indexOf("function MatrixCell"),
+  );
+  assert.match(matrix, /<th className="sticky right-0 z-20[^"]*">YTD<\/th>/);
+  assert.match(matrix, /<td className="sticky right-0 z-10[^"]*tabular-nums[^"]*">/);
+  assert.match(matrix, /border-l border-white\/\[0\.08\]/);
+  assert.match(matrix, /bg-\[#111614\]/);
+});
+
 test("deduction modal native selects explicitly request a dark popup palette", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const deductionSelects = [...dashboard.matchAll(/<select[\s\S]*?<\/select>/g)].map((match) => match[0]);
