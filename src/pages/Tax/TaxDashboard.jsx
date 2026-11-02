@@ -36,6 +36,7 @@ import { buildTaxEvaluationNotice } from "../../services/tax/taxEvaluationNotice
 import { resolveTaxWorkspacePrerequisites } from "./taxWorkspacePrerequisites.js";
 import { showTaxDecisionInfo, showTaxDecisionSuccess } from "./taxDecisionToast.js";
 import { loadMatrixCellWithProjectionRecovery } from "./matrixCellProjectionRecovery.js";
+import { buildDeductionCoveragePresentation } from "./deductionCoveragePresentation.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
@@ -680,10 +681,14 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
   const estimatedDeductibleExpenses = Number(
     overviewProjection?.estimatedDeductibleAmount ?? deductions.overview?.totals?.estimatedDeductibleAmount
   );
-  const authoritativeMatrixIncludedCount = Number(overviewProjection?.matrixIncludedCount);
   const evaluatedTransactionCount = Number(overviewProjection?.evaluatedTransactionCount);
   const outsideDeductionsCount = Number(overviewProjection?.outsideDeductionsCount);
-  const treatmentCounts = overviewProjection?.treatmentCounts || {};
+  const coverage = buildDeductionCoveragePresentation({
+    matrixTransactionCount: overviewProjection?.matrixIncludedCount,
+    estimated: overviewProjection?.treatmentCounts?.estimated,
+    reviewed: overviewProjection?.treatmentCounts?.reviewed,
+    needsInput: overviewProjection?.treatmentCounts?.needs_input,
+  });
   const questionCoveredUniqueCount = Number(overviewProjection?.questionCoveredUniqueCount || 0);
   const authoritativeQuestionCount = overviewProjection?.questionsForYouGroupCount;
   // Projection summaries are the question-list authority. Optional row/detail
@@ -812,7 +817,6 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
     if (workspaceView !== "all_transactions" || deductions.allTransactions || deductions.isDemo) return;
     void deductions.retryQuestions();
   }, [deductions, workspaceView]);
-  const evidenceThroughAt = classificationSummary.lastRunAt || null;
   const openVehicleWorkflow = (decision) => {
     const decisionRows = decisionActionRows(decision?.group);
     const target = decisionRows.find((row) => {
@@ -933,41 +937,66 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
         </div>
       ) : (
         <>
-      <section className="relative mt-6 overflow-hidden rounded-[22px] border border-emerald-200/[0.12] bg-[linear-gradient(135deg,rgba(16,185,129,0.105),rgba(16,185,129,0.035)_42%,rgba(255,255,255,0.025))] shadow-[inset_0_1px_0_rgba(255,255,255,0.045),0_18px_45px_rgba(0,0,0,0.16)]" aria-label="Deduction estimate summary">
-        <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-emerald-300/[0.055] blur-3xl" />
-        <div className="relative px-5 py-6 sm:px-7 sm:py-7">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-100/65">Estimated deductible expenses</div>
-          <div className="mt-2 break-words text-[2.65rem] font-semibold leading-none tracking-[-0.045em] tabular-nums text-white drop-shadow-[0_2px_18px_rgba(167,243,208,0.08)] sm:text-[3.35rem]">
-            {formatCurrencyLocal(estimatedDeductibleExpenses)}
-          </div>
-          <p className="mt-3 text-sm font-medium text-white/70">
-            Based on {authoritativeMatrixIncludedCount} expense transaction{authoritativeMatrixIncludedCount === 1 ? "" : "s"}{evidenceThroughAt ? ` through ${formatLongDateLocal(evidenceThroughAt)}` : ""}.
-          </p>
-          <p className="mt-2 max-w-2xl text-xs leading-relaxed text-white/42">
-            Estimates are based on expenses posted to QuickBooks. Items that need more information are excluded until reviewed.
-          </p>
-        </div>
-
-        <div className="relative border-t border-white/[0.07] bg-black/[0.09] px-5 py-4 sm:px-7" aria-label="Tax workspace reconciliation">
-          <div className="grid grid-cols-3 divide-x divide-white/[0.07]">
-            <div className="pr-3 sm:pr-5">
-              <div className="text-base font-semibold tabular-nums text-white/88">{evaluatedTransactionCount}</div>
-              <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/38">Evaluated</div>
+      <section className="relative mt-6 overflow-hidden rounded-[22px] border border-emerald-200/[0.12] bg-emerald-300/[0.035] shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]" aria-label="Deduction estimate summary">
+        <div className="grid min-w-0 grid-cols-1 lg:grid-cols-2">
+          <div className="min-w-0 px-5 py-5 sm:px-6 lg:pr-8">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.19em] text-emerald-100/65">Estimated deductions</div>
+              <span className="rounded-full border border-white/[0.09] bg-white/[0.045] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-white/50">Preliminary</span>
             </div>
-            <div className="px-3 sm:px-5">
-              <div className="text-base font-semibold tabular-nums text-white/88">{authoritativeMatrixIncludedCount}</div>
-              <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/38">Included</div>
+            <div className="mt-3 whitespace-nowrap text-[2.45rem] font-semibold leading-none tracking-[-0.04em] tabular-nums text-white sm:text-[2.9rem]">
+              {formatCurrencyLocal(estimatedDeductibleExpenses)}
             </div>
-            <div className="pl-3 sm:pl-5">
-              <div className="text-base font-semibold tabular-nums text-white/88">{outsideDeductionsCount}</div>
-              <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/38">Outside deductions</div>
-            </div>
-          </div>
-          <div className="mt-3 border-t border-white/[0.055] pt-3 text-[11px] leading-relaxed text-white/42">
-            <p>{authoritativeMatrixIncludedCount} matrix transactions · {Number(treatmentCounts.estimated || 0)} estimated · {Number(treatmentCounts.reviewed || 0)} reviewed · {Number(treatmentCounts.needs_input || 0)} needing input</p>
-            {Number(deductions.workspaceProjection?.vehicleMileageDeductionAmount || 0) > 0 ? <p className="mt-1">
+            <p className="mt-3 text-sm font-medium text-white/70">
+              {coverage.denominator ?? "—"} included transactions · {coverage.counts.needsInput ?? "—"} still need input
+            </p>
+            <p className="mt-1.5 max-w-xl text-xs leading-relaxed text-white/43">
+              The current estimate excludes transactions that still need information.
+            </p>
+            {Number(deductions.workspaceProjection?.vehicleMileageDeductionAmount || 0) > 0 ? <p className="mt-2 text-[11px] leading-relaxed text-white/42">
               Total = {formatCurrencyLocal(deductions.workspaceProjection?.postedTransactionDeductionAmount || 0)} posted-transaction deductions + {formatCurrencyLocal(deductions.workspaceProjection.vehicleMileageDeductionAmount)} standard-mileage deduction
             </p> : null}
+          </div>
+
+          <div className="min-w-0 border-t border-white/[0.07] px-5 py-5 sm:px-6 lg:border-l lg:border-t-0 lg:pl-8">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <div className="text-xs font-semibold text-white/72">Estimate coverage</div>
+                <p className="mt-1 text-[11px] text-white/40">Transactions ready for the current estimate</p>
+              </div>
+              <div className="shrink-0 text-right">
+                <span className="text-2xl font-semibold tabular-nums text-white/92">{coverage.percentage == null ? "—" : `${coverage.percentage}%`}</span>
+              </div>
+            </div>
+            {coverage.segmentWidths ? (
+              <div className="mt-4" role="img" aria-label={`Estimate coverage: ${coverage.accessibleBreakdown}`}>
+                <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                  <span aria-hidden="true" className="h-full bg-sky-400/75" style={{ width: `${coverage.segmentWidths.estimated}%` }} />
+                  <span aria-hidden="true" className="h-full bg-emerald-400/75" style={{ width: `${coverage.segmentWidths.reviewed}%` }} />
+                  <span aria-hidden="true" className="h-full bg-amber-300/75" style={{ width: `${coverage.segmentWidths.needsInput}%` }} />
+                </div>
+              </div>
+            ) : <p className="mt-4 text-xs text-white/38">Coverage is not available yet.</p>}
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[11px] text-white/55" aria-hidden={coverage.segmentWidths ? undefined : true}>
+              <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-sky-400/80" />{coverage.counts.estimated ?? "—"} Estimated</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" />{coverage.counts.reviewed ?? "—"} Reviewed</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-amber-300/80" />{coverage.counts.needsInput ?? "—"} Need input</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 border-t border-white/[0.07] bg-black/[0.08] min-[390px]:grid-cols-3" aria-label="Tax workspace reconciliation">
+          <div className="px-5 py-3 min-[390px]:px-4 sm:px-6">
+            <span className="text-sm font-semibold tabular-nums text-white/85">{Number.isFinite(evaluatedTransactionCount) ? evaluatedTransactionCount : "—"}</span>
+            <span className="ml-2 text-[10px] uppercase tracking-[0.12em] text-white/38">Evaluated</span>
+          </div>
+          <div className="border-t border-white/[0.055] px-5 py-3 min-[390px]:border-l min-[390px]:border-t-0 min-[390px]:px-4 sm:px-6">
+            <span className="text-sm font-semibold tabular-nums text-white/85">{coverage.denominator ?? "—"}</span>
+            <span className="ml-2 text-[10px] uppercase tracking-[0.12em] text-white/38">Included</span>
+          </div>
+          <div className="border-t border-white/[0.055] px-5 py-3 min-[390px]:border-l min-[390px]:border-t-0 min-[390px]:px-4 sm:px-6" aria-label={`${Number.isFinite(outsideDeductionsCount) ? outsideDeductionsCount : "Unknown"} excluded; outside deductions`}>
+            <span className="text-sm font-semibold tabular-nums text-white/85">{Number.isFinite(outsideDeductionsCount) ? outsideDeductionsCount : "—"}</span>
+            <span className="ml-2 text-[10px] uppercase tracking-[0.12em] text-white/38">Excluded</span>
           </div>
         </div>
         <ClassificationProgressSummary summary={classificationSummary} onViewTransactions={(transactionIds) => {
@@ -6156,12 +6185,6 @@ function formatDateLocal(value) {
   const parsed = parseLocalDate(value);
   if (Number.isNaN(parsed.getTime())) return String(value || "Not available");
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function formatLongDateLocal(value) {
-  const parsed = parseLocalDate(value);
-  if (Number.isNaN(parsed.getTime())) return "the latest available information";
-  return parsed.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
 function parseLocalDate(value) {

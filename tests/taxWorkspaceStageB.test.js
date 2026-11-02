@@ -47,9 +47,10 @@ test("Stage B does not initially hydrate legacy rows and optional failures canno
 });
 
 test("Stage B reconciliation copy and accepted projection counts are explicit", () => {
-  assert.match(dashboard, />\{evaluatedTransactionCount\}<\/div>[\s\S]*>Evaluated<\/div>/);
-  assert.match(dashboard, />\{authoritativeMatrixIncludedCount\}<\/div>[\s\S]*>Included<\/div>/);
-  assert.match(dashboard, />\{outsideDeductionsCount\}<\/div>[\s\S]*>Outside deductions<\/div>/);
+  assert.match(dashboard, /Number\.isFinite\(evaluatedTransactionCount\)[\s\S]*>Evaluated<\/span>/);
+  assert.match(dashboard, /coverage\.denominator \?\? "—"[\s\S]*>Included<\/span>/);
+  assert.match(dashboard, /Number\.isFinite\(outsideDeductionsCount\)[\s\S]*>Excluded<\/span>/);
+  assert.match(dashboard, /outside deductions/);
   const accepted = {
     evaluatedTransactionCount: 714,
     matrixIncludedCount: 690,
