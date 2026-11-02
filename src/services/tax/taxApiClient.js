@@ -1,3 +1,4 @@
+import { withTaxPreviewDeadline } from "./taxPreviewDeadline.js";
 import authenticatedFetch from "../api/authenticatedFetch.js";
 import { normalizeTaxOverview } from "./normalizeTaxOverview.js";
 import {
@@ -567,11 +568,11 @@ export async function previewGroupedTaxDeductionDecision({ businessId, year, gro
   requireValue(groupId, "groupId");
   const previewRequest = withBoundedCommandSignal(signal, { timeoutMs });
   try {
-    const payload = await request(`/api/tax/deduction-decisions/preview?${query({ businessId, year })}`, {
+    const payload = await withTaxPreviewDeadline(() => request(`/api/tax/deduction-decisions/preview?${query({ businessId, year })}`, {
       method: "POST",
       body: compact({ businessId, year, groupId, projectionId, sourceFingerprint }),
       signal: previewRequest.signal,
-    });
+    }), { signal, timeoutMs });
     return validateGroupedDecisionPreview(unwrap(payload), {
       businessId,
       year,

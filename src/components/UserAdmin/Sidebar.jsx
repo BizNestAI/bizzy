@@ -23,7 +23,6 @@ const tabs = [
   // { label: 'Growth', path: '/dashboard/marketing' },
   // { label: 'Scheduling', path: '/dashboard/calendar' },
   { label: 'Docs', path: '/dashboard/bizzi-docs' },
-  { label: 'Settings/Sync', path: '/dashboard/settings' },
 ];
 
 /* -------------------------- Accent palette ------------------------- */

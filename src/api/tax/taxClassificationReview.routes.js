@@ -143,14 +143,16 @@ router.post("/deduction-decisions/preview", async (req, res) => {
   setTaxNoStore(res);
   let ctx = null;
   try {
-    ctx = await routeContext(req, { requireServerBusinessContext: true });
-    assertTaxMutationAllowed(req);
-    const data = await withGroupedPreviewTimeout(createGroupedDecisionPreview({
-      ...ctx,
-      groupId: String(req.body?.groupId || "").trim(),
-      projectionId: String(req.body?.projectionId || "").trim() || null,
-      sourceFingerprint: String(req.body?.sourceFingerprint || "").trim() || null,
-      actor: actorFromRequest(req),
+    const data = await withGroupedPreviewTimeout(Promise.resolve().then(async () => {
+      ctx = await routeContext(req, { requireServerBusinessContext: true });
+      assertTaxMutationAllowed(req);
+      return createGroupedDecisionPreview({
+        ...ctx,
+        groupId: String(req.body?.groupId || "").trim(),
+        projectionId: String(req.body?.projectionId || "").trim() || null,
+        sourceFingerprint: String(req.body?.sourceFingerprint || "").trim() || null,
+        actor: actorFromRequest(req),
+      });
     }));
     return sendTaxSuccess(res, data);
   } catch (err) {

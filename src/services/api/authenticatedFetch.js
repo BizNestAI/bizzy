@@ -55,6 +55,8 @@ export async function authenticatedFetch(path, options = {}) {
 
   const url = resolveApiUrl(path);
   const session = await getSession();
+  // A session lookup can outlive the caller. Never send its cancelled request.
+  if (signal?.aborted) throw new ApiRequestError({ code: "request_aborted", message: "Request was cancelled.", retryable: false });
   const headers = mergeHeaders({
     Accept: responseType === "blob" ? "*/*" : "application/json",
     ...(requestId ? { "x-request-id": requestId } : {}),

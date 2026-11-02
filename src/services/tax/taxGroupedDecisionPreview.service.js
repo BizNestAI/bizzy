@@ -1,3 +1,4 @@
+import { withTaxPreviewDeadline } from "./taxPreviewDeadline.js";
 import { createHash, randomUUID } from "node:crypto";
 import { listTaxClassifications } from "./taxClassification.repository.js";
 import { buildTaxDecisionIdentity, taxDecisionTypeForRow } from "./taxDeductionsLifecycleProjection.js";
@@ -7,8 +8,7 @@ import { buildGroupedDecisionManifest, compareGroupedDecisionManifests, fingerpr
 import { conflictError, forbiddenBusinessError, notFoundError, validationError } from "./taxErrors.js";
 import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
 import { vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
-import { listTaxPostingSourceRowsByIds } from "./taxPostedTransaction.repository.js";
-import { safeTaxTransactionSummary } from "./taxDeductionsApi.service.js";
+import { listTaxQuestionBankRowsByIds } from "./taxPostedTransaction.repository.js";
 import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js";
 import { getLatestTaxWorkspaceProjection } from "./taxWorkspaceProjection.service.js";
 
@@ -47,20 +47,29 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
   };
   const { error } = await supabase.from("tax_grouped_deduction_decision_previews").insert(record);
   if (error) throw error;
-  const sourceRows = actionable.length ? await listTaxPostingSourceRowsByIds({
+  const sourceRows = actionable.length ? await listTaxQuestionBankRowsByIds({
     supabase, businessId, taxYear, transactionIds: record.actionable_transaction_ids,
   }) : [];
   const classificationById = new Map(actionable.map((row) => [String(row.transaction_id), row]));
   const summaries = new Map(sourceRows.map((source) => {
-    const id = String(source.transactionId);
-    return [id, questionTransactionSummary(safeTaxTransactionSummary(source, classificationById.get(id)))];
+    const id = String(source.id);
+    return [id, questionTransactionSummary(source, classificationById.get(id))];
   }));
-  const result = customerPreview(record, rows, summaries);
+  const result = customerPreview(record, rows, summaries, workspaceProjection);
   if (record.decision_type !== "vehicle_method") return result;
   return {
     ...result,
-    vehicleContext: await listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) }),
+    vehicleContext: await optionalVehicleContext(() => listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) })),
   };
+}
+
+// Vehicle setup is optional display context, not question membership authority.
+export async function optionalVehicleContext(load, timeoutMs = 1_000) {
+  try {
+    return await withTaxPreviewDeadline(load, { timeoutMs });
+  } catch {
+    return { vehicles: [], unavailable: true };
+  }
 }
 
 export async function confirmGroupedDecisionPreview({ supabase, businessId, taxYear, input = {}, actor = {}, now = new Date() } = {}) {
@@ -185,7 +194,7 @@ function completedBusinessPurposeTreatment(row = {}) {
   };
 }
 
-function customerPreview(record, rows, summaries = null) {
+function customerPreview(record, rows, summaries = null, workspaceProjection = null) {
   const actionable = rows.filter(isActionable);
   const actionableIds = actionable.map((row) => String(row.transaction_id));
   if (actionableIds.length && (!(summaries instanceof Map) || summaries.size !== actionableIds.length || actionableIds.some((id) => !summaries.has(id)))) {
@@ -219,7 +228,38 @@ function customerPreview(record, rows, summaries = null) {
       protected: rows.length - actionable.length,
     },
     futureDefaultScope: { accountScoped: true, taxYear: record.tax_year },
+    matrixReconciliation: matrixReconciliation({ record, actionable, workspaceProjection }),
   };
+}
+
+function matrixReconciliation({ record, actionable, workspaceProjection }) {
+  const payload = workspaceProjection?.projection_data;
+  if (!payload || !actionable.length) return null;
+  const categoryKey = String(actionable[0].tax_category || "");
+  const matrixRow = (payload.matrix || []).find((row) => String(row.categoryKey) === categoryKey);
+  const categoryIds = (payload.identityEvidence?.categories?.[categoryKey] || []).map(String);
+  const questionIds = (payload.identityEvidence?.questionGroups?.[record.group_id] || []).map(String);
+  const actionableIds = actionable.map((row) => String(row.transaction_id)).sort();
+  if (!matrixRow || !sameStringSet(questionIds, actionableIds) || questionIds.some((id) => !categoryIds.includes(id))) {
+    throw conflictError("grouped_decision_projection_stale", "This Tax question changed. Refresh and try again.", { action: "refresh_tax_deductions" });
+  }
+  const matrixGrossExpenseCents = Object.values(matrixRow.months || {})
+    .reduce((sum, month) => sum + Math.round(Number(month?.bookExpenseAmount || 0) * 100), 0);
+  const questionGrossExpenseCents = Math.abs(actionable.reduce((sum, row) => sum + Math.round(Number(row.book_amount || 0) * 100), 0));
+  return {
+    categoryKey,
+    categoryLabel: matrixRow.categoryLabel || categoryKey,
+    matrixTransactionCount: categoryIds.length,
+    questionTransactionCount: questionIds.length,
+    otherMatrixTransactionCount: categoryIds.length - questionIds.length,
+    matrixGrossExpenseCents,
+    questionGrossExpenseCents,
+    otherMatrixGrossExpenseCents: matrixGrossExpenseCents - questionGrossExpenseCents,
+  };
+}
+
+function sameStringSet(left = [], right = []) {
+  return left.length === right.length && new Set(left).size === left.length && left.every((value) => right.includes(value));
 }
 
 async function requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint }) {
@@ -235,23 +275,28 @@ async function requireCurrentWorkspaceProjection({ supabase, businessId, taxYear
   return projection;
 }
 
-function questionTransactionSummary(row) {
+function questionTransactionSummary(source, classification) {
+  const sourceCents = Math.round(Number(source.signed_amount ?? source.amount ?? 0) * 100);
+  const classificationCents = Math.round(Number(classification?.book_amount || 0) * 100);
+  if (sourceCents !== classificationCents) {
+    throw conflictError("grouped_decision_preview_amount_mismatch", "These transaction details no longer match this question.");
+  }
   return {
-    transactionId: row.transactionId,
-    date: row.date,
-    description: row.description,
-    merchantName: row.merchantName,
-    counterpartyName: row.counterpartyName,
-    signedAmount: row.signedAmount,
-    qboAccountId: row.qboAccountId,
-    qboAccountName: row.qboAccountName,
-    taxCategory: row.taxCategory,
-    taxTreatment: row.taxTreatment,
-    deductibilityStatus: row.deductibilityStatus,
-    deductiblePercent: row.deductiblePercent,
-    classificationStatus: row.classificationStatus,
-    requiresReview: row.requiresReview,
-    override: row.override,
+    transactionId: String(source.id),
+    date: source.date,
+    description: source.name || source.merchant_name || source.counterparty_name || "Transaction",
+    merchantName: source.merchant_name || source.counterparty_name || source.name || "Merchant unavailable",
+    counterpartyName: source.counterparty_name || null,
+    signedAmount: Number(classification.book_amount),
+    qboAccountId: accountId(classification),
+    qboAccountName: classification.source_qbo_account_name || classification.metadata?.source_qbo_account_name || "Account unavailable",
+    taxCategory: classification.tax_category,
+    taxTreatment: classification.tax_treatment?.type || classification.tax_treatment,
+    deductibilityStatus: classification.deductibility_status,
+    deductiblePercent: Number(classification.deductible_percent || 0),
+    classificationStatus: classification.classification_status,
+    requiresReview: classification.requires_review === true,
+    inclusionStatus: "included_in_question",
   };
 }
 
@@ -279,4 +324,4 @@ function fingerprintConfirmation(input = {}) {
 }
 function text(value) { return value == null ? "" : String(value).trim(); }
 
-export const __testables = { decisionIdentity, taxDecisionTypeForClassification, treatmentForAnswer, completedBusinessPurposeTreatment, customerPreview, fingerprintConfirmation, requireCurrentWorkspaceProjection };
+export const __testables = { decisionIdentity, taxDecisionTypeForClassification, treatmentForAnswer, completedBusinessPurposeTreatment, customerPreview, matrixReconciliation, fingerprintConfirmation, requireCurrentWorkspaceProjection };

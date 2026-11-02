@@ -11,6 +11,7 @@ import NavRailBusinessBadge from './NavRailBusinessBadge';
 import { getDemoMode } from '../services/demo/demoClient.js';
 import { useAdminView } from '../context/AdminViewContext.jsx';
 import { prefetchPlaidStatus } from '../services/bookkeeping/bookkeepingClient.js';
+import { Settings } from 'lucide-react';
 
 function hexToRgba(hex, alpha = 1) {
   let c = (hex || '').replace('#', '');
@@ -109,7 +110,7 @@ export default function NavRail({
 
         <div
           className="flex-1 min-h-0 flex flex-col overflow-y-auto no-scrollbar relative"
-          style={{ zIndex: 1, paddingBottom: "76px" }}
+          style={{ zIndex: 1, paddingBottom: "116px" }}
         >
           {/* Rail header */}
           <div
@@ -208,6 +209,18 @@ export default function NavRail({
               style={{ background: isLiveMode ? 'rgba(52,211,153,0.92)' : 'rgba(255,255,255,0.42)' }}
             />
             {isLiveMode ? 'Live' : 'Mock'}
+          </button>
+          <button
+            type="button"
+            data-admin-view-navigation
+            onClick={() => navigate('/dashboard/settings')}
+            onMouseEnter={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
+            onFocus={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
+            title="Settings and sync"
+            aria-label="Settings and sync"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-white/85 transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/30"
+          >
+            <Settings size={17} strokeWidth={1.7} aria-hidden="true" />
           </button>
           <NavRailBusinessBadge />
         </div>

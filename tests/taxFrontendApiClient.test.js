@@ -548,3 +548,17 @@ test("active Tax compatibility hooks do not scan tokens or write tax tables dire
   assert.doesNotMatch(liability + deductions, /fetch\(/);
   assert.match(panel, /createTaxPayment/);
 });
+
+test("grouped preview deadline settles a pending auth lookup before any POST", async () => {
+  let release;
+  let posts = 0;
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: () => new Promise(resolve => { release = resolve; }) } },
+    fetchImpl: async () => { posts += 1; throw new Error("cancelled POST must never be sent"); },
+  });
+  await assert.rejects(taxClient.previewGroupedTaxDeductionDecision({ businessId: "business-1", year: 2026, groupId: "decision:gas", timeoutMs: 5 }), { code: "grouped_decision_preview_timeout" });
+  release({ data: { session: null } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(posts, 0);
+});

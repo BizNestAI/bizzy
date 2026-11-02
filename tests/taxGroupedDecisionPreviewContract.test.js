@@ -199,6 +199,60 @@ test("reviewed and protected members stay out of the actionable transaction summ
   assert.deepEqual(preview.transactions.map((row) => row.transactionId), ["actionable"]);
 });
 
+test("Gas preview reconciles its 76 exact identities and cents to the 96-member Vehicle Expense matrix", () => {
+  const gasRows = Array.from({ length: 76 }, (_, index) => ({
+    ...BASE,
+    transaction_id: `gas-${index + 1}`,
+    source_qbo_account_id: "qbo-gas",
+    source_qbo_account_name: "Gas",
+    tax_category: "vehicle_expense",
+    book_amount: index === 75 ? -25.25 : -25,
+  }));
+  const otherIds = Array.from({ length: 20 }, (_, index) => `vehicle-other-${index + 1}`);
+  const groupId = "decision:gas";
+  const projection = {
+    projection_data: {
+      matrix: [{
+        categoryKey: "vehicle_expense",
+        categoryLabel: "Vehicle Expense",
+        transactionCount: 96,
+        months: { "2026-11": { bookExpenseAmount: 3661 } },
+      }],
+      identityEvidence: {
+        categories: { vehicle_expense: [...gasRows.map((row) => row.transaction_id), ...otherIds] },
+        questionGroups: { [groupId]: gasRows.map((row) => row.transaction_id) },
+      },
+    },
+  };
+  const preview = previewTestables.customerPreview({
+    id: "preview-gas", business_id: "business-1", tax_year: 2026, group_id: groupId,
+    decision_type: "vehicle_method", expires_at: "2026-11-02T12:05:00.000Z",
+  }, gasRows, summariesFor(gasRows), projection);
+
+  assert.equal(preview.transactions.length, 76);
+  assert.equal(new Set(preview.transactions.map((row) => row.transactionId)).size, 76);
+  assert.equal(preview.grossAmountCents, -190025);
+  assert.deepEqual(preview.matrixReconciliation, {
+    categoryKey: "vehicle_expense",
+    categoryLabel: "Vehicle Expense",
+    matrixTransactionCount: 96,
+    questionTransactionCount: 76,
+    otherMatrixTransactionCount: 20,
+    matrixGrossExpenseCents: 366100,
+    questionGrossExpenseCents: 190025,
+    otherMatrixGrossExpenseCents: 176075,
+  });
+});
+
+test("vehicle modal exposes the authoritative population before method selection", () => {
+  const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /action\.kind === "vehicle_method" \|\| \(businessUseAnswer/);
+  assert.match(dashboard, /Stable key:/);
+  assert.match(dashboard, /vehicle-matrix-reconciliation/);
+  assert.match(dashboard, /\$0 separate expense deduction/);
+  assert.match(dashboard, /Included · Vehicle method pending/);
+});
+
 test("Transportation confirmation resolves one complete treatment for preview and apply", () => {
   const transportation = {
     ...BASE,
@@ -247,7 +301,7 @@ test("Meals confirmation retains the established fifty-percent treatment", () =>
 test("technical preview failure cannot be converted to resolved zero-population UI", () => {
   const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /setPreviewState\("preview_error"\)/);
-  assert.match(dashboard, /previewError\?\.code === "grouped_decision_group_not_found"/);
+  assert.match(dashboard, /"grouped_decision_group_not_found", "grouped_decision_projection_stale"/);
   assert.match(dashboard, /preview\.actionableCount === 0 \? "preview_resolved" : "preview_ready"/);
   assert.match(dashboard, /await onScopeChangedRef\.current\?\.\(\)/);
   assert.match(dashboard, /onResolvedRef\.current\?\.\(\{ groupId: decisionGroupKey \}\)/);
@@ -269,8 +323,8 @@ test("every grouped question modal uses the bounded finite preview lifecycle", (
   assert.match(hook, /sourceFingerprint: workspaceSnapshotRef\.current\.sourceFingerprint/);
   assert.match(dashboard, /setPreviewState\("preview_timed_out"\)/);
   assert.match(dashboard, /setPreviewState\("preview_stale_refreshing"\)/);
-  assert.match(dashboard, /stalePreviewRetryRef\.current < 1/);
-  assert.match(dashboard, /return \(\) => controller\.abort\(\)/);
+  assert.match(dashboard, /attempt < 2/);
+  assert.match(dashboard, /active = false;[\s\S]*controller\.abort\(\)/);
   assert.match(dashboard, /This question couldn’t be loaded\./);
   assert.match(dashboard, /setPreviewAttempt\(\(current\) => current \+ 1\)/);
 });

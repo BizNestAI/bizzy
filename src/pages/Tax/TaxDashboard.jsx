@@ -1,5 +1,5 @@
 // File: /components/Tax/TaxDashboard.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, CheckCircle2, ChevronDown, Info, Loader2, RefreshCcw, Settings2, X } from "lucide-react";
 import { AnimatePresence, motion as Motion, useReducedMotion } from "framer-motion";
@@ -2546,7 +2546,7 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
   const visibleRows = expanded ? matchingRows.slice(0, 100) : [];
   const canSearch = rows.length > 8 || showExceptions;
   const treatment = action?.kind === "vehicle_method"
-    ? "Vehicle method pending"
+    ? "Included · Vehicle method pending"
     : action?.kind === "business_use_percent" || action?.kind === "utility_allocation"
       ? "Business use pending"
       : "Included";
@@ -2588,7 +2588,8 @@ function ReviewDecisionTransactionList({ rows, accountName, action, showExceptio
               ) : null}
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-semibold text-white/78">{row.vendor || row.description || "Vendor unavailable"}</span>
-                <span className="block truncate text-xs text-white/42">{row.date ? formatDateLocal(row.date) : "Date unavailable"} · {Number.isFinite(row.signedAmount) ? formatCurrencyLocal(row.signedAmount) : "Amount unavailable"} · {row.qboAccountName || accountName}</span>
+                <span className="block truncate text-xs text-white/42">{row.date ? formatDateLocal(row.date) : "Date unavailable"} · {Number.isFinite(row.signedAmount) ? formatCurrencyLocal(row.signedAmount) : "Amount unavailable"} · {row.qboAccountName || accountName} · {row.taxCategoryLabel || row.taxCategory || "Tax category unavailable"}</span>
+                <span className="block truncate font-mono text-[10px] text-white/30" title={id || undefined}>Stable key: {id || "unavailable"}</span>
               </span>
               <span className="shrink-0 text-right text-xs text-white/54">
                 {showExceptions && isException ? "Personal — unchanged" : treatment}
@@ -2663,7 +2664,7 @@ const GROUPED_DECISION_DISABLED_COPY = {
   confirmation_required: "Confirm the reviewed-estimate change to continue.",
 };
 
-function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling = false, onClose, onResolved, onApply, onCheckOutcome, onScopeChanged, onPreview, onCreateVehicle }) {
+function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspaceReconciling = false, onClose: onCloseRequested, onResolved, onApply, onCheckOutcome, onScopeChanged, onPreview, onCreateVehicle }) {
   const prefersReducedMotion = useReducedMotion();
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [vehicleMethod, setVehicleMethod] = useState("");
@@ -2690,7 +2691,11 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
   const previousFocusRef = useRef(null);
   const idempotencyKeyRef = useRef(null);
   const previewRequestRef = useRef(0);
-  const stalePreviewRetryRef = useRef(0);
+  const cancelPreviewRef = useRef(null);
+  const onClose = useCallback(() => {
+    cancelPreviewRef.current?.();
+    onCloseRequested?.();
+  }, [onCloseRequested]);
   const decisionGroupKey = decision?.group?.key || null;
 
   useEffect(() => {
@@ -2712,9 +2717,8 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
     setServerPreview(null);
     setPreviewState("preview_loading");
     setPreviewRequestId(null);
-    stalePreviewRetryRef.current = 0;
     idempotencyKeyRef.current = null;
-  }, [decisionGroupKey, decision?.scope, decision?.selectedMonth]);
+  }, [businessId, taxYear, decisionGroupKey, decision?.scope, decision?.selectedMonth]);
 
   const vehicleWorkflows = useMemo(() => serverPreview?.vehicleContext?.vehicles || [], [serverPreview?.vehicleContext?.vehicles]);
   useEffect(() => {
@@ -2734,7 +2738,12 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
   }, [onPreview, onResolved, onScopeChanged]);
 
   useEffect(() => {
-    if (!decisionGroupKey || readOnly || !onPreviewRef.current) return undefined;
+    if (!decisionGroupKey || readOnly) {
+      setServerPreview(null);
+      setPreviewState("preview_error");
+      setScopeRefreshing(false);
+      return undefined;
+    }
     const controller = new AbortController();
     const requestSequence = previewRequestRef.current + 1;
     previewRequestRef.current = requestSequence;
@@ -2742,51 +2751,72 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
     setPreviewState("preview_loading");
     setPreviewRequestId(null);
     setError("");
-    onPreviewRef.current({ groupId: decisionGroupKey, signal: controller.signal })
-      .then(async (preview) => {
-        if (previewRequestRef.current !== requestSequence || controller.signal.aborted) return;
-        setServerPreview(preview);
-        setPreviewState(preview.actionableCount === 0 ? "preview_resolved" : "preview_ready");
-        if (preview.actionableCount === 0) {
-          await onScopeChangedRef.current?.();
-          if (previewRequestRef.current === requestSequence && !controller.signal.aborted) {
-            onResolvedRef.current?.({ groupId: decisionGroupKey });
-          }
-        }
-      })
-      .catch(async (previewError) => {
-        if (previewRequestRef.current !== requestSequence) return;
-        if (previewError?.name === "AbortError" || previewError?.code === "request_aborted") return;
-        setServerPreview(null);
-        setPreviewRequestId(previewError?.requestId || null);
-        if (previewError?.code === "grouped_decision_projection_stale" && stalePreviewRetryRef.current < 1) {
-          stalePreviewRetryRef.current += 1;
+    // This timer owns the entire lifecycle, including auth, stale refresh, and
+    // retry. Aborting fetch alone cannot settle an uncooperative dependency.
+    let active = true;
+    const isCurrent = () => active && previewRequestRef.current === requestSequence;
+    const timer = setTimeout(() => {
+      if (!isCurrent()) return;
+      active = false;
+      controller.abort();
+      setServerPreview(null);
+      setPreviewState("preview_timed_out");
+      setScopeRefreshing(false);
+    }, 12_000);
+    const run = async () => {
+      let preview;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          if (!onPreviewRef.current) throw new Error("Preview unavailable");
+          preview = await onPreviewRef.current({ groupId: decisionGroupKey, signal: controller.signal });
+          if (!isCurrent()) return;
+          if (!preview || !Number.isInteger(preview.actionableCount) || preview.actionableCount < 0
+            || !preview.previewId || !Array.isArray(preview.transactions)
+            || preview.transactions.length !== preview.actionableCount) throw new Error("Invalid question preview");
+          break;
+        } catch (previewError) {
+          if (!isCurrent()) return;
+          if (previewError?.code !== "grouped_decision_projection_stale" || attempt === 1) throw previewError;
           setPreviewState("preview_stale_refreshing");
-          try {
-            await withBoundedModalTask(() => onScopeChangedRef.current?.(), 12_000);
-            if (previewRequestRef.current === requestSequence && !controller.signal.aborted) {
-              setPreviewAttempt((current) => current + 1);
-            }
-          } catch (refreshError) {
-            if (previewRequestRef.current === requestSequence && !controller.signal.aborted) {
-              setPreviewRequestId(refreshError?.requestId || previewError?.requestId || null);
-              setPreviewState("preview_error");
-            }
-          }
-        } else if (["grouped_decision_group_not_found", "grouped_decision_projection_stale"].includes(previewError?.code)) {
-          setPreviewState("preview_stale");
-          if (previewError?.code === "grouped_decision_group_not_found") void onScopeChangedRef.current?.();
-        } else if (previewError?.code === "grouped_decision_preview_timeout") {
-          setPreviewState("preview_timed_out");
-        } else {
-          setPreviewState("preview_error");
+          await onScopeChangedRef.current?.();
+          if (!isCurrent()) return;
         }
-      })
-      .finally(() => {
-        if (previewRequestRef.current === requestSequence) setScopeRefreshing(false);
-      });
-    return () => controller.abort();
-  }, [decisionGroupKey, previewAttempt, readOnly]);
+      }
+      if (!isCurrent()) return;
+      setServerPreview(preview);
+      setPreviewState(preview.actionableCount === 0 ? "preview_resolved" : "preview_ready");
+      if (preview.actionableCount === 0) {
+        // Close first: a pending workspace refresh must not keep an obsolete
+        // question open, nor cause another preview lifecycle.
+        onResolvedRef.current?.({ groupId: decisionGroupKey });
+        void Promise.resolve().then(() => onScopeChangedRef.current?.()).catch(() => {});
+      }
+    };
+    Promise.resolve().then(run).catch((previewError) => {
+      if (!isCurrent()) return;
+      setServerPreview(null);
+      setPreviewRequestId(previewError?.requestId || null);
+      if (previewError?.code === "grouped_decision_preview_timeout") {
+        setPreviewState("preview_timed_out");
+      } else if (["grouped_decision_group_not_found", "grouped_decision_projection_stale"].includes(previewError?.code)) {
+        setPreviewState("preview_stale");
+      } else {
+        setPreviewState("preview_error");
+      }
+    }).finally(() => {
+      if (!isCurrent()) return;
+      clearTimeout(timer);
+      active = false;
+      setScopeRefreshing(false);
+    });
+    const cancel = () => {
+      active = false;
+      clearTimeout(timer);
+      controller.abort();
+    };
+    cancelPreviewRef.current = cancel;
+    return cancel;
+  }, [businessId, taxYear, decisionGroupKey, decision?.scope, decision?.selectedMonth, previewAttempt, readOnly]);
 
   useEffect(() => {
     if (!decisionGroupKey || typeof document === "undefined") return undefined;
@@ -2827,7 +2857,12 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
   const rows = serverPreview?.transactions?.length
     ? serverPreview.transactions.map(mapDeductionTransactionRow)
     : decisionActionRows(group);
-  const population = decisionPopulation(group);
+  const groupPopulation = decisionPopulation(group);
+  const population = serverPreview ? {
+    categoryTransactionCount: Number(serverPreview.totalGroupCount),
+    actionableTransactionCount: Number(serverPreview.actionableCount),
+    alreadyResolvedCount: Number(serverPreview.previouslyReviewedCount),
+  } : groupPopulation;
   const selectedRows = decisionRowsForAnswer(rows, businessUseAnswer, exceptionIds);
   const action = isTaxRecord(group.decision) ? group.decision : reviewDecisionForType(group.decisionType);
   const requiresPercent = action.kind === "business_use_percent" || (action.kind === "utility_allocation" && !dedicatedPremises);
@@ -2853,7 +2888,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
         : null;
   const currentEstimate = action.kind === "vehicle_method"
     ? vehicleMethod === "standard_mileage"
-      ? "Business mileage needed"
+      ? "$0 separate expense deduction"
       : vehicleMethod === "not_sure" || vehiclePreviewPercent == null
         ? "Not estimated yet"
         : `${formatDeductiblePercent(vehiclePreviewPercent)} · ${formatCurrencyLocal(actionGrossTotal * vehiclePreviewPercent / 100)}`
@@ -2867,7 +2902,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
     previewState,
     serverPreview,
     previewRows: rows,
-    answer: businessUseAnswer,
+    answer: action.kind === "vehicle_method" && vehicleMethod ? "vehicle_method" : businessUseAnswer,
     personalExceptionIds: exceptionIds,
     selectedRowCount: selectedRows.length,
     readOnly,
@@ -3008,6 +3043,11 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
             <DecisionSummaryCard changed={changedSummary && changedSummary.gross !== group.actionableGrossAmountCents} label="Gross expense total" value={formatCurrencyLocal(actionGrossTotal)} />
             <DecisionSummaryCard changed={changedSummary && changedSummary.estimated !== group.actionableEstimatedDeductibleAmountCents} label="Estimated deduction if confirmed" value={currentEstimate} />
           </div>
+          {action.kind === "vehicle_method" && serverPreview?.matrixReconciliation ? (
+            <p className="mt-3 text-xs leading-relaxed text-white/48" data-testid="vehicle-matrix-reconciliation">
+              This question contains {serverPreview.matrixReconciliation.questionTransactionCount} of the {serverPreview.matrixReconciliation.matrixTransactionCount} transactions in {serverPreview.matrixReconciliation.categoryLabel}. The remaining {serverPreview.matrixReconciliation.otherMatrixTransactionCount} already have another tax status. Question expenses total {formatCurrencyLocal(serverPreview.matrixReconciliation.questionGrossExpenseCents / 100)}; the full matrix category totals {formatCurrencyLocal(serverPreview.matrixReconciliation.matrixGrossExpenseCents / 100)}.
+            </p>
+          ) : null}
           {population.alreadyResolvedCount > 0 ? <p className="mt-3 text-xs leading-relaxed text-white/46">{population.alreadyResolvedCount} transaction{population.alreadyResolvedCount === 1 ? " already has" : "s already have"} a reviewed treatment and will not be changed here.</p> : null}
           {action.kind === "confirm_business_purpose" ? (
             <div className="mt-3 space-y-2 rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
@@ -3084,7 +3124,7 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
             </label>
           ) : null}
 
-          {businessUseAnswer && businessUseAnswer !== "unsure" ? (
+          {(action.kind === "vehicle_method" || (businessUseAnswer && businessUseAnswer !== "unsure")) ? (
             <>
               {action.kind === "confirm_business_purpose" && businessUseAnswer === "some_personal" ? (
                 <p className="mt-3 text-xs leading-relaxed text-white/48">Every eligible row is included by default. Check only a personal exception to leave it unchanged; selection here is not a persisted review status.</p>
@@ -3153,22 +3193,6 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
     </Motion.div>
   );
   return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
-}
-
-async function withBoundedModalTask(task, timeoutMs) {
-  let timer = null;
-  try {
-    return await Promise.race([
-      Promise.resolve().then(task),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error("The Tax workspace refresh took too long."), {
-          code: "tax_workspace_refresh_timeout",
-        })), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 function GroupedDecisionPreviewState({ state, requestId, onRetry }) {
