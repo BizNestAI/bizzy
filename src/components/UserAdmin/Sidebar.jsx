@@ -4,7 +4,7 @@ import { ChevronRight, MessageSquare } from 'lucide-react';
 import {
   Brain, DollarSign, Rocket, FileText, TrendingUp,
   Calendar as CalendarIcon, Briefcase, BookOpen, Settings,
-  Activity as ActivityIcon, Landmark,
+  Landmark,
 } from 'lucide-react';
 import { motion as Motion, AnimatePresence } from 'framer-motion';
 import { createPortal } from 'react-dom';
@@ -22,7 +22,6 @@ const tabs = [
   // Temporarily hidden modules: Growth/Marketing and Calendar
   // { label: 'Growth', path: '/dashboard/marketing' },
   // { label: 'Scheduling', path: '/dashboard/calendar' },
-  { label: 'Activity', path: '/dashboard/activity', tooltip: 'Activity: Coming Soon!', disableNavigate: true },
   { label: 'Docs', path: '/dashboard/bizzi-docs' },
   { label: 'Settings/Sync', path: '/dashboard/settings' },
 ];
@@ -133,7 +132,6 @@ function renderIcon(label, size, colorHex, options = {}) {
       return <Briefcase size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Tax':           return <Landmark size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Investments':   return <TrendingUp size={dim} className={`${marginClass} transition-colors`} style={style} />;
-    case 'Activity':      return <ActivityIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Bizzi Docs':
     case 'Docs':
       return <FileText size={dim} className={`${marginClass} transition-colors`} style={style} />;
