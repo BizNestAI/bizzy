@@ -2,10 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { generateCollectionDraft } from "../../services/ar/collectionMessageDraft.js";
 import {
   CUSTOMER_NAME_UNAVAILABLE,
-  daysPastDueDateOnly,
   formatDateOnly,
   projectCollectionsInvoice,
 } from "../../services/ar/collectionsInvoiceProjection.js";
+import {
+  COLLECTIONS_AGING_BUCKETS,
+  collectionsAgingBadgeText,
+  formatCollectionsDueDate,
+  getCollectionsAging,
+} from "../../services/ar/collectionsAging.js";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Copy, FileSearch, Image as ImageIcon, Link2, Mic, Plus, RefreshCcw, Trash2, Upload, UploadCloud, Wand2, X } from "lucide-react";
@@ -209,24 +214,19 @@ function getInvoiceKey(row) {
   return String(row.qbo_invoice_id || row.external_id || row.doc_number || row.id || getInvoiceNumber(row));
 }
 
-function getDaysOverdue(row) {
-  const days = Number(row.days_overdue || 0);
-  if (Number.isFinite(days) && days > 0) return days;
-  return daysPastDueDateOnly(row.due_date) ?? 0;
+function getDaysOverdue(row, asOf = new Date()) {
+  return getCollectionsAging(row.due_date, { asOf }).daysPastDue ?? 0;
 }
 
-function buildAgingBuckets(rows) {
-  const buckets = [
-    { key: "current", label: "Current", min: 0, max: 0, total: 0, count: 0, color: "#3fb489", soft: "rgba(63,180,137,0.16)" },
-    { key: "1-30", label: "1-30", min: 1, max: 30, total: 0, count: 0, color: "#f0c56b", soft: "rgba(240,197,107,0.14)" },
-    { key: "31-60", label: "31-60", min: 31, max: 60, total: 0, count: 0, color: "#e99b60", soft: "rgba(233,155,96,0.14)" },
-    { key: "61-90", label: "61-90", min: 61, max: 90, total: 0, count: 0, color: "#e06d67", soft: "rgba(224,109,103,0.14)" },
-    { key: "90+", label: "90+", min: 91, max: Infinity, total: 0, count: 0, color: "#c95c80", soft: "rgba(201,92,128,0.14)" },
-  ];
+function buildAgingBuckets(rows, asOf = new Date()) {
+  const buckets = COLLECTIONS_AGING_BUCKETS.map((bucket) => ({
+    ...bucket, total: 0, count: 0, color: bucket.colorToken, soft: bucket.softToken,
+  }));
   rows.forEach((row) => {
-    const days = getDaysOverdue(row);
+    const aging = getCollectionsAging(row.due_date, { asOf });
+    if (aging.key === "unknown") return;
     const amount = Number(row.amount_due ?? row.balance ?? 0) || 0;
-    const bucket = buckets.find((b) => days >= b.min && days <= b.max) || buckets[buckets.length - 1];
+    const bucket = buckets.find((candidate) => candidate.key === aging.key);
     bucket.total += amount;
     bucket.count += 1;
   });
@@ -273,11 +273,11 @@ function mergeFollowupState(base = {}, override = {}) {
   };
 }
 
-function AgingChart({ rows, status, refreshing, onRefresh, showRefresh = true }) {
-  const buckets = useMemo(() => buildAgingBuckets(rows), [rows]);
-  const total = buckets.reduce((sum, bucket) => sum + bucket.total, 0);
+function AgingChart({ rows, asOf, status, refreshing, onRefresh, showRefresh = true }) {
+  const buckets = useMemo(() => buildAgingBuckets(rows, asOf), [asOf, rows]);
+  const total = rows.reduce((sum, row) => sum + (Number(row.amount_due ?? row.balance ?? 0) || 0), 0);
   const max = Math.max(...buckets.map((bucket) => bucket.total), 1);
-  const overdue = rows.reduce((sum, row) => sum + (getDaysOverdue(row) > 0 ? Number(row.amount_due ?? row.balance ?? 0) || 0 : 0), 0);
+  const overdue = rows.reduce((sum, row) => sum + (getDaysOverdue(row, asOf) > 0 ? Number(row.amount_due ?? row.balance ?? 0) || 0 : 0), 0);
   const ringRadius = 72;
   const ringStroke = 18;
   const ringCircumference = 2 * Math.PI * ringRadius;
@@ -423,10 +423,10 @@ function AgingChart({ rows, status, refreshing, onRefresh, showRefresh = true })
   );
 }
 
-function OutstandingInvoices({ rows }) {
+function OutstandingInvoices({ rows, asOf }) {
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => {
-      const overdueDifference = getDaysOverdue(b) - getDaysOverdue(a);
+      const overdueDifference = getDaysOverdue(b, asOf) - getDaysOverdue(a, asOf);
       if (overdueDifference !== 0) return overdueDifference;
       const dueDateDifference = Date.parse(a.due_date || 0) - Date.parse(b.due_date || 0);
       if (Number.isFinite(dueDateDifference) && dueDateDifference !== 0) return dueDateDifference;
@@ -434,7 +434,7 @@ function OutstandingInvoices({ rows }) {
       if (balanceDifference !== 0) return balanceDifference;
       return String(getInvoiceNumber(a)).localeCompare(String(getInvoiceNumber(b)), undefined, { numeric: true });
     });
-  }, [rows]);
+  }, [asOf, rows]);
 
   return (
     <section className={`${glass} p-4 sm:p-6`} aria-label="Outstanding invoices">
@@ -450,29 +450,36 @@ function OutstandingInvoices({ rows }) {
         <div className="overflow-hidden rounded-[18px] bg-white/[0.04]">
           <div className="max-h-[360px] overflow-y-auto custom-scrollbar divide-y divide-white/6">
             {sorted.map((row) => {
-              const days = getDaysOverdue(row);
+              const aging = getCollectionsAging(row.due_date, { asOf });
               return (
                 <div
                   key={row.qbo_invoice_id || row.id || getInvoiceNumber(row)}
-                  className="grid grid-cols-[1.25fr,0.8fr,0.7fr,0.65fr,0.7fr] gap-3 px-4 py-3 text-sm items-center hover:bg-white/[0.04] transition"
+                  className="relative grid gap-3 border-l-2 px-4 py-3 text-sm transition hover:bg-white/[0.04] sm:grid-cols-[1.15fr,0.8fr,1.25fr,0.6fr,0.65fr] sm:items-center"
+                  style={{ borderLeftColor: aging.colorToken, backgroundImage: `linear-gradient(90deg, ${aging.softToken}, transparent 18%)` }}
                 >
                   <div className="min-w-0">
                     <div className="font-medium text-white truncate">{getCustomerName(row)}</div>
                     <div className="text-[11px] text-white/45 truncate">Invoice #{getInvoiceNumber(row)}</div>
                   </div>
-                  <div className="text-white/75 truncate">{row.customer_company_name && row.customer_given_name ? `Contact: ${[row.customer_given_name, row.customer_family_name].filter(Boolean).join(" ")}` : row.external_source || "QuickBooks"}</div>
-                  <div>
-                    <div className="text-white/80">{formatDate(row.due_date)}</div>
-                    <div className={days > 0 ? "text-[11px] text-amber-200" : "text-[11px] text-white/45"}>
-                      {days > 0 ? `${days}d past due` : "Current"}
+                  <div className="min-w-0 break-words text-white/75 sm:truncate">{row.customer_company_name && row.customer_given_name ? `Contact: ${[row.customer_given_name, row.customer_family_name].filter(Boolean).join(" ")}` : row.external_source || "QuickBooks"}</div>
+                  <div className="min-w-0">
+                    <div className="text-xs text-white/55">
+                      {aging.key === "unknown" ? "Due date unavailable" : `Due ${formatCollectionsDueDate(row.due_date, { asOf })}`}
                     </div>
+                    <span
+                      className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium leading-none"
+                      style={{ borderColor: aging.colorToken, backgroundColor: aging.softToken, color: aging.key === "unknown" ? "rgba(255,255,255,0.68)" : aging.colorToken }}
+                    >
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: aging.colorToken }} aria-hidden="true" />
+                      <span className="truncate">{collectionsAgingBadgeText(aging)}</span>
+                    </span>
                   </div>
                   <div>
                     <span className="rounded-full border border-white/12 bg-white/[0.05] px-2 py-1 text-xs capitalize text-white/75">
                       {row.invoice_status || row.status || "open"}
                     </span>
                   </div>
-                  <div className="text-right font-semibold text-white">{money.format(row.amount_due ?? row.balance ?? 0)}</div>
+                  <div className="font-semibold text-white sm:text-right">{money.format(row.amount_due ?? row.balance ?? 0)}</div>
                 </div>
               );
             })}
@@ -8442,6 +8449,7 @@ export default function JobsDashboard() {
   const readOnly = adminView.active && adminView.readOnly;
   const allowTransactionAssignment = adminView.active && adminView.bookkeepingAccess === true;
   const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem("currentBusinessId") || "");
+  const [collectionsAsOf] = useState(() => new Date());
 
   const [openInvoices, setOpenInvoices] = useState([]);
   const [hero, setHero] = useState(null);
@@ -8708,13 +8716,14 @@ export default function JobsDashboard() {
           <>
             <AgingChart
               rows={invoiceRows}
+              asOf={collectionsAsOf}
               status={arStatus}
               refreshing={syncingAr}
               onRefresh={() => refreshAr({ force: true })}
               showRefresh={!usingDemo && qbStatus === "connected"}
             />
 
-            <OutstandingInvoices rows={invoiceRows} />
+            <OutstandingInvoices rows={invoiceRows} asOf={collectionsAsOf} />
 
             <ArTracker
               rows={invoiceRows}
