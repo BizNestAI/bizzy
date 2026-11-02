@@ -93,7 +93,7 @@ test("actual-expense elections cannot preview or contribute mileage", async () =
 });
 
 test("the database command keeps treatment, election, default, and mileage activation in one transaction", () => {
-  const migration = readFileSync("supabase/migrations/20261104120000_vehicle_deduction_workflow.sql", "utf8");
+  const migration = readFileSync("supabase/migrations/20261101180000_vehicle_deduction_workflow.sql", "utf8");
   const wrapper = migration.slice(migration.indexOf("create or replace function public.apply_grouped_tax_vehicle_decision_from_preview"), migration.indexOf("create or replace function public.replace_tax_vehicle_mileage_entries"));
   assert.match(wrapper, /apply_grouped_tax_deduction_decision_from_preview/);
   assert.match(wrapper, /status='superseded'/);

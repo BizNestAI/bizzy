@@ -156,7 +156,11 @@ function restoreSparseProjectionMembers({ payload, baselinePayload, mappedRows, 
     resultRow.transactionCount += missingCellIds.length;
   }
   result.matrix.sort((left, right) => String(left.categoryLabel).localeCompare(String(right.categoryLabel)));
-  restoreMissingQuestionMemberships({ result, baselinePayload, mappedById, missingIds, fallbackMembers });
+  // Missing live classifications retain their immutable matrix/audit evidence,
+  // but they are not current actionable question authority. Restoring baseline
+  // question memberships here produced cards whose authoritative preview had
+  // zero members. The next classification/workspace revision can recreate a
+  // question only from current account/category facts.
   result.identityEvidence = resultEvidence;
   result.evaluatedTransactionCount = resultEvidence.evaluated.length;
   result.matrixIncludedCount = resultEvidence.matrixIncluded.length;
@@ -225,49 +229,6 @@ function emptyMatrixMonth() {
     needsReviewAmount: 0, needsInputGrossExpense: 0, needsTaxReviewGrossExpense: 0,
     estimatedTransactionCount: 0, reviewedTransactionCount: 0, needsInputTransactionCount: 0,
     estimatedDeductibleAmount: 0, reviewedDeductibleAmount: 0 };
-}
-
-function restoreMissingQuestionMemberships({ result, baselinePayload, mappedById, missingIds, fallbackMembers }) {
-  const baselineGroups = baselinePayload.identityEvidence?.questionGroups || {};
-  const fallbackById = new Map(fallbackMembers.map((member) => [member.id, member]));
-  result.identityEvidence.questionGroups ||= {};
-  for (const [groupId, baselineMembers] of Object.entries(baselineGroups)) {
-    const unresolved = baselineMembers.filter((id) => {
-      if (!missingIds.has(String(id))) return false;
-      const fallbackMember = fallbackById.get(String(id));
-      if (!fallbackMember) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
-      return fallbackMember.questionGroupIds.includes(groupId);
-    });
-    if (!unresolved.length) continue;
-    let group = result.questionGroups.find((candidate) => candidate.id === groupId);
-    const baselineGroup = baselinePayload.questionGroups.find((candidate) => candidate.id === groupId);
-    if (!baselineGroup) throw coded("tax_workspace_sparse_overlay_baseline_invalid");
-    if (!group) {
-      group = { ...structuredClone(baselineGroup), transactionCount: 0, actionableTransactionCount: 0,
-        actionableGrossAmountCents: 0, actionableEstimatedDeductibleAmountCents: 0 };
-      result.questionGroups.push(group);
-      result.identityEvidence.questionGroups[groupId] = [];
-    }
-    const presentBaselineGrossCents = baselineMembers.filter((id) => !missingIds.has(String(id))).reduce((sum, id) => {
-      const row = mappedById.get(String(id));
-      return sum + (row ? Math.round(Math.abs(signedExpenseAmount(row)) * 100) : 0);
-    }, 0);
-    result.identityEvidence.questionGroups[groupId] = sortedUnique([
-      ...(result.identityEvidence.questionGroups[groupId] || []), ...unresolved,
-    ]);
-    group.transactionCount += unresolved.length;
-    group.actionableTransactionCount += unresolved.length;
-    group.actionableGrossAmountCents += Math.max(0, Number(baselineGroup.actionableGrossAmountCents || 0) - presentBaselineGrossCents);
-    group.state = "temporarily_unavailable";
-    group.liveOverlayMissingCount = unresolved.length;
-  }
-  result.questionGroups.sort((left, right) => String(left.id).localeCompare(String(right.id)));
-  const memberships = Object.values(result.identityEvidence.questionGroups);
-  result.questionGroupCount = result.questionGroups.length;
-  result.questionMembershipSum = memberships.reduce((sum, ids) => sum + ids.length, 0);
-  const union = sortedUnique(memberships.flat());
-  result.questionCoveredUniqueCount = union.length;
-  result.questionMembershipOverlapCount = result.questionMembershipSum - union.length;
 }
 
 function uniqueMembershipKey(partitions, id, code) {

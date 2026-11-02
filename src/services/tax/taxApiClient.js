@@ -262,6 +262,17 @@ export async function getTaxWorkspace({ businessId, year, refresh = false, signa
   return unwrap(payload);
 }
 
+export async function scheduleTaxWorkspaceRefresh({ businessId, year, signal } = {}) {
+  requireBusinessId(businessId);
+  const result = unwrap(await request(`/api/tax/workspace/refresh?${query({ businessId })}`, {
+    method: "POST",
+    body: compact({ businessId, year }),
+    signal,
+  }));
+  clearBusinessCache(businessId);
+  return result;
+}
+
 function validateTaxWorkspaceResponse(response, { businessId, year }) {
   const envelope = response?.ok === true ? response.data : response;
   const projection = envelope?.projection;

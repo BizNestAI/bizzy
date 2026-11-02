@@ -2309,6 +2309,7 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
       qbo_update: result.qbo_update,
       posting_summary: result.posting_summary || null,
       reusable_rule: result.reusable_rule || null,
+      tax_workspace_update: result.tax_workspace_update || null,
     });
   } catch (e) {
     console.error("[monthly-review] account adjustment failed", {

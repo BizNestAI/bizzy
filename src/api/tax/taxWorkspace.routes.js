@@ -18,8 +18,34 @@ import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
 import { assertInternalSchedulerAccess } from "./taxSchedulerAuth.js";
 import { workspaceReadError } from "./taxWorkspaceErrors.js";
 import { listProjectionEvaluatedTransactions, normalizeDeductionPagination } from "../../services/tax/taxDeductionsApi.service.js";
+import { computeTaxClassificationSourceFingerprint } from "../../services/tax/taxClassificationRun.service.js";
+import { synchronizeTaxDataChange, TAX_CHANGE_TYPES } from "../../services/tax/taxChangeEvents.js";
 
 const router = Router();
+
+router.post("/workspace/refresh", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const db = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    assertNoConflictingBusinessIdentity(req, businessId);
+    const access = await assertTaxBusinessAccess({ req, businessId, supabase: db });
+    if (String(access.businessId) !== String(businessId)) throw safeError("tax_workspace_scope_conflict", 403, "Tax workspace scope does not match the authenticated business.");
+    if (!(await businessHasPaidEntitlement(businessId, { db }))) throw safeError("paid_entitlement_required", 403, "A paid subscription is required to refresh this Tax workspace.");
+    const taxYear = optionalTaxYear(req.body?.year ?? req.body?.taxYear, new Date().getFullYear());
+    const sourceRevision = await computeTaxClassificationSourceFingerprint({ supabase: db, businessId, taxYear });
+    const queued = await synchronizeTaxDataChange({
+      supabase: db,
+      businessId,
+      taxYear,
+      changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_UPDATED,
+      metadata: { source: "tax_workspace_manual_refresh", sourceRevision },
+    });
+    return sendTaxSuccess(res, { status: "updating", sourceRevision, ...queued });
+  } catch (error) {
+    return sendTaxError(res, workspaceReadError(error), "tax_workspace_refresh_failed");
+  }
+});
 
 router.get("/workspace", async (req, res) => {
   res.set("Cache-Control", "private, no-store");

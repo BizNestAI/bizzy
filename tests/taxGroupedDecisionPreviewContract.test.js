@@ -229,6 +229,9 @@ test("technical preview failure cannot be converted to resolved zero-population 
   assert.match(dashboard, /setPreviewState\("preview_error"\)/);
   assert.match(dashboard, /previewError\?\.code === "grouped_decision_group_not_found"/);
   assert.match(dashboard, /preview\.actionableCount === 0 \? "preview_resolved" : "preview_ready"/);
+  assert.match(dashboard, /await onScopeChangedRef\.current\?\.\(\)/);
+  assert.match(dashboard, /onResolvedRef\.current\?\.\(\{ groupId: decisionGroupKey \}\)/);
+  assert.match(dashboard, /This question was updated because the underlying transactions changed\./);
   assert.match(dashboard, /previewState !== "preview_ready"/);
   assert.match(dashboard, /serverPreview\.actionableCount\) \|\| serverPreview\.actionableCount <= 0/);
   assert.match(dashboard, /We couldn’t load this question\. No changes were made\./);

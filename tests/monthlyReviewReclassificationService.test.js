@@ -615,6 +615,7 @@ test("Monthly Review posted Purchase builds allowlisted update payload from fetc
   const updates = [];
   const originalConsoleInfo = console.info;
   const payloadShapeLogs = [];
+  const taxChanges = [];
   console.info = (...args) => payloadShapeLogs.push(args);
   try {
     const result = await reclassifyBookkeepingTransaction({
@@ -639,11 +640,16 @@ test("Monthly Review posted Purchase builds allowlisted update payload from fetc
           throw new Error("createPurchase must not be called");
         },
       }),
+      synchronizeTaxChange: async (change) => {
+        taxChanges.push(change);
+        return { status: "queued", classificationRunId: "classification-run-1", workspaceRequestId: "workspace-request-1" };
+      },
     });
 
     assert.equal(result.qbo_update.qbo_txn_id, "1294");
     assert.equal(result.qbo_update.sync_token_before, "7");
     assert.equal(result.qbo_update.sync_token_after, "8");
+    assert.equal(result.tax_workspace_update.status, "queued");
   } finally {
     console.info = originalConsoleInfo;
   }
@@ -679,6 +685,9 @@ test("Monthly Review posted Purchase builds allowlisted update payload from fetc
   assert.equal(payload.PrintStatus, undefined);
   assert.equal(db.tables.transaction_categorizations[0].final_qbo_account_id, "1150040040");
   assert.equal(db.tables.transaction_categorizations[0].qbo_txn_id, "1294");
+  assert.equal(taxChanges.length, 1);
+  assert.deepEqual([taxChanges[0].businessId, taxChanges[0].taxYear, taxChanges[0].entityId], ["biz-1", 2026, "txn-1"]);
+  assert.equal(taxChanges[0].metadata.after.qboAccountId, "1150040040");
   assert.equal(payloadShapeLogs.length, 1);
   assert.equal(payloadShapeLogs[0][0], "[bookkeeping-reclassification] qbo transaction update payload shape");
   assert.deepEqual(payloadShapeLogs[0][1].top_level_keys, ["AccountRef", "DocNumber", "EntityRef", "Id", "Line", "PaymentType", "SyncToken", "TxnDate", "sparse"]);
@@ -929,6 +938,24 @@ test("Monthly Review QBO provider diagnostics do not include raw update payloads
   assert.doesNotMatch(route, /req\.headers\.authorization|access_token|refresh_token/);
 });
 
+test("Monthly Review account route preserves authenticated tenant scope and truthful Tax update contract", () => {
+  const route = read("src/api/admin/monthlyReview.routes.js");
+  const start = route.indexOf('router.patch("/runs/:runId/transactions/:transactionId/account"');
+  const end = route.indexOf('router.post("/runs/:runId/transactions/:transactionId/approve"', start);
+  const handler = route.slice(start, end);
+
+  assert.match(route, /router\.use\(requireAuth\)/, "the Admin router must require authentication");
+  assert.match(handler, /const run = await fetchRun\(runId\)/);
+  assert.match(handler, /businessId:\s*run\.business_id/);
+  assert.match(handler, /targetQboAccountId:\s*accountId/);
+  assert.doesNotMatch(handler, /businessId:\s*req\.body/, "request input cannot override tenant scope");
+  assert.match(handler, /tax_workspace_update:\s*result\.tax_workspace_update \|\| null/);
+  const responseIndex = handler.indexOf("res.json({");
+  const catchIndex = handler.indexOf("} catch (e)");
+  assert.ok(responseIndex > 0 && catchIndex > responseIndex, "success response must only execute after reclassification succeeds");
+  assert.doesNotMatch(handler.slice(catchIndex), /tax_workspace_update/, "failed reclassification must not claim Tax is updating");
+});
+
 test("Monthly Review generic reclassification rejects protected special workflows", async () => {
   for (const [taxonomy, expected] of [
     ["cc_payment", "cc_payment_generic_reclassification_not_supported"],
@@ -1122,4 +1149,9 @@ test("Monthly Review Phase 2A collapsed P&L behavior remains wired after reclass
   assert.match(ui, /onChange=\{\(accountId\) => handlePnlAccountDraftChange\(txn, accountId\)\}/);
   assert.match(ui, /Confirm Reclass/);
   assert.match(ui, /transactionId: txn\.bizzi_transaction_id/);
+  assert.match(ui, /Saved\. Tax deductions are updating\./);
+  assert.match(ui, /Reclassified in QuickBooks and Bizzi · Tax deductions updating/);
+  const failureBlock = ui.slice(ui.indexOf("} catch (e) {", ui.indexOf("const handlePnlConfirmReclass")), ui.indexOf("}, [onAccountChange, pnlAccountDrafts]);"));
+  assert.match(failureBlock, /setPnlAccountDrafts/);
+  assert.match(failureBlock, /delete next\[rowKey\]/);
 });

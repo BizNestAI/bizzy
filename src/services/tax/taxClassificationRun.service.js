@@ -226,7 +226,7 @@ export async function listTaxClassificationRunItems({ supabase, businessId, taxY
       row.run_id === runId && row.business_id === businessId && Number(row.tax_year) === year && (!allowed.size || allowed.has(row.lifecycle_state))
     );
   }
-  let query = supabase.from("tax_classification_run_items").select("id,run_id,business_id,tax_year,stable_transaction_id,lifecycle_state,attempt_count,last_attempt_at,next_retry_at,completed_at,updated_at")
+  let query = supabase.from("tax_classification_run_items").select("id,run_id,business_id,tax_year,stable_transaction_id,source_fingerprint,lifecycle_state,attempt_count,last_attempt_at,next_retry_at,completed_at,updated_at")
     .eq("business_id", businessId).eq("tax_year", year).eq("run_id", runId).order("created_at", { ascending: true });
   if (lifecycleStates.length) query = query.in("lifecycle_state", lifecycleStates);
   const { data, error } = await query;

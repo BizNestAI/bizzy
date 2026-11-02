@@ -355,8 +355,9 @@ test("sparse overlay isolates actionable, outside, and extra membership without 
 
   const actionable = await reconcileFixture(productionSparseOverlayFixture({ missingId: "question-0" }));
   assert.deepEqual([actionable.evaluatedTransactionCount, actionable.matrixIncludedCount, actionable.outsideDeductionsCount], [714, 690, 24]);
-  assert.equal(actionable.questionMembershipSum, 310);
-  assert.ok(actionable.questionGroups.some((group) => group.state === "temporarily_unavailable" && group.liveOverlayMissingCount === 1));
+  assert.equal(actionable.questionMembershipSum, 309);
+  assert.equal(Object.values(actionable.identityEvidence.questionGroups).flat().includes("question-0"), false);
+  assert.equal(actionable.questionGroups.some((group) => group.state === "temporarily_unavailable"), false);
   assert.doesNotThrow(() => projection.validatePayload(actionable));
 
   const outside = await reconcileFixture(productionSparseOverlayFixture({ missingId: "outside-0" }));

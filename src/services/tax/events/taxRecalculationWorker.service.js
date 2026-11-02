@@ -2,6 +2,7 @@
 import { supabase } from "../../supabaseAdmin.js";
 import { processPendingTaxRecalculationRequests } from "./processTaxRecalculationRequests.js";
 import { processTaxWorkspaceProjectionRequests } from "../processTaxWorkspaceProjectionRequests.js";
+import { processTaxBookkeepingChangeOutbox } from "../processTaxBookkeepingChangeOutbox.js";
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_BATCH_SIZE = 10;
@@ -27,7 +28,8 @@ export function startTaxRecalculationWorker({
     Promise.all([
       processPendingTaxRecalculationRequests({ supabase, workerId, batchSize }),
       processTaxWorkspaceProjectionRequests({ supabase, workerId: `${workerId}:workspace`, batchSize: Math.min(batchSize, 5) }),
-    ]).then(([result, workspace]) => {
+      processTaxBookkeepingChangeOutbox({ supabase, workerId: `${workerId}:bookkeeping-tax`, batchSize }),
+    ]).then(([result, workspace, bookkeepingTax]) => {
         if (result.processed > 0) {
           console.info("[tax-recalculation-worker] processed", {
             workerId,
@@ -38,6 +40,7 @@ export function startTaxRecalculationWorker({
           });
         }
         if (workspace.processed > 0) console.info("[tax-workspace-worker] processed", { workerId, ...workspace });
+        if (bookkeepingTax.processed > 0) console.info("[tax-bookkeeping-outbox] processed", { workerId, ...bookkeepingTax });
       })
       .catch((err) => console.warn("[tax-recalculation-worker] failed", err?.message || err));
   };

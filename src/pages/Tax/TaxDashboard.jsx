@@ -34,7 +34,7 @@ import {
 } from "../../services/tax/taxDeductionsLifecycleProjection.js";
 import { buildTaxEvaluationNotice } from "../../services/tax/taxEvaluationNoticeProjection.js";
 import { resolveTaxWorkspacePrerequisites } from "./taxWorkspacePrerequisites.js";
-import { showTaxDecisionSuccess } from "./taxDecisionToast.js";
+import { showTaxDecisionInfo, showTaxDecisionSuccess } from "./taxDecisionToast.js";
 import { loadMatrixCellWithProjectionRecovery } from "./matrixCellProjectionRecovery.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
@@ -559,7 +559,7 @@ function resolveOverviewStatus(model, isDemo) {
   };
 }
 
-function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPending = false }) {
+export function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPending = false }) {
   const [selectedCell, setSelectedCell] = useState(null);
   const [matrixDrilldown, setMatrixDrilldown] = useState({ loading: false, error: null });
   const matrixCellCacheRef = useRef(new Map());
@@ -601,27 +601,30 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
     () => buildCustomerDeductionsWorkflow(workspaceRows, lifecycleProjection, deductions.workspaceProjection),
     [deductions.workspaceProjection, lifecycleProjection, workspaceRows]
   );
-  const attentionGroups = useMemo(
-    () => buildAttentionReviewGroups([], { lifecycleProjection }),
-    [lifecycleProjection]
+  const projectedQuestionGroups = useMemo(
+    () => deductions.workspaceProjection?.questionGroups || [],
+    [deductions.workspaceProjection?.questionGroups]
   );
   // Keep an open question bound to the latest canonical projection. This is
   // especially important after a scope-conflict refresh: selections live in
   // the modal, while counts/amounts/rows must come from the refreshed group.
   useEffect(() => {
-    setReviewDecision((current) => {
-      if (!current?.group) return current;
-      const currentId = current.group.id || current.group.key;
-      const refreshed = attentionGroups
-        .flatMap((section) => section?.groups || [])
-        .find((group) => (group.id || group.key) === currentId);
-      if (refreshed) return current.group === refreshed ? current : { ...current, group: refreshed };
-      // Absence from a still-changing local projection is not proof that the
-      // server-owned question was resolved. Preserve it until preview returns
-      // an explicit authoritative outcome.
-      return current;
-    });
-  }, [attentionGroups, deductions.refreshing]);
+    if (!reviewDecision?.group) return;
+    const currentId = reviewDecision.group.id || reviewDecision.group.key;
+    const refreshed = projectedQuestionGroups
+      .find((group) => (group.id || group.key) === currentId);
+    if (refreshed) {
+      if (reviewDecision.group !== refreshed) setReviewDecision((current) => current ? { ...current, group: refreshed } : current);
+      return;
+    }
+    const openedProjectionId = reviewDecision.projectionId || null;
+    const currentProjectionId = deductions.workspaceProjectionId || null;
+    if (openedProjectionId && currentProjectionId && String(openedProjectionId) !== String(currentProjectionId)) {
+      setReviewDecision(null);
+      showTaxDecisionInfo("This question was updated because the underlying transactions changed.", currentId);
+    }
+    // While the same projection is revalidating, absence is not authoritative.
+  }, [deductions.workspaceProjectionId, projectedQuestionGroups, reviewDecision]);
   const deductionDecisionRules = useMemo(
     () => enrichDeductionDecisionRules(deductions.decisionRules, workspaceRows),
     [deductions.decisionRules, workspaceRows]
@@ -683,7 +686,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   const treatmentCounts = overviewProjection?.treatmentCounts || {};
   const questionCoveredUniqueCount = Number(overviewProjection?.questionCoveredUniqueCount || 0);
   const authoritativeQuestionCount = overviewProjection?.questionsForYouGroupCount;
-  const projectedQuestionGroups = deductions.workspaceProjection?.questionGroups || [];
   // Projection summaries are the question-list authority. Optional row/detail
   // reads must never replace or erase them.
   const questionsRequestStatus = deductions.workspaceProjection ? "success" : (deductions.sectionStatus?.overview || "idle");
@@ -850,12 +852,13 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
   }, [matrix]);
 
   return (
-    <div className="relative max-w-full overflow-hidden rounded-[24px] border border-white/10 bg-white/[0.045] p-4 text-white shadow-[0_18px_50px_rgba(0,0,0,0.35)] sm:p-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+    <div className="relative max-w-full overflow-hidden rounded-[26px] border border-white/[0.09] bg-[linear-gradient(145deg,rgba(255,255,255,0.055),rgba(255,255,255,0.025)_48%,rgba(16,185,129,0.025))] p-4 text-white shadow-[0_22px_70px_rgba(0,0,0,0.38)] sm:p-6">
+      <div className="pointer-events-none absolute inset-x-16 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/20 to-transparent" />
+      <div className="relative flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] uppercase tracking-[0.14em] text-white/65">Deductions</div>
-          <div className="text-xl font-semibold leading-tight">{year} deductions overview</div>
-          <p className="mt-1 max-w-2xl text-sm text-white/55">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-100/55">Deductions</div>
+          <div className="mt-1 text-xl font-semibold leading-tight tracking-[-0.015em]">{year} deductions overview</div>
+          <p className="mt-1.5 max-w-2xl text-sm text-white/48">
             Preliminary bookkeeping estimate—not a tax return.
           </p>
         </div>
@@ -930,22 +933,39 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
         </div>
       ) : (
         <>
-      <section className="mt-5 rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-4" aria-label="Deduction estimate summary">
-        <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/62">Estimated deductible expenses</div>
-          <div className="mt-1 break-words text-2xl font-semibold tabular-nums text-white sm:text-3xl">
+      <section className="relative mt-6 overflow-hidden rounded-[22px] border border-emerald-200/[0.12] bg-[linear-gradient(135deg,rgba(16,185,129,0.105),rgba(16,185,129,0.035)_42%,rgba(255,255,255,0.025))] shadow-[inset_0_1px_0_rgba(255,255,255,0.045),0_18px_45px_rgba(0,0,0,0.16)]" aria-label="Deduction estimate summary">
+        <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-emerald-300/[0.055] blur-3xl" />
+        <div className="relative px-5 py-6 sm:px-7 sm:py-7">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-100/65">Estimated deductible expenses</div>
+          <div className="mt-2 break-words text-[2.65rem] font-semibold leading-none tracking-[-0.045em] tabular-nums text-white drop-shadow-[0_2px_18px_rgba(167,243,208,0.08)] sm:text-[3.35rem]">
             {formatCurrencyLocal(estimatedDeductibleExpenses)}
           </div>
-          <p className="mt-1 text-sm text-white/68">
+          <p className="mt-3 text-sm font-medium text-white/70">
             Based on {authoritativeMatrixIncludedCount} expense transaction{authoritativeMatrixIncludedCount === 1 ? "" : "s"}{evidenceThroughAt ? ` through ${formatLongDateLocal(evidenceThroughAt)}` : ""}.
           </p>
-          <p className="mt-3 max-w-2xl text-xs leading-relaxed text-white/50">
+          <p className="mt-2 max-w-2xl text-xs leading-relaxed text-white/42">
             Estimates are based on expenses posted to QuickBooks. Items that need more information are excluded until reviewed.
           </p>
-          <div className="mt-3 space-y-1 text-xs text-white/58" aria-label="Tax workspace reconciliation">
-            <p>{evaluatedTransactionCount} posted transactions evaluated · {authoritativeMatrixIncludedCount} deductible-expense transactions included · {outsideDeductionsCount} outside deductions</p>
-            <p>{authoritativeMatrixIncludedCount} matrix transactions = {Number(treatmentCounts.estimated || 0)} estimated + {Number(treatmentCounts.reviewed || 0)} reviewed + {Number(treatmentCounts.needs_input || 0)} needing input</p>
-            {Number(deductions.workspaceProjection?.vehicleMileageDeductionAmount || 0) > 0 ? <p>
+        </div>
+
+        <div className="relative border-t border-white/[0.07] bg-black/[0.09] px-5 py-4 sm:px-7" aria-label="Tax workspace reconciliation">
+          <div className="grid grid-cols-3 divide-x divide-white/[0.07]">
+            <div className="pr-3 sm:pr-5">
+              <div className="text-base font-semibold tabular-nums text-white/88">{evaluatedTransactionCount}</div>
+              <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/38">Evaluated</div>
+            </div>
+            <div className="px-3 sm:px-5">
+              <div className="text-base font-semibold tabular-nums text-white/88">{authoritativeMatrixIncludedCount}</div>
+              <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/38">Included</div>
+            </div>
+            <div className="pl-3 sm:pl-5">
+              <div className="text-base font-semibold tabular-nums text-white/88">{outsideDeductionsCount}</div>
+              <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/38">Outside deductions</div>
+            </div>
+          </div>
+          <div className="mt-3 border-t border-white/[0.055] pt-3 text-[11px] leading-relaxed text-white/42">
+            <p>{authoritativeMatrixIncludedCount} matrix transactions · {Number(treatmentCounts.estimated || 0)} estimated · {Number(treatmentCounts.reviewed || 0)} reviewed · {Number(treatmentCounts.needs_input || 0)} needing input</p>
+            {Number(deductions.workspaceProjection?.vehicleMileageDeductionAmount || 0) > 0 ? <p className="mt-1">
               Total = {formatCurrencyLocal(deductions.workspaceProjection?.postedTransactionDeductionAmount || 0)} posted-transaction deductions + {formatCurrencyLocal(deductions.workspaceProjection.vehicleMileageDeductionAmount)} standard-mileage deduction
             </p> : null}
           </div>
@@ -1028,7 +1048,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
           ) : (
             <ProjectedQuestionGroups
               groups={projectedQuestionGroups}
-              onOpen={(group) => setReviewDecision({ group: toDecisionActionGroup(group), selectedMonth: null })}
+              onOpen={(group) => setReviewDecision({ group: toDecisionActionGroup(group), selectedMonth: null, projectionId: deductions.workspaceProjectionId })}
             />
           )}</>
           )}
@@ -1076,6 +1096,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, contextPen
         readOnly={readOnly}
         workspaceReconciling={deductions.refreshing}
         onClose={() => setReviewDecision(null)}
+        onResolved={({ groupId }) => {
+          setReviewDecision(null);
+          showTaxDecisionInfo("This question was updated because the underlying transactions changed.", groupId);
+        }}
         onPreview={(input) => deductions.previewGroupedDeductionDecision(input)}
         onScopeChanged={async () => {
           await deductions.refresh();
@@ -2610,7 +2634,7 @@ const GROUPED_DECISION_DISABLED_COPY = {
   confirmation_required: "Confirm the reviewed-estimate change to continue.",
 };
 
-function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling = false, onClose, onApply, onCheckOutcome, onScopeChanged, onPreview, onCreateVehicle }) {
+function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling = false, onClose, onResolved, onApply, onCheckOutcome, onScopeChanged, onPreview, onCreateVehicle }) {
   const prefersReducedMotion = useReducedMotion();
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [vehicleMethod, setVehicleMethod] = useState("");
@@ -2671,10 +2695,12 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
 
   const onPreviewRef = useRef(onPreview);
   const onScopeChangedRef = useRef(onScopeChanged);
+  const onResolvedRef = useRef(onResolved);
   useEffect(() => {
     onPreviewRef.current = onPreview;
     onScopeChangedRef.current = onScopeChanged;
-  }, [onPreview, onScopeChanged]);
+    onResolvedRef.current = onResolved;
+  }, [onPreview, onResolved, onScopeChanged]);
 
   useEffect(() => {
     if (!decisionGroupKey || readOnly || !onPreviewRef.current) return undefined;
@@ -2686,11 +2712,16 @@ function ReviewDecisionModal({ decision, taxYear, readOnly, workspaceReconciling
     setPreviewRequestId(null);
     setError("");
     onPreviewRef.current({ groupId: decisionGroupKey, signal: controller.signal })
-      .then((preview) => {
+      .then(async (preview) => {
         if (previewRequestRef.current !== requestSequence || controller.signal.aborted) return;
         setServerPreview(preview);
         setPreviewState(preview.actionableCount === 0 ? "preview_resolved" : "preview_ready");
-        if (preview.actionableCount === 0) void onScopeChangedRef.current?.();
+        if (preview.actionableCount === 0) {
+          await onScopeChangedRef.current?.();
+          if (previewRequestRef.current === requestSequence && !controller.signal.aborted) {
+            onResolvedRef.current?.({ groupId: decisionGroupKey });
+          }
+        }
       })
       .catch((previewError) => {
         if (previewRequestRef.current !== requestSequence) return;

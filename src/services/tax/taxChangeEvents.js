@@ -99,6 +99,38 @@ export function emitTaxDataChanged({ businessId, taxYear, changeType, entityId, 
   }
 }
 
+// Mutations whose response promises that downstream Tax state is updating use
+// this awaited boundary. It durably marks/enqueues classification work first,
+// then queues an immutable workspace revision for the same source change. The
+// background worker will enqueue the final post-classification revision too.
+export async function synchronizeTaxDataChange({ businessId, taxYear, changeType, entityId, userId, metadata = {}, supabase } = {}) {
+  if (!supabase || !businessId || !taxYear || !changeType) {
+    return { status: "not_queued", reason: "missing_context" };
+  }
+  const classification = shouldDispatchTaxClassification(changeType)
+    ? await deps.handleTaxClassificationEvent?.({ supabase, businessId, taxYear, changeType, entityId, userId, metadata })
+    : null;
+  let workspace = null;
+  const classificationWillPublishWorkspace = classification?.queued === true || classification?.outcome === "existing_active_run";
+  if (shouldRebuildTaxWorkspace(changeType) && !classificationWillPublishWorkspace) {
+    const { enqueueTaxWorkspaceProjection } = await import("./taxWorkspaceProjection.service.js");
+    workspace = await enqueueTaxWorkspaceProjection({
+      supabase,
+      businessId,
+      taxYear: Number(taxYear),
+      reason: changeType,
+      requestKey: `tax-workspace:${businessId}:${taxYear}:${changeType}:${entityId || metadata.sourceRevision || metadata.correlationId || "scope"}`,
+    });
+  }
+  return {
+    status: "queued",
+    classificationStatus: classification?.queued ? "queued" : classification?.outcome || "not_required",
+    classificationRunId: classification?.run?.id || null,
+    workspaceRequestId: workspace?.id || null,
+    workspaceStatus: classificationWillPublishWorkspace ? "deferred_until_classification" : workspace ? "queued" : "not_required",
+  };
+}
+
 function shouldRebuildTaxWorkspace(changeType) {
   return [
     TAX_CHANGE_TYPES.CLASSIFICATION_OVERRIDDEN, TAX_CHANGE_TYPES.CLASSIFICATION_CONFIRMED,

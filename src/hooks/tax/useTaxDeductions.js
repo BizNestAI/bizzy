@@ -33,6 +33,7 @@ import {
   runTaxClassification,
   saveTaxDeductionDecisionRule,
   saveTaxVehicleMileage,
+  scheduleTaxWorkspaceRefresh,
   sendTaxClassificationsToReview,
   setTaxProfileMemory,
   updateTaxDeductionDecisionRule,
@@ -353,6 +354,35 @@ export function useTaxDeductions({
     };
   }, [businessId, classificationCoverage?.jobStatus?.pollAfterMs, classificationJobStatus?.pollAfterMs, enabled, isDemo, load, loadSecondaryDetails, shouldPollClassification, year]);
 
+  useEffect(() => {
+    if (isDemo || !enabled || !businessId || !rebuildPending) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const startedAt = Date.now();
+    const poll = async () => {
+      try {
+        const value = await getTaxWorkspace({ businessId, year, refresh: true });
+        if (cancelled) return;
+        commitWorkspaceSnapshot(value);
+        const pending = value?.state === "refreshing";
+        setRebuildPending(pending);
+        if (!pending) return;
+        if (Date.now() - startedAt >= 60_000) {
+          setRebuildPending(false);
+          setRefreshError(Object.assign(new Error("Tax deductions are still updating. Try Refresh again."), { code: "tax_workspace_refresh_timeout" }));
+          return;
+        }
+        timer = setTimeout(poll, 2_000);
+      } catch (error) {
+        if (cancelled) return;
+        setRebuildPending(false);
+        setRefreshError(error);
+      }
+    };
+    timer = setTimeout(poll, 2_000);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [businessId, commitWorkspaceSnapshot, enabled, isDemo, rebuildPending, year]);
+
   const reconcileGroupedDecisionWorkspace = useCallback(async (result, { signal } = {}) => {
     if (result?.authoritativeWorkspace) {
       const committed = commitWorkspaceSnapshot(result.authoritativeWorkspace);
@@ -406,7 +436,8 @@ export function useTaxDeductions({
       if (refreshInFlight.current) return refreshInFlight.current;
       const operationOwner = workspaceOperationTrackerRef.current.acquire("manual-workspace-refresh");
       setRefreshError(null);
-      const operation = load({ ...options, refresh: true })
+      const operation = scheduleTaxWorkspaceRefresh({ businessId, year, signal: options.signal })
+        .then(() => { setRebuildPending(true); return load({ ...options, refresh: true }); })
         .catch((err) => {
           setRefreshError(err);
           throw err;

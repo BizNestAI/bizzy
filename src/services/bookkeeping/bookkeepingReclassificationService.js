@@ -15,7 +15,7 @@ import {
   isProtectedCreditCardPaymentWorkflow,
   isUnconfirmedAutomaticPeerToPeerWorkflow,
 } from "./protectedWorkflow.js";
-import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../tax/taxChangeEvents.js";
+import { synchronizeTaxDataChange, TAX_CHANGE_TYPES } from "../tax/taxChangeEvents.js";
 import { learnVendorRuleFromTransaction } from "./vendorRuleLearner.js";
 
 export class BookkeepingReclassificationError extends Error {
@@ -79,6 +79,7 @@ export async function reclassifyBookkeepingTransaction({
   validateApprovalSelectedAccountsFn = undefined,
   allowAutomaticSpecialWorkflowOverride = false,
   confirmPossibleQboDuplicateRisk = false,
+  synchronizeTaxChange = synchronizeTaxDataChange,
 } = {}) {
   if (!businessId) throw new BookkeepingReclassificationError("missing_business_id", 400);
   if (!transactionId) throw new BookkeepingReclassificationError("missing_transaction_id", 400);
@@ -141,13 +142,16 @@ export async function reclassifyBookkeepingTransaction({
       now,
       qboUpdate,
     });
-    emitTaxDataChanged({
-      businessId,
-      taxYear: taxYearFromDate(context.bankTxn?.date || now),
-      changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_UPDATED,
-      entityId: transactionId,
-      userId: actor?.id || actor?.userId || actor || null,
-      metadata: {
+    let taxWorkspaceUpdate;
+    try {
+      taxWorkspaceUpdate = await synchronizeTaxChange({
+        supabase: db,
+        businessId,
+        taxYear: taxYearFromDate(context.bankTxn?.date || now),
+        changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_UPDATED,
+        entityId: transactionId,
+        userId: actor?.id || actor?.userId || actor || null,
+        metadata: {
         source: "posted_bookkeeping_reclassification",
         changedFields: ["final_qbo_account_id", "final_qbo_account_name"],
         before: {
@@ -160,8 +164,16 @@ export async function reclassifyBookkeepingTransaction({
           effectiveDate: context.bankTxn?.date || null,
         },
         materiality: { amount: Math.abs(Number(context.bankTxn?.amount || 0)) || null, transactionCount: 1 },
-      },
-    });
+        },
+      });
+    } catch (error) {
+      taxWorkspaceUpdate = {
+        status: "pending",
+        reason: "tax_workspace_invalidation_pending_outbox_replay",
+        retryable: true,
+        errorCode: error?.code || error?.name || "tax_workspace_invalidation_failed",
+      };
+    }
     return {
       ok: true,
       mode: "posted_qbo_reclassification",
@@ -171,6 +183,7 @@ export async function reclassifyBookkeepingTransaction({
       target_account: targetAccount,
       qbo_update: qboUpdate,
       posting_summary: null,
+      tax_workspace_update: taxWorkspaceUpdate,
     };
   }
 

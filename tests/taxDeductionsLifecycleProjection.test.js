@@ -123,6 +123,58 @@ test("4. five launch-safe annual decisions remain distinct from 425 affected tra
   assert.equal(result.entries.filter((entry) => /rent/i.test(entry.row.qboAccountName || "")).every((entry) => entry.decisionId == null), true);
 });
 
+test("canonical GL reclassification moves question membership by account identity without changing the unique population", () => {
+  const gas = rows(61, "gas", {
+    status: "needs_review", requiresReview: true, qboAccountId: "gas-account", qboAccountName: "Gas",
+    taxCategory: "vehicle_expense", matchedRuleCode: "vehicle_review_gl_v3", deductiblePercent: 0,
+  });
+  const lyftA = rows(8, "lyft-a", {
+    status: "needs_review", requiresReview: true, qboAccountId: "lyft-account-a", qboAccountName: "Lyft/Uber",
+    taxCategory: "travel_transportation", matchedRuleCode: "travel_review_gl_v3", deductiblePercent: 0,
+  });
+  const lyftB = rows(6, "lyft-b", {
+    status: "needs_review", requiresReview: true, qboAccountId: "lyft-account-b", qboAccountName: "Lyft/Uber",
+    taxCategory: "travel_transportation", matchedRuleCode: "travel_review_gl_v3", deductiblePercent: 0,
+  });
+  const project = (source) => buildTaxDeductionsLifecycleProjection({ rows: source, businessId: BUSINESS, taxYear: YEAR });
+  const summary = (source) => project(source).activeDecisionGroups.map((group) => ({
+    accountId: group.qboAccountId, count: group.actionableTransactionCount,
+  })).sort((a, b) => a.accountId.localeCompare(b.accountId));
+  const toGas = (source, ids) => source.map((item) => ids.has(item.id) ? {
+    ...item, qboAccountId: "gas-account", qboAccountName: "Gas", taxCategory: "vehicle_expense",
+    matchedRuleCode: "vehicle_review_gl_v3",
+  } : item);
+
+  assert.deepEqual(summary([...gas, ...lyftA, ...lyftB]), [
+    { accountId: "gas-account", count: 61 },
+    { accountId: "lyft-account-a", count: 8 },
+    { accountId: "lyft-account-b", count: 6 },
+  ]);
+  const onlySix = toGas([...gas, ...lyftA, ...lyftB], new Set(lyftB.map((item) => item.id)));
+  assert.deepEqual(summary(onlySix), [
+    { accountId: "gas-account", count: 67 }, { accountId: "lyft-account-a", count: 8 },
+  ]);
+  const allButQuikTrip = toGas(onlySix, new Set(lyftA.slice(1).map((item) => item.id)));
+  assert.deepEqual(summary(allButQuikTrip), [
+    { accountId: "gas-account", count: 74 }, { accountId: "lyft-account-a", count: 1 },
+  ]);
+  const allGas = toGas(allButQuikTrip, new Set([lyftA[0].id]));
+  assert.deepEqual(summary(allGas), [{ accountId: "gas-account", count: 75 }]);
+  assert.equal(project(allGas).canonicalCount, 75);
+});
+
+test("a Transportation destination and duplicate Lyft/Uber display names remain separate canonical questions", () => {
+  const source = [
+    row("lyft-a", { status: "needs_review", requiresReview: true, qboAccountId: "lyft-a", qboAccountName: "Lyft/Uber", taxCategory: "travel_transportation", matchedRuleCode: "travel_review_gl_v3" }),
+    row("lyft-b", { status: "needs_review", requiresReview: true, qboAccountId: "lyft-b", qboAccountName: "Lyft/Uber", taxCategory: "travel_transportation", matchedRuleCode: "travel_review_gl_v3" }),
+    row("transport", { status: "needs_review", requiresReview: true, qboAccountId: "transportation", qboAccountName: "Transportation", taxCategory: "travel_transportation", matchedRuleCode: "travel_review_gl_v3" }),
+  ];
+  const result = buildTaxDeductionsLifecycleProjection({ rows: source, businessId: BUSINESS, taxYear: YEAR });
+  assert.equal(result.activeDecisionGroups.length, 3);
+  assert.equal(new Set(result.activeDecisionGroups.map((group) => group.qboAccountId)).size, 3);
+  assert.equal(new Set(result.activeDecisionGroups.flatMap((group) => group.stableTransactionIds.actionable)).size, 3);
+});
+
 test("5. one annual GL decision covers multiple monthly cells", () => {
   const first = row("meals-september", { status: "needs_review", requiresReview: true, qboAccountId: "meals", qboAccountName: "Meals", taxCategory: "business_meals", matchedRuleCode: "meals_review_gl_v3", date: "2026-09-15" });
   const second = { ...first, id: "meals-october", transactionId: "meals-october", raw: { transactionId: "meals-october" }, date: "2026-10-15" };

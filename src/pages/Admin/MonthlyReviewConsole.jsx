@@ -2098,7 +2098,7 @@ export default function MonthlyReviewConsole() {
     setBusyTransaction(transactionId);
     setError("");
     try {
-      await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(transactionId)}/account`, {
+      const result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(transactionId)}/account`, {
         method: "PATCH",
         body: {
           final_qbo_account_id: account.id,
@@ -2107,11 +2107,13 @@ export default function MonthlyReviewConsole() {
         },
       });
       if (options.pnlOnly) {
-        setQboPnlRefreshMessage("");
+        setQboPnlRefreshMessage(result?.tax_workspace_update?.status === "pending"
+          ? "Books saved; Tax update pending. Tax will retry automatically."
+          : "Saved. Tax deductions are updating.");
         const expectedReclass = buildExpectedPnlReclassState(qboPnlSnapshot, transaction, account);
         patchQboPnlReclassPresentation({ transaction, targetAccount: account });
         void refreshQboPnlSnapshot({ afterReclassification: true, silent: true, expectedReclass });
-        return { ok: true, transaction_id: transactionId, target_account: account };
+        return { ...result, ok: true, transaction_id: transactionId, target_account: result?.target_account || account };
       }
       await loadSourceLedger();
       await loadDetail();
@@ -4427,7 +4429,9 @@ function SourceLedgerPanel({
         });
         setPnlReclassSuccesses((current) => ({
           ...current,
-          [rowKey]: "Reclassified in QuickBooks",
+          [rowKey]: result?.tax_workspace_update?.status === "pending"
+            ? "Books saved; Tax update pending"
+            : "Reclassified in QuickBooks and Bizzi · Tax deductions updating",
         }));
         setExpandedAccountKeys((current) => {
           const next = new Set(current);
@@ -4436,6 +4440,12 @@ function SourceLedgerPanel({
         });
       }
     } catch (e) {
+      setPnlAccountDrafts((current) => {
+        if (!current[rowKey]) return current;
+        const next = { ...current };
+        delete next[rowKey];
+        return next;
+      });
       setPnlReclassErrors((current) => ({
         ...current,
         [rowKey]: friendlyReclassificationError(e),

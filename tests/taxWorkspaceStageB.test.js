@@ -20,7 +20,7 @@ test("Stage B requests v2 explicitly while server default remains v1", () => {
 test("persisted v2 projection remains the matrix and question authority after detail loading", () => {
   assert.match(dashboard, /if \(hasProjectedMatrix\) return buildPersistedWorkspaceMatrix\(deductions\.workspaceProjection, year\)/);
   assert.doesNotMatch(dashboard, /if \(!deductions\.allTransactions && hasProjectedMatrix\)/);
-  assert.match(dashboard, /const projectedQuestionGroups = deductions\.workspaceProjection\?\.questionGroups \|\| \[\]/);
+  assert.match(dashboard, /\(\) => deductions\.workspaceProjection\?\.questionGroups \|\| \[\]/);
   assert.match(dashboard, /projectedQuestionGroups\.length\} questions covering \{questionCoveredUniqueCount\} unique transactions/);
   assert.doesNotMatch(dashboard, /deductions\.allTransactions\s*\? <AttentionReviewGroups/);
 });
@@ -47,7 +47,9 @@ test("Stage B does not initially hydrate legacy rows and optional failures canno
 });
 
 test("Stage B reconciliation copy and accepted projection counts are explicit", () => {
-  assert.match(dashboard, /posted transactions evaluated · \{authoritativeMatrixIncludedCount\} deductible-expense transactions included · \{outsideDeductionsCount\} outside deductions/);
+  assert.match(dashboard, />\{evaluatedTransactionCount\}<\/div>[\s\S]*>Evaluated<\/div>/);
+  assert.match(dashboard, />\{authoritativeMatrixIncludedCount\}<\/div>[\s\S]*>Included<\/div>/);
+  assert.match(dashboard, />\{outsideDeductionsCount\}<\/div>[\s\S]*>Outside deductions<\/div>/);
   const accepted = {
     evaluatedTransactionCount: 714,
     matrixIncludedCount: 690,

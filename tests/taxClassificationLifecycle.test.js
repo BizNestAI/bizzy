@@ -20,6 +20,7 @@ import {
 import { getBusinessesEligibleForTaxClassification } from "../src/services/tax/taxClassificationRecovery.service.js";
 import { evaluateTaxCalculationPrerequisites } from "../src/services/tax/taxCalculationPrerequisites.service.js";
 import {
+  synchronizeTaxDataChange,
   TAX_CHANGE_TYPES,
 } from "../src/services/tax/taxChangeEvents.js";
 import {
@@ -927,7 +928,6 @@ test("posted GL account change marks prior machine classification stale and recl
     final_qbo_account_name: "Meals",
     updated_at: "2026-09-04T13:00:00Z",
   });
-
   const updated = await handleTaxClassificationEvent({
     supabase,
     businessId: BUSINESS_ID,
@@ -945,6 +945,34 @@ test("posted GL account change marks prior machine classification stale and recl
   assert.equal(classification.tax_category, "meals");
   assert.equal(classification.classification_status, "needs_review");
   assert.equal(classification.metadata.tax_classification_stale, false);
+});
+
+test("posted GL account change durably queues classification and defers one immutable workspace publication until completion", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1 }));
+  await processPendingRunFromEvent({ supabase, changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED, transactionId: "txn-001" });
+  Object.assign(supabase.store.transaction_categorizations[0], {
+    final_qbo_account_id: "gas-account",
+    final_qbo_account_name: "Gas",
+    updated_at: "2026-09-04T13:00:00Z",
+  });
+  const workspaceRequestsBefore = supabase.store.tax_workspace_projection_requests.length;
+
+  const result = await synchronizeTaxDataChange({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_UPDATED,
+    entityId: "txn-001",
+    metadata: { changedFields: ["final_qbo_account_id", "final_qbo_account_name"] },
+  });
+
+  assert.equal(result.status, "queued");
+  assert.ok(result.classificationRunId);
+  assert.equal(result.workspaceRequestId, null);
+  assert.equal(result.workspaceStatus, "deferred_until_classification");
+  assert.equal(supabase.store.tax_workspace_projection_requests.length, workspaceRequestsBefore);
+  await processPendingTaxClassificationRuns({ supabase, workerId: "post-change-worker", runBatchSize: 1, transactionBatchSize: 50 });
+  assert.equal(supabase.store.tax_workspace_projection_requests.length, workspaceRequestsBefore + 1);
 });
 
 test("reviewed transaction fact change is preserved as renewed review, not silently overwritten", async () => {
@@ -1056,10 +1084,10 @@ test("manual link-existing posting route emits canonical tax classification even
   assert.match(route.slice(eventEmit, response), /taxYearFromDate\(bankTxn\?\.date \|\| nowIso\)/);
 });
 
-test("posted bookkeeping reclassification service emits canonical updated tax event", () => {
+test("posted bookkeeping reclassification service awaits canonical updated tax invalidation", () => {
   const service = fs.readFileSync("src/services/bookkeeping/bookkeepingReclassificationService.js", "utf8");
   const postedBranch = service.indexOf('mode: "posted_qbo_reclassification"');
-  const eventEmit = service.indexOf("emitTaxDataChanged({");
+  const eventEmit = service.indexOf("await synchronizeTaxChange({");
 
   assert.ok(eventEmit > 0);
   assert.ok(postedBranch > eventEmit);
