@@ -530,6 +530,8 @@ async function buildCurrentTaxWorkspacePayload({ supabase, businessId, taxYear, 
     const classification = classificationById.get(String(row.transactionId));
     return mapDeductionTransactionRow({
       ...row,
+      userOverride: classification?.user_override ?? row.userOverride,
+      cpaOverride: classification?.cpa_override ?? row.cpaOverride,
       ruleVersion: row.ruleVersion || classification?.rule_version || classification?.metadata?.rule_version || null,
       matchedRuleCode: row.matchedRuleCode || classification?.rule_code || null,
       taxScopeDisposition: scopeById.get(String(row.transactionId)) || sourceRow.taxScopeDisposition || null,
@@ -735,7 +737,7 @@ function title(value) { return String(value).split("_").map((part)=>part ? part[
 function round(value) { return Math.round((Number(value)||0)*100)/100; }
 
 async function loadRows(args) { const rows=[]; for(let offset=0;;offset+=PAGE_SIZE){ const page=await listDeductionTransactions({...args,pagination:{limit:PAGE_SIZE,offset},filters:{}}); rows.push(...(page.rows||[])); if(!page.pagination?.hasMore) break; } return rows; }
-function fingerprint({ overview, rows, sourceRows = [], classificationRows = [], vehicleDeductions = null }) { return createHash("sha256").update(JSON.stringify({ formulaVersion: TAX_WORKSPACE_FORMULA_VERSION, engine: overview.meta?.engineVersion, bridge: overview.populationBridge?.identity_comparison, source: sourceRows.map((r)=>[r.transactionId,r.taxScopeDisposition,r.taxScopeReasonCode,r.signedAmount]), rows: rows.map((r)=>[r.transactionId,r.classificationStatus,r.taxCategory,r.deductibleAmount,r.ruleVersion,r.override?.lastChangedAt]), classifications: classificationRows.map((r)=>[r.transaction_id,r.rule_version,r.rule_code,r.updated_at]), vehicleDeductions })).digest("hex"); }
+function fingerprint({ overview, rows, sourceRows = [], classificationRows = [], vehicleDeductions = null }) { return createHash("sha256").update(JSON.stringify({ formulaVersion: TAX_WORKSPACE_FORMULA_VERSION, engine: overview.meta?.engineVersion, bridge: overview.populationBridge?.identity_comparison, source: sourceRows.map((r)=>[r.transactionId,r.taxScopeDisposition,r.taxScopeReasonCode,r.signedAmount]), rows: rows.map((r)=>[r.transactionId,r.classificationStatus,r.taxCategory,r.deductibleAmount,r.ruleVersion,r.override?.lastChangedAt]), classifications: classificationRows.map((r)=>[r.transaction_id,r.rule_version,r.rule_code,r.updated_at,r.user_override === true,r.cpa_override === true]), vehicleDeductions })).digest("hex"); }
 function validatePayload(p){
   const counts=[p.estimatedDeductibleAmount,p.evaluatedTransactionCount,p.matrixIncludedCount,p.outsideDeductionsCount,p.questionGroupCount];
   const matrixRows=Array.isArray(p.matrix)?p.matrix:[];

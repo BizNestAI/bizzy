@@ -14,6 +14,7 @@ import {
 import { TaxEngineError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
 import { optionalTaxYear, validateBusinessIdInput } from "./taxValidation.js";
+import { isValidUuid } from "../../services/tax/taxDomain.js";
 import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
 import { assertInternalSchedulerAccess } from "./taxSchedulerAuth.js";
 import { workspaceReadError } from "./taxWorkspaceErrors.js";
@@ -34,6 +35,14 @@ router.post("/workspace/refresh", async (req, res) => {
     if (String(access.businessId) !== String(businessId)) throw safeError("tax_workspace_scope_conflict", 403, "Tax workspace scope does not match the authenticated business.");
     if (!(await businessHasPaidEntitlement(businessId, { db }))) throw safeError("paid_entitlement_required", 403, "A paid subscription is required to refresh this Tax workspace.");
     const taxYear = optionalTaxYear(req.body?.year ?? req.body?.taxYear, new Date().getFullYear());
+    const previousProjectionId = String(req.body?.previousProjectionId || "").trim();
+    if (previousProjectionId) {
+      if (!isValidUuid(previousProjectionId)) throw safeError("invalid_projection_id", 422, "A valid previous projection ID is required.");
+      // Recovery rebuilds the current classifications directly. It must not
+      // wait for bookkeeping outbox replay or reuse a completed source-event key.
+      const request = await enqueueTaxWorkspaceProjection({ supabase: db, businessId, taxYear, reason: "grouped_preview_stale" });
+      return sendTaxSuccess(res, { status: "updating", workspaceRequestId: request.id, workspaceStatus: "queued" });
+    }
     const sourceRevision = await computeTaxClassificationSourceFingerprint({ supabase: db, businessId, taxYear });
     const queued = await synchronizeTaxDataChange({
       supabase: db,

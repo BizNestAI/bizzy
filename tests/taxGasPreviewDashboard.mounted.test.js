@@ -170,11 +170,43 @@ test("mounted dashboard preserves an id-only Gas question while its authoritativ
     assert.match(document.body.textContent, /question changed/); noSubmit();
 
     await close(); await open();
+    const { recoverTaxWorkspaceProjection } = await import("../src/services/tax/taxWorkspaceRecovery.js");
+    const published = { ...p2, projectionId: "P70", sourceFingerprint: "F70", projection: { ...p2.projection, status: "complete",
+      questionGroups: [{ ...group, actionableTransactionCount: 70, transactionCount: 76, reviewedCount: 6 }] } };
+    const old = { ...p2, projection: { ...p2.projection, status: "complete" } };
+    const recoveryTimeline = [];
+    let recoveryReads = 0;
+    globalThis.__gasRefresh = async ({ signal, rebuildAfterProjectionId }) => {
+      refreshes += 1;
+      assert.equal(rebuildAfterProjectionId, "P2");
+      const value = await recoverTaxWorkspaceProjection({ previousProjectionId: rebuildAfterProjectionId, signal, pollMs: 1,
+        readWorkspace: async () => { recoveryTimeline.push("GET"); return ++recoveryReads < 3 ? old : published; },
+        requestRebuild: async () => { recoveryTimeline.push("POST /workspace/refresh"); },
+      });
+      return { workspaceSnapshot: value };
+    };
+    const beforeRecovery = calls.length;
+    await act(async () => {
+      calls.at(-1).reject({ code: "grouped_decision_projection_stale" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.deepEqual(recoveryTimeline, ["GET", "POST /workspace/refresh", "GET", "GET"]);
+    assert.equal(calls.length, beforeRecovery + 1, "only one replacement preview is attempted");
+    assert.equal(calls.at(-1).projectionId, "P70");
+    assert.equal(calls.at(-1).sourceFingerprint, "F70");
+    noSubmit();
+    await act(async () => calls.at(-1).resolve({ ...success, projectionId: "P70", sourceFingerprint: "F70",
+      actionableCount: 70, totalGroupCount: 76, previouslyReviewedCount: 6, transactions: transactions.slice(0, 70) }));
+    assert.match(document.body.textContent, /70 still need your answer/);
+    assert.match(document.body.textContent, /70 transactions/);
+    noSubmit();
+
+    await close(); await open();
     const removedCount = calls.length;
     // A replacement semantic question must close this modal, never inherit its answer.
     globalThis.__gasRefresh = async () => { refreshes += 1; return { workspaceSnapshot: { ...p2, projectionId: "P3", sourceFingerprint: "F3", projection: { ...p2.projection, questionGroups: [{ ...group, id: "replacement:gas" }] } } }; };
     await act(async () => calls.at(-1).reject({ code: "grouped_decision_projection_stale" }));
-    assert.equal(refreshes, 3); assert.equal(calls.length, removedCount);
+    assert.equal(refreshes, 4); assert.equal(calls.length, removedCount);
     assert.equal(elements(document.body, (node) => node.getAttribute("role") === "dialog").length, 0);
     noSubmit();
   } finally {

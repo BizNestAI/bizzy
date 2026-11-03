@@ -1137,7 +1137,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
           showTaxDecisionInfo("This question was updated because the underlying transactions changed.", groupId);
         }}
         onPreview={(input) => deductions.previewGroupedDeductionDecision(input)}
-        onScopeChanged={({ signal } = {}) => deductions.refreshWorkspaceSnapshot({ signal })}
+        onScopeChanged={(options = {}) => deductions.refreshWorkspaceSnapshot(options)}
         onOpenVehicleWorkflow={openVehicleWorkflow}
         onCreateVehicle={(input) => deductions.createVehicle(input)}
         onApply={async ({ command }) => {
@@ -2788,7 +2788,7 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspac
           if (!isCurrent()) return;
           if (previewError?.code !== "grouped_decision_projection_stale" || attempt === 1) throw previewError;
           setPreviewState("preview_stale_refreshing");
-          const refreshed = await onScopeChangedRef.current?.({ signal: controller.signal });
+          const refreshed = await onScopeChangedRef.current?.({ signal: controller.signal, rebuildAfterProjectionId: previewInput.projectionId });
           if (!isCurrent()) return;
           const snapshot = refreshed?.workspaceSnapshot;
           if (!snapshot?.projectionId || !snapshot?.sourceFingerprint

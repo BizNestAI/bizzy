@@ -143,6 +143,8 @@ export function mapDeductionTransactionRow(row = {}) {
     status: isTaxReviewHolding ? "needs_tax_review" : isUnresolvedFallback ? "unclassified" : authorityStatus || "unclassified",
     statusLabel: isTaxReviewHolding ? "Needs tax review" : isUnresolvedFallback ? "Needs classification" : authorityStatus ? STATUS_LABELS[authorityStatus] || labelize(authorityStatus) : "Unclassified",
     requiresReview: hasClassificationAuthority && (row.requiresReview === true || row.requires_review === true),
+    userOverride: row.userOverride === true || row.user_override === true,
+    cpaOverride: row.cpaOverride === true || row.cpa_override === true,
     warnings: normalizeList(row.warnings),
     taxDataUnavailable: treatmentUnavailable,
     taxDataReasonCode: row.taxDataReasonCode || null,

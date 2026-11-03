@@ -19,6 +19,7 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
   diagnostics.stage = "customer_authorization";
   requireCustomerActor(actor);
   let workspaceProjection = await requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint, groupId, diagnostics });
+  const publishedProjection = workspaceProjection;
   if (workspaceProjection) {
     diagnostics.stage = "workspace_membership_reconciliation";
     const storedMembers = taxMembershipDiagnostics(workspaceProjection.projection_data?.identityEvidence?.questionGroups?.[groupId] || []);
@@ -37,6 +38,10 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
   diagnostics.resolvedGroupId = taxDiagnosticIdentity(groupId);
   const manifest = buildGroupedDecisionManifest({ businessId, taxYear, rows });
   const actionable = rows.filter(isActionable);
+  // A live overlay is not a newly published concurrency identity. Require the
+  // published question too, so changed membership recovers through a rebuild
+  // rather than silently authorizing a different population under the old ID.
+  matrixReconciliation({ record: { group_id: groupId }, actionable, workspaceProjection: publishedProjection, diagnostics });
   const first = actionable[0] || rows[0];
   const previewId = randomUUID();
   const expiresAt = new Date(now.getTime() + previewTtlSeconds() * 1000).toISOString();

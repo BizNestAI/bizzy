@@ -354,7 +354,7 @@ export default function Login() {
                   bizzy-login-submit relative overflow-hidden mt-1 inline-flex w-full items-center justify-center gap-2 rounded-full
                   border border-emerald-300/32 bg-[linear-gradient(180deg,rgba(32,216,155,0.18),rgba(19,185,129,0.10))] py-3 text-sm font-semibold text-emerald-50
                   shadow-[0_18px_45px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)]
-                  transition hover:border-emerald-300/48 hover:bg-emerald-300/[0.16] disabled:cursor-wait
+                  transition hover:border-emerald-300/48 hover:bg-emerald-300/[0.16] disabled:cursor-default
                 "
                 aria-busy={loading ? "true" : "false"}
               >

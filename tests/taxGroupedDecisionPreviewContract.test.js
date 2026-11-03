@@ -303,7 +303,7 @@ test("technical preview failure cannot be converted to resolved zero-population 
   assert.match(dashboard, /setPreviewState\("preview_error"\)/);
   assert.match(dashboard, /"grouped_decision_group_not_found", "grouped_decision_projection_stale"/);
   assert.match(dashboard, /preview\.actionableCount === 0 \? "preview_resolved" : "preview_ready"/);
-  assert.match(dashboard, /await onScopeChangedRef\.current\?\.\(\{ signal: controller.signal \}\)/);
+  assert.match(dashboard, /await onScopeChangedRef\.current\?\.\(\{ signal: controller.signal, rebuildAfterProjectionId: previewInput.projectionId \}\)/);
   assert.match(dashboard, /onResolvedRef\.current\?\.\(\{ groupId: decisionGroupKey \}\)/);
   assert.match(dashboard, /This question was updated because the underlying transactions changed\./);
   assert.match(dashboard, /previewState !== "preview_ready"/);

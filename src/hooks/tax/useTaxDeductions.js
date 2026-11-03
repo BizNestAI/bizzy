@@ -39,6 +39,7 @@ import {
   updateTaxDeductionDecisionRule,
 } from "../../services/tax/taxApiClient.js";
 import { createWorkspaceOperationTracker } from "./workspaceOperationTracker.js";
+import { recoverTaxWorkspaceProjection } from "../../services/tax/taxWorkspaceRecovery.js";
 
 export function useTaxDeductions({
   businessId,
@@ -89,6 +90,8 @@ export function useTaxDeductions({
   }
   const isDemo = shouldUseDemoData();
   const scopeKey = `${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`;
+  const currentScopeRef = useRef(scopeKey);
+  currentScopeRef.current = scopeKey;
   const requestEnabled = enabled && Boolean(businessId);
   const scopedRequestStatus = resolveScopedDeductionsRequestStatus({ requestStatus, scopeKey, enabled: requestEnabled });
   const shouldPollClassification = isActiveClassificationStatus(
@@ -431,7 +434,24 @@ export function useTaxDeductions({
       const projectionId = options.projectionId || workspaceSnapshotRef.current.projectionId;
       return getTaxWorkspaceMatrixCell({ businessId, year, ...scope, projectionId, ...options });
     },
-    refreshWorkspaceSnapshot: (options = {}) => load({ ...options, refresh: true }),
+    refreshWorkspaceSnapshot: async (options = {}) => {
+      if (!options.rebuildAfterProjectionId) return load({ ...options, refresh: true });
+      const owner = workspaceOperationTrackerRef.current.acquire("stale-question-recovery");
+      try {
+        const value = await recoverTaxWorkspaceProjection({
+          previousProjectionId: options.rebuildAfterProjectionId,
+          signal: options.signal,
+          readWorkspace: ({ signal }) => getTaxWorkspace({ businessId, year, refresh: true, signal }),
+          requestRebuild: ({ signal, previousProjectionId }) => scheduleTaxWorkspaceRefresh({ businessId, year, signal, previousProjectionId }),
+        });
+        if (options.signal?.aborted || currentScopeRef.current !== scopeKey) return null;
+        const snapshot = commitWorkspaceSnapshot(value);
+        setRebuildPending(value?.state === "refreshing");
+        return { workspaceSnapshot: snapshot };
+      } finally {
+        workspaceOperationTrackerRef.current.release(owner);
+      }
+    },
     isCurrentWorkspaceProjection: (projectionId) => String(workspaceSnapshotRef.current.projectionId || "") === String(projectionId || ""),
     refresh: (options = {}) => {
       if (refreshInFlight.current) return refreshInFlight.current;

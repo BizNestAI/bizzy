@@ -263,11 +263,11 @@ export async function getTaxWorkspace({ businessId, year, refresh = false, signa
   return unwrap(payload);
 }
 
-export async function scheduleTaxWorkspaceRefresh({ businessId, year, signal } = {}) {
+export async function scheduleTaxWorkspaceRefresh({ businessId, year, previousProjectionId, signal } = {}) {
   requireBusinessId(businessId);
   const result = unwrap(await request(`/api/tax/workspace/refresh?${query({ businessId })}`, {
     method: "POST",
-    body: compact({ businessId, year }),
+    body: compact({ businessId, year, previousProjectionId }),
     signal,
   }));
   clearBusinessCache(businessId);
