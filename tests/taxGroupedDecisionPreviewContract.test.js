@@ -303,7 +303,7 @@ test("technical preview failure cannot be converted to resolved zero-population 
   assert.match(dashboard, /setPreviewState\("preview_error"\)/);
   assert.match(dashboard, /"grouped_decision_group_not_found", "grouped_decision_projection_stale"/);
   assert.match(dashboard, /preview\.actionableCount === 0 \? "preview_resolved" : "preview_ready"/);
-  assert.match(dashboard, /await onScopeChangedRef\.current\?\.\(\)/);
+  assert.match(dashboard, /await onScopeChangedRef\.current\?\.\(\{ signal: controller.signal \}\)/);
   assert.match(dashboard, /onResolvedRef\.current\?\.\(\{ groupId: decisionGroupKey \}\)/);
   assert.match(dashboard, /This question was updated because the underlying transactions changed\./);
   assert.match(dashboard, /previewState !== "preview_ready"/);
@@ -319,8 +319,8 @@ test("every grouped question modal uses the bounded finite preview lifecycle", (
   const hook = readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   assert.match(client, /timeoutMs = 12_000/);
   assert.match(client, /code: "grouped_decision_preview_timeout"/);
-  assert.match(hook, /projectionId: workspaceSnapshotRef\.current\.projectionId/);
-  assert.match(hook, /sourceFingerprint: workspaceSnapshotRef\.current\.sourceFingerprint/);
+  assert.match(hook, /projectionId = workspaceSnapshotRef\.current\.projectionId/);
+  assert.match(hook, /sourceFingerprint = workspaceSnapshotRef\.current\.sourceFingerprint/);
   assert.match(dashboard, /setPreviewState\("preview_timed_out"\)/);
   assert.match(dashboard, /setPreviewState\("preview_stale_refreshing"\)/);
   assert.match(dashboard, /attempt < 2/);
@@ -387,4 +387,27 @@ test("browser confirmation cannot submit authoritative IDs, counts, amounts, aut
   assert.match(route, /canonicalMutationBusinessId/);
   assert.match(route, /tenantContext\?\.mode === "admin_view"/);
   assert.match(route, /changedFields: Array\.isArray/);
+});
+
+
+test("business ID aliases normalize before tenant scoped projection lookup", async () => {
+  const { validateBusinessIdInput } = await import("../src/api/tax/taxValidation.js");
+  const businessId = "00000000-0000-4000-8000-000000000010";
+  for (const alias of ["businessId", "business_id"]) {
+    const normalized = validateBusinessIdInput({ body: { [alias]: businessId } });
+    const projection = { id: "P2", business_id: businessId, tax_year: 2026, projection_version: "tax-workspace-v1", status: "complete", generated_at: "2026-11-02" };
+    const { getLatestTaxWorkspaceProjection, TAX_WORKSPACE_PROJECTION_VERSION } = await import("../src/services/tax/taxWorkspaceProjection.service.js");
+    projection.projection_version = TAX_WORKSPACE_PROJECTION_VERSION;
+    assert.equal((await getLatestTaxWorkspaceProjection({ supabase: { store: { tax_workspace_projections: [projection] } }, businessId: normalized, taxYear: 2026 })).id, "P2");
+  }
+});
+
+test("preview route cannot enter a decision approval claim path", () => {
+  const route = readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
+  const previewRoute = route.slice(route.indexOf('router.post("/deduction-decisions/preview"'), route.indexOf("async function withGroupedPreviewTimeout"));
+  assert.match(previewRoute, /createGroupedDecisionPreview/);
+  assert.doesNotMatch(previewRoute, /confirmGroupedDecisionPreview|applyGroupedTaxDeductionDecision|runMerchantApprovalQueueOnce/);
+  const service = readFileSync("src/services/tax/taxGroupedDecisionPreview.service.js", "utf8");
+  const create = service.slice(service.indexOf("export async function createGroupedDecisionPreview"), service.indexOf("export async function optionalVehicleContext"));
+  assert.doesNotMatch(create, /confirmGroupedDecisionPreview|applyGroupedTaxDeductionDecision|runMerchantApprovalQueueOnce/);
 });

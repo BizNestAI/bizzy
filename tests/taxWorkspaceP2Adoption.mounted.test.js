@@ -81,12 +81,13 @@ test("mounted Tax deductions adopts P2, closes a stale Lyft/Uber modal, and clea
   const originalLoggerError = logger.error.bind(logger);
   logger.error = (message, options) => { if (!String(message).includes("WebSocket server error")) originalLoggerError(message, options); };
   const vite = await createServer({ configFile: false, customLogger: logger, plugins: [{ name: "mounted-tax-hook", enforce: "pre", resolveId(id) {
+    if (id.includes("supabaseClient")) return "\0supabase-stub";
     if (id === "react-router-dom") return routerDomModule;
     if (id === "react-router") return routerModule;
     if (id === "react-router/dom") return routerDomExportModule;
     if (id.endsWith("/hooks/tax/useTaxDeductions.js") || id.endsWith("hooks/tax/useTaxDeductions.js")) return hookId;
     return null;
-  }, load(id) { if (id !== hookId) return null; return `
+  }, load(id) { if (id === "\0supabase-stub") return "export const supabase = { auth: { getSession: async () => ({ data: { session: null } }) } }; export default supabase;"; if (id !== hookId) return null; return `
     import { useState } from "react";
     export function useTaxDeductions() {
       const [snapshot, setSnapshot] = useState(globalThis.__taxP1);

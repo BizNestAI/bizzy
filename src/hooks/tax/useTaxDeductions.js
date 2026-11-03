@@ -402,6 +402,7 @@ export function useTaxDeductions({
     overview,
     workspaceProjection,
     workspaceProjectionId,
+    workspaceSourceFingerprint: workspaceSnapshot.sourceFingerprint,
     transactions,
     allTransactions,
     postedTransactions,
@@ -540,12 +541,12 @@ export function useTaxDeductions({
       if (options.skipReload !== true) await load();
       return result;
     },
-    previewGroupedDeductionDecision: ({ groupId, signal } = {}) => previewGroupedTaxDeductionDecision({
+    previewGroupedDeductionDecision: ({ groupId, projectionId = workspaceSnapshotRef.current.projectionId, sourceFingerprint = workspaceSnapshotRef.current.sourceFingerprint, signal } = {}) => previewGroupedTaxDeductionDecision({
       businessId,
       year,
       groupId,
-      projectionId: workspaceSnapshotRef.current.projectionId,
-      sourceFingerprint: workspaceSnapshotRef.current.sourceFingerprint,
+      projectionId,
+      sourceFingerprint,
       signal,
     }),
     confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, signal } = {}) => {

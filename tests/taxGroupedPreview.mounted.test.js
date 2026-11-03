@@ -66,7 +66,7 @@ test("mounted real Gas modal bounds the complete lifecycle and rejects obsolete 
   let calls = [], refreshes = 0, resolved = 0;
   const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
   let next = deferred();
-  const props = { decision: { group }, taxYear: 2026, onClose: () => {}, onResolved: () => { resolved += 1; }, onScopeChanged: async () => { refreshes += 1; }, onPreview: ({ signal }) => { calls.push(signal); return next.promise; } };
+  const props = { decision: { group, projectionId: "P1", sourceFingerprint: "F1" }, taxYear: 2026, onClose: () => {}, onResolved: () => { resolved += 1; }, onScopeChanged: async () => { refreshes += 1; return { workspaceSnapshot: { projectionId: "P2", sourceFingerprint: "F2", projection: { questionGroups: [group] } } }; }, onPreview: ({ signal }) => { calls.push(signal); return next.promise; } };
   const render = async (value = props) => act(async () => root.render(value ? React.createElement(ReviewDecisionModal, value) : null));
   const text = () => document.body.textContent;
   const noSubmit = () => assert.equal(elements(document.body, (n) => n.tagName === "BUTTON" && /Save|Apply|Confirm/.test(n.textContent) && !n.hasAttribute("disabled")).length, 0);
@@ -129,6 +129,30 @@ test("mounted real Gas modal bounds the complete lifecycle and rejects obsolete 
     assert.match(text(), /Refreshing this question/);
     await act(async () => t.mock.timers.tick(12_001));
     assert.match(text(), /couldn’t be loaded/); noSubmit();
+    await render(null);
+    const identities = [];
+    await render({ ...props, onPreview: async (input) => {
+      identities.push(input);
+      if (identities.length === 1) throw { code: "grouped_decision_projection_stale" };
+      assert.equal(input.projectionId, "P2"); assert.equal(input.sourceFingerprint, "F2");
+      assert.equal(input.groupId, group.id || group.key);
+      return success;
+    } });
+    assert.equal(identities.length, 2);
+    assert.equal(identities[0].projectionId, "P1"); assert.equal(identities[0].sourceFingerprint, "F1");
+    assert.match(text(), /76 transactions/); assert.match(text(), /\$1,900/);
+    await render(null);
+    let sameCalls = 0;
+    await render({ ...props, onPreview: async () => { sameCalls += 1; throw { code: "grouped_decision_projection_stale" }; },
+      onScopeChanged: async () => ({ workspaceSnapshot: { projectionId: "P1", sourceFingerprint: "F1", projection: { questionGroups: [group] } } }) });
+    assert.equal(sameCalls, 1); assert.match(text(), /question changed/);
+    await act(async () => t.mock.timers.tick(12_001)); assert.equal(sameCalls, 1);
+    await render(null);
+    let disappearedCalls = 0, disappearedResolved = 0;
+    await render({ ...props, onPreview: async () => { disappearedCalls += 1; throw { code: "grouped_decision_projection_stale" }; },
+      onResolved: () => { disappearedResolved += 1; },
+      onScopeChanged: async () => ({ workspaceSnapshot: { projectionId: "P2", sourceFingerprint: "F2", projection: { questionGroups: [] } } }) });
+    assert.equal(disappearedCalls, 1); assert.equal(disappearedResolved, 1);
     await render(null); next = deferred(); await render();
     const firstStale = next; next = deferred();
     const callsBeforeStale = calls.length;
@@ -138,6 +162,6 @@ test("mounted real Gas modal bounds the complete lifecycle and rejects obsolete 
     assert.match(text(), /question changed/); noSubmit();
     next = deferred(); await act(async () => button(document.body, "Retry").click());
     await act(async () => next.resolve({ ...success, actionableCount: 0, transactions: [] }));
-    assert.equal(resolved, 1); assert.equal(refreshes, 3);
+    assert.equal(resolved, 1); assert.equal(refreshes, 4);
   } finally { await act(async () => root.unmount()); t.mock.timers.reset(); await vite.close(); }
 });

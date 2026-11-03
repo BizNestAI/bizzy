@@ -606,16 +606,23 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
     () => deductions.workspaceProjection?.questionGroups || [],
     [deductions.workspaceProjection?.questionGroups]
   );
+  // Opening and synchronizing must use the same modal group contract. Raw
+  // projection groups have an id but no key; adopting one remounts the modal
+  // and cancels its authoritative preview.
+  const decisionQuestionGroups = useMemo(
+    () => projectedQuestionGroups.map(toDecisionActionGroup),
+    [projectedQuestionGroups]
+  );
   // Keep an open question bound to the latest canonical projection. This is
   // especially important after a scope-conflict refresh: selections live in
   // the modal, while counts/amounts/rows must come from the refreshed group.
   useEffect(() => {
     if (!reviewDecision?.group) return;
     const currentId = reviewDecision.group.id || reviewDecision.group.key;
-    const refreshed = projectedQuestionGroups
+    const refreshed = decisionQuestionGroups
       .find((group) => (group.id || group.key) === currentId);
     if (refreshed) {
-      if (reviewDecision.group !== refreshed) setReviewDecision((current) => current ? { ...current, group: refreshed } : current);
+      if (reviewDecision.group !== refreshed) setReviewDecision((current) => current ? { ...current, group: refreshed, projectionId: deductions.workspaceProjectionId, sourceFingerprint: deductions.workspaceSourceFingerprint } : current);
       return;
     }
     const openedProjectionId = reviewDecision.projectionId || null;
@@ -625,7 +632,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
       showTaxDecisionInfo("This question was updated because the underlying transactions changed.", currentId);
     }
     // While the same projection is revalidating, absence is not authoritative.
-  }, [deductions.workspaceProjectionId, projectedQuestionGroups, reviewDecision]);
+  }, [deductions.workspaceProjectionId, deductions.workspaceSourceFingerprint, decisionQuestionGroups, reviewDecision]);
   const deductionDecisionRules = useMemo(
     () => enrichDeductionDecisionRules(deductions.decisionRules, workspaceRows),
     [deductions.decisionRules, workspaceRows]
@@ -1077,7 +1084,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
           ) : (
             <ProjectedQuestionGroups
               groups={projectedQuestionGroups}
-              onOpen={(group) => setReviewDecision({ group: toDecisionActionGroup(group), selectedMonth: null, projectionId: deductions.workspaceProjectionId })}
+              onOpen={(group) => setReviewDecision({ group: toDecisionActionGroup(group), selectedMonth: null, projectionId: deductions.workspaceProjectionId, sourceFingerprint: deductions.workspaceSourceFingerprint })}
             />
           )}</>
           )}
@@ -1130,9 +1137,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
           showTaxDecisionInfo("This question was updated because the underlying transactions changed.", groupId);
         }}
         onPreview={(input) => deductions.previewGroupedDeductionDecision(input)}
-        onScopeChanged={async () => {
-          await deductions.refresh();
-        }}
+        onScopeChanged={({ signal } = {}) => deductions.refreshWorkspaceSnapshot({ signal })}
         onOpenVehicleWorkflow={openVehicleWorkflow}
         onCreateVehicle={(input) => deductions.createVehicle(input)}
         onApply={async ({ command }) => {
@@ -2728,6 +2733,10 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspac
     }
   }, [vehicleId, vehicleWorkflows]);
 
+  const previewIdentityRef = useRef(null);
+  useEffect(() => {
+    previewIdentityRef.current = { projectionId: decision.projectionId, sourceFingerprint: decision.sourceFingerprint };
+  }, [decision.projectionId, decision.sourceFingerprint]);
   const onPreviewRef = useRef(onPreview);
   const onScopeChangedRef = useRef(onScopeChanged);
   const onResolvedRef = useRef(onResolved);
@@ -2765,10 +2774,11 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspac
     }, 12_000);
     const run = async () => {
       let preview;
+      let previewInput = { groupId: decisionGroupKey, ...previewIdentityRef.current };
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           if (!onPreviewRef.current) throw new Error("Preview unavailable");
-          preview = await onPreviewRef.current({ groupId: decisionGroupKey, signal: controller.signal });
+          preview = await onPreviewRef.current({ ...previewInput, signal: controller.signal });
           if (!isCurrent()) return;
           if (!preview || !Number.isInteger(preview.actionableCount) || preview.actionableCount < 0
             || !preview.previewId || !Array.isArray(preview.transactions)
@@ -2778,8 +2788,18 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspac
           if (!isCurrent()) return;
           if (previewError?.code !== "grouped_decision_projection_stale" || attempt === 1) throw previewError;
           setPreviewState("preview_stale_refreshing");
-          await onScopeChangedRef.current?.();
+          const refreshed = await onScopeChangedRef.current?.({ signal: controller.signal });
           if (!isCurrent()) return;
+          const snapshot = refreshed?.workspaceSnapshot;
+          if (!snapshot?.projectionId || !snapshot?.sourceFingerprint
+            || (snapshot.projectionId === previewInput.projectionId && snapshot.sourceFingerprint === previewInput.sourceFingerprint)) throw previewError;
+          const currentGroup = snapshot.projection?.questionGroups?.find((group) => (group.id || group.key) === previewInput.groupId);
+          if (!currentGroup) {
+            onResolvedRef.current?.({ groupId: previewInput.groupId });
+            return;
+          }
+          // Use only the returned authoritative snapshot, independent of React commits.
+          previewInput = { groupId: currentGroup.id || currentGroup.key, projectionId: snapshot.projectionId, sourceFingerprint: snapshot.sourceFingerprint };
         }
       }
       if (!isCurrent()) return;
