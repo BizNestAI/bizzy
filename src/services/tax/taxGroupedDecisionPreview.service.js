@@ -10,15 +10,27 @@ import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
 import { vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
 import { listTaxQuestionBankRowsByIds } from "./taxPostedTransaction.repository.js";
 import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js";
-import { getLatestTaxWorkspaceProjection } from "./taxWorkspaceProjection.service.js";
-import { taxDiagnosticFingerprint, taxDiagnosticIdentity } from "./taxPreviewDiagnostics.js";
+import { getLatestTaxWorkspaceProjection, reconcileTaxWorkspaceProjection } from "./taxWorkspaceProjection.service.js";
+import { taxDiagnosticFingerprint, taxDiagnosticIdentity, taxMembershipDiagnostics } from "./taxPreviewDiagnostics.js";
 
 const DEFAULT_PREVIEW_TTL_SECONDS = 10 * 60;
 
 export async function createGroupedDecisionPreview({ supabase, businessId, taxYear, groupId, projectionId = null, sourceFingerprint = null, actor = {}, now = new Date(), diagnostics = {} } = {}) {
   diagnostics.stage = "customer_authorization";
   requireCustomerActor(actor);
-  const workspaceProjection = await requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint, groupId, diagnostics });
+  let workspaceProjection = await requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint, groupId, diagnostics });
+  if (workspaceProjection) {
+    diagnostics.stage = "workspace_membership_reconciliation";
+    const storedMembers = taxMembershipDiagnostics(workspaceProjection.projection_data?.identityEvidence?.questionGroups?.[groupId] || []);
+    diagnostics.storedMemberCount = storedMembers.expectedMemberCount;
+    diagnostics.storedMemberHash = storedMembers.expectedMemberHash;
+    // Workspace GET overlays current classifications on this immutable
+    // population. Compare against that same question representation, while
+    // retaining the persisted ID/fingerprint and the exact membership guard.
+    workspaceProjection = { ...workspaceProjection, projection_data: await reconcileTaxWorkspaceProjection({
+      supabase, record: workspaceProjection, businessId, taxYear,
+    }) };
+  }
   diagnostics.stage = "live_group_resolution";
   const rows = await decisionGroupRows({ supabase, businessId, taxYear, groupId });
   if (!rows.length) throw notFoundError("grouped_decision_group_not_found", "This Tax question is no longer available.");
@@ -247,8 +259,10 @@ function matrixReconciliation({ record, actionable, workspaceProjection, diagnos
   const categoryKey = String(actionable[0].tax_category || "");
   const matrixRow = (payload.matrix || []).find((row) => String(row.categoryKey) === categoryKey);
   const categoryIds = (payload.identityEvidence?.categories?.[categoryKey] || []).map(String);
-  const questionIds = (payload.identityEvidence?.questionGroups?.[record.group_id] || []).map(String);
+  const rawQuestionIds = payload.identityEvidence?.questionGroups?.[record.group_id] || [];
+  const questionIds = rawQuestionIds.map(String);
   const actionableIds = actionable.map((row) => String(row.transaction_id)).sort();
+  Object.assign(diagnostics, taxMembershipDiagnostics(rawQuestionIds, actionable.map((row) => row.transaction_id)));
   if (!matrixRow || !sameStringSet(questionIds, actionableIds) || questionIds.some((id) => !categoryIds.includes(id))) {
     diagnostics.failedComparison = !matrixRow ? "matrix_category_missing"
       : !sameStringSet(questionIds, actionableIds) ? "question_membership_mismatch" : "question_outside_category";
