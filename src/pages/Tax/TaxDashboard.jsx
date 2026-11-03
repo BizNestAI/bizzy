@@ -1,5 +1,5 @@
 import VehicleTreatmentEditor from "../../components/Tax/VehicleTreatmentEditor.jsx";
-import { isVehicleExpenseRow, taxDecisionAuthority, vehicleTreatmentProvenanceLabel } from "../../services/tax/taxVehicleAuthority.js";
+import { hasConfirmedVehicleElection, isVehicleExpenseRow, taxDecisionAuthority, vehicleTreatmentProvenanceLabel } from "../../services/tax/taxVehicleAuthority.js";
 // File: /components/Tax/TaxDashboard.jsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -3997,7 +3997,7 @@ function isStandardMileageGasRow(row) {
     row?.raw?.classification?.tax_treatment?.type
   ) || "").toLowerCase();
   const category = String(firstValue(row?.taxCategory, row?.raw?.tax_category, row?.raw?.classification?.tax_category) || "").toLowerCase();
-  return treatment.includes("standard_mileage") && (category.includes("vehicle") || /\b(gas|fuel|auto)\b/i.test(String(row?.qboAccountName || "")));
+  return hasConfirmedVehicleElection(row, "standard_mileage") && treatment.includes("standard_mileage") && (category.includes("vehicle") || /\b(gas|fuel|auto)\b/i.test(String(row?.qboAccountName || "")));
 }
 
 function deductibilityLabel(row) {
@@ -4211,13 +4211,13 @@ function DeductionMonthDetailModal({
   if (!selection) return null;
 
   const editableConfirmedRows = transactions.filter((row) => classificationBucket(row) === "user_confirmed");
-  const protectedConfirmedRows = transactions.filter((row) => classificationBucket(row) === "accountant_confirmed");
+  const protectedConfirmedRows = transactions.filter((row) => taxDecisionAuthority(row).type === "cpa");
   const confirmationSummary = userConfirmationSummary(editableConfirmedRows);
   const isReviewDetail = transactions.some((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
   const vehicleDetail = reviewContext.kind === "vehicle_method";
   const canEditConfirmation = !vehicleDetail && editableConfirmedRows.length > 0 && !protectedConfirmedRows.length && !readOnly;
   const showResolutionPanel = isReviewDetail || editingConfirmation;
-  const scopeRows = vehicleDetail ? transactions.filter((row) => classificationBucket(row) !== "accountant_confirmed") : editingConfirmation
+  const scopeRows = vehicleDetail ? transactions.filter((row) => taxDecisionAuthority(row).type !== "cpa") : editingConfirmation
     ? editableConfirmedRows
     : transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
   const selectedReviewRows = scopeRows.filter((row) => selectedReviewTransactionIds.has(String(row.id || row.raw?.transactionId)));
@@ -5777,6 +5777,8 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
     warnings: classified?.warnings || row.sourceWarnings || [],
     taxDataUnavailable: treatmentUnavailable,
     taxDataReasonCode: classified?.taxDataReasonCode || row.taxDataReasonCode || null,
+    businessId: classified?.businessId || row.businessId, taxYear: classified?.taxYear || row.taxYear,
+    vehicleId: classified?.vehicleId || row.vehicleId, vehicleElectionEvidence: classified?.vehicleElectionEvidence || null,
     raw: { ...row, classification: classified?.raw || null },
   };
 }
@@ -5788,7 +5790,20 @@ function buildPersistedWorkspaceMatrix(workspace, year) {
   });
   const accounts = (workspace?.matrix || []).map((category) => {
     const monthMap = Object.fromEntries(months.map((month) => {
-      const stored = category.months?.[month.key] || {};
+      let stored = category.months?.[month.key] || {};
+      if (isVehicleExpenseRow({ taxCategory: category.categoryKey })) {
+        if (stored.vehicleElectionEvidenceVersion !== "persisted-election-v1") {
+          // Old projections cannot establish an election. Keep their population,
+          // but require refreshed authoritative evidence before counting review.
+          stored = { ...stored, deductibleAmount: 0, estimatedDeductibleAmount: 0, reviewedDeductibleAmount: 0,
+            estimatedTransactionCount: 0, reviewedTransactionCount: 0, needsInputTransactionCount: stored.transactionCount || 0,
+            needsInputGrossExpense: stored.bookExpenseAmount || 0, standardMileageTransactionCount: 0, reviewedTreatmentLabel: null };
+        } else {
+          const confirmedMileageCount = (stored.confirmedMileageMembers || []).filter(row => hasConfirmedVehicleElection(row, "standard_mileage")).length;
+          stored = { ...stored, standardMileageTransactionCount: confirmedMileageCount,
+            reviewedTreatmentLabel: String(stored.reviewedTreatmentLabel || "").includes("covered by standard mileage") && !confirmedMileageCount ? null : stored.reviewedTreatmentLabel };
+        }
+      }
       const deductible = Number(stored.deductibleAmount || 0);
       const estimatedDeductible = Number(stored.estimatedDeductibleAmount || 0);
       const reviewedDeductible = Number(stored.reviewedDeductibleAmount || 0);

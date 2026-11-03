@@ -12,7 +12,11 @@ export async function listVehicleDeductionWorkflows({ supabase, businessId, taxY
     listRows(supabase, "tax_vehicle_mileage_inputs", (row) => row.business_id === businessId && Number(row.tax_year) === year && ["active", "finalized"].includes(row.status || "active") && !row.superseded_by, (query) => query.eq("business_id", businessId).eq("tax_year", year)),
     listRows(supabase, "tax_vehicle_mileage_rates", (row) => row.purpose === "business" && row.status === "active" && overlapsYear(row, year), (query) => query.eq("purpose", "business").eq("status", "active")),
   ]);
-  const electionByVehicle = new Map(elections.map((row) => [String(row.vehicle_id), row]));
+  const electionByVehicle = new Map();
+  for (const vehicle of vehicles) {
+    const matches = elections.filter(row => String(row.vehicle_id) === String(vehicle.id) && !row.superseded_by);
+    if (matches.length === 1) electionByVehicle.set(String(vehicle.id), matches[0]);
+  }
   return {
     contractVersion: VEHICLE_DEDUCTION_CONTRACT_VERSION,
     liveRefreshSupported: true,
@@ -106,7 +110,7 @@ function publicWorkflow(vehicle, election, allEntries, rates) {
   const mileageDeduction = election?.method === "standard_mileage" ? roundMoney(entries.reduce((sum, entry) => sum + Number(entry.deduction_amount || 0), 0)) : 0;
   return {
     ...publicVehicle(vehicle),
-    election: election ? { id: election.id, method: election.method, status: election.status, businessUsePercent: numberOrNull(election.business_use_percent), effectiveStart: election.effective_start, effectiveEnd: election.effective_end, finalized: election.status === "finalized" } : null,
+    election: election ? { id: election.id, method: election.method, status: election.status, electedBy: election.elected_by, electedAt: election.elected_at, supersededBy: election.superseded_by || null, businessUsePercent: numberOrNull(election.business_use_percent), effectiveStart: election.effective_start, effectiveEnd: election.effective_end, finalized: election.status === "finalized" } : null,
     mileage: { status: entries.length ? "entered" : election?.method === "standard_mileage" ? "needed" : "inactive", entryCount: entries.length, businessMiles: entries.reduce((sum, entry) => sum + Number(entry.business_miles || 0), 0), deductionAmount: mileageDeduction, substantiationStatus: aggregateSubstantiation(entries), periods: entries.sort(byPeriod).map(publicMileageEntry) },
     availableRates: rates.sort(byPeriod).map(publicRate),
   };

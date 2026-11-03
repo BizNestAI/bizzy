@@ -1,4 +1,4 @@
-import { isVehicleExpenseRow, vehicleTreatmentProvenanceLabel } from "./taxVehicleAuthority.js";
+import { hasConfirmedVehicleElection, attachVehicleElectionEvidence, vehicleMethodNeedsConfirmation, isVehicleExpenseRow, vehicleTreatmentProvenanceLabel } from "./taxVehicleAuthority.js";
 import { createHash, randomUUID } from "node:crypto";
 import { getDeductionsOverview, listDeductionTransactions } from "./taxDeductionsApi.service.js";
 import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/deductionsWorkspaceViewModel.js";
@@ -13,7 +13,7 @@ import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js"
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
-export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.5-vehicle-authority`;
+export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.6-election-evidence`;
 export const TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION = "signed-treatment-amounts-v1";
 const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;
@@ -56,12 +56,10 @@ export async function reconcileTaxWorkspaceProjection({ supabase, record, busine
       : outside.has(String(row.transaction_id)) ? "posted_non_expense_outside_deductions" : null,
   }));
   const payload = await timedWorkspaceStage("in_memory_reconciliation", onStage, async () => {
-    const lifecycle = buildTaxDeductionsLifecycleProjection({ rows: mapped, businessId, taxYear: Number(taxYear) });
-    if (!lifecycle.conservation.isConserved) throw coded("tax_workspace_identity_not_conserved");
     const generatedAt = new Date().toISOString();
-    const vehicleDeductions = baselinePayload?.vehicleDeductions?.liveRefreshSupported
-      ? await listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) })
-      : baselinePayload?.vehicleDeductions;
+    const vehicleDeductions = await listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) });
+    const lifecycle = buildTaxDeductionsLifecycleProjection({ rows: attachVehicleElectionEvidence(mapped, { businessId, taxYear, workflows: vehicleDeductions }), businessId, taxYear: Number(taxYear) });
+    if (!lifecycle.conservation.isConserved) throw coded("tax_workspace_identity_not_conserved");
     // This read-only overlay retains the persisted projection ID and population.
     // Its concurrency fingerprint must retain that same persisted identity too;
     // preview validates live question membership separately before confirmation.
@@ -97,6 +95,9 @@ function restoreSparseProjectionMembers({ payload, baselinePayload, mappedRows, 
     id, baselinePayload, matrix, outside,
   }));
   const missingMatrix = new Set(fallbackMembers.filter((member) => member.scope === "matrix").map((member) => member.id));
+  // A missing vehicle classification cannot inherit historical reviewed state:
+  // its vehicle/date/election scope cannot be validated from aggregate totals.
+  if (fallbackMembers.some(member => member.scope === "matrix" && isVehicleExpenseRow({ taxCategory: member.categoryKey }))) throw coded("tax_workspace_live_population_mismatch");
 
   for (const member of fallbackMembers.filter((candidate) => candidate.scope === "matrix")) {
     addUnique(resultEvidence.evaluated, member.id);
@@ -538,9 +539,9 @@ async function buildCurrentTaxWorkspacePayload({ supabase, businessId, taxYear, 
       taxScopeDisposition: scopeById.get(String(row.transactionId)) || sourceRow.taxScopeDisposition || null,
     });
   });
-  const lifecycle = buildTaxDeductionsLifecycleProjection({ rows: mapped, businessId, taxYear: Number(taxYear) });
-  if (!lifecycle.conservation.isConserved) throw coded("tax_workspace_identity_not_conserved");
   const vehicleDeductions = await listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) });
+  const lifecycle = buildTaxDeductionsLifecycleProjection({ rows: attachVehicleElectionEvidence(mapped, { businessId, taxYear, workflows: vehicleDeductions }), businessId, taxYear: Number(taxYear) });
+  if (!lifecycle.conservation.isConserved) throw coded("tax_workspace_identity_not_conserved");
   const sourceFingerprint = fingerprint({ overview, rows, sourceRows, classificationRows: classificationPage.rows || [], vehicleDeductions });
   const generatedAt = overview.meta?.generatedAt || new Date().toISOString();
   const payload = buildPayload({ overview, lifecycle, businessId, taxYear: Number(taxYear), sourceFingerprint, generatedAt, vehicleDeductions });
@@ -697,6 +698,8 @@ function aggregateMonth(entries) {
     : null;
   const standardMileageTransactionCount = reviewedRows.filter((row) => vehicleTreatmentProvenanceLabel(row) === "Reviewed — covered by standard mileage").length;
   return {
+    vehicleElectionEvidenceVersion: "persisted-election-v1",
+    confirmedMileageMembers: reviewedRows.filter(row => hasConfirmedVehicleElection(row, "standard_mileage")).map(row => ({ businessId: row.businessId, taxYear: row.taxYear, vehicleId: row.vehicleId, date: row.date, vehicleElectionEvidence: row.vehicleElectionEvidence })),
     reviewedTreatmentLabel, standardMileageTransactionCount,
     transactionCount: entries.length,
     identityManifest: sortedUnique(entries.map((entry) => entry.id)),
@@ -729,6 +732,7 @@ function nullableAmount(value) {
 }
 
 function treatmentBucket(entry) {
+  if (vehicleMethodNeedsConfirmation(entry?.row)) return "needsInput";
   if ([TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_APPLIED, TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.STANDARD_RULE_ESTIMATED_NO_ACTION].includes(entry?.outcome)) return "estimated";
   if ([TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.REVIEWED, TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.EXCLUDED].includes(entry?.outcome)) return "reviewed";
   return "needsInput";

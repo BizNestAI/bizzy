@@ -1,3 +1,4 @@
+import { vehicleMethodNeedsConfirmation } from "./taxVehicleAuthority.js";
 // Tax Deductions UI projection
 //
 // This module deliberately works from stable posted-transaction identities.
@@ -75,6 +76,7 @@ export function taxClassificationBucketForDeductions(row = {}) {
   if (status === "needs_tax_review" || category === "tax_review_holding" || row.raw?.metadata?.is_holding === true) return "needs_tax_review";
   if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
   if (status === "needs_review" || status === "review_required" || ((row.requiresReview === true || row.requires_review === true) && !["user_confirmed", "cpa_confirmed", "accountant_reviewed", "bizzi_operator_confirmed"].includes(status))) return "needs_review";
+  if (vehicleMethodNeedsConfirmation(row)) return "needs_review";
   if (status === "cpa_confirmed" || status === "accountant_reviewed" || row.cpaOverride === true || row.cpa_override === true) return "accountant_confirmed";
   if (status === "bizzi_operator_confirmed") return "bizzi_operator_confirmed";
   if (status === "user_confirmed" || row.userOverride === true || row.user_override === true) return "user_confirmed";

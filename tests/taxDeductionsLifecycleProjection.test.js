@@ -213,7 +213,7 @@ test("7. completed business-use percentage decisions retain their percentage and
 });
 
 test("8. completed vehicle decisions remain reviewable by stable vehicle/account scope", () => {
-  const result = projection([row("reviewed-vehicle", { status: "user_confirmed", taxCategory: "vehicle_expense", qboAccountId: "vehicle", qboAccountName: "Gas", raw: { transactionId: "reviewed-vehicle", updated_at: "2026-10-18" } })]);
+  const result = projection([row("reviewed-vehicle", { businessId: "business", taxYear: 2026, vehicleId: "vehicle", vehicleElectionEvidence: { id: "confirmed-election", businessId: "business", taxYear: 2026, vehicleId: "vehicle", method: "standard_mileage", status: "active", electedBy: "owner", electedAt: "2026-01-01T00:00:00Z", effectiveStart: "2026-01-01", effectiveEnd: "2026-12-31" }, status: "user_confirmed", taxCategory: "vehicle_expense", qboAccountId: "vehicle", qboAccountName: "Gas", raw: { transactionId: "reviewed-vehicle", updated_at: "2026-10-18" } })]);
   assert.equal(result.completedDecisionGroups[0].decisionType, "vehicle_method");
   assert.match(result.completedDecisionGroups[0].id, /subject:vehicle/);
 });

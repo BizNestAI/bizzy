@@ -1,3 +1,5 @@
+import { attachVehicleElectionEvidence, isVehicleExpenseRow } from "./taxVehicleAuthority.js";
+import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js";
 // /src/services/tax/taxDeductionsApi.service.js
 import {
   DEDUCTIBILITY_STATUSES,
@@ -92,7 +94,7 @@ function buildOverviewProjection({ summary, populationBridge, businessId, taxYea
   };
 }
 
-export async function listDeductionTransactions({ supabase, businessId, taxYear, asOfDate, filters = {}, pagination = {} } = {}) {
+async function listDeductionTransactionsWithoutElectionEvidence({ supabase, businessId, taxYear, asOfDate, filters = {}, pagination = {} } = {}) {
   const context = requireContext({ supabase, businessId, taxYear, asOfDate });
   const limit = normalizeLimit(pagination.limit);
   const offset = normalizeOffset(pagination.offset);
@@ -120,7 +122,7 @@ export async function listDeductionTransactions({ supabase, businessId, taxYear,
 // transaction can legitimately be waiting for a Bizzi Tax mapping and have no
 // classification row yet; omitting it would make All Transactions contradict
 // the accepted workspace projection.
-export async function listProjectionEvaluatedTransactions({
+async function listProjectionEvaluatedTransactionsWithoutElectionEvidence({
   supabase,
   businessId,
   taxYear,
@@ -239,7 +241,7 @@ function chunkValues(values, size) {
   return result;
 }
 
-export async function getDeductionTransactionDetail({ supabase, businessId, taxYear, transactionId } = {}) {
+async function getDeductionTransactionDetailWithoutElectionEvidence({ supabase, businessId, taxYear, transactionId } = {}) {
   const context = requireContext({ supabase, businessId, taxYear });
   if (!transactionId) throw validationError("missing_transaction_id", "transactionId is required.", { field: "transactionId" });
   const row = await loadSingleJoinedRow({ ...context, transactionId });
@@ -1019,4 +1021,25 @@ async function appendHistory({ supabase, businessId, taxYear, rows }) {
 
 function warning(code, severity, message, action) {
   return { code, severity, message, action };
+}
+
+export async function listDeductionTransactions(input = {}) {
+  const result = await listDeductionTransactionsWithoutElectionEvidence(input);
+  if (!(result.rows || []).some(isVehicleExpenseRow)) return result;
+  const workflows = await listVehicleDeductionWorkflows(input);
+  return { ...result, rows: attachVehicleElectionEvidence(result.rows, { ...input, workflows }) };
+}
+
+export async function listProjectionEvaluatedTransactions(input = {}) {
+  const result = await listProjectionEvaluatedTransactionsWithoutElectionEvidence(input);
+  if (!(result.rows || []).some(isVehicleExpenseRow)) return result;
+  const workflows = await listVehicleDeductionWorkflows(input);
+  return { ...result, rows: attachVehicleElectionEvidence(result.rows, { ...input, workflows }) };
+}
+
+export async function getDeductionTransactionDetail(input = {}) {
+  const result = await getDeductionTransactionDetailWithoutElectionEvidence(input);
+  if (!isVehicleExpenseRow(result.transaction)) return result;
+  const workflows = await listVehicleDeductionWorkflows(input);
+  return { ...result, transaction: attachVehicleElectionEvidence([result.transaction], { ...input, workflows })[0] };
 }

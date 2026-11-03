@@ -235,9 +235,9 @@ test("mounted dashboard preserves an id-only Gas question while its authoritativ
     noSubmit();
 
     const detailRows = [
-      { id: "reviewed-gas", date: "2026-06-15", vendor: "Reviewed Gas", qboAccountName: "Gas", taxCategory: "vehicle_expense", taxTreatment: "vehicle_actual_expense_business_use", classificationStatus: "user_confirmed", status: "user_confirmed", deductiblePercent: 80, deductibleAmount: 40, amount: 50, signedAmount: -50, userOverride: true, requiresReview: false },
+      { businessId: "business", taxYear: 2026, vehicleId: "vehicle", vehicleElectionEvidence: { id: "confirmed-election", businessId: "business", taxYear: 2026, vehicleId: "vehicle", method: "actual_expenses", status: "active", electedBy: "owner", electedAt: "2026-01-01T00:00:00Z", effectiveStart: "2026-01-01", effectiveEnd: "2026-12-31" }, id: "reviewed-gas", date: "2026-06-15", vendor: "Reviewed Gas", qboAccountName: "Gas", taxCategory: "vehicle_expense", taxTreatment: "vehicle_actual_expense_business_use", classificationStatus: "user_confirmed", status: "user_confirmed", deductiblePercent: 80, deductibleAmount: 40, amount: 50, signedAmount: -50, userOverride: true, requiresReview: false },
       { id: "pending-gas", date: "2026-06-16", vendor: "Pending Gas", qboAccountName: "Gas", taxCategory: "vehicle_expense", taxTreatment: "vehicle_expense", classificationStatus: "needs_review", status: "needs_review", classificationSource: "rule_engine", deductiblePercent: 0, deductibleAmount: 0, amount: 50, signedAmount: -50, requiresReview: true },
-      { id: "cpa-gas", date: "2026-06-17", vendor: "CPA Gas", qboAccountName: "Gas", taxCategory: "vehicle_expense", taxTreatment: "vehicle_actual_expense_business_use", classificationStatus: "cpa_confirmed", status: "cpa_confirmed", deductiblePercent: 80, deductibleAmount: 40, amount: 50, signedAmount: -50, cpaOverride: true, requiresReview: false },
+      { businessId: "business", taxYear: 2026, vehicleId: "vehicle", vehicleElectionEvidence: { id: "confirmed-election", businessId: "business", taxYear: 2026, vehicleId: "vehicle", method: "actual_expenses", status: "active", electedBy: "owner", electedAt: "2026-01-01T00:00:00Z", effectiveStart: "2026-01-01", effectiveEnd: "2026-12-31" }, id: "cpa-gas", date: "2026-06-17", vendor: "CPA Gas", qboAccountName: "Gas", taxCategory: "vehicle_expense", taxTreatment: "vehicle_actual_expense_business_use", classificationStatus: "cpa_confirmed", status: "cpa_confirmed", deductiblePercent: 80, deductibleAmount: 40, amount: 50, signedAmount: -50, cpaOverride: true, requiresReview: false },
     ];
     let correctionChoices;
     await act(async () => root.render(React.createElement(internals.DeductionMonthDetailModal, {
@@ -267,7 +267,17 @@ test("mounted dashboard preserves an id-only Gas question while its authoritativ
     assert.deepEqual([...correctionChoices.transactionIds].sort(), ["pending-gas", "reviewed-gas"]);
     const persisted = internals.buildPersistedWorkspaceMatrix({ matrix: [{ categoryKey: "vehicle_expense", categoryLabel: "Vehicle Expense", transactionCount: 1,
       months: { "2026-06": { transactionCount: 1, reviewedTransactionCount: 1, reviewedDeductibleAmount: 0, deductibleAmount: 0, bookExpenseAmount: 51, standardMileageTransactionCount: 1, reviewedTreatmentLabel: "Reviewed — covered by standard mileage" } } }] }, 2026);
-    const persistedAccount = persisted.accounts[0];
+    const unverifiedAccount = persisted.accounts[0];
+    assert.equal(unverifiedAccount.months["2026-06"].reviewedTransactionCount, 0);
+    assert.equal(unverifiedAccount.months["2026-06"].customerInputTransactionCount, 1);
+    await act(async () => root.render(React.createElement(internals.PersistedMatrixCell, { account: unverifiedAccount, month: { key: "2026-06", longLabel: "June 2026" }, cell: unverifiedAccount.months["2026-06"], onOpen() {} })));
+    assert.doesNotMatch(container.textContent, /Reviewed|covered by standard mileage/);
+    assert.match(container.textContent, /awaiting input/);
+    const scope = { businessId: "business", taxYear: 2026, vehicleId: "vehicle", date: "2026-06-15",
+      vehicleElectionEvidence: { id: "election", businessId: "business", taxYear: 2026, vehicleId: "vehicle", method: "standard_mileage", status: "active", electedBy: "owner", electedAt: "2026-01-01T00:00:00Z", effectiveStart: "2026-01-01", effectiveEnd: "2026-12-31" } };
+    const verified = internals.buildPersistedWorkspaceMatrix({ matrixIncludedCount: 1, matrix: [{ categoryKey: "vehicle_expense", categoryLabel: "Vehicle Expense", transactionCount: 1,
+      months: { "2026-06": { transactionCount: 1, reviewedTransactionCount: 1, reviewedDeductibleAmount: 0, deductibleAmount: 0, bookExpenseAmount: 51, standardMileageTransactionCount: 1, reviewedTreatmentLabel: "Reviewed — covered by standard mileage", vehicleElectionEvidenceVersion: "persisted-election-v1", confirmedMileageMembers: [scope] } } }] }, 2026);
+    const persistedAccount = verified.accounts[0];
     assert.equal(persistedAccount.months["2026-06"].standardMileageTransactionCount, 1);
     await act(async () => root.render(React.createElement(internals.PersistedMatrixCell, { account: persistedAccount, month: { key: "2026-06", longLabel: "June 2026" }, cell: persistedAccount.months["2026-06"], onOpen() {} })));
     assert.match(container.textContent, /Reviewed — covered by standard mileage/);

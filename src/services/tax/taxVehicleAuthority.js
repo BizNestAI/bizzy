@@ -30,6 +30,7 @@ export function vehicleTreatmentProvenanceLabel(row = {}) {
   const status = row.classification_status || row.classificationStatus || row.status;
   const requiresReview = ["needs_review", "needs_tax_review"].includes(status) || ((row.requires_review === true || row.requiresReview === true) && !["user_confirmed", "cpa_confirmed", "bizzi_operator_confirmed"].includes(status));
   if (requiresReview) return (row.source || row.classificationSource || row.raw?.source) === "rule_engine" ? "Suggested — needs confirmation" : "Needs Input";
+  if (vehicleMethodNeedsConfirmation(row)) return "Needs Input";
   const authority = taxDecisionAuthority(row);
   if (authority.type === "cpa") return "Reviewed — CPA decision";
   const treatment = String(vehicleTaxTreatmentType(row));
@@ -38,4 +39,37 @@ export function vehicleTreatmentProvenanceLabel(row = {}) {
   if (treatment.includes("actual_expense")) return `Reviewed — actual expenses at ${Number(row.deductible_percent ?? row.deductiblePercent ?? 0)}%`;
   if (treatment.includes("manual_excluded") || status === "excluded") return "Reviewed — manually excluded";
   return authority.protected ? "Reviewed — manual decision" : "Suggested — needs confirmation";
+}
+
+// Evidence is attached only by server reads of the persisted election/vehicle tables.
+// A historical treatment string or protected/manual flag is never an election.
+export function hasConfirmedVehicleElection(row = {}, method = null) {
+  const evidence = row.vehicleElectionEvidence || row.raw?.vehicleElectionEvidence;
+  const metadata = vehicleRowMetadata(row);
+  const businessId = row.businessId || row.business_id || row.raw?.business_id;
+  const taxYear = row.taxYear || row.tax_year || row.raw?.tax_year;
+  const vehicleId = row.vehicleId || metadata.vehicle_id;
+  const date = row.date || row.transaction_date || row.transactionDate;
+  return Boolean(evidence?.id && evidence.electedBy && evidence.electedAt &&
+    ["active", "finalized"].includes(evidence.status) && !evidence.supersededBy &&
+    businessId && String(evidence.businessId) === String(businessId) &&
+    Number(evidence.taxYear) === Number(taxYear) && vehicleId && String(evidence.vehicleId) === String(vehicleId) &&
+    (!method || evidence.method === method) && date && evidence.effectiveStart <= date && evidence.effectiveEnd >= date);
+}
+export function vehicleMethodNeedsConfirmation(row = {}) {
+  if (!isVehicleExpenseRow(row)) return false;
+  const treatment = vehicleTaxTreatmentType(row);
+  if (/manual_excluded|no_business_use/.test(treatment)) return false;
+  const method = treatment.includes("standard_mileage") ? "standard_mileage" : treatment.includes("actual_expense") ? "actual_expenses" : null;
+  return !hasConfirmedVehicleElection(row, method);
+}
+export function attachVehicleElectionEvidence(rows, { businessId, taxYear, workflows } = {}) {
+  return rows.map(row => {
+    const vehicleId = row.vehicleId || vehicleRowMetadata(row).vehicle_id;
+    const vehicle = (workflows?.vehicles || []).find(v => String(v.id) === String(vehicleId));
+    const election = vehicle?.status === "active" ? vehicle.election : null;
+    return { ...row, businessId, taxYear, vehicleElectionEvidence: election ? {
+      ...election, businessId, taxYear, vehicleId: vehicle.id,
+    } : null };
+  });
 }
