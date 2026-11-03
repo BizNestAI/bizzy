@@ -1,3 +1,5 @@
+import { validationError } from "./taxErrors.js";
+
 export const VEHICLE_MILEAGE_RATES = Object.freeze([
   Object.freeze({ purpose: "business", effectiveFrom: "2026-01-01", effectiveTo: "2026-06-30", amountPerMile: 0.725, centsPerMile: 72.5, sourceVersion: "irs-2026-business-v1" }),
   Object.freeze({ purpose: "business", effectiveFrom: "2026-07-01", effectiveTo: "2026-12-31", amountPerMile: 0.76, centsPerMile: 76, sourceVersion: "irs-2026-business-v2" }),
@@ -50,10 +52,12 @@ function normalizeMileageEntry(entry = {}) {
   return { periodStart, periodEnd, businessMiles };
 }
 
-function mileageError(code, message) { return Object.assign(new Error(message), { code }); }
+function mileageError(code, message) { return validationError(code, message); }
 function roundMoney(value) { return Math.round((Number(value) + Number.EPSILON) * 100) / 100; }
 
 function normalizeDateKey(value) {
   const text = String(value || "").slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const date = new Date(`${text}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : null;
 }

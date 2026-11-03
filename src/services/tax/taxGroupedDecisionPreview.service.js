@@ -7,7 +7,7 @@ import { applyGroupedTaxDeductionDecision, getGroupedTaxDeductionDecisionOperati
 import { buildGroupedDecisionManifest, compareGroupedDecisionManifests, fingerprintGroupedDecisionManifest } from "./taxGroupedDecisionManifest.js";
 import { conflictError, forbiddenBusinessError, notFoundError, validationError } from "./taxErrors.js";
 import { buildTaxQuestionIdentity } from "./taxQuestionSemanticIdentity.js";
-import { vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
+import { calculateVehicleExpenseEstimate, vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
 import { listTaxQuestionBankRowsByIds } from "./taxPostedTransaction.repository.js";
 import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js";
 import { getLatestTaxWorkspaceProjection, reconcileTaxWorkspaceProjection } from "./taxWorkspaceProjection.service.js";
@@ -128,6 +128,7 @@ export async function confirmGroupedDecisionPreview({ supabase, businessId, taxY
 }
 
 async function applyFromPreview({ supabase, businessId, taxYear, preview, input, actor, rows = null, confirmationFingerprint = fingerprintConfirmation(input) }) {
+  if (preview.decision_type === "vehicle_method" && input.answer !== "vehicle_method") throw validationError("vehicle_method_answer_required", "Choose a vehicle method and business-use allocation for this vehicle question.");
   const currentRows = rows || await decisionGroupRows({ supabase, businessId, taxYear, groupId: preview.group_id });
   const actionableIds = new Set(preview.actionable_transaction_ids || []);
   const exceptions = new Set((input.personalExceptionIds || []).map(String));
@@ -140,17 +141,20 @@ async function applyFromPreview({ supabase, businessId, taxYear, preview, input,
   const reason = "Customer confirmed a grouped Tax question from a server preview.";
   const scope = { taxCategory: first.tax_category, qboAccountId: accountId(first), decisionType: preview.decision_type, semanticFingerprint: preview.scope?.semantic_fingerprint };
   const scopeFingerprint = buildGroupedDeductionDecisionFingerprint({ businessId, taxYear, ...scope, transactionIds: targetIds, expectedPopulationTransactionIds: [...actionableIds], personalExceptionIds: [...exceptions], changes, reason });
-  return applyGroupedTaxDeductionDecision({ supabase, businessId, taxYear, actor, input: {
+  const vehicleExpenseEstimate = input.answer === "vehicle_method" ? calculateVehicleExpenseEstimate({ ...input, rows: currentRows.filter((row) => businessIds.includes(String(row.transaction_id))), taxCategory: first.tax_category }) : null;
+  const result = await applyGroupedTaxDeductionDecision({ supabase, businessId, taxYear, actor, input: {
     idempotencyKey: input.idempotencyKey, previewId: preview.id, confirmationFingerprint, scope, scopeFingerprint, targetTransactionIds: targetIds,
     expectedPopulationTransactionIds: [...actionableIds], personalExceptionIds: [...exceptions], changes, reason,
     vehicleElection: input.answer === "vehicle_method" ? {
       vehicleId: input.vehicleId,
+      vehicleScope: input.vehicleScope,
       method: input.vehicleMethod,
       expectedActiveElectionId: input.expectedActiveElectionId,
       businessUsePercent: changes.deductiblePercent,
       eligibility: input.eligibility,
     } : null,
   } });
+  return vehicleExpenseEstimate ? { ...result, vehicleExpenseEstimate } : result;
 }
 
 async function decisionGroupRows({ supabase, businessId, taxYear, groupId }) {
@@ -188,7 +192,7 @@ function taxDecisionTypeForClassification(row) {
 function treatmentForAnswer(row, input) {
   if (input.answer === "vehicle_method") {
     try {
-      return vehicleTreatmentForAnswer({ taxCategory: row.tax_category, ...input });
+      return vehicleTreatmentForAnswer({ ...input, taxCategory: row.tax_category });
     } catch (error) {
       throw validationError(error.code || "invalid_vehicle_decision", error.message);
     }
@@ -235,6 +239,7 @@ function customerPreview(record, rows, summaries = null, workspaceProjection = n
     projectionId: record.scope?.workspace_projection_id || null,
     sourceFingerprint: record.scope?.workspace_source_fingerprint || null,
     totalGroupCount: rows.length, actionableCount: actionable.length, previouslyReviewedCount: rows.length - actionable.length,
+    protectedUnresolvedCount: rows.filter((row) => !isActionable(row) && (row.requires_review || row.classification_status === "needs_review")).length,
     grossAmountCents: signedGrossAmountCents,
     estimatedDeductionCents: actionable.reduce((sum, row) => sum + Math.round(Number(row.book_amount || 0) * 100 * Number(row.deductible_percent || 0) / 100), 0),
     transactions,
@@ -252,7 +257,7 @@ function customerPreview(record, rows, summaries = null, workspaceProjection = n
       actionable: actionable.length,
       protected: rows.length - actionable.length,
     },
-    futureDefaultScope: { accountScoped: true, taxYear: record.tax_year },
+    futureDefaultScope: { accountScoped: record.decision_type !== "vehicle_method", vehicleAttributionRequired: record.decision_type === "vehicle_method", taxYear: record.tax_year },
     matrixReconciliation: matrixReconciliation({ record, actionable, workspaceProjection, diagnostics }),
   };
 }
@@ -331,6 +336,7 @@ function questionTransactionSummary(source, classification) {
     merchantName: source.merchant_name || source.counterparty_name || source.name || "Merchant unavailable",
     counterpartyName: source.counterparty_name || null,
     signedAmount: Number(classification.book_amount),
+    direction: classification.metadata?.direction || null,
     qboAccountId: accountId(classification),
     qboAccountName: classification.source_qbo_account_name || classification.metadata?.source_qbo_account_name || "Account unavailable",
     taxCategory: classification.tax_category,
@@ -359,6 +365,7 @@ function fingerprintConfirmation(input = {}) {
     actualExpenseUse: text(input.actualExpenseUse),
     businessUsePercent: input.businessUsePercent == null ? null : Number(input.businessUsePercent),
     vehicleId: text(input.vehicleId),
+    ...(text(input.vehicleScope) ? { vehicleScope: text(input.vehicleScope) } : {}),
     expectedActiveElectionId: text(input.expectedActiveElectionId),
     eligibility: input.eligibility && typeof input.eligibility === "object" ? input.eligibility : {},
     personalExceptionIds: [...new Set((input.personalExceptionIds || []).map(String))].sort(),

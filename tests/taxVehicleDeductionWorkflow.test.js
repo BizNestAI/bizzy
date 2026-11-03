@@ -109,3 +109,54 @@ test("browser payload contains choices and vehicle identity but no authoritative
   assert.match(apply, /vehicleId, expectedActiveElectionId, eligibility/);
   assert.doesNotMatch(apply, /taxTreatment|deductibilityStatus|deductiblePercent|targetTransactionIds|defaultScope|authority/);
 });
+
+async function mileageFixture() {
+  const supabase = storeClient();
+  const vehicle = await createTaxVehicle({ supabase, businessId: BUSINESS_ID, actor, input: { displayName: "Primary vehicle" } });
+  const electionId = "33333333-3333-4333-8333-333333333333";
+  supabase.store.tax_vehicle_method_elections.push({ id: electionId, business_id: BUSINESS_ID, vehicle_id: vehicle.id, tax_year: 2026, method: "standard_mileage", status: "active" });
+  return { supabase, input: { vehicleId: vehicle.id, expectedElectionId: electionId }, save: (input) => saveVehicleMileage({ supabase, businessId: BUSINESS_ID, taxYear: 2026, actor, input }) };
+}
+
+test("cumulative snapshots replace 1,500 March miles with 3,200 June miles, and identical retries add no history", async () => {
+  const { supabase, input, save } = await mileageFixture();
+  await save({ ...input, entries: [{ periodStart: "2026-01-01", periodEnd: "2026-03-31", businessMiles: 1500 }] });
+  const june = { ...input, entries: [{ periodStart: "2026-01-01", periodEnd: "2026-06-30", businessMiles: 3200 }] };
+  const result = await save(june);
+  const retry = await save(june);
+  assert.deepEqual(retry.entryIds, result.entryIds);
+  assert.equal(supabase.store.tax_vehicle_mileage_inputs.length, 2);
+  assert.deepEqual(supabase.store.tax_vehicle_mileage_inputs.map((row) => row.business_miles), [1500, 3200]);
+  const workflows = await listVehicleDeductionWorkflows({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  assert.equal(workflows.vehicles[0].mileage.businessMiles, 3200);
+  assert.equal(workflows.vehicles[0].mileage.deductionAmount, 2320);
+});
+
+test("year-end finalization requires records, replays idempotently, and prevents later edits", async () => {
+  const { supabase, input, save } = await mileageFixture();
+  const final = { ...input, finalize: true, entries: [{ periodStart: "2026-07-01", periodEnd: "2026-12-31", businessMiles: 100 }] };
+  await assert.rejects(save(final), (error) => error.code === "mileage_finalization_requires_records");
+  final.substantiationStatus = "supported";
+  const result = await save(final);
+  assert.deepEqual((await save(final)).entryIds, result.entryIds);
+  assert.equal(supabase.store.tax_vehicle_method_elections[0].status, "finalized");
+  await assert.rejects(save({ ...final, entries: [{ ...final.entries[0], businessMiles: 101 }] }), (error) => error.code === "vehicle_election_finalized");
+  assert.equal(supabase.store.tax_vehicle_mileage_inputs.length, 1);
+});
+
+test("mileage rejects empty entries, impossible dates, unsupported years, and cross-business vehicles", async () => {
+  const { supabase, input, save } = await mileageFixture();
+  await assert.rejects(save({ ...input, entries: [] }), (error) => error.code === "mileage_entries_required");
+  await assert.rejects(save({ ...input, entries: [{ periodStart: "2026-02-30", periodEnd: "2026-03-31", businessMiles: 1 }] }), (error) => error.code === "invalid_mileage_period");
+  assert.throws(() => calculateVehicleMileagePeriods({ entries: [{ periodStart: "2027-01-01", periodEnd: "2027-03-31", businessMiles: 1 }] }), (error) => error.code === "mileage_period_requires_rate_allocation");
+  await assert.rejects(previewVehicleMileage({ supabase, businessId: "another-business", taxYear: 2026, actor, input: { ...input, entries: [] } }), /vehicle.*not available/i);
+});
+
+test("vehicle scope survives every browser adapter to reach the authoritative command", () => {
+  const hook = readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  const client = readFileSync("src/services/tax/taxApiClient.js", "utf8");
+  const route = readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
+  assert.match(route, /vehicleScope: req.body\?\.vehicleScope/);
+  assert.match(hook, /confirmGroupedTaxDeductionDecision\(\{[^}]*vehicleScope/);
+  assert.match(client, /compact\(\{[^}]*vehicleScope/);
+});

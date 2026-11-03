@@ -1,3 +1,4 @@
+import { isVehicleExpenseRow, vehicleTreatmentProvenanceLabel } from "./taxVehicleAuthority.js";
 import { createHash, randomUUID } from "node:crypto";
 import { getDeductionsOverview, listDeductionTransactions } from "./taxDeductionsApi.service.js";
 import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/deductionsWorkspaceViewModel.js";
@@ -12,7 +13,7 @@ import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js"
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
-export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.4-vehicle-deductions`;
+export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.5-vehicle-authority`;
 export const TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION = "signed-treatment-amounts-v1";
 const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;
@@ -689,7 +690,14 @@ function aggregateMonth(entries) {
     bookExpenseAmount: 0, needsInputGrossExpense: 0,
   });
   const deductibleAmount = round(treatment.estimatedDeductibleAmount + treatment.reviewedDeductibleAmount);
+  const reviewedRows = entries.filter((entry) => treatmentBucket(entry) === "reviewed").map((entry) => entry.row);
+  const labels = [...new Set(reviewedRows.filter(isVehicleExpenseRow).map(vehicleTreatmentProvenanceLabel))];
+  const reviewedTreatmentLabel = reviewedRows.length && reviewedRows.every(isVehicleExpenseRow)
+    ? labels.length === 1 ? labels[0] : "Reviewed — mixed vehicle treatments"
+    : null;
+  const standardMileageTransactionCount = reviewedRows.filter((row) => vehicleTreatmentProvenanceLabel(row) === "Reviewed — covered by standard mileage").length;
   return {
+    reviewedTreatmentLabel, standardMileageTransactionCount,
     transactionCount: entries.length,
     identityManifest: sortedUnique(entries.map((entry) => entry.id)),
     bookExpenseAmount: round(treatment.bookExpenseAmount),

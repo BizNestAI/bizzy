@@ -1,0 +1,43 @@
+{
+  "baseline_focused": {
+    "passed": 82,
+    "failed": 1,
+    "failure": "Pre-existing removal of visible Stable key text conflicts with old source assertion; assertion now checks retained React identity."
+  },
+  "focused_final": {
+    "passed": 186,
+    "failed": 0
+  },
+  "postgres": {
+    "passed": 1,
+    "failed": 0,
+    "scope": "Real migrations applied twice and real grouped preview/apply/mileage functions on synthetic schema, service role, disposable database."
+  },
+  "broad_baseline_HEAD": {
+    "passed": 731,
+    "failed": 11
+  },
+  "broad_changed": {
+    "passed": 737,
+    "failed": 11,
+    "skipped": 1
+  },
+  "identical_preexisting_failures": [
+    "tests/taxClassificationLifecycle.test.js",
+    "dashboard view model exposes a date-only next deadline KPI model",
+    "TaxDashboard layout keeps responsive stacking and loading skeletons",
+    "initial workspace projection resolves without detail hydration while refresh remains atomic",
+    "headline transaction count comes from the validated overview and never from an unhydrated matrix",
+    "hidden estimator errors do not replace the Deductions workspace for ordinary customers",
+    "Tax Dashboard deductions preview renders a persisted category matrix with optional GL drilldown",
+    "tests/taxRecalculationEvents.test.js",
+    "diagnostics route is read-only and central tax router mounts it behind authenticated router",
+    "tests/taxSchedulers.test.js",
+    "workpaper rows recursively expand and show full traceability detail on hover"
+  ],
+  "excluded_test": "taxBrowserReloadFullProvider.test.js completed its assertion but kept the broad process alive; terminated only that run and its child processes. Focused runs and broad run excluding it exited naturally.",
+  "lint": "All changed JS/JSX and new PostgreSQL test pass",
+  "build": "Production build passes; large-chunk warning",
+  "migration": "Additive migration successfully reapplied; no production migration or data write",
+  "diff_check": "passes"
+}

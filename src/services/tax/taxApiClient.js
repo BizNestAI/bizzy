@@ -621,7 +621,7 @@ function validateGroupedDecisionPreview(preview, { businessId, year, groupId, re
   });
 }
 
-export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds = [], vehicleId, expectedActiveElectionId, eligibility, signal } = {}) {
+export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds = [], vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal } = {}) {
   requireBusinessId(businessId);
   requireValue(previewId, "previewId");
   const commandRequest = withBoundedCommandSignal(signal, { timeoutMs: 20_000 });
@@ -629,7 +629,7 @@ export async function confirmGroupedTaxDeductionDecision({ businessId, year, pre
     const result = unwrap(await request(`/api/tax/deduction-decisions/apply?${query({ businessId, year })}`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: compact({ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility }),
+      body: compact({ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope }),
       signal: commandRequest.signal,
     }));
     clearBusinessCache(businessId);
@@ -670,17 +670,17 @@ export async function createTaxVehicle({ businessId, year, displayName, ownershi
   }));
 }
 
-export async function previewTaxVehicleMileage({ businessId, year, vehicleId, entries, signal } = {}) {
+export async function previewTaxVehicleMileage({ businessId, year, vehicleId, entries, substantiationStatus, finalize, signal } = {}) {
   requireBusinessId(businessId);
   return unwrap(await request(`/api/tax/vehicle-mileage/preview?${query({ businessId, year })}`, {
-    method: "POST", body: { vehicleId, entries }, signal,
+    method: "POST", body: { vehicleId, entries, substantiationStatus, finalize }, signal,
   }));
 }
 
-export async function saveTaxVehicleMileage({ businessId, year, vehicleId, expectedElectionId, entries, mileageBasis = "records", substantiationStatus = "unsubstantiated", signal } = {}) {
+export async function saveTaxVehicleMileage({ businessId, year, vehicleId, expectedElectionId, entries, mileageBasis = "records", substantiationStatus = "unsubstantiated", finalize = false, signal } = {}) {
   requireBusinessId(businessId);
   const result = unwrap(await request(`/api/tax/vehicle-mileage/apply?${query({ businessId, year })}`, {
-    method: "POST", body: { vehicleId, expectedElectionId, entries, mileageBasis, substantiationStatus }, signal,
+    method: "POST", body: { vehicleId, expectedElectionId, entries, mileageBasis, substantiationStatus, finalize }, signal,
   }));
   clearBusinessCache(businessId);
   return result;
@@ -1393,3 +1393,20 @@ export default {
   getLegacyTaxLiability,
   clearTaxApiCache,
 };
+
+export async function previewTaxVehicleCommand({ businessId, year, signal, ...choices } = {}) {
+  requireBusinessId(businessId);
+  const preview = withBoundedCommandSignal(signal, { timeoutMs: 12_000 });
+  try {
+    return unwrap(await withTaxPreviewDeadline(() => request(`/api/tax/vehicle-commands/preview?${query({ businessId, year })}`, { method: "POST", body: choices, signal: preview.signal }), { signal, timeoutMs: 12_000 }));
+  } finally { preview.cleanup(); }
+}
+export async function applyTaxVehicleCommand({ businessId, year, previewId, idempotencyKey, signal } = {}) {
+  requireBusinessId(businessId);
+  const command = withBoundedCommandSignal(signal, { timeoutMs: 20_000 });
+  try {
+    const result = unwrap(await request(`/api/tax/vehicle-commands/apply?${query({ businessId, year })}`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: { previewId }, signal: command.signal }));
+    clearBusinessCache(businessId);
+    return result;
+  } finally { command.cleanup(); }
+}

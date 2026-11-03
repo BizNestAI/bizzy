@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { calculateVehicleMileagePeriods } from "./vehicleMileageRates.js";
 import { conflictError, forbiddenBusinessError, notFoundError, validationError } from "./taxErrors.js";
 
@@ -47,12 +47,19 @@ export async function previewVehicleMileage({ supabase, businessId, taxYear, act
   requireCustomer(actor);
   const workflow = await requireStandardMileageElection({ supabase, businessId, taxYear, vehicleId: input.vehicleId });
   const rates = workflow.rates.map((rate) => ({ effectiveFrom: rate.effective_start, effectiveTo: rate.effective_end, amountPerMile: Number(rate.amount_per_mile), sourceVersion: rate.source_version }));
+  if (!Array.isArray(input.entries) || !input.entries.length) throw validationError("mileage_entries_required", "Enter at least one mileage period.");
   const result = calculateVehicleMileagePeriods({ entries: input.entries, rates });
+  if (result.periods.some((period) => period.periodStart < `${Number(taxYear)}-01-01` || period.periodEnd > `${Number(taxYear)}-12-31`)) throw validationError("mileage_outside_tax_year", "Mileage periods must be within the selected tax year.");
+  const mileageBasis = text(input.mileageBasis) || "records";
+  const substantiation = text(input.substantiationStatus) || "unsubstantiated";
+  if (!["records", "estimate"].includes(mileageBasis) || !["unsubstantiated", "supported", "verified"].includes(substantiation)) throw validationError("invalid_mileage_support", "Choose valid mileage records and support.");
+  if (input.finalize === true && (mileageBasis !== "records" || !["supported", "verified"].includes(substantiation))) throw validationError("mileage_finalization_requires_records", "Confirm supported mileage records before finalizing.");
   return {
     contractVersion: VEHICLE_DEDUCTION_CONTRACT_VERSION,
+    finalized: input.finalize === true,
     vehicleId: workflow.vehicle.id,
     electionId: workflow.election.id,
-    periods: result.periods.map(({ periodStart, periodEnd, businessMiles, amount, amountPerMile, rateSourceVersion }) => ({ periodStart, periodEnd, businessMiles, amount, amountPerMile, rateSourceVersion })),
+    periods: [...result.periods].sort(byPeriod).map(({ periodStart, periodEnd, businessMiles, amount, amountPerMile, rateSourceVersion }) => ({ periodStart, periodEnd, businessMiles, amount, amountPerMile, rateSourceVersion })),
     totalBusinessMiles: result.totalBusinessMiles,
     totalDeduction: result.totalDeduction,
     replacesExistingActiveEntries: workflow.entries.length,
@@ -65,6 +72,7 @@ export async function saveVehicleMileage({ supabase, businessId, taxYear, actor 
   const entries = preview.periods.map((period) => ({
     period_start: period.periodStart, period_end: period.periodEnd, business_miles: period.businessMiles,
     mileage_basis: text(input.mileageBasis) || "records", substantiation_status: text(input.substantiationStatus) || "unsubstantiated",
+    finalize: input.finalize === true,
   }));
   if (supabase.store) return saveMileageInStore({ supabase, businessId, taxYear: Number(taxYear), actor, preview, entries });
   const { data, error } = await supabase.rpc("replace_tax_vehicle_mileage_entries", {
@@ -72,7 +80,7 @@ export async function saveVehicleMileage({ supabase, businessId, taxYear, actor 
     p_actor_user_id: actor.userId, p_expected_election_id: preview.electionId, p_entries: entries,
   });
   if (error) throw mapVehicleError(error);
-  return { ...preview, saved: true, entryIds: data?.entry_ids || [] };
+  return { ...preview, totalDeduction: Number(data?.total_deduction ?? preview.totalDeduction), saved: true, entryIds: data?.entry_ids || [] };
 }
 
 async function requireStandardMileageElection({ supabase, businessId, taxYear, vehicleId }) {
@@ -106,10 +114,16 @@ function publicWorkflow(vehicle, election, allEntries, rates) {
 
 function saveMileageInStore({ supabase, businessId, taxYear, actor, preview, entries }) {
   supabase.store.tax_vehicle_mileage_inputs ||= [];
+  const snapshotFingerprint = createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+  const current = supabase.store.tax_vehicle_mileage_inputs.filter((row) => row.business_id === businessId && String(row.vehicle_id) === String(preview.vehicleId) && Number(row.tax_year) === taxYear && ["active", "finalized"].includes(row.status) && !row.superseded_by);
+  if (current.length && current.every((row) => row.metadata?.snapshot_fingerprint === snapshotFingerprint)) return { ...preview, saved: true, entryIds: current.map((row) => row.id) };
+  const election = supabase.store.tax_vehicle_method_elections.find((row) => row.id === preview.electionId);
+  if (election?.status === "finalized") throw conflictError("vehicle_election_finalized", "Finalized mileage requires a controlled amendment.");
   for (const row of supabase.store.tax_vehicle_mileage_inputs) if (row.business_id === businessId && String(row.vehicle_id) === String(preview.vehicleId) && Number(row.tax_year) === taxYear && ["active", "inactive"].includes(row.status || "active") && !row.superseded_by) row.status = "superseded";
   const now = new Date().toISOString();
-  const created = entries.map((entry, index) => ({ id: randomUUID(), business_id: businessId, tax_year: taxYear, vehicle_key: preview.vehicleId, vehicle_id: preview.vehicleId, ...entry, source: "user", confirmed_by: actor.userId, confirmed_at: now, status: "active", rate_snapshot: [preview.periods[index]], deduction_amount: preview.periods[index].amount, metadata: {}, created_at: now, updated_at: now }));
+  const created = entries.map((entry, index) => ({ id: randomUUID(), business_id: businessId, tax_year: taxYear, vehicle_key: preview.vehicleId, vehicle_id: preview.vehicleId, ...entry, source: "user", confirmed_by: actor.userId, confirmed_at: now, status: preview.finalized ? "finalized" : "active", finalized_at: preview.finalized ? now : null, rate_snapshot: [preview.periods[index]], deduction_amount: preview.periods[index].amount, metadata: { snapshot_fingerprint: snapshotFingerprint }, created_at: now, updated_at: now }));
   supabase.store.tax_vehicle_mileage_inputs.push(...created);
+  if (preview.finalized) { election.status = "finalized"; election.finalized_at = now; }
   return { ...preview, saved: true, entryIds: created.map((row) => row.id) };
 }
 
@@ -134,4 +148,4 @@ function optionalInteger(value, min, max) { if (value == null || value === "") r
 function numberOrNull(value) { return value == null ? null : Number(value); }
 function text(value) { return value == null ? "" : String(value).trim(); }
 function roundMoney(value) { return Math.round((Number(value) + Number.EPSILON) * 100) / 100; }
-function mapVehicleError(error) { const value = `${error?.code || ""} ${error?.message || ""}`.toLowerCase(); if (value.includes("overlap")) return conflictError("duplicate_or_overlapping_mileage", "Mileage periods overlap an existing entry."); if (value.includes("vehicle_election_changed")) return conflictError("vehicle_election_changed", "The vehicle method changed. Refresh before saving mileage."); return error; }
+function mapVehicleError(error) { const value = `${error?.code || ""} ${error?.message || ""}`.toLowerCase(); if (value.includes("vehicle_election_finalized")) return conflictError("vehicle_election_finalized", "Finalized mileage requires a controlled amendment."); if (value.includes("mileage_finalization_requires_records")) return validationError("mileage_finalization_requires_records", "Confirm supported mileage records before finalizing."); if (value.includes("overlap")) return conflictError("duplicate_or_overlapping_mileage", "Mileage periods overlap an existing entry."); if (value.includes("vehicle_election_changed")) return conflictError("vehicle_election_changed", "The vehicle method changed. Refresh before saving mileage."); return error; }

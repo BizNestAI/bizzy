@@ -198,6 +198,7 @@ router.post("/deduction-decisions/apply", async (req, res) => {
         actualExpenseUse: req.body?.actualExpenseUse,
         businessUsePercent: req.body?.businessUsePercent,
         vehicleId: req.body?.vehicleId,
+        vehicleScope: req.body?.vehicleScope,
         expectedActiveElectionId: req.body?.expectedActiveElectionId,
         eligibility: req.body?.eligibility,
         personalExceptionIds: req.body?.personalExceptionIds,

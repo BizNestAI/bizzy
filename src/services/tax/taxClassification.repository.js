@@ -104,14 +104,15 @@ function abortedSnapshotError(reason) {
   return error;
 }
 
-export async function upsertTaxClassification({ supabase, classification, force = false } = {}) {
+export async function upsertTaxClassification({ supabase, classification } = {}) {
+  if (["user_confirmed", "cpa_confirmed", "bizzi_operator_confirmed"].includes(classification.classificationStatus) || classification.userOverride || classification.cpaOverride) throw validationError("manual_provenance_forbidden", "Classification automation cannot create manual authority.");
   const existing = await getTaxClassification({
     supabase,
     businessId: classification.businessId,
     transactionId: classification.transactionId,
     taxYear: classification.taxYear,
   });
-  if (existing && isConfirmed(existing) && !force) {
+  if (existing && (isConfirmed(existing) || existing.user_override || existing.cpa_override)) {
     return { row: existing, skipped: true, reason: "confirmed_classification_preserved" };
   }
 

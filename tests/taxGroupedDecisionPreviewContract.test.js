@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
@@ -247,7 +248,7 @@ test("Gas preview reconciles its 76 exact identities and cents to the 96-member 
 test("vehicle modal exposes the authoritative population before method selection", () => {
   const dashboard = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /action\.kind === "vehicle_method" \|\| \(businessUseAnswer/);
-  assert.match(dashboard, /Stable key:/);
+  assert.match(dashboard, /key=\{id \|\|/, "stable transaction identity is retained without displaying internal IDs");
   assert.match(dashboard, /vehicle-matrix-reconciliation/);
   assert.match(dashboard, /\$0 separate expense deduction/);
   assert.match(dashboard, /Included · Vehicle method pending/);
@@ -382,7 +383,7 @@ test("customer ownership and expiry are rejected before classifications or write
 test("browser confirmation cannot submit authoritative IDs, counts, amounts, authority, or treatment", () => {
   const client = readFileSync("src/services/tax/taxApiClient.js", "utf8");
   const route = readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
-  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility \}\)/);
+  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope \}\)/);
   assert.doesNotMatch(client, /confirmGroupedTaxDeductionDecision[\s\S]{0,500}(targetTransactionIds|scopeFingerprint|grossAmountCents)/);
   assert.match(route, /canonicalMutationBusinessId/);
   assert.match(route, /tenantContext\?\.mode === "admin_view"/);
@@ -410,4 +411,12 @@ test("preview route cannot enter a decision approval claim path", () => {
   const service = readFileSync("src/services/tax/taxGroupedDecisionPreview.service.js", "utf8");
   const create = service.slice(service.indexOf("export async function createGroupedDecisionPreview"), service.indexOf("export async function optionalVehicleContext"));
   assert.doesNotMatch(create, /confirmGroupedDecisionPreview|applyGroupedTaxDeductionDecision|runMerchantApprovalQueueOnce/);
+});
+
+test("new vehicle scope choices preserve confirmation fingerprints for legacy retry payloads", () => {
+  const input = { answer: "vehicle_method", vehicleMethod: "standard_mileage", vehicleId: "existing-vehicle", eligibility: { ownedOrLeased: true } };
+  const oldPayload = JSON.stringify({ answer: input.answer, vehicleMethod: input.vehicleMethod, actualExpenseUse: "", businessUsePercent: null,
+    vehicleId: input.vehicleId, expectedActiveElectionId: "", eligibility: input.eligibility, personalExceptionIds: [] });
+  assert.equal(previewTestables.fingerprintConfirmation(input), `gdc-v1-${createHash("sha256").update(oldPayload).digest("hex")}`);
+  assert.notEqual(previewTestables.fingerprintConfirmation({ ...input, vehicleScope: "one" }), previewTestables.fingerprintConfirmation(input));
 });

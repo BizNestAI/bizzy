@@ -1,3 +1,4 @@
+import { VEHICLE_WORKFLOW_AUTHORITY } from "./taxVehicleAuthority.js";
 // Atomic application of one customer deduction decision to one explicit GL
 // account/category population. This deliberately does not invoke the generic
 // classification runner: a saved customer decision must not recast unrelated
@@ -80,6 +81,7 @@ export async function applyGroupedTaxDeductionDecision({
     currentRows: selectedRows,
     input: {
       ...command.changes,
+      [VEHICLE_WORKFLOW_AUTHORITY]: Boolean(command.vehicleElection),
       reason: command.reason,
       protectConfirmedAuthority: true,
       allowUserConfirmedEdit: false,
@@ -203,12 +205,13 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
   const confirmationFingerprint = text(input.confirmationFingerprint) || null;
   const vehicleElection = input.vehicleElection && typeof input.vehicleElection === "object" ? {
     vehicle_id: text(input.vehicleElection.vehicleId),
+    vehicle_scope: text(input.vehicleElection.vehicleScope),
     method: text(input.vehicleElection.method),
     expected_active_election_id: text(input.vehicleElection.expectedActiveElectionId),
     business_use_percent: input.vehicleElection.businessUsePercent == null ? null : Number(input.vehicleElection.businessUsePercent),
     eligibility: input.vehicleElection.eligibility && typeof input.vehicleElection.eligibility === "object" ? input.vehicleElection.eligibility : {},
   } : null;
-  if (vehicleElection && (!vehicleElection.vehicle_id || !["standard_mileage", "actual_expense", "actual_expenses"].includes(vehicleElection.method))) {
+  if (vehicleElection && ((!vehicleElection.vehicle_id && vehicleElection.vehicle_scope !== "one") || !["standard_mileage", "actual_expense", "actual_expenses"].includes(vehicleElection.method))) {
     throw validationError("invalid_vehicle_election", "A valid vehicle and vehicle method are required.");
   }
   if (vehicleElection?.method === "standard_mileage" && !standardMileageEligibilityConfirmed(vehicleElection.eligibility)) {
@@ -233,7 +236,7 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
 }
 
 function standardMileageEligibilityConfirmed(value = {}) {
-  return value?.ownedOrLeased === true && value?.firstYearAvailable === true && value?.fleetUnderFive === true;
+  return value?.ownedOrLeased === true && value?.firstYearAvailable === true && value?.fleetUnderFive === true && value?.noDisallowedDepreciation === true;
 }
 
 function isEligibleScopedDecisionRow(row = {}, scope = {}, businessId, taxYear) {
@@ -296,6 +299,10 @@ function mapGroupedDecisionRpcError(error) {
   if (textValue.includes("grouped_decision_population_changed")) {
     return conflictError("scope_membership_changed", "The decision population changed before it could be saved. Refresh before trying again.", { action: "refresh_tax_deductions" });
   }
+  if (textValue.includes("vehicle_method_eligibility_unknown_or_leased")) return validationError("vehicle_method_eligibility_unknown_or_leased", "Confirm ownership and method history in Change treatment for this vehicle/year. A leased vehicle cannot switch methods here.");
+  if (textValue.includes("vehicle_method_change_requires_year_recalculation")) return conflictError("vehicle_method_change_requires_year_recalculation", "Changing the method or business-use share requires a reviewed recalculation of the affected year. Your existing decision was preserved.");
+  if (textValue.includes("vehicle_election_changed") || textValue.includes("vehicle_election_finalized")) return conflictError("vehicle_election_changed", "The vehicle election changed or is finalized. Refresh before continuing.");
+  if (textValue.includes("vehicle_attribution_required") || textValue.includes("vehicle_allocation_required")) return validationError("vehicle_attribution_required", "Identify one vehicle for all these expenses before confirming.");
   for (const code of ["scope_membership_changed", "scope_amount_changed", "scope_account_changed", "scope_treatment_changed", "customer_facts_changed", "protected_authority_changed", "rule_version_changed", "preview_expired", "preview_already_consumed", "idempotency_payload_conflict", "grouped_decision_outcome_unknown"]) {
     if (textValue.includes(code)) return conflictError(code, "The decision preview changed before it could be saved. Refresh before trying again.", { action: "refresh_tax_deductions" });
   }

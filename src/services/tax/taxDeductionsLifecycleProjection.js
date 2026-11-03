@@ -74,6 +74,8 @@ export function taxClassificationBucketForDeductions(row = {}) {
   if (status === "failed" || status === "classification_failed") return "failed";
   if (status === "needs_tax_review" || category === "tax_review_holding" || row.raw?.metadata?.is_holding === true) return "needs_tax_review";
   if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
+  if (status === "needs_review" || status === "review_required" || ((row.requiresReview === true || row.requires_review === true) && !["user_confirmed", "cpa_confirmed", "accountant_reviewed", "bizzi_operator_confirmed"].includes(status))) return "needs_review";
+  if (status === "cpa_confirmed" || status === "accountant_reviewed" || row.cpaOverride === true || row.cpa_override === true) return "accountant_confirmed";
   if (status === "bizzi_operator_confirmed") return "bizzi_operator_confirmed";
   if (status === "user_confirmed" || row.userOverride === true || row.user_override === true) return "user_confirmed";
   if (status === "cpa_confirmed" || status === "accountant_reviewed" || row.cpaOverride === true || row.cpa_override === true) return "accountant_confirmed";
@@ -304,6 +306,7 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
       rows: [],
       pendingRows: [],
       reviewedRows: [],
+      protectedPendingRows: [],
       months: new Set(),
       grossAmount: 0,
       estimatedDeductibleAmount: 0,
@@ -314,7 +317,9 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
     };
     existing.ruleVersions.add(String(firstValue(row.ruleVersion, row.raw?.rule_version, row.raw?.classification?.rule_version, row.matchedRuleCode, row.ruleCode, row.taxTreatment, "unversioned")));
     existing.rows.push(row);
-    if (entry.outcome === TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED) {
+    const protectedPending = entry.outcome === TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED && (row.userOverride === true || row.user_override === true || row.cpaOverride === true || row.cpa_override === true);
+    if (protectedPending) existing.protectedPendingRows.push(row);
+    if (entry.outcome === TAX_DEDUCTIONS_LIFECYCLE_OUTCOMES.CUSTOMER_INPUT_REQUIRED && !protectedPending) {
       existing.pendingRows.push(row);
       const amountCents = moneyToCents(row.amount ?? row.absoluteAmount ?? row.signedAmount);
       existing.actionableGrossAmountCents += Math.abs(amountCents);
@@ -338,6 +343,7 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
       const alreadyResolvedTransactionIds = uniqueStableTaxTransactionIds(group.reviewedRows);
       const categoryTransactionIds = uniqueStableTaxTransactionIds(group.rows);
       const actionableTransactionCount = actionableTransactionIds.length;
+      const protectedUnresolvedCount = uniqueStableTaxTransactionIds(group.protectedPendingRows).length;
       const alreadyResolvedCount = alreadyResolvedTransactionIds.length;
       const categoryTransactionCount = categoryTransactionIds.length;
       const explicitlyExcludedCount = 0;
@@ -346,6 +352,7 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
         ruleVersions: [...group.ruleVersions].sort(),
         pendingCount: actionableTransactionCount,
         reviewedCount: alreadyResolvedCount,
+        protectedUnresolvedCount,
         transactionCount: categoryTransactionCount,
         categoryTransactionCount,
         actionableTransactionCount,
@@ -362,14 +369,15 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
           actionableTransactionCount,
           alreadyResolvedCount,
           explicitlyExcludedCount,
-          isConserved: categoryTransactionCount === actionableTransactionCount + alreadyResolvedCount + explicitlyExcludedCount,
+          protectedUnresolvedCount,
+          isConserved: categoryTransactionCount === actionableTransactionCount + alreadyResolvedCount + explicitlyExcludedCount + protectedUnresolvedCount,
         },
         months: [...group.months].sort(),
         grossAmount: roundMoney(group.grossAmount),
         estimatedDeductibleAmount: roundMoney(group.estimatedDeductibleAmount),
         actionableGrossAmountCents: group.actionableGrossAmountCents,
         actionableEstimatedDeductibleAmountCents: group.actionableEstimatedDeductibleAmountCents,
-        state: actionableTransactionCount > 0 ? "needs_input" : "reviewed",
+        state: actionableTransactionCount + protectedUnresolvedCount > 0 ? "needs_input" : "reviewed",
       };
     })
     .sort((a, b) => b.pendingCount - a.pendingCount || b.transactionCount - a.transactionCount || String(a.qboAccountName).localeCompare(String(b.qboAccountName)));

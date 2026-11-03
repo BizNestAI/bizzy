@@ -1,8 +1,9 @@
+import { isVehicleExpenseRow } from "./taxVehicleAuthority.js";
 // Explicit, company-scoped deduction decisions. These are intentionally kept
 // separate from inferred classification statuses: a card is only shown when a
 // person has saved a rule that the classifier can use for later transactions.
 import { DEDUCTIBILITY_STATUSES, TAX_JURISDICTIONS, normalizeTaxYear } from "./taxDomain.js";
-import { validationError, notFoundError } from "./taxErrors.js";
+import { conflictError, validationError, notFoundError } from "./taxErrors.js";
 import { getTaxClassification } from "./taxClassification.repository.js";
 import { getPostedTransactionForTax } from "./taxPostedTransaction.repository.js";
 import { normalizeQboGlAccountKey } from "./taxQboGlNormalizer.js";
@@ -40,6 +41,7 @@ export async function saveTaxDeductionDecisionRule({ supabase, businessId, taxYe
     getTaxClassification({ supabase, businessId, taxYear: year, transactionId }),
   ]);
   if (!classification) throw notFoundError("classification_not_found", "Tax classification was not found.", { transactionId, taxYear: year });
+  if (isVehicleExpenseRow(classification) || isVehicleExpenseRow(transaction)) throw conflictError("vehicle_change_requires_preview", "Use Change treatment for the vehicle/year to preview and recalculate this change.");
   const accountName = String(transaction?.qboAccountName || transaction?.bookkeepingCategory || classification?.source_qbo_account_name || classification?.metadata?.source_qbo_account_name || "").trim();
   if (!accountName) {
     throw validationError("unsafe_deduction_decision_rule", "A company deduction rule needs a QuickBooks GL account.", { transactionId });
@@ -67,6 +69,7 @@ export async function updateTaxDeductionDecisionRule({ supabase, businessId, tax
   if (error) throw error;
   const current = (data || []).find(isExplicitTaxDeductionDecisionRule);
   if (!current) throw notFoundError("deduction_decision_rule_not_found", "This deduction rule is no longer available for this company.", { ruleId });
+  if (isVehicleExpenseRow(current)) throw conflictError("vehicle_change_requires_preview", "Use Change treatment for the vehicle/year to preview and recalculate this change.");
   const accountName = String(current.bookkeeping_category || current.match_conditions?.qbo_account_name_keys?.[0] || "").trim();
   const rule = buildTaxDeductionDecisionRule({ businessId, taxYear: year, accountName, classification: current, input, actor, current });
   const saved = await updateDecisionRuleRow({ supabase, existingId: current.id, businessId, taxYear: year, rule });
@@ -137,7 +140,7 @@ export function toTaxDeductionDecisionRule(row = {}) {
     taxTreatment: treatment,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
-    autoApplies: true,
+    autoApplies: !treatment.startsWith("vehicle_"),
   };
 }
 

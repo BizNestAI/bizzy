@@ -1,0 +1,2131 @@
+{
+  "runItems": [
+    {
+      "run_id": "be98b36f-91e1-4d99-aa0f-04869ce063f2",
+      "stable_transaction_id": "04f17007-e33c-458e-ba52-351691801604",
+      "lifecycle_state": "completed",
+      "last_attempt_at": "2026-11-02T02:01:08.803+00:00",
+      "completed_at": "2026-11-02T02:01:32.383+00:00",
+      "updated_at": "2026-11-02T02:01:32.448351+00:00"
+    },
+    {
+      "run_id": "be98b36f-91e1-4d99-aa0f-04869ce063f2",
+      "stable_transaction_id": "21d5b965-0701-410d-bac4-0b2064235117",
+      "lifecycle_state": "completed",
+      "last_attempt_at": "2026-11-02T02:01:08.803+00:00",
+      "completed_at": "2026-11-02T02:01:32.383+00:00",
+      "updated_at": "2026-11-02T02:01:32.448351+00:00"
+    },
+    {
+      "run_id": "be98b36f-91e1-4d99-aa0f-04869ce063f2",
+      "stable_transaction_id": "6ce25de9-1700-4b38-8fb2-a1a514ecb0d9",
+      "lifecycle_state": "completed",
+      "last_attempt_at": "2026-11-02T02:01:08.803+00:00",
+      "completed_at": "2026-11-02T02:01:32.383+00:00",
+      "updated_at": "2026-11-02T02:01:32.448351+00:00"
+    },
+    {
+      "run_id": "be98b36f-91e1-4d99-aa0f-04869ce063f2",
+      "stable_transaction_id": "72fb0233-f82a-4506-bcc0-e21f98c59fff",
+      "lifecycle_state": "completed",
+      "last_attempt_at": "2026-11-02T02:01:08.803+00:00",
+      "completed_at": "2026-11-02T02:01:32.383+00:00",
+      "updated_at": "2026-11-02T02:01:32.448351+00:00"
+    },
+    {
+      "run_id": "be98b36f-91e1-4d99-aa0f-04869ce063f2",
+      "stable_transaction_id": "94e332f2-8821-4d55-8b02-08c19aebd6ec",
+      "lifecycle_state": "completed",
+      "last_attempt_at": "2026-11-02T02:01:08.803+00:00",
+      "completed_at": "2026-11-02T02:01:32.383+00:00",
+      "updated_at": "2026-11-02T02:01:32.448351+00:00"
+    },
+    {
+      "run_id": "be98b36f-91e1-4d99-aa0f-04869ce063f2",
+      "stable_transaction_id": "ac898a63-f822-4335-9b5b-2a39a39ccd20",
+      "lifecycle_state": "completed",
+      "last_attempt_at": "2026-11-02T02:01:08.803+00:00",
+      "completed_at": "2026-11-02T02:01:32.383+00:00",
+      "updated_at": "2026-11-02T02:01:32.448351+00:00"
+    }
+  ],
+  "runs": [
+    {
+      "id": "be98b36f-91e1-4d99-aa0f-04869ce063f2",
+      "triggerSource": "recovery_scan",
+      "createdAt": "2026-11-02T02:01:08.595502+00:00",
+      "startedAt": "2026-11-02T02:01:08.803+00:00",
+      "completedAt": "2026-11-02T02:01:08.803+00:00",
+      "actorUserId": null
+    }
+  ],
+  "runAuditErrors": [],
+  "auditedAt": "2026-11-03T20:01:29.255Z",
+  "businessId": "cffc2183-e77c-4148-a206-d5192e090925",
+  "taxYear": 2026,
+  "gasCount": 96,
+  "gasQuestionCount": 76,
+  "actionableGasCount": 70,
+  "protectedRows": [
+    {
+      "transactionId": "b354c3a2-0b73-44db-9056-7205bad0f125",
+      "createdAt": "2026-09-07T16:14:53.718+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:34:48.823833+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "0256d748-b907-459d-b80c-252fa0e2a381",
+      "createdAt": "2026-09-07T16:15:08.552+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:34:53.405673+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "58e9eedb-7132-4b25-8213-0329689fab0d",
+      "createdAt": "2026-09-07T16:16:13.436+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:04.193238+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "602e5fe2-8f8e-4519-9cee-5796aa72069b",
+      "createdAt": "2026-09-07T16:16:18.85+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:05.974182+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "ac898a63-f822-4335-9b5b-2a39a39ccd20",
+      "createdAt": "2026-09-07T16:17:10.947+00:00",
+      "updatedAt": "2026-11-02T02:01:30.832108+00:00",
+      "classificationStatus": "needs_review",
+      "requiresReview": true,
+      "source": "rule_engine",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_expense",
+        "business_use_required": true
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:27.174839+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 3 deduction review items from the detail modal (business_purpose, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:01:02.010965+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 35.64,
+            "deductiblePercent": 100,
+            "treatment": {
+              "type": "travel_transportation_business_purpose_confirmed"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "3ab732ad-5c34-4c91-91c8-3989f1808dec",
+      "createdAt": "2026-09-07T16:14:57.279+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:34:49.099106+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "43af7b82-85d0-4c77-be2c-60c650b359dd",
+      "createdAt": "2026-09-07T16:15:00.923+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:34:51.430299+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "bc8035c5-c01c-40f8-8a8d-deb837d934c8",
+      "createdAt": "2026-09-07T16:15:12.285+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:34:55.675997+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "6ce25de9-1700-4b38-8fb2-a1a514ecb0d9",
+      "createdAt": "2026-09-07T16:16:31.776+00:00",
+      "updatedAt": "2026-11-02T02:01:28.516007+00:00",
+      "classificationStatus": "needs_review",
+      "requiresReview": true,
+      "source": "rule_engine",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_expense",
+        "business_use_required": true
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:11.990545+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 3 deduction review items from the detail modal (business_purpose, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:01:28.956131+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 6.62,
+            "deductiblePercent": 100,
+            "treatment": {
+              "type": "travel_transportation_business_purpose_confirmed"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "a8951e75-33ea-441e-84f8-cdc1cca17a60",
+      "createdAt": "2026-09-07T16:16:37.55+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:13.391317+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "04f17007-e33c-458e-ba52-351691801604",
+      "createdAt": "2026-09-07T16:16:45.497+00:00",
+      "updatedAt": "2026-11-02T02:01:29.248786+00:00",
+      "classificationStatus": "needs_review",
+      "requiresReview": true,
+      "source": "rule_engine",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_expense",
+        "business_use_required": true
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:16.828689+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 3 deduction review items from the detail modal (business_purpose, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:01:28.956131+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 4.29,
+            "deductiblePercent": 100,
+            "treatment": {
+              "type": "travel_transportation_business_purpose_confirmed"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "c28e99d8-e584-4b80-8be3-c6bfc5da872c",
+      "createdAt": "2026-09-07T16:16:56.327+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:22.367224+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "12cbf7ae-579e-41d9-b18d-d6a288897341",
+      "createdAt": "2026-09-07T16:17:05.176+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:24.955468+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "94e332f2-8821-4d55-8b02-08c19aebd6ec",
+      "createdAt": "2026-09-07T16:16:57.72+00:00",
+      "updatedAt": "2026-11-02T02:01:29.987602+00:00",
+      "classificationStatus": "needs_review",
+      "requiresReview": true,
+      "source": "rule_engine",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_expense",
+        "business_use_required": true
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:21.819324+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 3 deduction review items from the detail modal (business_purpose, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:01:28.956131+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 6.62,
+            "deductiblePercent": 100,
+            "treatment": {
+              "type": "travel_transportation_business_purpose_confirmed"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "72fb0233-f82a-4506-bcc0-e21f98c59fff",
+      "createdAt": "2026-09-07T16:17:17.44+00:00",
+      "updatedAt": "2026-11-02T02:01:31.617755+00:00",
+      "classificationStatus": "needs_review",
+      "requiresReview": true,
+      "source": "rule_engine",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_expense",
+        "business_use_required": true
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:29.686318+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 3 deduction review items from the detail modal (business_purpose, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:01:02.010965+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 5.57,
+            "deductiblePercent": 100,
+            "treatment": {
+              "type": "travel_transportation_business_purpose_confirmed"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "21d5b965-0701-410d-bac4-0b2064235117",
+      "createdAt": "2026-09-07T16:17:22.512+00:00",
+      "updatedAt": "2026-11-02T02:01:32.333701+00:00",
+      "classificationStatus": "needs_review",
+      "requiresReview": true,
+      "source": "rule_engine",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_expense",
+        "business_use_required": true
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:30.815109+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 3 deduction review items from the detail modal (business_purpose, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:01:02.010965+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "travel_transportation",
+              "business_purpose_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 15.65,
+            "deductiblePercent": 100,
+            "treatment": {
+              "type": "travel_transportation_business_purpose_confirmed"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "5c28fcc2-4ee8-4164-9d27-bbe660c7fd67",
+      "createdAt": "2026-09-07T16:15:14.414+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:34:55.931169+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "8e158d56-0adf-4521-ab52-17757030da22",
+      "createdAt": "2026-09-07T16:16:19.567+00:00",
+      "updatedAt": "2026-09-10T18:04:12.589133+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:07.406842+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 9 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:04:12.589133+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "d05a535a-bd47-44a3-a0c1-09d21e3b3cd6",
+      "createdAt": "2026-09-07T16:16:24.647+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:09.379381+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "0145bdd8-76c5-4ab1-8660-2d00817f2c59",
+      "createdAt": "2026-09-07T16:16:28.215+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:10.240673+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "a8767901-fb1d-4126-860d-6a5a41e80632",
+      "createdAt": "2026-09-07T16:16:41.147+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:15.428084+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "045cccfd-31e1-4f27-993c-d3f528758130",
+      "createdAt": "2026-09-07T16:16:38.302+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:13.096387+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "8c920c84-804a-4002-9c4b-b92e19a79559",
+      "createdAt": "2026-09-07T16:16:49.85+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:19.187216+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "6e6f319a-beac-482e-9914-3c2939369f2b",
+      "createdAt": "2026-09-07T16:17:06.647+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:25.516943+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "6c5b65f0-d82e-4731-bedd-5c5df5c1fcd6",
+      "createdAt": "2026-09-07T16:16:55.609+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:20.979528+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    },
+    {
+      "transactionId": "a83a8cd1-278f-4072-bdb7-08a395a15a9f",
+      "createdAt": "2026-09-07T16:16:59.937+00:00",
+      "updatedAt": "2026-09-10T18:05:11.643788+00:00",
+      "classificationStatus": "user_confirmed",
+      "requiresReview": false,
+      "source": "user",
+      "userOverride": true,
+      "cpaOverride": false,
+      "deductibleAmount": 0,
+      "deductiblePercent": 0,
+      "treatment": {
+        "type": "vehicle_standard_mileage_no_separate_gas"
+      },
+      "actorUserId": null,
+      "history": [
+        {
+          "source": "system_repair",
+          "reason": "Targeted unresolved fallback repair from approved GL alias rules.",
+          "actor": null,
+          "timestamp": "2026-09-09T01:35:22.643016+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "unclassified"
+            }
+          },
+          "after": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          }
+        },
+        {
+          "source": "user",
+          "reason": "User confirmed 11 deduction review items from the detail modal (vehicle_method, selected transaction scope).",
+          "actor": "cf497e57-baac-4c0a-b6f4-f145c18a9b72",
+          "timestamp": "2026-09-10T18:05:11.643788+00:00",
+          "before": {
+            "classificationStatus": "needs_review",
+            "requiresReview": true,
+            "source": "rule_engine",
+            "userOverride": false,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_expense",
+              "business_use_required": true
+            },
+            "actorUserId": null
+          },
+          "after": {
+            "classificationStatus": "user_confirmed",
+            "requiresReview": false,
+            "source": "user",
+            "userOverride": true,
+            "cpaOverride": false,
+            "deductibleAmount": 0,
+            "deductiblePercent": 0,
+            "treatment": {
+              "type": "vehicle_standard_mileage_no_separate_gas"
+            },
+            "actorUserId": null
+          }
+        }
+      ]
+    }
+  ]
+}

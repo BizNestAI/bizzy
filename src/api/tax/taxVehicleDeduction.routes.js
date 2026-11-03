@@ -1,3 +1,5 @@
+import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../services/tax/taxChangeEvents.js";
+import { previewVehicleCommand, applyVehicleCommand } from "../../services/tax/taxVehicleCommands.service.js";
 import { Router } from "express";
 import { supabase as defaultSupabase } from "../../services/supabaseAdmin.js";
 import { createTaxVehicle, listVehicleDeductionWorkflows, previewVehicleMileage, saveVehicleMileage } from "../../services/tax/taxVehicleDeduction.service.js";
@@ -18,6 +20,14 @@ router.post("/vehicle-mileage/preview", handle(async ({ supabase, businessId, ta
 
 router.post("/vehicle-mileage/apply", handle(async ({ supabase, businessId, taxYear, actor, req }) =>
   saveVehicleMileage({ supabase, businessId, taxYear, actor, input: req.body || {} }), { mutation: true }));
+
+router.post("/vehicle-commands/preview", handle(async ({ supabase, businessId, taxYear, actor, req }) =>
+  previewVehicleCommand({ supabase, businessId, taxYear, actor, input: req.body || {} }), { mutation: true }));
+router.post("/vehicle-commands/apply", handle(async ({ supabase, businessId, taxYear, actor, req }) => {
+  const result = await applyVehicleCommand({ supabase, businessId, taxYear, actor, input: { previewId: req.body?.previewId, idempotencyKey: req.get("Idempotency-Key") } });
+  emitTaxDataChanged({ businessId, taxYear, changeType: TAX_CHANGE_TYPES.CLASSIFICATION_OVERRIDDEN, entityId: result.previewId, userId: actor.userId, metadata: { vehicleCommand: true, correlationId: result.previewId } });
+  return result;
+}, { mutation: true }));
 
 function handle(operation, { mutation = false } = {}) {
   return async (req, res) => {

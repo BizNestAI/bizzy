@@ -1,3 +1,4 @@
+import { isVehicleExpenseRow } from "./taxVehicleAuthority.js";
 // /src/services/tax/taxClassificationEngine.js
 import {
   DEDUCTIBILITY_STATUSES,
@@ -41,7 +42,7 @@ export async function classifyPostedTransaction({
   const profile = loadedProfile;
   const memories = loadedMemories;
   const existing = await getTaxClassification({ supabase, businessId, transactionId, taxYear: year });
-  if (existing && isConfirmed(existing) && !force) {
+  if (existing && (isConfirmed(existing) || existing.user_override || existing.cpa_override)) {
     return { classification: existing, skipped: true, reason: "confirmed_classification_preserved" };
   }
 
@@ -125,10 +126,17 @@ export async function classifyNormalizedTransaction({
   }
   const rule = match.selected || null;
   if (!rule) {
+    if (isVehicleExpenseRow(transaction)) return buildClassification({ businessId, taxYear: year, transaction, profile, source,
+      taxCategory: "vehicle_expense", deductibilityStatus: DEDUCTIBILITY_STATUSES.NEEDS_REVIEW, deductiblePercent: 0,
+      taxTreatment: { type: "vehicle_expense", business_use_required: true }, rule: null,
+      reason: "A vehicle and confirmed deduction method are required.", explanationSteps: ["Account text cannot establish a vehicle election."], requiresReview: true });
     return buildFallbackClassification({ businessId, taxYear: year, transaction, profile, memories, source, match });
   }
 
   const adjusted = applyMemoryAdjustments({ rule, transaction, memories });
+  // Account matches cannot establish the vehicle for a new purchase. Existing
+  // confirmed rows return earlier; ambiguous new rows must remain a question.
+  const vehicleAttributionNeeded = isVehicleExpenseRow({ ...transaction, tax_category: rule.tax_category, tax_treatment: rule.treatment });
   return buildClassification({
     businessId,
     taxYear: year,
@@ -136,9 +144,9 @@ export async function classifyNormalizedTransaction({
     profile,
     source,
     taxCategory: rule.tax_category || "other",
-    deductibilityStatus: rule.deductibility_status,
-    deductiblePercent: adjusted.deductiblePercent,
-    taxTreatment: rule.treatment || { type: "ordinary_expense" },
+    deductibilityStatus: vehicleAttributionNeeded ? DEDUCTIBILITY_STATUSES.NEEDS_REVIEW : rule.deductibility_status,
+    deductiblePercent: vehicleAttributionNeeded ? 0 : adjusted.deductiblePercent,
+    taxTreatment: vehicleAttributionNeeded ? { type: "vehicle_expense" } : rule.treatment || { type: "ordinary_expense" },
     rule,
     reason: explainDeductionRuleMatch(rule, transactionContext),
     explanationSteps: [
@@ -148,7 +156,7 @@ export async function classifyNormalizedTransaction({
       ...(rule.__match?.reasons || []),
       ...adjusted.explanationSteps,
     ],
-    requiresReview: Boolean(rule.requires_review || adjusted.requiresReview),
+    requiresReview: Boolean(vehicleAttributionNeeded || rule.requires_review || adjusted.requiresReview),
     memoryKeysUsed: adjusted.memoryKeysUsed,
   });
 }

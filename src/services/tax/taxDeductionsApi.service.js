@@ -664,6 +664,10 @@ function toTransactionRow(row) {
     rule_version: c.rule_version || c.metadata?.rule_version || null,
     source_type: c.source || null,
     authority: authorityState(c, row.override),
+    vehicleId: c.metadata?.vehicle_id || null,
+    decisionAuthority: c.metadata?.decision_authority || null,
+    decisionActorId: c.metadata?.decision_actor_id || null,
+    decisionAt: c.metadata?.decision_at || null,
     reason: c.reason || null,
     explanation: c.reason || null,
     warnings,
@@ -700,6 +704,10 @@ function safeClassification(c) {
     ruleCode: c.rule_code,
     reason: c.reason,
     requiresReview: c.requires_review,
+    vehicleId: c.metadata?.vehicle_id || null,
+    decisionAuthority: c.metadata?.decision_authority || null,
+    decisionActorId: c.metadata?.decision_actor_id || null,
+    decisionAt: c.metadata?.decision_at || null,
     userOverride: c.user_override === true,
     cpaOverride: c.cpa_override === true,
     updatedAt: c.updated_at,
@@ -755,6 +763,7 @@ function safeRuleSummary(c) {
 function authorityState(c, override) {
   if (c.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED) return "excluded";
   if (c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW || c.tax_category === "tax_review_holding" || c.metadata?.is_holding === true) return "needs_tax_review";
+  if (c.classification_status === "needs_review" || (c.requires_review === true && !["user_confirmed", "cpa_confirmed", "bizzi_operator_confirmed"].includes(c.classification_status))) return "proposed_needs_review";
   if (c.cpa_override || c.classification_status === TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED) return "cpa_confirmed";
   if (c.user_override || c.classification_status === TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED) return "user_confirmed";
   if (isManualOverrideHistory(override)) return "manual_override";

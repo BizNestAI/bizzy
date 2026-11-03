@@ -1,3 +1,5 @@
+import { computeClassificationAmounts } from "./taxClassificationAmounts.js";
+
 export const VEHICLE_QUESTION_ANSWER_CONTRACT = Object.freeze({
   schema: {
     required: ["vehicleMethod"],
@@ -61,4 +63,19 @@ function vehicleInputError(code, message) {
 
 function supplied(value) {
   return value != null && value !== "";
+}
+
+// Shared preview/apply arithmetic; the server always supplies its own rows.
+// Round each member with the canonical classification calculation before summing.
+export function calculateVehicleExpenseEstimate({ rows = [], ...answer } = {}) {
+  const treatment = vehicleTreatmentForAnswer(answer);
+  const signedDeductionCents = rows.reduce((sum, row) => {
+    const signedAmount = Number(row.book_amount ?? row.signedAmount);
+    if (!Number.isFinite(signedAmount)) throw vehicleInputError("invalid_vehicle_expense_amount", "A vehicle expense amount is unavailable.");
+    const amounts = computeClassificationAmounts({ signedAmount, direction: row.direction || row.metadata?.direction,
+      deductibilityStatus: treatment.deductibilityStatus, deductiblePercent: treatment.deductiblePercent, taxCategory: treatment.taxCategory });
+    return sum + Math.sign(signedAmount) * Math.round(amounts.deductibleAmount * 100);
+  }, 0);
+  return { deductibleAmount: Math.max(0, -signedDeductionCents) / 100, businessUsePercent: treatment.deductiblePercent,
+    label: answer.vehicleMethod === "standard_mileage" ? "Separate gas deduction" : "Estimated deductible gas expense" };
 }

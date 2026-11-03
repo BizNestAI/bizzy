@@ -27,6 +27,8 @@ import {
   prepareTaxClassifications,
   previewGroupedTaxDeductionDecision,
   previewTaxVehicleMileage,
+  previewTaxVehicleCommand,
+  applyTaxVehicleCommand,
   previewTaxClassificationBackfill,
   rejectTaxClassification,
   restoreTaxClassification,
@@ -569,10 +571,10 @@ export function useTaxDeductions({
       sourceFingerprint,
       signal,
     }),
-    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, signal } = {}) => {
+    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal } = {}) => {
       const operationOwner = workspaceOperationTrackerRef.current.acquire("grouped-decision-reconciliation");
       try {
-        const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, signal });
+        const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal });
         applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
         const refreshed = await reconcileGroupedDecisionWorkspace(result, { signal });
         return { ...result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } };
@@ -584,6 +586,20 @@ export function useTaxDeductions({
       const result = await createTaxVehicle({ businessId, year, ...input });
       await load();
       return result;
+    },
+    previewVehicleCommand: (input = {}) => previewTaxVehicleCommand({ businessId, year, projectionId: workspaceSnapshotRef.current.projectionId, sourceFingerprint: workspaceSnapshotRef.current.sourceFingerprint, ...input }),
+    applyVehicleCommand: async (input = {}) => {
+      const owner = workspaceOperationTrackerRef.current.acquire("vehicle-command-reconciliation");
+      let committed = false;
+      try {
+        const result = await applyTaxVehicleCommand({ businessId, year, ...input });
+        committed = true;
+        await reconcileGroupedDecisionWorkspace(result);
+        return result;
+      } catch (error) {
+        if (committed) error.outcomeUnknown = true;
+        throw error;
+      } finally { workspaceOperationTrackerRef.current.release(owner); }
     },
     previewVehicleMileage: (input = {}) => previewTaxVehicleMileage({ businessId, year, ...input }),
     saveVehicleMileage: async (input = {}) => {

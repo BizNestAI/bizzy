@@ -1,3 +1,4 @@
+import { isVehicleExpenseRow, VEHICLE_WORKFLOW_AUTHORITY } from "./taxVehicleAuthority.js";
 // /src/services/tax/taxClassificationOverride.service.js
 import {
   DEDUCTIBILITY_STATUSES,
@@ -24,6 +25,7 @@ export async function applyClassificationOverride({ supabase, businessId, taxYea
   const year = requireTaxYear(taxYear);
   const current = await requireClassification({ supabase, businessId, taxYear: year, transactionId });
   assertNoStaleWrite(current, input.expectedUpdatedAt);
+  if (isVehicleExpenseRow(current)) throw conflictError("vehicle_change_requires_preview", "Use the vehicle Change treatment preview before editing these expenses.");
   assertActorMayOverrideAuthority(current, actor);
   if (input.protectConfirmedAuthority && hasConfirmedAuthority(current)) {
     throw conflictError("confirmed_authority_protected", "Confirmed tax classification authority is protected.", {
@@ -56,6 +58,8 @@ export async function confirmClassification({ supabase, businessId, taxYear, tra
   }
   const current = await requireClassification({ supabase, businessId, taxYear: year, transactionId });
   assertNoStaleWrite(current, expectedUpdatedAt);
+  statusForActor(actor);
+  if (isVehicleExpenseRow(current)) throw conflictError("vehicle_change_requires_preview", "Use Change treatment to confirm a vehicle method and preview its full effect.");
   const nextStatus = confirmationType === "cpa" ? TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED : TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED;
   const next = {
     ...current,
@@ -219,6 +223,7 @@ export function buildClassificationOverrideBatchItems({ transactionIds = [], cur
   const roleStatus = statusForActor(actor);
   const items = ids.map((transactionId) => {
     const current = currentByTransactionId.get(transactionId);
+    if (isVehicleExpenseRow(current) && !input[VEHICLE_WORKFLOW_AUTHORITY]) throw conflictError("vehicle_change_requires_preview", "Use the vehicle Change treatment preview before editing these expenses.");
     assertActorMayOverrideAuthority(current, actor);
     const expectedUpdatedAt = input.expectedUpdatedAtByTransactionId?.[transactionId] || input.expectedUpdatedAtByTransactionId?.[String(transactionId)] || input.expectedUpdatedAt || null;
     if (expectedUpdatedAt) assertNoStaleWrite(current, expectedUpdatedAt);
@@ -325,6 +330,9 @@ function buildUpdatedClassification({ current, input, actor, transaction, status
 }
 
 async function applyOverrideAtomically({ supabase, businessId, taxYear, transactionId, current, next, actor, reason }) {
+  statusForActor(actor);
+  assertActorMayOverrideAuthority(current, actor);
+  if (isVehicleExpenseRow(current)) throw conflictError("vehicle_change_requires_preview", "Use the vehicle Change treatment preview before editing these expenses.");
   const { data, error } = await supabase.rpc("apply_tax_classification_override", {
     p_business_id: businessId,
     p_tax_year: taxYear,
@@ -467,8 +475,9 @@ function buildBusinessRule({ businessId, taxYear, transaction, classification, o
   throw validationError("invalid_business_rule_match_type", "Unsupported business rule match type.");
 }
 
-function statusForActor(actor) {
+function statusForActor(actor = {}) {
   const role = resolveActorRole(actor);
+  if (!actor.userId || (actor.role && !["user", "cpa", "admin", "operator"].includes(actor.role)) || role === "system" || (actor.source && !["user", "cpa", "admin", "operator", "bizzi_operator"].includes(actor.source))) throw new TaxEngineError({ code: "manual_actor_required", message: "Human authorization is required for a manual decision.", status: 403 });
   if (role === "cpa") return TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED;
   if (role === "admin" || role === "operator") return TAX_CLASSIFICATION_STATUSES.BIZZI_OPERATOR_CONFIRMED;
   return TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED;

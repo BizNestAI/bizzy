@@ -106,7 +106,7 @@ for (const [name, input] of [
 test("browser apply payload cannot supply treatment, scope, membership, subject, or authority", () => {
   const client = readFileSync("src/services/tax/taxApiClient.js", "utf8");
   const route = readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
-  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility \}\)/);
+  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope \}\)/);
   assert.doesNotMatch(client, /compact\(\{[^}]*taxTreatment/);
   assert.doesNotMatch(route.slice(route.indexOf('router.post("/deduction-decisions/apply"')), /req\.body\?\.(?:taxTreatment|deductibilityStatus|deductiblePercent|targetTransactionIds|expectedPopulationTransactionIds|scope|groupId|vehicleSubject|authority)/);
 });
@@ -121,4 +121,14 @@ test("mixed vehicle percentages preserve expense and refund signs in the signed 
   assert.equal(month.bookExpenseAmount, 80);
   assert.equal(month.reviewedDeductibleAmount, 49.8);
   assert.equal(month.deductibleAmount, 49.8);
+});
+
+test("preview and apply use canonical per-member rounding for actual gas, refunds, and standard mileage", async () => {
+  const { calculateVehicleExpenseEstimate } = await import("../src/services/tax/taxVehicleQuestionContract.js");
+  const input = { taxCategory: "vehicle_expense", vehicleMethod: "actual_expense", actualExpenseUse: "mixed_use", businessUsePercent: 80 };
+  const rows = [{ book_amount: -68 }, ...Array.from({ length: 69 }, () => ({ book_amount: -51 }))];
+  assert.equal(calculateVehicleExpenseEstimate({ ...input, rows }).deductibleAmount, 2869.6);
+  assert.equal(calculateVehicleExpenseEstimate({ ...input, businessUsePercent: 50, rows: [{ signedAmount: -0.03 }, { signedAmount: -0.03 }] }).deductibleAmount, 0.04);
+  assert.equal(calculateVehicleExpenseEstimate({ ...input, rows: [{ signedAmount: -100 }, { signedAmount: 20 }] }).deductibleAmount, 64);
+  assert.equal(calculateVehicleExpenseEstimate({ vehicleMethod: "standard_mileage", rows }).deductibleAmount, 0);
 });

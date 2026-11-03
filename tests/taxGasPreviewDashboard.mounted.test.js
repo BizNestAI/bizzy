@@ -21,6 +21,9 @@ class NodeStub extends EventTargetStub {
 }
 class ElementStub extends NodeStub {
   constructor(name, document) { super(1, String(name).toUpperCase(), document); this.tagName = this.nodeName; this.namespaceURI = "http://www.w3.org/1999/xhtml"; this.attributes = new Map(); this.style = { setProperty() {}, removeProperty() {} }; this.dataset = {}; }
+  get options() { return this.childNodes.filter((child) => child.tagName === "OPTION"); }
+  get value() { return this._value ?? this.attributes.get("value") ?? ""; }
+  set value(value) { this._value = String(value); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   removeAttribute(name) { this.attributes.delete(name); }
   hasAttribute(name) { return this.attributes.has(name); }
@@ -99,7 +102,7 @@ test("mounted dashboard preserves an id-only Gas question while its authoritativ
       globalThis.__mountedTaxHook = value;
       return value;
     }`; } }, reactPlugin()], server: { middlewareMode: true, hmr: false }, appType: "custom", ssr: { noExternal: ["react-router-dom", "react-router", "framer-motion"], resolve: { conditions: ["browser", "import", "module"], externalConditions: ["browser", "import", "module"] } } });
-  const { TaxDashboardDeductions } = await vite.ssrLoadModule("/src/pages/Tax/TaxDashboard.jsx");
+  const { TaxDashboardDeductions, __TaxDashboardTestInternals: internals } = await vite.ssrLoadModule("/src/pages/Tax/TaxDashboard.jsx");
   const React = await import("react");
   const root = createRoot(container);
   const success = { previewId: "gas-preview", actionableCount: 76, totalGroupCount: 76, previouslyReviewedCount: 0, grossAmountCents: -190000, transactions, vehicleContext: { vehicles: [] } };
@@ -201,6 +204,27 @@ test("mounted dashboard preserves an id-only Gas question while its authoritativ
     assert.match(document.body.textContent, /70 transactions/);
     noSubmit();
 
+    assert.match(document.body.textContent, /Do these expenses belong to one vehicle or multiple vehicles/);
+    assert.equal(elements(document.body, (node) => node.getAttribute("placeholder") === "Vehicle name").length, 0);
+    const choose = async (labelText, checked = true) => {
+      const label = elements(document.body, (node) => node.tagName === "LABEL" && node.textContent.startsWith(labelText))[0];
+      assert.ok(label, `choice is mounted: ${labelText}`);
+      const input = elements(label, (node) => node.tagName === "INPUT")[0];
+      const props = input[Object.keys(input).find((key) => key.startsWith("__reactProps$"))];
+      await act(async () => props.onChange({ target: { checked } }));
+    };
+    await choose("One vehicle");
+    await choose("Standard mileage");
+    await choose("I owned or leased");
+    await choose("For an owned vehicle");
+    await choose("I did not operate five");
+    await choose("I have not claimed MACRS");
+    assert.equal(button(document.body, "Apply vehicle decision").hasAttribute("disabled"), false, "one unnamed vehicle can confirm after eligibility");
+    await choose("Multiple vehicles");
+    assert.equal(button(document.body, "Apply vehicle decision").hasAttribute("disabled"), true, "a mixed-vehicle group needs allocation first");
+    await choose("I’m not sure yet");
+    assert.equal(globalThis.__gasSubmissions, 0, "selecting not sure creates no decision or vehicle");
+
     await close(); await open();
     const removedCount = calls.length;
     // A replacement semantic question must close this modal, never inherit its answer.
@@ -209,6 +233,46 @@ test("mounted dashboard preserves an id-only Gas question while its authoritativ
     assert.equal(refreshes, 4); assert.equal(calls.length, removedCount);
     assert.equal(elements(document.body, (node) => node.getAttribute("role") === "dialog").length, 0);
     noSubmit();
+
+    const detailRows = [
+      { id: "reviewed-gas", date: "2026-06-15", vendor: "Reviewed Gas", qboAccountName: "Gas", taxCategory: "vehicle_expense", taxTreatment: "vehicle_actual_expense_business_use", classificationStatus: "user_confirmed", status: "user_confirmed", deductiblePercent: 80, deductibleAmount: 40, amount: 50, signedAmount: -50, userOverride: true, requiresReview: false },
+      { id: "pending-gas", date: "2026-06-16", vendor: "Pending Gas", qboAccountName: "Gas", taxCategory: "vehicle_expense", taxTreatment: "vehicle_expense", classificationStatus: "needs_review", status: "needs_review", classificationSource: "rule_engine", deductiblePercent: 0, deductibleAmount: 0, amount: 50, signedAmount: -50, requiresReview: true },
+      { id: "cpa-gas", date: "2026-06-17", vendor: "CPA Gas", qboAccountName: "Gas", taxCategory: "vehicle_expense", taxTreatment: "vehicle_actual_expense_business_use", classificationStatus: "cpa_confirmed", status: "cpa_confirmed", deductiblePercent: 80, deductibleAmount: 40, amount: 50, signedAmount: -50, cpaOverride: true, requiresReview: false },
+    ];
+    let correctionChoices;
+    await act(async () => root.render(React.createElement(internals.DeductionMonthDetailModal, {
+      selection: { account: { key: "gas", name: "Gas" }, month: { key: "2026-06", longLabel: "June 2026" }, cell: { transactions: detailRows } },
+      onClose() {}, onPreviewVehicleCommand: async (input) => { correctionChoices = input; return { previewId: "detail-preview", affectedCount: 2, beforeDeduction: 40, afterDeduction: 0, label: "Estimated deductible gas expense", skipped: [], rows: [] }; },
+      onApplyVehicleCommand: async () => ({ appliedCount: 2 }),
+    })));
+    const detailDisclosure = elements(document.body, (node) => node.tagName === "DETAILS")[0];
+    await act(async () => detailDisclosure[Object.keys(detailDisclosure).find((key) => key.startsWith("__reactProps$"))].onToggle({ currentTarget: { open: true } }));
+    const picks = elements(document.body, (node) => node.tagName === "INPUT" && node.getAttribute("aria-label")?.startsWith("Select "));
+    const reviewedPick = picks.find((node) => node.getAttribute("aria-label") === "Select Reviewed Gas");
+    const pendingPick = picks.find((node) => node.getAttribute("aria-label") === "Select Pending Gas");
+    const cpaPick = picks.find((node) => node.getAttribute("aria-label") === "Select CPA Gas");
+    assert.ok(reviewedPick && pendingPick, "both Reviewed and Needs Input rows are selectable");
+    assert.equal(reviewedPick.hasAttribute("disabled"), false);
+    assert.equal(pendingPick.hasAttribute("disabled"), false);
+    assert.equal(cpaPick.hasAttribute("disabled"), true);
+    assert.match(document.body.textContent, /Reviewed — actual expenses at 80%/);
+    assert.match(document.body.textContent, /Suggested — needs confirmation/);
+    assert.match(document.body.textContent, /Reviewed — CPA decision/);
+    const handler = (node) => node[Object.keys(node).find((key) => key.startsWith("__reactProps$"))];
+    await act(async () => handler(reviewedPick).onChange({ target: { checked: true } }));
+    await act(async () => button(document.body, "Change treatment").click());
+    const reasonInput = elements(document.body, (node) => node.getAttribute("aria-label") === "Vehicle correction reason")[0];
+    await act(async () => handler(reasonInput).onChange({ target: { type: "text", value: "Explicitly correct these two expenses" } }));
+    await act(async () => button(document.body, "Preview correction").click());
+    assert.deepEqual([...correctionChoices.transactionIds].sort(), ["pending-gas", "reviewed-gas"]);
+    const persisted = internals.buildPersistedWorkspaceMatrix({ matrix: [{ categoryKey: "vehicle_expense", categoryLabel: "Vehicle Expense", transactionCount: 1,
+      months: { "2026-06": { transactionCount: 1, reviewedTransactionCount: 1, reviewedDeductibleAmount: 0, deductibleAmount: 0, bookExpenseAmount: 51, standardMileageTransactionCount: 1, reviewedTreatmentLabel: "Reviewed — covered by standard mileage" } } }] }, 2026);
+    const persistedAccount = persisted.accounts[0];
+    assert.equal(persistedAccount.months["2026-06"].standardMileageTransactionCount, 1);
+    await act(async () => root.render(React.createElement(internals.PersistedMatrixCell, { account: persistedAccount, month: { key: "2026-06", longLabel: "June 2026" }, cell: persistedAccount.months["2026-06"], onOpen() {} })));
+    assert.match(container.textContent, /Reviewed — covered by standard mileage/);
+    assert.doesNotMatch(container.textContent, /Reviewed deduction/);
+
   } finally {
     await act(async () => root.unmount()); await vite.close();
     for (const key of ["__taxP1", "__taxP2", "__gasPreview", "__gasSubmissions", "__gasRefresh", "__rerenderGas", "__completeTaxRefresh", "__mountedTaxHook"]) delete globalThis[key];

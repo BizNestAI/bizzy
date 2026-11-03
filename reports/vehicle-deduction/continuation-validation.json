@@ -1,0 +1,29 @@
+{
+  "verdict": "READY",
+  "productionWrites": false,
+  "productionMigrationApplied": false,
+  "focused": {
+    "passed": 197,
+    "failed": 0,
+    "timeoutSeconds": 60
+  },
+  "databaseHttpRls": {
+    "passed": 9,
+    "failed": 0,
+    "timeoutSeconds": 90,
+    "productionShapedDomainDdl": true,
+    "liveGoTrue": false
+  },
+  "beforeAuthority": {
+    "passed": 0,
+    "failed": 8
+  },
+  "beforeCommandContracts": {
+    "missingRpcFailures": 4
+  },
+  "eslint": "passed",
+  "build": "passed",
+  "broadSuiteRerunOnResume": false,
+  "knownPreexistingBroadFailures": 11,
+  "preservedExistingChanges": true
+}

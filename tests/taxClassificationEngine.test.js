@@ -665,3 +665,18 @@ class Query {
     return Promise.resolve({ data: this.rows, error: null }).then(resolve);
   }
 }
+
+test("a legacy account-only vehicle default cannot guess attribution for a future Gas transaction", async () => {
+  for (const type of ["vehicle_standard_mileage_no_separate_gas", "vehicle_actual_expense_business_use"]) {
+    const result = await classifyNormalizedTransaction(baseArgs({
+      transaction: txn({ qboAccountName: "Gas", bookkeepingCategory: "Gas" }),
+      rules: [rule({ business_id: BUSINESS_ID, scope: "business_override", bookkeeping_category: "Gas",
+        tax_category: "vehicle_expense", treatment: { type }, requires_review: false,
+        default_deductible_percent: type.includes("standard_mileage") ? 0 : 80,
+        deductibility_status: type.includes("standard_mileage") ? "nondeductible" : "partially_deductible" })],
+    }));
+    assert.equal(result.classificationStatus, "needs_review");
+    assert.equal(result.taxTreatment.type, "vehicle_expense");
+    assert.equal(result.deductibleAmount, 0);
+  }
+});
