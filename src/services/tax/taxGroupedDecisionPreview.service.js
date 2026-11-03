@@ -11,14 +11,18 @@ import { vehicleTreatmentForAnswer } from "./taxVehicleQuestionContract.js";
 import { listTaxQuestionBankRowsByIds } from "./taxPostedTransaction.repository.js";
 import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js";
 import { getLatestTaxWorkspaceProjection } from "./taxWorkspaceProjection.service.js";
+import { taxDiagnosticFingerprint, taxDiagnosticIdentity } from "./taxPreviewDiagnostics.js";
 
 const DEFAULT_PREVIEW_TTL_SECONDS = 10 * 60;
 
-export async function createGroupedDecisionPreview({ supabase, businessId, taxYear, groupId, projectionId = null, sourceFingerprint = null, actor = {}, now = new Date() } = {}) {
+export async function createGroupedDecisionPreview({ supabase, businessId, taxYear, groupId, projectionId = null, sourceFingerprint = null, actor = {}, now = new Date(), diagnostics = {} } = {}) {
+  diagnostics.stage = "customer_authorization";
   requireCustomerActor(actor);
-  const workspaceProjection = await requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint });
+  const workspaceProjection = await requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint, groupId, diagnostics });
+  diagnostics.stage = "live_group_resolution";
   const rows = await decisionGroupRows({ supabase, businessId, taxYear, groupId });
   if (!rows.length) throw notFoundError("grouped_decision_group_not_found", "This Tax question is no longer available.");
+  diagnostics.resolvedGroupId = taxDiagnosticIdentity(groupId);
   const manifest = buildGroupedDecisionManifest({ businessId, taxYear, rows });
   const actionable = rows.filter(isActionable);
   const first = actionable[0] || rows[0];
@@ -45,8 +49,10 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
     protected_transaction_ids: rows.filter((row) => !isActionable(row)).map((row) => String(row.transaction_id)).sort(),
     expires_at: expiresAt,
   };
+  diagnostics.stage = "preview_persistence";
   const { error } = await supabase.from("tax_grouped_deduction_decision_previews").insert(record);
   if (error) throw error;
+  diagnostics.stage = "transaction_hydration";
   const sourceRows = actionable.length ? await listTaxQuestionBankRowsByIds({
     supabase, businessId, taxYear, transactionIds: record.actionable_transaction_ids,
   }) : [];
@@ -55,8 +61,10 @@ export async function createGroupedDecisionPreview({ supabase, businessId, taxYe
     const id = String(source.id);
     return [id, questionTransactionSummary(source, classificationById.get(id))];
   }));
-  const result = customerPreview(record, rows, summaries, workspaceProjection);
+  diagnostics.stage = "preview_construction";
+  const result = customerPreview(record, rows, summaries, workspaceProjection, diagnostics);
   if (record.decision_type !== "vehicle_method") return result;
+  diagnostics.stage = "optional_vehicle_context";
   return {
     ...result,
     vehicleContext: await optionalVehicleContext(() => listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) })),
@@ -194,7 +202,7 @@ function completedBusinessPurposeTreatment(row = {}) {
   };
 }
 
-function customerPreview(record, rows, summaries = null, workspaceProjection = null) {
+function customerPreview(record, rows, summaries = null, workspaceProjection = null, diagnostics = {}) {
   const actionable = rows.filter(isActionable);
   const actionableIds = actionable.map((row) => String(row.transaction_id));
   if (actionableIds.length && (!(summaries instanceof Map) || summaries.size !== actionableIds.length || actionableIds.some((id) => !summaries.has(id)))) {
@@ -228,11 +236,12 @@ function customerPreview(record, rows, summaries = null, workspaceProjection = n
       protected: rows.length - actionable.length,
     },
     futureDefaultScope: { accountScoped: true, taxYear: record.tax_year },
-    matrixReconciliation: matrixReconciliation({ record, actionable, workspaceProjection }),
+    matrixReconciliation: matrixReconciliation({ record, actionable, workspaceProjection, diagnostics }),
   };
 }
 
-function matrixReconciliation({ record, actionable, workspaceProjection }) {
+function matrixReconciliation({ record, actionable, workspaceProjection, diagnostics = {} }) {
+  diagnostics.stage = "matrix_reconciliation";
   const payload = workspaceProjection?.projection_data;
   if (!payload || !actionable.length) return null;
   const categoryKey = String(actionable[0].tax_category || "");
@@ -241,6 +250,8 @@ function matrixReconciliation({ record, actionable, workspaceProjection }) {
   const questionIds = (payload.identityEvidence?.questionGroups?.[record.group_id] || []).map(String);
   const actionableIds = actionable.map((row) => String(row.transaction_id)).sort();
   if (!matrixRow || !sameStringSet(questionIds, actionableIds) || questionIds.some((id) => !categoryIds.includes(id))) {
+    diagnostics.failedComparison = !matrixRow ? "matrix_category_missing"
+      : !sameStringSet(questionIds, actionableIds) ? "question_membership_mismatch" : "question_outside_category";
     throw conflictError("grouped_decision_projection_stale", "This Tax question changed. Refresh and try again.", { action: "refresh_tax_deductions" });
   }
   const matrixGrossExpenseCents = Object.values(matrixRow.months || {})
@@ -262,12 +273,25 @@ function sameStringSet(left = [], right = []) {
   return left.length === right.length && new Set(left).size === left.length && left.every((value) => right.includes(value));
 }
 
-async function requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint }) {
+async function requireCurrentWorkspaceProjection({ supabase, businessId, taxYear, projectionId, sourceFingerprint, groupId, diagnostics = {} }) {
+  diagnostics.stage = "current_projection_lookup";
+  diagnostics.suppliedProjectionId = taxDiagnosticIdentity(projectionId);
+  diagnostics.suppliedSourceFingerprintHash = taxDiagnosticFingerprint(sourceFingerprint);
+  diagnostics.suppliedGroupId = taxDiagnosticIdentity(groupId);
   if (!projectionId && !sourceFingerprint) return null;
   const projection = await getLatestTaxWorkspaceProjection({ supabase, businessId, taxYear });
+  diagnostics.stage = "current_projection_identity";
+  diagnostics.currentProjectionId = taxDiagnosticIdentity(projection?.id);
+  diagnostics.currentSourceFingerprintHash = taxDiagnosticFingerprint(projection?.source_fingerprint);
+  diagnostics.currentProjectionStatus = projection?.status === "complete" ? "complete" : null;
+  const projectedGroups = projection?.projection_data?.questionGroups;
+  diagnostics.resolvedGroupId = taxDiagnosticIdentity(Array.isArray(projectedGroups)
+    ? projectedGroups.find((group) => group?.id === groupId)?.id : null);
   if (!projection
     || (projectionId && String(projection.id) !== String(projectionId))
     || (sourceFingerprint && String(projection.source_fingerprint) !== String(sourceFingerprint))) {
+    diagnostics.failedComparison = !projection ? "current_projection_missing"
+      : projectionId && String(projection.id) !== String(projectionId) ? "projection_id_mismatch" : "source_fingerprint_mismatch";
     throw conflictError("grouped_decision_projection_stale", "This Tax question changed. Refresh and try again.", {
       action: "refresh_tax_deductions",
     });

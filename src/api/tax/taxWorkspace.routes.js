@@ -20,6 +20,7 @@ import { workspaceReadError } from "./taxWorkspaceErrors.js";
 import { listProjectionEvaluatedTransactions, normalizeDeductionPagination } from "../../services/tax/taxDeductionsApi.service.js";
 import { computeTaxClassificationSourceFingerprint } from "../../services/tax/taxClassificationRun.service.js";
 import { synchronizeTaxDataChange, TAX_CHANGE_TYPES } from "../../services/tax/taxChangeEvents.js";
+import { taxDiagnosticFingerprint, taxDiagnosticIdentity } from "../../services/tax/taxPreviewDiagnostics.js";
 
 const router = Router();
 
@@ -93,6 +94,18 @@ router.get("/workspace", async (req, res) => {
     stageTimings.serialization = Date.now() - serializationStartedAt;
     stageTimings.total = Date.now() - routeStartedAt;
     res.set("Server-Timing", Object.entries(stageTimings).map(([name, duration]) => `${name};dur=${duration}`).join(", "));
+    console.info("[tax-workspace-identity]", JSON.stringify({
+      requestId: taxDiagnosticIdentity(req.id || req.headers?.["x-request-id"]),
+      route: "GET /api/tax/workspace",
+      stage: "workspace_response",
+      elapsedMs: stageTimings.total,
+      businessId: taxDiagnosticIdentity(businessId),
+      taxYear,
+      projectionId: taxDiagnosticIdentity(record.id),
+      storedSourceFingerprintHash: taxDiagnosticFingerprint(record.source_fingerprint),
+      returnedSourceFingerprintHash: taxDiagnosticFingerprint(response.sourceFingerprint),
+      workspacePublicationState: refreshState,
+    }));
     return sendTaxSuccess(res, response);
   } catch (error) {
     stageTimings.total = Date.now() - routeStartedAt;

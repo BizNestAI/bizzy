@@ -142,6 +142,8 @@ router.patch("/deduction-decision-rules/:ruleId", async (req, res) => {
 router.post("/deduction-decisions/preview", async (req, res) => {
   setTaxNoStore(res);
   let ctx = null;
+  const startedAt = Date.now();
+  const diagnostics = { stage: "business_context" };
   try {
     const data = await withGroupedPreviewTimeout(Promise.resolve().then(async () => {
       ctx = await routeContext(req, { requireServerBusinessContext: true });
@@ -152,11 +154,12 @@ router.post("/deduction-decisions/preview", async (req, res) => {
         projectionId: String(req.body?.projectionId || "").trim() || null,
         sourceFingerprint: String(req.body?.sourceFingerprint || "").trim() || null,
         actor: actorFromRequest(req),
+        diagnostics,
       });
     }));
     return sendTaxSuccess(res, data);
   } catch (err) {
-    logGroupedDecisionFailure({ req, ctx, err });
+    logGroupedDecisionFailure({ req, ctx, err, diagnostics, elapsedMs: Date.now() - startedAt });
     return sendTaxError(res, err, "tax_grouped_deduction_preview_failed");
   }
 });
@@ -444,7 +447,7 @@ function canonicalMutationBusinessId(req) {
   return validateBusinessIdInput({ tenantContext: { businessId: canonical } });
 }
 
-function logGroupedDecisionFailure({ req, ctx, err }) {
+function logGroupedDecisionFailure({ req, ctx, err, diagnostics, elapsedMs }) {
   // Keep production diagnostics useful without logging vendor names, amounts,
   // credentials, or the full request body.
   console.warn("[tax-grouped-deduction-decision]", {
@@ -458,6 +461,22 @@ function logGroupedDecisionFailure({ req, ctx, err }) {
     addedCount: Number.isFinite(err?.details?.addedCount) ? err.details.addedCount : null,
     removedCount: Number.isFinite(err?.details?.removedCount) ? err.details.removedCount : null,
     changedFields: Array.isArray(err?.details?.changedFields) ? err.details.changedFields.slice(0, 8) : [],
+    ...(diagnostics ? {
+      route: "POST /api/tax/deduction-decisions/preview",
+      stage: diagnostics.stage,
+      elapsedMs,
+      failedComparison: diagnostics.failedComparison || null,
+      suppliedProjectionId: diagnostics.suppliedProjectionId || null,
+      currentProjectionId: diagnostics.currentProjectionId || null,
+      suppliedSourceFingerprintHash: diagnostics.suppliedSourceFingerprintHash || null,
+      currentSourceFingerprintHash: diagnostics.currentSourceFingerprintHash || null,
+      suppliedGroupId: diagnostics.suppliedGroupId || null,
+      resolvedGroupId: diagnostics.resolvedGroupId || null,
+      currentProjectionStatus: diagnostics.currentProjectionStatus || null,
+      // Preview reads completed projections, not the publication queue. The
+      // correlated workspace read logs its actual queue state separately.
+      workspacePublicationState: "not_read_by_preview",
+    } : {}),
   });
 }
 
