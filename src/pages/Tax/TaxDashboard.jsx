@@ -1,3 +1,4 @@
+import BusinessMileagePanel from "../../components/Tax/BusinessMileagePanel.jsx";
 import VehicleTreatmentEditor from "../../components/Tax/VehicleTreatmentEditor.jsx";
 import { hasConfirmedVehicleElection, isVehicleExpenseRow, taxDecisionAuthority, vehicleTreatmentProvenanceLabel } from "../../services/tax/taxVehicleAuthority.js";
 // File: /components/Tax/TaxDashboard.jsx
@@ -1017,10 +1018,12 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
         }} />
       </section>
 
-      {(deductions.workspaceProjection?.vehicleDeductions?.vehicles || []).map((vehicle) => <div key={vehicle.id} className="mt-3"><p className="text-sm font-semibold text-white/80">{vehicle.displayName} · {year} vehicle treatment</p><VehicleTreatmentEditor vehicles={deductions.workspaceProjection.vehicleDeductions.vehicles} vehicleId={vehicle.id} defaultAction="amend" readOnly={readOnly} onPreview={(input) => deductions.previewVehicleCommand(input)} onApply={(input) => deductions.applyVehicleCommand(input)} /></div>)}
       <BusinessMileagePanel
         workflows={deductions.workspaceProjection?.vehicleDeductions}
-        tasks={deductions.workspaceProjection?.nonTransactionTasks}
+        gasContext={deductions.workspaceProjection?.gasContext}
+        projectionKey={`${deductions.workspaceProjection?.sourceFingerprint || ""}:${deductions.workspaceProjectionId || ""}`}
+        onMethodPreview={(input) => deductions.previewVehicleCommand(input)}
+        onMethodApply={(input) => deductions.applyVehicleCommand(input)}
         readOnly={readOnly}
         onPreview={(input) => deductions.previewVehicleMileage(input)}
         onSave={(input) => deductions.saveVehicleMileage(input)}
@@ -1788,70 +1791,6 @@ function describeOutsideMatrixActivity(dispositions = {}) {
   return `Outside the matrix includes ${categories.slice(0, -1).join(", ")}, and ${categories[categories.length - 1]}.`;
 }
 
-function BusinessMileagePanel({ workflows, tasks = [], readOnly, onPreview, onSave }) {
-  const standardVehicles = (workflows?.vehicles || []).filter((vehicle) => vehicle?.election?.method === "standard_mileage");
-  const legacySetup = tasks.find((task) => task.kind === "vehicle_setup");
-  if (!standardVehicles.length && !legacySetup) return null;
-  return <section className="mt-4 rounded-2xl border border-sky-300/15 bg-sky-300/[0.035] p-4" aria-label="Business mileage">
-    <div className="text-sm font-semibold text-white/88">Mileage Deduction</div>
-    <p className="mt-1 text-xs text-white/50">Mileage is a separate deduction from posted vehicle costs. Rates are selected by date and each period is counted once.</p>
-    {legacySetup ? <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-xs text-amber-50">Vehicle setup is required before the existing Standard Mileage choice can produce a mileage deduction. The posted vehicle costs remain excluded from separate deduction.</div> : null}
-    <div className="mt-3 space-y-3">{standardVehicles.map((vehicle) => <BusinessMileageVehicle key={vehicle.id} vehicle={vehicle} readOnly={readOnly} onPreview={onPreview} onSave={onSave} />)}</div>
-  </section>;
-}
-
-function BusinessMileageVehicle({ vehicle, readOnly, onPreview, onSave }) {
-  const rates = vehicle.availableRates || [];
-  const [miles, setMiles] = useState(() => Object.fromEntries(rates.map((rate) => [`${rate.effectiveStart}:${rate.effectiveEnd}`, (vehicle.mileage?.periods || []).filter((period) => period.periodStart >= rate.effectiveStart && period.periodEnd <= rate.effectiveEnd).reduce((sum, period) => sum + Number(period.businessMiles), 0) || ""])));
-  const [throughDates, setThroughDates] = useState(() => Object.fromEntries(rates.map((rate) => [rate.effectiveStart, (vehicle.mileage?.periods || []).filter((period) => period.periodStart >= rate.effectiveStart && period.periodEnd <= rate.effectiveEnd).map((period) => period.periodEnd).sort().at(-1) || rate.effectiveEnd])));
-  const [supported, setSupported] = useState(false);
-  const [finalize, setFinalize] = useState(false);
-  const [preview, setPreview] = useState(null);
-  const [status, setStatus] = useState("idle");
-  const [error, setError] = useState("");
-  const entries = rates.map((rate) => ({
-    periodStart: rate.effectiveStart,
-    periodEnd: throughDates[rate.effectiveStart],
-    businessMiles: miles[`${rate.effectiveStart}:${rate.effectiveEnd}`],
-  })).filter((entry) => entry.businessMiles !== "" && entry.businessMiles != null);
-  const previewMileage = async () => {
-    setStatus("previewing"); setError(""); setPreview(null);
-    try { setPreview(await onPreview({ vehicleId: vehicle.id, entries, substantiationStatus: supported ? "supported" : "unsubstantiated", finalize })); }
-    catch (caught) { setError(caught?.message || "Mileage could not be previewed."); }
-    finally { setStatus("idle"); }
-  };
-  const saveMileage = async () => {
-    setStatus("saving"); setError("");
-    try { await onSave({ vehicleId: vehicle.id, expectedElectionId: vehicle.election.id, entries, substantiationStatus: supported ? "supported" : "unsubstantiated", finalize }); setPreview(null); }
-    catch (caught) { setError(caught?.message || "Mileage could not be saved."); }
-    finally { setStatus("idle"); }
-  };
-  return <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div><div className="text-sm font-semibold text-white/82">{vehicle.displayName}</div><div className="text-xs text-white/46">{vehicle.mileage?.status === "needed" ? "Mileage needed · Estimate pending" : `${vehicle.mileage?.businessMiles || 0} saved business miles · ${formatCurrencyLocal(vehicle.mileage?.deductionAmount || 0)} estimated deduction`}</div></div>
-      {vehicle.election?.finalized ? <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] uppercase tracking-wide text-white/50">Finalized</span> : null}
-    </div>
-    <p className="mt-2 text-xs text-white/50">Enter cumulative business miles within each rate period through the date shown. Saving replaces the entire saved set; it does not add miles to earlier snapshots. Keep mileage records to support this estimate.</p>
-    {!readOnly && !vehicle.election?.finalized ? <div className="mt-3 grid gap-2 sm:grid-cols-2">
-      {rates.map((rate) => { const key = `${rate.effectiveStart}:${rate.effectiveEnd}`; return <label key={key} className="text-xs text-white/55">
-        {rate.effectiveStart}–{rate.effectiveEnd} · ${Number(rate.amountPerMile).toFixed(3)}/mile
-        <input aria-label={`Mileage through date for ${rate.effectiveStart}`} type="date" min={rate.effectiveStart} max={rate.effectiveEnd} value={throughDates[rate.effectiveStart]} onChange={(event) => { setThroughDates((value) => ({ ...value, [rate.effectiveStart]: event.target.value })); setPreview(null); }} className="mt-1 w-full rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-white" />
-        <input type="number" min="0" step="0.1" value={miles[key] || ""} onChange={(event) => { setMiles((value) => ({ ...value, [key]: event.target.value })); setPreview(null); }} placeholder="Business miles" className="mt-1 w-full rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-white" />
-      </label>; })}
-    </div> : null}
-    {error ? <div className="mt-2 text-xs text-rose-200">{error}</div> : null}
-    {!readOnly && !vehicle.election?.finalized ? <div className="mt-3 space-y-2 text-xs text-white/60">
-      <label className="flex gap-2"><input type="checkbox" checked={supported} onChange={(event) => { setSupported(event.target.checked); setPreview(null); }} />I have mileage records supporting these business miles.</label>
-      <label className="flex gap-2"><input type="checkbox" checked={finalize} onChange={(event) => { setFinalize(event.target.checked); setPreview(null); }} />Finalize year-end mileage. Further changes require an amendment.</label>
-    </div> : null}
-    {preview ? <div className="mt-2 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.05] px-3 py-2 text-xs text-emerald-50">Preview: {preview.totalBusinessMiles} miles · {formatCurrencyLocal(preview.totalDeduction)} deduction. {finalize ? "Final year-end snapshot. " : "Interim estimate. "}This replaces {preview.replacesExistingActiveEntries} active mileage period{preview.replacesExistingActiveEntries === 1 ? "" : "s"}.</div> : null}
-    {!readOnly && !vehicle.election?.finalized ? <div className="mt-3 flex justify-end gap-2">
-      <button type="button" disabled={!entries.length || status !== "idle"} onClick={previewMileage} className="rounded-full border border-white/12 px-3 py-1.5 text-xs font-semibold disabled:opacity-50">{status === "previewing" ? "Previewing…" : "Preview deduction"}</button>
-      <button type="button" disabled={!preview || status !== "idle"} onClick={saveMileage} className="rounded-full bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-black disabled:opacity-50">{status === "saving" ? "Saving…" : "Save mileage"}</button>
-    </div> : null}
-  </div>;
-}
-
 function DeductionsIncludedDisclosure({ transactionCount, populationBridge = null, projection = null, workspaceProjection = null, updating = false, awaitingEvaluationCount = null }) {
   const legacyCounts = resolveDeductionsPopulationCounts({ transactionCount, populationBridge, projection });
   const hasPersistedCounts = workspaceProjection?.projectionVersion === "tax-workspace-v2"
@@ -2069,7 +2008,8 @@ function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenD
                     </td>
                   ))}
                   <td className="sticky right-0 z-10 w-[128px] min-w-[128px] border-l border-white/[0.08] bg-[#111614] px-3 py-3 text-right align-middle text-sm tabular-nums shadow-[-12px_0_18px_-16px_rgba(0,0,0,0.95)]">
-                    <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.reviewedDeductibleTotal + account.standardRuleDeductibleTotal)}</div>
+                    <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.reviewedDeductibleTotal + account.standardRuleDeductibleTotal + Number(account.mileageAnnualDeductionAmount || 0))}</div>
+                    {Number(account.mileageAnnualDeductionAmount || 0) > 0 ? <div className="mt-1 text-[11px] text-sky-100">{formatCurrencyLocal(account.mileageAnnualDeductionAmount)} mileage deduction{Number(account.mileageUnallocatedDeductionAmount || 0) > 0 ? " · monthly allocation unavailable for period totals" : ""}</div> : null}
                     {account.reviewedTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-emerald-100/76">{account.standardMileageTransactionCount === account.reviewedTransactionCount ? "Reviewed — covered by standard mileage; $0 separate expense deduction" : `${formatCurrencyLocal(account.reviewedDeductibleTotal)} reviewed`}</div> : null}
                     {account.standardRuleTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-sky-100/76">{formatCurrencyLocal(account.standardRuleDeductibleTotal)} estimated</div> : null}
                     {account.customerInputTransactionCount > 0 ? <div className="mt-1 text-[11px] font-semibold text-amber-100/76">{formatCurrencyLocal(account.needsInputGrossExpense)} expenses to review</div> : null}
@@ -2089,7 +2029,7 @@ function DeductionAccountMatrix({ matrix, loading = false, onSelectCell, onOpenD
 }
 
 function MatrixCell({ account, month, cell, onSelectCell, onOpenDecision, decisionGroups = [], onOpenPersistedCell }) {
-  if (!Number(cell?.transactionCount || cell?.transactions?.length || 0)) {
+  if (!Number(cell?.transactionCount || cell?.transactions?.length || 0) && !Number(cell?.mileageDeductionAmount || 0)) {
     return <span className="block px-2 py-1.5 text-[12px] text-white/22" role="img" aria-label="No activity">—</span>;
   }
   if (cell.persisted) return <PersistedMatrixCell account={account} month={month} cell={cell} onOpen={onOpenPersistedCell} />;
@@ -2228,6 +2168,7 @@ function PersistedMatrixCell({ account, month, cell, onOpen }) {
   };
   return (
     <div className="flex flex-col items-stretch gap-1" aria-label={`${account.name}, ${month.longLabel}`}>
+      {Number(cell.mileageDeductionAmount || 0) > 0 ? <div className="rounded-lg border border-sky-300/20 bg-sky-300/[0.06] px-2 py-2 text-right text-xs text-sky-100" aria-label={`${month.longLabel} estimated mileage deduction`}><span className="block font-semibold">{formatCurrencyLocal(cell.mileageDeductionAmount)}</span><span className="block text-[10px]">Estimated mileage deduction</span><span className="sr-only">Separate mileage adjustment; no expense transactions</span></div> : null}
       {button("reviewed", cell.reviewedTransactionCount, "w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50", <><span className="block">{formatCurrencyLocal(cell.reviewedDeductibleTotal)}</span><span className="block text-[10px] font-medium">{matrixAuthorityLabel("reviewed", cell)}</span></>)}
       {button("standard_rule", cell.standardRuleTransactionCount, "w-full rounded-lg border border-sky-300/10 bg-sky-300/[0.05] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-sky-100", <><span className="block">{formatCurrencyLocal(cell.standardRuleDeductibleTotal)}</span><span className="block text-[10px] font-medium">Estimated deduction</span></>)}
       {button("needs_input", cell.customerInputTransactionCount, "w-full rounded-lg border border-amber-300/10 bg-amber-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-amber-100", <><span className="block">{formatCurrencyLocal(cell.needsInputGrossExpense)}</span><span className="block text-[10px] font-medium">Expenses awaiting input</span></>)}
@@ -5813,6 +5754,7 @@ function buildPersistedWorkspaceMatrix(workspace, year) {
       const needsInputCount = Number(stored.needsInputTransactionCount || 0);
       const transactionCount = Number(stored.transactionCount || 0);
       return [month.key, {
+        mileageDeductionAmount: Number(stored.mileageDeductionAmount || 0),
         persisted: true, transactionCount,
         expenseTotal: Number(stored.bookExpenseAmount || 0), authoritativeDeductibleTotal: deductible,
         proposedDeductibleTotal: 0, standardRuleDeductibleTotal: estimatedDeductible, reviewedDeductibleTotal: reviewedDeductible,
@@ -5829,6 +5771,8 @@ function buildPersistedWorkspaceMatrix(workspace, year) {
     }));
     const values = Object.values(monthMap);
     return {
+      mileageAnnualDeductionAmount: Number(category.mileageAnnualDeductionAmount || 0),
+      mileageUnallocatedDeductionAmount: Number(category.mileageUnallocatedDeductionAmount || 0),
       key: `tax-category:${category.categoryKey}`, id: category.categoryKey, name: category.categoryLabel,
       sourceLabel: "Tax category", months: monthMap,
       expenseTotal: values.reduce((sum, item) => sum + item.expenseTotal, 0),

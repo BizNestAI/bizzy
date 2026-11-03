@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 
-export default function VehicleTreatmentEditor({ vehicles = [], vehicleId: initialVehicleId = "", transactionIds = [], defaultAction = "exclude", onPreview, onApply, onSaved, readOnly = false }) {
+export default function VehicleTreatmentEditor({ vehicles = [], vehicleId: initialVehicleId = "", transactionIds = [], defaultAction = "exclude", onPreview, onApply, onSaved, readOnly = false, triggerLabel = "Change treatment", compact = false }) {
   const [open, setOpen] = useState(false);
   const [action, setAction] = useState(defaultAction);
   const [vehicleId, setVehicleId] = useState(initialVehicleId);
@@ -60,8 +60,8 @@ export default function VehicleTreatmentEditor({ vehicles = [], vehicleId: initi
     }
     finally { setBusy(false); }
   };
-  return <section className="my-3 rounded-xl border border-emerald-300/20 bg-emerald-300/[0.035] p-3 text-xs text-white/70">
-    <button type="button" disabled={readOnly || busy || unknown} onClick={() => setOpen(!open)} className="font-semibold text-emerald-100 disabled:opacity-40">Change treatment</button>
+  return <section className={compact ? "my-3 text-xs text-white/70" : "my-3 rounded-xl border border-emerald-300/20 bg-emerald-300/[0.035] p-3 text-xs text-white/70"}>
+    <button type="button" disabled={readOnly || busy || unknown} onClick={() => setOpen(!open)} aria-expanded={open} className="rounded font-semibold text-emerald-100 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/60">{triggerLabel}</button>
     {saved ? <p role="status" className="mt-2 text-emerald-100">Treatment saved with audit history.</p> : null}
     {open ? <>
       <p className="mt-2">Explicit corrections can amend earlier user decisions. CPA decisions remain protected. A vehicle method or percentage amendment recalculates the entire vehicle/year.</p>

@@ -604,7 +604,8 @@ export function useTaxDeductions({
     previewVehicleMileage: (input = {}) => previewTaxVehicleMileage({ businessId, year, ...input }),
     saveVehicleMileage: async (input = {}) => {
       const result = await saveTaxVehicleMileage({ businessId, year, ...input });
-      await load();
+      const refreshed = await load({ refresh: true });
+      if (!refreshed?.workspaceSnapshot) throw Object.assign(new Error("Mileage was saved, but deductions could not be refreshed. Refresh to check the saved amount."), { saved: true });
       return result;
     },
     getGroupedDeductionDecisionOperation: async ({ idempotencyKey, signal } = {}) => {

@@ -670,17 +670,17 @@ export async function createTaxVehicle({ businessId, year, displayName, ownershi
   }));
 }
 
-export async function previewTaxVehicleMileage({ businessId, year, vehicleId, entries, substantiationStatus, finalize, signal } = {}) {
+export async function previewTaxVehicleMileage({ businessId, year, vehicleId, expectedElectionId, entries, substantiationStatus, finalize, signal } = {}) {
   requireBusinessId(businessId);
   return unwrap(await request(`/api/tax/vehicle-mileage/preview?${query({ businessId, year })}`, {
-    method: "POST", body: { vehicleId, entries, substantiationStatus, finalize }, signal,
+    method: "POST", body: { vehicleId, expectedElectionId, entries, substantiationStatus, finalize }, signal,
   }));
 }
 
-export async function saveTaxVehicleMileage({ businessId, year, vehicleId, expectedElectionId, entries, mileageBasis = "records", substantiationStatus = "unsubstantiated", finalize = false, signal } = {}) {
+export async function saveTaxVehicleMileage({ businessId, year, vehicleId, expectedElectionId, expectedPreview, entries, mileageBasis = "records", substantiationStatus = "unsubstantiated", finalize = false, signal } = {}) {
   requireBusinessId(businessId);
   const result = unwrap(await request(`/api/tax/vehicle-mileage/apply?${query({ businessId, year })}`, {
-    method: "POST", body: { vehicleId, expectedElectionId, entries, mileageBasis, substantiationStatus, finalize }, signal,
+    method: "POST", body: { vehicleId, expectedElectionId, expectedPreview, entries, mileageBasis, substantiationStatus, finalize }, signal,
   }));
   clearBusinessCache(businessId);
   return result;

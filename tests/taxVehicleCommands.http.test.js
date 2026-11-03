@@ -20,13 +20,14 @@ function databaseAdapter(db) {
   };
   return {
     rpc(name, args) {
-      assert.ok(["preview_tax_vehicle_command", "apply_tax_vehicle_command"].includes(name));
+      assert.ok(["preview_tax_vehicle_command", "apply_tax_vehicle_command", "replace_tax_vehicle_mileage_entries"].includes(name));
       return query(`select public.${name}(${Object.values(args).map(literal).join(",")});`);
     },
     from(table) {
-      assert.ok(["business_profiles", "user_business_link"].includes(table));
+      assert.ok(["business_profiles", "user_business_link", "tax_vehicles", "tax_vehicle_method_elections", "tax_vehicle_mileage_inputs", "tax_vehicle_mileage_rates"].includes(table));
       const filters = [];
       const chain = { select() { return this; }, limit() { return this; }, eq(column, value) { assert.match(column, /^[a-z_]+$/); filters.push(`${column}=${literal(value)}`); return this; },
+        then(resolve) { return Promise.resolve(query(`select coalesce(jsonb_agg(t),'[]'::jsonb) from public.${table} t where ${filters.length ? filters.join(" and ") : "true"};`)).then(resolve); },
         maybeSingle() { return query(`select to_jsonb(t) from public.${table} t where ${filters.join(" and ")} limit 1;`); } };
       return chain;
     },
@@ -98,6 +99,27 @@ test("authenticated HTTP vehicle corrections enforce tenant, projection, RLS, hi
     assert.notEqual(db.sql("select public.apply_tax_vehicle_command(null,null,null,null,null);", "authenticated").status, 0);
     const policies = JSON.parse(db.check(db.sql("select json_agg(roles) from pg_policies where tablename in ('tax_vehicle_command_previews','tax_vehicle_transaction_assignments');")).stdout.trim());
     assert.ok(policies.every((roles) => roles.length === 1 && roles[0] === "service_role"));
+    // Exercise real authenticated mileage preview/apply against SQL snapshots.
+    db.check(db.sql(`insert into public.tax_vehicles(id,business_id,display_name,ownership_type) values('44444444-4444-4444-8444-444444444444','${B}','Monthly HTTP vehicle','owned');
+      insert into public.tax_vehicle_method_elections(id,business_id,vehicle_id,tax_year,method,status,effective_start,effective_end,source,authority,contract_version,elected_by) values('55555555-5555-4555-8555-555555555555','${B}','44444444-4444-4444-8444-444444444444',2026,'standard_mileage','active','2026-01-01','2026-12-31','tax_workspace_question','customer','vehicle-election-v1','${U}');`));
+    const mileageCall = async (route, body, token = owner) => {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/tax/vehicle-mileage/${route}?businessId=${B}&year=2026`, {
+        method:'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(5000) });
+      return {status:response.status,...await response.json()};
+    };
+    const mileageInput={vehicleId:'44444444-4444-4444-8444-444444444444',expectedElectionId:'55555555-5555-4555-8555-555555555555',substantiationStatus:'supported',entries:[{periodStart:'2026-01-01',periodEnd:'2026-01-31',businessMiles:1000},{periodStart:'2026-07-01',periodEnd:'2026-07-31',businessMiles:12000}]};
+    assert.equal((await mileageCall('preview',mileageInput,null)).status,401);
+    assert.equal((await mileageCall('preview',mileageInput,other)).status,403);
+    const mileagePreview=await mileageCall('preview',mileageInput);assert.equal(mileagePreview.status,200,JSON.stringify(mileagePreview));assert.equal(mileagePreview.data.totalDeduction,9845);assert.equal(mileagePreview.data.monthlyAllocation.status,'complete');
+    const expectedPreview={electionId:mileagePreview.data.electionId,periods:mileagePreview.data.periods,totalDeduction:9845};
+    const mileageSaved=await mileageCall('apply',{...mileageInput,expectedPreview});assert.equal(mileageSaved.status,200,JSON.stringify(mileageSaved));assert.equal(mileageSaved.data.totalDeduction,9845);
+    const mileageReplay=await mileageCall('apply',{...mileageInput,expectedPreview});assert.deepEqual(mileageReplay.data.entryIds,mileageSaved.data.entryIds);
+    const snapshotBefore=db.check(db.sql('select count(*) from public.tax_vehicle_mileage_inputs;')).stdout;
+    assert.equal((await mileageCall('apply',{...mileageInput,expectedPreview:{...expectedPreview,totalDeduction:999999}})).status,409);
+    assert.equal((await mileageCall('apply',{...mileageInput,expectedElectionId:'66666666-6666-4666-8666-666666666666'})).status,409);
+    assert.equal((await mileageCall('apply',{...mileageInput,entries:[{...mileageInput.entries[0],businessMiles:-1}]})).status,422);
+    assert.equal((await mileageCall('apply',mileageInput,other)).status,403);
+    assert.equal(db.check(db.sql('select count(*) from public.tax_vehicle_mileage_inputs;')).stdout,snapshotBefore);
   } finally {
     reset?.();
     if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }

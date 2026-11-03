@@ -22,16 +22,19 @@ export function calculateVehicleMileageDeduction({ date, miles, estimate = false
 }
 
 export function calculateVehicleMileagePeriods({ entries = [], rates = VEHICLE_MILEAGE_RATES } = {}) {
+  if (!Array.isArray(entries) || entries.length > 366) throw mileageError("invalid_mileage_period", "Enter no more than 366 mileage periods.");
   const normalized = entries.map(normalizeMileageEntry);
+  const totalMileUnits = normalized.reduce((sum, entry) => sum + Math.round(entry.businessMiles * 100), 0);
+  if (totalMileUnits > 100_000_000) throw mileageError("invalid_business_miles", "Annual business miles exceed the accepted range.");
   assertNoOverlappingMileage(normalized);
   const periods = normalized.map((entry) => {
     const matchingRates = rates.filter((rate) => entry.periodStart >= rate.effectiveFrom && entry.periodEnd <= rate.effectiveTo);
     if (matchingRates.length !== 1) throw mileageError("mileage_period_requires_rate_allocation", "Mileage must be allocated to one effective rate period.");
     const rate = matchingRates[0];
-    const amount = roundMoney(entry.businessMiles * Number(rate.amountPerMile ?? Number(rate.centsPerMile) / 100));
+    const amount = exactMileageAmount(entry.businessMiles, Number(rate.amountPerMile ?? Number(rate.centsPerMile) / 100));
     return { ...entry, amount, amountPerMile: Number(rate.amountPerMile ?? Number(rate.centsPerMile) / 100), rateSourceVersion: rate.sourceVersion || null };
   });
-  return { periods, totalBusinessMiles: periods.reduce((sum, period) => sum + period.businessMiles, 0), totalDeduction: roundMoney(periods.reduce((sum, period) => sum + period.amount, 0)) };
+  return { periods, totalBusinessMiles: totalMileUnits / 100, totalDeduction: roundMoney(periods.reduce((sum, period) => sum + period.amount, 0)) };
 }
 
 export function assertNoOverlappingMileage(entries = []) {
@@ -60,4 +63,13 @@ function normalizeDateKey(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
   const date = new Date(`${text}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === text ? text : null;
+}
+
+// SQL rounds numeric(miles * rate, 2). Integer units reproduce that rounding
+// exactly for the contract's two-place miles and six-place rate precision.
+export function exactMileageAmount(miles, rate) {
+  if (!Number.isFinite(rate) || rate < 0 || rate > 100 || Math.abs(rate * 1e6 - Math.round(rate * 1e6)) > 0.00001) throw mileageError("invalid_mileage_rate", "Mileage rate is unavailable.");
+  const mileUnits = BigInt(Math.round(Number(miles) * 100));
+  const rateUnits = BigInt(Math.round(rate * 1e6));
+  return Number((mileUnits * rateUnits + 500000n) / 1000000n) / 100;
 }

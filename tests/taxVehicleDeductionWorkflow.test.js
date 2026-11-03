@@ -160,3 +160,24 @@ test("vehicle scope survives every browser adapter to reach the authoritative co
   assert.match(hook, /confirmGroupedTaxDeductionDecision\(\{[^}]*vehicleScope/);
   assert.match(client, /compact\(\{[^}]*vehicleScope/);
 });
+
+test('monthly snapshots reconcile preview, saved rate amounts, reload, retries, and reject stale preview without writes', async () => {
+  const supabase=storeClient();const vehicle=await createTaxVehicle({supabase,businessId:BUSINESS_ID,actor,input:{displayName:'Monthly van'}});
+  const electionId='33333333-3333-4333-8333-333333333333';
+  supabase.store.tax_vehicle_method_elections.push({id:electionId,business_id:BUSINESS_ID,vehicle_id:vehicle.id,tax_year:2026,method:'standard_mileage',status:'active',effective_start:'2026-01-01',effective_end:'2026-12-31'});
+  const entries=Array.from({length:12},(_,i)=>({periodStart:`2026-${String(i+1).padStart(2,'0')}-01`,periodEnd:`2026-${String(i+1).padStart(2,'0')}-${new Date(Date.UTC(2026,i+1,0)).getUTCDate()}`,businessMiles:i===0?1000:i===6?12000:0}));
+  const input={vehicleId:vehicle.id,expectedElectionId:electionId,entries,substantiationStatus:'supported'};
+  const preview=await previewVehicleMileage({supabase,businessId:BUSINESS_ID,taxYear:2026,actor,input});
+  assert.equal(preview.totalDeduction,9845);assert.equal(preview.monthlyAllocation.status,'complete');assert.equal(preview.monthlyAllocation.months['2026-01'].deductionAmount,725);assert.equal(preview.monthlyAllocation.months['2026-07'].deductionAmount,9120);
+  input.expectedPreview={electionId,periods:preview.periods,totalDeduction:preview.totalDeduction};
+  const saved=await saveVehicleMileage({supabase,businessId:BUSINESS_ID,taxYear:2026,actor,input});
+  const replay=await saveVehicleMileage({supabase,businessId:BUSINESS_ID,taxYear:2026,actor,input});assert.deepEqual(saved.entryIds,replay.entryIds);assert.equal(supabase.store.tax_vehicle_mileage_inputs.length,12);
+  const reload=(await listVehicleDeductionWorkflows({supabase,businessId:BUSINESS_ID,taxYear:2026})).vehicles[0];
+  assert.equal(reload.mileage.businessMiles,13000);assert.equal(reload.mileage.deductionAmount,9845);assert.deepEqual(reload.mileage.monthlyAllocation,preview.monthlyAllocation);
+  const before=JSON.stringify(supabase.store.tax_vehicle_mileage_inputs);
+  supabase.store.tax_vehicle_mileage_rates[0].amount_per_mile=0.726;
+  await assert.rejects(saveVehicleMileage({supabase,businessId:BUSINESS_ID,taxYear:2026,actor,input}),e=>e.code==='mileage_preview_stale');assert.equal(JSON.stringify(supabase.store.tax_vehicle_mileage_inputs),before);
+  await assert.rejects(saveVehicleMileage({supabase,businessId:BUSINESS_ID,taxYear:2026,actor,input:{...input,expectedElectionId:'stale'}}),e=>e.code==='vehicle_election_changed');
+  await assert.rejects(saveVehicleMileage({supabase,businessId:'22222222-2222-4222-8222-222222222222',taxYear:2026,actor,input}));
+  await assert.rejects(saveVehicleMileage({supabase,businessId:BUSINESS_ID,taxYear:2026,actor:{},input}));assert.equal(JSON.stringify(supabase.store.tax_vehicle_mileage_inputs),before);
+});

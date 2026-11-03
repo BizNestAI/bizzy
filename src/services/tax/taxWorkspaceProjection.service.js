@@ -1,3 +1,4 @@
+import { buildGasContext } from "./taxVehicleMileagePresentation.js";
 import { hasConfirmedVehicleElection, attachVehicleElectionEvidence, vehicleMethodNeedsConfirmation, isVehicleExpenseRow, vehicleTreatmentProvenanceLabel } from "./taxVehicleAuthority.js";
 import { createHash, randomUUID } from "node:crypto";
 import { getDeductionsOverview, listDeductionTransactions } from "./taxDeductionsApi.service.js";
@@ -13,7 +14,7 @@ import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js"
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
-export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.6-election-evidence`;
+export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.7-monthly-mileage`;
 export const TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION = "signed-treatment-amounts-v1";
 const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;
@@ -611,6 +612,27 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
   const postedTransactionDeductionAmount = round(matrix.reduce((sum, row) => sum + Object.values(row.months).reduce((monthSum, month) => monthSum + month.deductibleAmount, 0), 0));
   const vehicleMileageDeductionAmount = round((vehicleDeductions?.vehicles || []).reduce((sum, vehicle) => sum + Number(vehicle?.mileage?.deductionAmount || 0), 0));
   const vehicleWorkflows = vehicleDeductions?.vehicles || [];
+  const gasContext = buildGasContext(matrixEntries, { taxYear, rates: vehicleDeductions?.rates || [], vehicles: vehicleWorkflows });
+  let allocatedMileageCents = 0;
+  for (const vehicle of vehicleWorkflows.filter(v => v.election?.method === "standard_mileage")) {
+    const allocation = vehicle.mileage?.monthlyAllocation;
+    if (allocation && !sameMoney(vehicle.mileage.deductionAmount, Number(allocation.allocatedDeductionAmount || 0) + Number(allocation.unallocatedDeductionAmount || 0))) throw coded("tax_workspace_mileage_reconciliation_failed");
+    if (!vehicle.mileage?.entryCount && !Number(vehicle.mileage?.deductionAmount)) continue;
+    let category = matrix.find(row => row.categoryKey === "vehicle_expense");
+    if (!category) { category = { categoryKey: "vehicle_expense", categoryLabel: "Vehicle Expense", transactionCount: 0, identityManifest: [], months: {} }; matrix.push(category); }
+    category.mileageAnnualDeductionAmount = round(Number(category.mileageAnnualDeductionAmount || 0) + Number(vehicle.mileage.deductionAmount || 0));
+    category.mileageUnallocatedDeductionAmount = round(Number(category.mileageUnallocatedDeductionAmount || 0) + Number(allocation?.unallocatedDeductionAmount ?? vehicle.mileage.deductionAmount ?? 0));
+    for (const [month, value] of Object.entries(allocation?.months || {})) {
+      if (!month.startsWith(`${taxYear}-`)) throw coded("tax_workspace_mileage_year_mismatch");
+      const cell = category.months[month] ||= aggregateMonth([]);
+      cell.mileageDeductionAmount = round(Number(cell.mileageDeductionAmount || 0) + Number(value.deductionAmount));
+      cell.mileageBusinessMiles = round(Number(cell.mileageBusinessMiles || 0) + Number(value.businessMiles));
+      cell.mileageSource = "saved_vehicle_mileage";
+      cell.mileageLabel = "Estimated mileage deduction";
+      allocatedMileageCents += Math.round(Number(value.deductionAmount) * 100);
+    }
+  }
+
   const nonTransactionTasks = vehicleWorkflows
     .filter((vehicle) => vehicle?.election?.method === "standard_mileage" && vehicle?.mileage?.status === "needed")
     .map((vehicle) => ({ kind: "business_mileage", vehicleId: vehicle.id, label: vehicle.displayName, status: "needs_input" }));
@@ -626,6 +648,8 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
     estimatedDeductibleAmount: round(postedTransactionDeductionAmount + vehicleMileageDeductionAmount),
     postedTransactionDeductionAmount,
     vehicleMileageDeductionAmount,
+    monthlyAllocatedMileageDeductionAmount: allocatedMileageCents / 100,
+    gasContext,
     otherNonTransactionDeductionAmount: 0,
     vehicleDeductions: vehicleDeductions || { contractVersion: "vehicle-deduction-v1", taxYear, rates: [], vehicles: [] },
     nonTransactionTasks,
@@ -766,6 +790,11 @@ function validatePayload(p){
     matrixDeductibleAmount+=Number(month?.deductibleAmount||0);
   }
   if(!sameMoney(p.postedTransactionDeductionAmount ?? matrixDeductibleAmount,matrixDeductibleAmount)) throw coded("tax_workspace_posted_estimate_amount_mismatch");
+  if (p.monthlyAllocatedMileageDeductionAmount != null) {
+    const monthlyMileage = matrixRows.reduce((sum,row) => sum + Object.values(row.months || {}).reduce((sub,month) => sub + Math.round(Number(month.mileageDeductionAmount || 0) * 100),0),0) / 100;
+    const unallocatedMileage = matrixRows.reduce((sum,row) => sum + Math.round(Number(row.mileageUnallocatedDeductionAmount || 0) * 100),0) / 100;
+    if (!Number.isFinite(monthlyMileage) || !sameMoney(monthlyMileage,p.monthlyAllocatedMileageDeductionAmount) || !sameMoney(monthlyMileage+unallocatedMileage,p.vehicleMileageDeductionAmount)) throw coded("tax_workspace_mileage_reconciliation_failed");
+  }
   const composedTotal=Number(p.postedTransactionDeductionAmount??matrixDeductibleAmount)+Number(p.vehicleMileageDeductionAmount||0)+Number(p.otherNonTransactionDeductionAmount||0);
   if(!sameMoney(p.estimatedDeductibleAmount,composedTotal)) throw coded("tax_workspace_estimate_amount_mismatch");
   const evidence=p.identityEvidence||{};
@@ -810,6 +839,15 @@ export function publicTaxWorkspaceProjection(payload) {
   const safe = { ...payload };
   const matrix = safe.matrix || [];
   delete safe.identityEvidence;
+  if (safe.gasContext) {
+    const publicSummary = value => { const { transactionIds: _ids, ...summary } = value || {}; return summary; };
+    safe.gasContext = { ...safe.gasContext, total: publicSummary(safe.gasContext.total),
+      coveredByStandardMileage: publicSummary(safe.gasContext.coveredByStandardMileage),
+      requiresSeparateConfirmation: publicSummary(safe.gasContext.requiresSeparateConfirmation),
+      otherConfirmed: publicSummary(safe.gasContext.otherConfirmed),
+      periods: safe.gasContext.periods.map(publicSummary),
+      byVehicle: Object.fromEntries(Object.entries(safe.gasContext.byVehicle).map(([id,value]) => [id,publicSummary(value)])) };
+  }
   safe.questionGroups = (safe.questionGroups || []).map((sourceGroup) => {
     const group = { ...sourceGroup };
     delete group.semanticFingerprint;

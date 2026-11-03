@@ -1,0 +1,52 @@
+{
+  "verdict": "READY",
+  "focused": {
+    "passed": 208,
+    "failed": 0,
+    "timeoutSeconds": 45
+  },
+  "lastTargetedUi": {
+    "passed": 6,
+    "failed": 0,
+    "timeoutSeconds": 20
+  },
+  "postgresHttpRls": {
+    "passed": 5,
+    "failed": 0,
+    "timeoutSeconds": 60
+  },
+  "extendedMileageHttp": {
+    "passed": 1,
+    "failed": 0,
+    "timeoutSeconds": 45
+  },
+  "before": {
+    "passed": 0,
+    "failed": 3
+  },
+  "eslint": "passed",
+  "build": "passed",
+  "diffCheck": "passed",
+  "migrationsChanged": false,
+  "productionWrites": false,
+  "gasFixture": {
+    "annual": {
+      "count": 96,
+      "expense": 3934.47
+    },
+    "firstPeriod": {
+      "count": 32,
+      "expense": 2690.63
+    },
+    "secondPeriod": {
+      "count": 64,
+      "expense": 1243.84
+    }
+  },
+  "monthlyExample": {
+    "businessMiles": 13000,
+    "deduction": 9845,
+    "january": 725,
+    "july": 9120
+  }
+}

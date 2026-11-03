@@ -282,6 +282,16 @@ test("mounted dashboard preserves an id-only Gas question while its authoritativ
     await act(async () => root.render(React.createElement(internals.PersistedMatrixCell, { account: persistedAccount, month: { key: "2026-06", longLabel: "June 2026" }, cell: persistedAccount.months["2026-06"], onOpen() {} })));
     assert.match(container.textContent, /Reviewed — covered by standard mileage/);
     assert.doesNotMatch(container.textContent, /Reviewed deduction/);
+    const mileageMatrix = internals.buildPersistedWorkspaceMatrix({ matrixIncludedCount: 0, matrix: [{ categoryKey: "vehicle_expense", categoryLabel: "Vehicle Expense", transactionCount: 0,
+      mileageAnnualDeductionAmount: 9845, mileageUnallocatedDeductionAmount: 0,
+      months: { "2026-01": { transactionCount: 0, mileageDeductionAmount: 725, vehicleElectionEvidenceVersion: "persisted-election-v1" }, "2026-07": { transactionCount: 0, mileageDeductionAmount: 9120, vehicleElectionEvidenceVersion: "persisted-election-v1" } } }] }, 2026);
+    assert.equal(mileageMatrix.transactionCount, 0);
+    assert.equal(mileageMatrix.accounts[0].mileageAnnualDeductionAmount, 9845);
+    assert.equal(Object.values(mileageMatrix.accounts[0].months).reduce((sum, month) => sum + month.mileageDeductionAmount, 0), 9845);
+    await act(async () => root.render(React.createElement(internals.PersistedMatrixCell, { account: mileageMatrix.accounts[0], month: { key: "2026-01", longLabel: "January 2026" }, cell: mileageMatrix.accounts[0].months["2026-01"], onOpen() {} })));
+    assert.match(container.textContent, /\$725/);
+    assert.match(container.textContent, /Estimated mileage deduction/);
+    assert.equal(elements(container, node => node.tagName === "BUTTON").length, 0, "mileage adjustment is not a fake transaction drilldown");
 
   } finally {
     await act(async () => root.unmount()); await vite.close();

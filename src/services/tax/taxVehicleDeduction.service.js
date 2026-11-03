@@ -1,3 +1,4 @@
+import { monthlyMileageAllocation } from "./taxVehicleMileagePresentation.js";
 import { createHash, randomUUID } from "node:crypto";
 import { calculateVehicleMileagePeriods } from "./vehicleMileageRates.js";
 import { conflictError, forbiddenBusinessError, notFoundError, validationError } from "./taxErrors.js";
@@ -52,6 +53,7 @@ export async function previewVehicleMileage({ supabase, businessId, taxYear, act
   const workflow = await requireStandardMileageElection({ supabase, businessId, taxYear, vehicleId: input.vehicleId });
   const rates = workflow.rates.map((rate) => ({ effectiveFrom: rate.effective_start, effectiveTo: rate.effective_end, amountPerMile: Number(rate.amount_per_mile), sourceVersion: rate.source_version }));
   if (!Array.isArray(input.entries) || !input.entries.length) throw validationError("mileage_entries_required", "Enter at least one mileage period.");
+  if (input.expectedElectionId && String(input.expectedElectionId) !== String(workflow.election.id)) throw conflictError("vehicle_election_changed", "The vehicle method changed. Refresh before saving mileage.");
   const result = calculateVehicleMileagePeriods({ entries: input.entries, rates });
   if (result.periods.some((period) => period.periodStart < `${Number(taxYear)}-01-01` || period.periodEnd > `${Number(taxYear)}-12-31`)) throw validationError("mileage_outside_tax_year", "Mileage periods must be within the selected tax year.");
   const mileageBasis = text(input.mileageBasis) || "records";
@@ -66,6 +68,7 @@ export async function previewVehicleMileage({ supabase, businessId, taxYear, act
     periods: [...result.periods].sort(byPeriod).map(({ periodStart, periodEnd, businessMiles, amount, amountPerMile, rateSourceVersion }) => ({ periodStart, periodEnd, businessMiles, amount, amountPerMile, rateSourceVersion })),
     totalBusinessMiles: result.totalBusinessMiles,
     totalDeduction: result.totalDeduction,
+    monthlyAllocation: monthlyMileageAllocation(result.periods),
     replacesExistingActiveEntries: workflow.entries.length,
   };
 }
@@ -73,6 +76,7 @@ export async function previewVehicleMileage({ supabase, businessId, taxYear, act
 export async function saveVehicleMileage({ supabase, businessId, taxYear, actor = {}, input = {} } = {}) {
   const preview = await previewVehicleMileage({ supabase, businessId, taxYear, actor, input });
   if (text(input.expectedElectionId) !== String(preview.electionId)) throw conflictError("vehicle_election_changed", "The vehicle method changed. Refresh before saving mileage.");
+  if (input.expectedPreview && JSON.stringify({ electionId: preview.electionId, periods: preview.periods, totalDeduction: preview.totalDeduction }) !== JSON.stringify(input.expectedPreview)) throw conflictError("mileage_preview_stale", "Mileage rates or details changed. Review the updated estimate before saving.");
   const entries = preview.periods.map((period) => ({
     period_start: period.periodStart, period_end: period.periodEnd, business_miles: period.businessMiles,
     mileage_basis: text(input.mileageBasis) || "records", substantiation_status: text(input.substantiationStatus) || "unsubstantiated",
@@ -111,7 +115,7 @@ function publicWorkflow(vehicle, election, allEntries, rates) {
   return {
     ...publicVehicle(vehicle),
     election: election ? { id: election.id, method: election.method, status: election.status, electedBy: election.elected_by, electedAt: election.elected_at, supersededBy: election.superseded_by || null, businessUsePercent: numberOrNull(election.business_use_percent), effectiveStart: election.effective_start, effectiveEnd: election.effective_end, finalized: election.status === "finalized" } : null,
-    mileage: { status: entries.length ? "entered" : election?.method === "standard_mileage" ? "needed" : "inactive", entryCount: entries.length, businessMiles: entries.reduce((sum, entry) => sum + Number(entry.business_miles || 0), 0), deductionAmount: mileageDeduction, substantiationStatus: aggregateSubstantiation(entries), periods: entries.sort(byPeriod).map(publicMileageEntry) },
+    mileage: { status: entries.length ? "entered" : election?.method === "standard_mileage" ? "needed" : "inactive", entryCount: entries.length, businessMiles: entries.reduce((sum, entry) => sum + Math.round(Number(entry.business_miles || 0) * 100), 0) / 100, deductionAmount: mileageDeduction, substantiationStatus: aggregateSubstantiation(entries), periods: entries.sort(byPeriod).map(publicMileageEntry), monthlyAllocation: monthlyMileageAllocation(entries.map(publicMileageEntry)) },
     availableRates: rates.sort(byPeriod).map(publicRate),
   };
 }
