@@ -1642,6 +1642,33 @@ body.pdf-modal-open .bizzy-qprompts {
   }
 }
 
+/* Keep sign-in visibly active until navigation replaces the login page. */
+.bizzy-login-spinner {
+  animation: bizzyLoginSpin 800ms linear infinite;
+}
+
+.bizzy-login-sheen {
+  background: linear-gradient(105deg, transparent 25%, rgba(167,243,208,0.16) 50%, transparent 75%);
+  transform: translateX(-100%);
+  animation: bizzyLoginSheen 1.8s ease-in-out infinite;
+}
+
+@keyframes bizzyLoginSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes bizzyLoginSheen {
+  to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bizzy-login-spinner,
+  .bizzy-login-sheen {
+    animation: none;
+  }
+  .bizzy-login-sheen { display: none; }
+}
+
 /* Login page: keep browser autofill aligned with the graphite home palette. */
 .bizzy-login-input,
 .bizzy-login-input:-webkit-autofill,

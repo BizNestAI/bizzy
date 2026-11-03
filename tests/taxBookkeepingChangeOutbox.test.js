@@ -1,9 +1,29 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createClient } from "@supabase/supabase-js";
 import { processTaxBookkeepingChangeOutbox } from "../src/services/tax/processTaxBookkeepingChangeOutbox.js";
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+
+test("outbox RPC serializes the named signature declared by its migration", async () => {
+  const migration = read("supabase/migrations/20261101170000_tax_bookkeeping_change_outbox.sql");
+  assert.match(migration, /claim_tax_bookkeeping_change_outbox\(\s*p_worker_id text, p_batch_size integer default 10, p_now timestamptz default now\(\)/);
+  const now = new Date("2026-11-03T12:00:00.000Z");
+  let calls = 0;
+  const supabase = createClient("https://example.supabase.co", "test-service-key", {
+    global: { fetch: async (url, options) => {
+      calls += 1;
+      assert.equal(new URL(url).pathname, "/rest/v1/rpc/claim_tax_bookkeeping_change_outbox");
+      assert.equal(options.method, "POST");
+      assert.deepEqual(JSON.parse(options.body), { p_worker_id: "worker-test", p_batch_size: 7, p_now: now.toISOString() });
+      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    } },
+  });
+  assert.deepEqual(await processTaxBookkeepingChangeOutbox({ supabase, workerId: "worker-test", batchSize: 7, now }),
+    { processed: 0, completed: 0, failed: 0 });
+  assert.equal(calls, 1);
+});
 
 test("bookkeeping account changes enqueue a tenant-scoped durable event in the same database transaction", () => {
   const migration = read("supabase/migrations/20261101170000_tax_bookkeeping_change_outbox.sql");

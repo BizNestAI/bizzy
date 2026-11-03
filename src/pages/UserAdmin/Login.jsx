@@ -168,6 +168,7 @@ export default function Login() {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    if (loading) return;
     setError("");
     setLoading(true);
     try {
@@ -185,7 +186,6 @@ export default function Login() {
       navigate(postLoginRoute, { replace: true });
     } catch (err) {
       setError(friendlyLoginError(err));
-    } finally {
       setLoading(false);
     }
   };
@@ -351,14 +351,24 @@ export default function Login() {
                 type="submit"
                 disabled={loading}
                 className="
-                  mt-1 inline-flex w-full items-center justify-center gap-2 rounded-full
+                  bizzy-login-submit relative overflow-hidden mt-1 inline-flex w-full items-center justify-center gap-2 rounded-full
                   border border-emerald-300/32 bg-[linear-gradient(180deg,rgba(32,216,155,0.18),rgba(19,185,129,0.10))] py-3 text-sm font-semibold text-emerald-50
                   shadow-[0_18px_45px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)]
-                  transition hover:border-emerald-300/48 hover:bg-emerald-300/[0.16] disabled:opacity-60
+                  transition hover:border-emerald-300/48 hover:bg-emerald-300/[0.16] disabled:cursor-wait
                 "
                 aria-busy={loading ? "true" : "false"}
               >
-                {loading ? "Signing in…" : "Login"} <ArrowRight className="h-4 w-4" />
+                {loading && <span aria-hidden="true" className="bizzy-login-sheen pointer-events-none absolute inset-0" />}
+                <span className="relative inline-flex items-center justify-center gap-2" role="status" aria-live="polite">
+                  {loading ? (
+                    <>
+                      <span aria-hidden="true" className="bizzy-login-spinner h-4 w-4 rounded-full border-2 border-emerald-100/25 border-t-emerald-50" />
+                      Signing in…
+                    </>
+                  ) : (
+                    <>Login <ArrowRight aria-hidden="true" className="h-4 w-4" /></>
+                  )}
+                </span>
               </button>
             </form>
 

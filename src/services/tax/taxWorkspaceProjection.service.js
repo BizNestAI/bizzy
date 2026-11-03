@@ -61,12 +61,10 @@ export async function reconcileTaxWorkspaceProjection({ supabase, record, busine
     const vehicleDeductions = baselinePayload?.vehicleDeductions?.liveRefreshSupported
       ? await listVehicleDeductionWorkflows({ supabase, businessId, taxYear: Number(taxYear) })
       : baselinePayload?.vehicleDeductions;
-    const sourceFingerprint = createHash("sha256").update(JSON.stringify({
-      baseline: record.source_fingerprint || baselinePayload?.sourceFingerprint,
-      classifications: currentRows.map((row) => [row.transaction_id, row.classification_status, row.tax_category,
-        row.deductibility_status, row.deductible_percent, row.deductible_amount, row.updated_at]),
-      vehicleDeductions,
-    })).digest("hex");
+    // This read-only overlay retains the persisted projection ID and population.
+    // Its concurrency fingerprint must retain that same persisted identity too;
+    // preview validates live question membership separately before confirmation.
+    const sourceFingerprint = record.source_fingerprint || baselinePayload?.sourceFingerprint;
     const currentPayload = buildPayload({
       overview: {
         projection: { completeness: baselinePayload?.completeness || record?.completeness || "complete" },

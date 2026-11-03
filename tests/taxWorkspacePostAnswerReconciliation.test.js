@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import process from "node:process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
@@ -504,4 +505,60 @@ test("Phone Bill transition conserves 690 identities and moves five Utilities me
   assert.equal(afterUtilities.reviewedDeductibleAmount, 260);
   assert.equal(afterUtilities.needsInputGrossExpense, 20);
   assert.doesNotThrow(() => projection.validatePayload(after));
+});
+
+test("workspace GET and preview share stored identity despite live overlay fingerprint representation", async (t) => {
+  const { EventEmitter } = await import("node:events");
+  const { createHash } = await import("node:crypto");
+  const { __testables } = await import("../src/services/tax/taxGroupedDecisionPreview.service.js");
+  process.env.SUPABASE_URL ||= "http://127.0.0.1:54321";
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
+  const { default: router } = await import("../src/api/tax/taxWorkspace.routes.js");
+  const businessId = "00000000-0000-4000-8000-000000000010";
+  const { baseline, classifications } = productionSparseOverlayFixture();
+  baseline.canonicalBusinessId = businessId;
+  classifications.forEach((row) => {
+    row.business_id = businessId;
+    if (row.source_qbo_account_name === "Transportation 1") {
+      row.source_qbo_account_id = "gas-account";
+      row.source_qbo_account_name = "Gas";
+    }
+  });
+  const record = { id: "b89dcfba-3f08-47cd-be86-8e014242ca42", business_id: businessId,
+    tax_year: 2026, projection_version: "tax-workspace-v2", status: "complete",
+    source_fingerprint: baseline.sourceFingerprint, projection_data: baseline, generated_at: baseline.generatedAt };
+  const query = { select() { return this; }, eq() { return this; }, limit() { return this; },
+    async maybeSingle() { return { data: { id: businessId, user_id: "owner" }, error: null }; },
+    then(resolve) { return Promise.resolve(resolve({ data: classifications, error: null })); } };
+  const db = { store: { tax_workspace_projections: [record], business_billing: [{ business_id: businessId,
+    subscription_status_test: "active", subscription_status_live: "active" }] }, from() { return query; } };
+  t.mock.method(console, "warn", () => {});
+  t.mock.method(console, "info", () => {});
+  // Seed matching semantic groups from the real reconciler, rather than a hand-built group ID.
+  const overlay = await reconcileTaxWorkspaceProjection({ supabase: db, record, businessId, taxYear: 2026 });
+  record.projection_data.questionGroups = overlay.questionGroups;
+  const groupId = overlay.questionGroups.find((group) => group.qboAccountName === "Gas").id;
+  const oldOverlayFingerprint = createHash("sha256").update(JSON.stringify({ baseline: record.source_fingerprint,
+    classifications: classifications.map((row) => [row.transaction_id, row.classification_status, row.tax_category,
+      row.deductibility_status, row.deductible_percent, row.deductible_amount, row.updated_at]),
+    vehicleDeductions: baseline.vehicleDeductions,
+  })).digest("hex");
+  assert.notEqual(oldOverlayFingerprint, record.source_fingerprint);
+  const req = Object.assign(new EventEmitter(), { headers: {}, query: { businessId, year: "2026", projectionVersion: "tax-workspace-v2" },
+    tenantContext: { businessId }, user: { id: "owner" }, app: { locals: { supabase: db } } });
+  let body;
+  const res = { set() { return this; }, status() { return this; }, json(value) { body = value; return this; } };
+  await router.stack.find((layer) => layer.route?.path === "/workspace").route.stack[0].handle(req, res);
+  assert.equal(body.ok, true, JSON.stringify(body));
+  const workspace = body.data;
+  assert.equal(workspace.projectionId, record.id);
+  assert.ok(workspace.projection.questionGroups.some((group) => group.id === groupId));
+  assert.equal(workspace.sourceFingerprint, record.source_fingerprint);
+  assert.equal(workspace.projection.sourceFingerprint, record.source_fingerprint);
+  const check = (projectionId, sourceFingerprint) => __testables.requireCurrentWorkspaceProjection({
+    supabase: db, businessId, taxYear: 2026, projectionId, sourceFingerprint, groupId });
+  assert.equal(await check(workspace.projectionId, workspace.sourceFingerprint), record);
+  await assert.rejects(check(record.id, oldOverlayFingerprint), { code: "grouped_decision_projection_stale", status: 409 });
+  await assert.rejects(check("old-projection", record.source_fingerprint), { code: "grouped_decision_projection_stale", status: 409 });
+  assert.equal(db.store.tax_workspace_projections.length, 1);
 });
