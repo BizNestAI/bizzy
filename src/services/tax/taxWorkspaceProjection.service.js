@@ -14,7 +14,7 @@ import { listVehicleDeductionWorkflows } from "./taxVehicleDeduction.service.js"
 
 export const TAX_WORKSPACE_PROJECTION_VERSION = "tax-workspace-v2";
 export const TAX_WORKSPACE_LEGACY_PROJECTION_VERSION = "tax-workspace-v1";
-export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.7-monthly-mileage`;
+export const TAX_WORKSPACE_FORMULA_VERSION = `${TAX_DEDUCTIONS_ENGINE_VERSION}:identity-contract-v2.8-category-questions`;
 export const TAX_WORKSPACE_AMOUNT_CONTRACT_VERSION = "signed-treatment-amounts-v1";
 const PAGE_SIZE = 200;
 const MAX_QUESTIONS = 50;
@@ -171,6 +171,10 @@ function restoreSparseProjectionMembers({ payload, baselinePayload, mappedRows, 
   result.estimatedDeductibleAmount = round(result.postedTransactionDeductionAmount
     + Number(result.vehicleMileageDeductionAmount || 0)
     + Number(result.otherNonTransactionDeductionAmount || 0));
+  if (result.resolutionWorkflows) {
+    const covered = new Set(Object.values(resultEvidence.questionGroups || {}).flat());
+    result.resolutionWorkflows.transactionCount = resultEvidence.treatments.needs_input.filter(id => !covered.has(id)).length;
+  }
   refreshIdentityFingerprints(result);
   result.warnings = [...(result.warnings || []), {
     code: "tax_workspace_sparse_live_overlay", severity: "low",
@@ -533,6 +537,7 @@ async function buildCurrentTaxWorkspacePayload({ supabase, businessId, taxYear, 
     const classification = classificationById.get(String(row.transactionId));
     return mapDeductionTransactionRow({
       ...row,
+      metadata: classification?.metadata || row.metadata,
       userOverride: classification?.user_override ?? row.userOverride,
       cpaOverride: classification?.cpa_override ?? row.cpaOverride,
       ruleVersion: row.ruleVersion || classification?.rule_version || classification?.metadata?.rule_version || null,
@@ -598,7 +603,7 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
   };
   const matrix = buildIdentityMatrix(matrixEntries, taxYear);
   const questionGroups = lifecycle.activeDecisionGroups.slice(0, MAX_QUESTIONS).map((group) => ({
-    id: group.id, decisionType: group.decisionType, qboAccountId: group.qboAccountId,
+    id: group.id, decisionType: group.decisionType, resolutionFacts: group.resolutionFacts, resolutionTitle: group.resolutionTitle, qboAccountId: group.qboAccountId,
     qboAccountName: group.qboAccountName, semanticFingerprint: group.semanticFingerprint,
     semanticManifest: group.semanticManifest, ruleVersions: group.ruleVersions,
     transactionCount: group.transactionCount, actionableTransactionCount: group.actionableTransactionCount,
@@ -658,6 +663,7 @@ function buildPayload({ overview, lifecycle, businessId, taxYear, sourceFingerpr
     treatmentCounts: Object.fromEntries(Object.entries(treatmentEntries).map(([key, value]) => [key, value.length])),
     actionOwnerCounts,
     matrix,
+    resolutionWorkflows: { transactionCount: treatmentEntries.needs_input.filter(entry => !questionUnion.includes(entry.id)).length, label: "Review remaining transactions in All transactions" },
     questionGroupCount: questionGroups.length,
     questionMembershipSum,
     questionCoveredUniqueCount: questionUnion.length,
@@ -825,6 +831,11 @@ function validatePayload(p){
   if(p.evaluatedTransactionCount!==evaluated.size || p.matrixIncludedCount!==matrix.size || p.outsideDeductionsCount!==outside.size || rowCount!==matrix.size || monthCount!==matrix.size) throw coded("tax_workspace_identity_count_mismatch");
   if(p.questionMembershipSum!==questionSum || p.questionCoveredUniqueCount!==questionUnion.size || p.questionMembershipOverlapCount!==0 || questionSum!==questionUnion.size) throw coded("tax_workspace_question_membership_mismatch");
   for(const id of questionUnion) if(!matrix.has(id)) throw coded("tax_workspace_question_outside_matrix");
+  if (p.questionGroupCount !== p.questionGroups.length) throw coded("tax_workspace_question_membership_mismatch");
+  if (p.resolutionWorkflows) {
+    if ([...questionUnion].some(id => !treatmentSets.needs_input.has(id)) ||
+      p.resolutionWorkflows.transactionCount !== [...treatmentSets.needs_input].filter(id => !questionUnion.has(id)).length) throw coded("tax_workspace_resolution_path_mismatch");
+  }
   for(const [name,ids] of [["evaluated",evaluated],["matrixIncluded",matrix],["outsideDeductions",outside],["estimated",treatmentSets.estimated],["reviewed",treatmentSets.reviewed],["needsInput",treatmentSets.needs_input],["questionCovered",questionUnion]]) if(p.identityFingerprints?.[name]!==setFingerprint([...ids])) throw coded("tax_workspace_identity_fingerprint_mismatch");
 }
 function requiredUniqueSet(ids,code){ if(!Array.isArray(ids)||ids.some((id)=>!String(id||"").trim())||new Set(ids.map(String)).size!==ids.length) throw coded(code); return new Set(ids.map(String)); }

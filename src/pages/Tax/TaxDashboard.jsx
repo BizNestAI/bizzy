@@ -1,3 +1,4 @@
+import { CATEGORY_RESOLUTION_OPTIONS, TEMPORARY_TAX_CATEGORIES, categoryTreatmentForAnswer } from "../../services/tax/taxCategoryResolution.js";
 import { formatTaxCurrency as formatCurrencyLocal } from "../../components/Tax/taxCurrency.js";
 import BusinessMileagePanel from "../../components/Tax/BusinessMileagePanel.jsx";
 import VehicleTreatmentEditor from "../../components/Tax/VehicleTreatmentEditor.jsx";
@@ -1098,8 +1099,9 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
               Manage deduction defaults
             </button>
           </div>
+          {Number(deductions.workspaceProjection?.resolutionWorkflows?.transactionCount || 0) > 0 ? <button type="button" onClick={()=>{setWorkspaceView("all_transactions");setClassificationTab("all");}} className="m-3 text-xs text-amber-100 underline">{deductions.workspaceProjection.resolutionWorkflows.transactionCount} other transactions need review · Open All transactions</button> : null}
           {questionsPanelState === "ready_empty" ? (
-            <div className="px-3 py-8 text-center text-sm text-white/58">Nothing needs your input right now.</div>
+            <div className="px-3 py-8 text-center text-sm text-white/58">No grouped questions are ready. Check All transactions for other review items.</div>
           ) : (
             <ProjectedQuestionGroups
               groups={projectedQuestionGroups}
@@ -1150,6 +1152,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
         taxYear={year}
         readOnly={readOnly}
         workspaceReconciling={deductions.refreshing}
+        onOpenTransactions={() => {setReviewDecision(null);setWorkspaceView("all_transactions");setClassificationTab("all");}}
         onClose={() => setReviewDecision(null)}
         onResolved={({ groupId }) => {
           setReviewDecision(null);
@@ -1164,6 +1167,10 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
             previewId: command.previewId,
             idempotencyKey: command?.idempotencyKey,
             answer: command.answer,
+            taxCategory: command.taxCategory,
+            businessPurposeConfirmed: command.businessPurposeConfirmed,
+            rentUse: command.rentUse,
+            currentYearConfirmed: command.currentYearConfirmed,
             vehicleMethod: command.vehicleMethod,
             actualExpenseUse: command.actualExpenseUse,
             businessUsePercent: command.businessUsePercent,
@@ -1249,6 +1256,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
             onSetTaxProfileMemory={deductions.setProfileMemory}
             onSaveDeductionDecisionRule={deductions.saveDeductionDecisionRule}
             onRefresh={refreshDeductions}
+            onOpenCategoryQuestions={() => { closeMatrixCell(); setWorkspaceView("needs_attention"); }}
             vehicleWorkflows={deductions.workspaceProjection?.vehicleDeductions?.vehicles || []}
             onPreviewVehicleCommand={(input) => deductions.previewVehicleCommand(input)}
             onApplyVehicleCommand={(input) => deductions.applyVehicleCommand(input)}
@@ -1917,9 +1925,10 @@ function ProjectedQuestionGroups({ groups = [], onOpen }) {
         const sameNameGroups = groups.filter((candidate) => String(candidate.qboAccountName || "Expense review") === String(group.qboAccountName || "Expense review"));
         const scopePosition = sameNameGroups.length > 1 ? sameNameGroups.findIndex((candidate) => candidate.id === group.id) + 1 : null;
         return <article key={group.id} className="rounded-xl border border-amber-300/15 bg-amber-300/[0.05] p-3" data-question-position={groupIndex + 1}>
-          <div className="text-sm font-semibold text-white">{group.qboAccountName || "Expense review"}</div>
+          <div className="text-sm font-semibold text-white">{group.resolutionTitle || group.qboAccountName || "Expense review"}</div>
           <div className="mt-0.5 text-[11px] text-white/42">{projectedQuestionGroupSubtitle(group, scopePosition, sameNameGroups.length)}</div>
-          <div className="mt-1 text-xs text-white/55">{Number(group.actionableTransactionCount || 0)} transaction{Number(group.actionableTransactionCount || 0) === 1 ? "" : "s"} need your input.</div>
+          <div className="mt-1 text-xs text-white/55">{group.qboAccountName} · {formatCurrencyLocal(Number(group.actionableGrossAmountCents || 0) / 100)} · {Number(group.actionableTransactionCount || 0)} transaction{Number(group.actionableTransactionCount || 0) === 1 ? "" : "s"} need your input.</div>
+          {group.resolutionFacts ? <p className="mt-1 text-xs text-white/45">{group.resolutionFacts.suggestedCategory ? "A suggested category needs your confirmation; the current classification remains Unresolved." : "No reliable final tax classification is available. Your records are needed to choose its treatment."}</p> : null}
           <button type="button" onClick={() => onOpen?.(group)} className="mt-3 rounded-full border border-amber-100/20 px-3 py-1 text-xs font-semibold text-amber-50 hover:bg-amber-100/10">Open question</button>
         </article>;
       })}
@@ -2483,6 +2492,7 @@ function decisionTransactionIds(rows = [], answer = "all_business", exceptionIds
 
 function decisionActionLabel(action, answer, accountName = "") {
   if (answer === "unsure") return "Leave unresolved";
+  if (["category_confirmation", "rent_treatment"].includes(action?.kind)) return "Save classification";
   if (action?.kind === "vehicle_method") return "Apply vehicle decision";
   if (action?.kind === "business_use_percent" || action?.kind === "utility_allocation") return "Apply business-use percentage";
   if (answer === "some_personal") return "Save business-use decision";
@@ -2491,6 +2501,9 @@ function decisionActionLabel(action, answer, accountName = "") {
 }
 
 function decisionTitle(action, accountName) {
+  if (action?.resolutionTitle && ["category_confirmation","rent_treatment"].includes(action.kind)) return action.resolutionTitle;
+  if (action?.kind === "rent_treatment") return "Confirm Rent Lease treatment";
+  if (action?.kind === "category_confirmation") return "Choose a tax category";
   if (action?.kind === "vehicle_method") return `Choose a vehicle method for ${accountName}`;
   if (action?.kind === "business_use_percent" || action?.kind === "utility_allocation") return `Set business use for ${accountName}`;
   return `Review ${accountName}`;
@@ -2640,8 +2653,12 @@ const GROUPED_DECISION_DISABLED_COPY = {
   confirmation_required: "Confirm the reviewed-estimate change to continue.",
 };
 
-function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspaceReconciling = false, onClose: onCloseRequested, onResolved, onApply, onCheckOutcome, onScopeChanged, onPreview }) {
+function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspaceReconciling = false, onClose: onCloseRequested, onResolved, onApply, onCheckOutcome, onScopeChanged, onPreview, onOpenTransactions }) {
   const prefersReducedMotion = useReducedMotion();
+  const [resolutionTaxCategory, setResolutionTaxCategory] = useState(decision?.group?.resolutionFacts?.suggestedCategory || "");
+  const [businessPurposeConfirmed, setBusinessPurposeConfirmed] = useState(false);
+  const [rentUse, setRentUse] = useState("");
+  const [currentYearConfirmed, setCurrentYearConfirmed] = useState(false);
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [vehicleMethod, setVehicleMethod] = useState("");
   const [vehicleId, setVehicleId] = useState("");
@@ -2855,6 +2872,9 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspac
   } : groupPopulation;
   const selectedRows = decisionRowsForAnswer(rows, businessUseAnswer, exceptionIds);
   const action = isTaxRecord(group.decision) ? group.decision : reviewDecisionForType(group.decisionType);
+  const categoryQuestion = ["category_confirmation","rent_treatment"].includes(action.kind);
+  let categoryAnswerValid = true;
+  if (categoryQuestion) { try { categoryTreatmentForAnswer({ taxCategory: resolutionTaxCategory, businessPurposeConfirmed, rentUse, currentYearConfirmed }, action.kind); } catch { categoryAnswerValid = false; } }
   const requiresPercent = action.kind === "business_use_percent" || (action.kind === "utility_allocation" && !dedicatedPremises);
   const hasPercentInput = dedicatedPremises || String(businessUsePercent).trim() !== "";
   const percentValue = dedicatedPremises ? 100 : Number(businessUsePercent);
@@ -2910,7 +2930,7 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspac
     changingReviewedEstimate,
     confirmRetroactiveChange,
   });
-  const { canSubmit } = submitEligibility;
+  const canSubmit = submitEligibility.canSubmit && categoryAnswerValid;
   const disabledReason = GROUPED_DECISION_DISABLED_COPY[submitEligibility.reason] || null;
 
   const submit = async () => {
@@ -2925,7 +2945,8 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspac
         command: {
           idempotencyKey,
           previewId: serverPreview.previewId,
-          answer: action.kind === "vehicle_method" ? "vehicle_method" : requiresPercent ? "business_use_percent" : businessUseAnswer,
+          taxCategory: categoryQuestion ? resolutionTaxCategory : undefined, businessPurposeConfirmed: categoryQuestion ? businessPurposeConfirmed : undefined, rentUse: categoryQuestion ? rentUse : undefined, currentYearConfirmed: categoryQuestion ? currentYearConfirmed : undefined,
+          answer: categoryQuestion ? "category_confirmation" : action.kind === "vehicle_method" ? "vehicle_method" : requiresPercent ? "business_use_percent" : businessUseAnswer,
           vehicleMethod: action.kind === "vehicle_method" ? vehicleMethod : null,
           actualExpenseUse: action.kind === "vehicle_method" && vehicleMethod === "actual_expense" ? actualExpenseUse : null,
           businessUsePercent: action.kind === "vehicle_method" && actualExpenseUse === "mixed_use" ? businessUsePercent : requiresPercent ? percentValue : null,
@@ -3043,6 +3064,17 @@ function ReviewDecisionModal({ decision, businessId, taxYear, readOnly, workspac
             </p>
           ) : null}
           {Number(serverPreview?.protectedUnresolvedCount || 0) > 0 ? <p className="mt-3 text-xs leading-relaxed text-white/46">{serverPreview.protectedUnresolvedCount} transactions have protected prior decisions but still need confirmation. They are unchanged here; use Change treatment to correct them explicitly.</p> : population.alreadyResolvedCount > 0 ? <p className="mt-3 text-xs leading-relaxed text-white/46">{population.alreadyResolvedCount} transaction{population.alreadyResolvedCount === 1 ? " already has" : "s already have"} a reviewed treatment and will not be changed here.</p> : null}
+          {categoryQuestion ? <div className="space-y-3 rounded-xl border border-amber-300/20 p-3 text-sm">
+            <p className="text-xs text-white/60">{action.kind === "rent_treatment" ? "Confirm what was rented before choosing its treatment. Vehicle, home-office, prepaid or asset costs need separate review." : "No final tax category is saved yet. Choose the category supported by your records."}</p>
+            <label className="block text-xs">Tax category<select aria-label="Resolution tax category" value={resolutionTaxCategory} onChange={event=>setResolutionTaxCategory(event.target.value)} className="dark-dropdown mt-1 w-full rounded-lg bg-[#151a18] p-2"><option value="">Choose a tax category</option>{CATEGORY_RESOLUTION_OPTIONS.map(option=><option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            {(action.kind === "rent_treatment" || ["rent_lease","equipment_rental"].includes(resolutionTaxCategory)) ? <>
+              <label className="block text-xs">What was rented?<select aria-label="What was rented" value={rentUse} onChange={event=>{setRentUse(event.target.value);if(event.target.value === "business_premises")setResolutionTaxCategory("rent_lease");if(event.target.value === "equipment_rental")setResolutionTaxCategory("equipment_rental");}} className="dark-dropdown mt-1 w-full rounded-lg bg-[#151a18] p-2"><option value="">Choose what was rented</option><option value="business_premises">Business premises</option><option value="equipment_rental">Business equipment rental</option><option value="vehicle">Vehicle</option><option value="home_office">Home office</option><option value="prepaid">Prepaid rent or an asset</option><option value="not_sure">I’m not sure</option></select></label>
+              <label className="flex gap-2 text-xs"><input type="checkbox" checked={currentYearConfirmed} onChange={event=>setCurrentYearConfirmed(event.target.checked)} />This payment covers use during {taxYear}.</label>
+              {rentUse && !["business_premises","equipment_rental"].includes(rentUse) ? <p role="status" className="text-xs text-amber-100">Keep this expense in Needs Input. Review vehicle treatment, home-office eligibility or payment timing in All transactions before confirming.</p> : null}
+            </> : null}
+            <label className="flex gap-2 text-xs"><input type="checkbox" checked={businessPurposeConfirmed} onChange={event=>{setBusinessPurposeConfirmed(event.target.checked);setBusinessUseAnswer(event.target.checked ? "all_business" : "");}} />I reviewed the purpose of these expenses and the selected category.</label>
+            <p className="text-xs text-white/50">Vehicle expenses need the dedicated Change treatment workflow in All transactions. Nothing changes until you confirm a complete answer.</p><button type="button" onClick={onOpenTransactions} className="text-xs text-amber-100 underline">Open All transactions for separate review</button>
+          </div> : null}
           {action.kind === "confirm_business_purpose" ? (
             <div className="mt-3 space-y-2 rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
               <div className="font-semibold text-white/84">Confirm business use</div>
@@ -3779,7 +3811,7 @@ function toDecisionActionGroup(group) {
   const allRows = normalizeRows(safeGroup.rows).filter(isTaxRecord);
   const rows = pendingRows.length ? pendingRows : (reviewedRows.length ? reviewedRows : allRows);
   const row = rows[0] || {};
-  const decision = reviewDecisionForType(safeGroup.decisionType, { completed: safeGroup.pendingCount === 0 });
+  const decision = { ...reviewDecisionForType(safeGroup.decisionType, { completed: safeGroup.pendingCount === 0 }), resolutionTitle: safeGroup.resolutionTitle };
   const deductiblePercent = safeGroup.currentDeductiblePercent ?? row.deductiblePercent ?? null;
   const categoryTransactionCount = Number(safeGroup.categoryTransactionCount ?? safeGroup.transactionCount ?? (allRows.length || rows.length)) || 0;
   const actionableTransactionCount = Number(safeGroup.actionableTransactionCount ?? safeGroup.pendingCount ?? pendingRows.length) || 0;
@@ -3821,6 +3853,7 @@ function toDecisionActionGroup(group) {
 }
 
 function reviewDecisionForType(type, { completed = false } = {}) {
+  if (["category_confirmation","rent_treatment"].includes(type)) return { kind: type, canApply: true, actionLabel: "Save classification" };
   if (type === "vehicle_method") {
     return {
       kind: "vehicle_method",
@@ -4061,6 +4094,7 @@ function DeductionMonthDetailModal({
   detailLoading = false,
   detailError = null,
   onRetryDetail,
+  onOpenCategoryQuestions,
   readOnly = false,
 }) {
   const prefersReducedMotion = useReducedMotion();
@@ -4208,7 +4242,7 @@ function DeductionMonthDetailModal({
     resolutionCategory,
     resolutionMode: reviewResolutionMode,
   });
-  const canResolve = !readOnly && reviewContext.kind !== "vehicle_method" && selectedCount > 0 && reviewContext.supported &&
+  const canResolve = !readOnly && !["vehicle_method", "category_confirmation"].includes(reviewContext.kind) && selectedCount > 0 && reviewContext.supported &&
     (isTaxReviewResolution({ resolutionMode: reviewResolutionMode, businessUseMode, vehicleMethod, resolutionCategory }) ||
       ((reviewContext.kind !== "business_use_percent" || businessUseSelectionValid) &&
       (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid))));
@@ -4534,6 +4568,7 @@ function DeductionMonthDetailModal({
               onTaxReviewReasonNoteChange={setTaxReviewReasonNote}
               onBookkeepingIssueFlagChange={setBookkeepingIssueFlag}
               onToggleCategoryChange={() => setShowCategoryChange((current) => !current)}
+              onOpenCategoryQuestions={onOpenCategoryQuestions}
               onSave={saveReviewResolution}
               onCancelEdit={cancelEditConfirmation}
               onDefer={() => {
@@ -4829,7 +4864,7 @@ function detailResolutionHeading(context = {}) {
   if (context.kind === "vehicle_method") return "Choose vehicle deduction method";
   if (context.kind === "business_purpose" && context.businessLabel?.toLowerCase().includes("meal")) return "Confirm business meals";
   if (context.kind === "business_purpose") return "Confirm business trips";
-  if (context.kind === "category_confirmation") return "Confirm supplies treatment";
+  if (context.kind === "category_confirmation") return "Choose a tax category";
   return "Resolve this review";
 }
 
@@ -4844,7 +4879,7 @@ function detailResolutionSaveLabel(context = {}, selectedCount = 0, resolutionMo
     return selectedCount ? "Confirm selected as business meals" : "Confirm selected as business meals";
   }
   if (context.kind === "business_purpose") return "Confirm selected as business trips";
-  if (context.kind === "category_confirmation") return "Save supplies treatment";
+  if (context.kind === "category_confirmation") return "Save classification";
   return `Save ${selectedCount || 0} ${selectedCount === 1 ? "decision" : "decisions"}`;
 }
 
@@ -4878,6 +4913,7 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   onToggleCategoryChange,
   onSave,
   onCancelEdit,
+  onOpenCategoryQuestions,
   onDefer,
 }, ref) {
   const allSelected = rows.length > 0 && rows.every((row) => selectedIds.has(String(row.id || row.raw?.transactionId)));
@@ -4923,17 +4959,9 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
             </div>
           ) : null}
           {context.kind === "category_confirmation" ? (
-            <div>
-              <label className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Confirm category</label>
-              <div className="mt-1">
-                <TaxCategorySelect
-                  value={resolutionCategory}
-                  currentLabel={formatTaxCategoryLabel(resolutionCategory || context.defaultTaxCategory)}
-                  disabled={readOnly || saving}
-                  tone="review"
-                  onChange={onResolutionCategoryChange}
-                />
-              </div>
+            <div className="text-sm text-white/65">
+              <p>Choose a final category in Questions for you. Each question groups expenses with compatible facts and confirms the treatment before saving.</p>
+              <button type="button" onClick={onOpenCategoryQuestions} className="mt-2 text-emerald-100 underline">Open classification questions</button>
             </div>
           ) : null}
           {context.kind === "business_purpose" ? (
@@ -5366,7 +5394,7 @@ function detailReviewContextForSelection(selection) {
   return {
     kind: "category_confirmation",
     supported: true,
-    defaultTaxCategory: taxCategorySelectValue(row) || "other",
+    defaultTaxCategory: taxCategorySelectValue(row) || "",
     confirmationPercent: Number(row?.deductiblePercent || 0),
     deductibilityStatus: row?.deductibilityStatus || "needs_review",
     taxTreatment: row?.taxTreatment || "ordinary_expense",
@@ -5422,11 +5450,11 @@ function isTaxReviewResolution(options = {}) {
 
 function buildDetailResolutionChanges(context, rows, options = {}) {
   const first = rows[0] || {};
-  if (isTaxReviewResolution(options)) return null;
+  if (isTaxReviewResolution(options) || context.kind === "category_confirmation") return null;
   const category = context.kind === "category_confirmation" || context.allowCategoryChange
     ? options.resolutionCategory || context.defaultTaxCategory
     : taxCategorySelectValue(first) || context.defaultTaxCategory;
-  if (!category) return null;
+  if (!category || TEMPORARY_TAX_CATEGORIES.has(category)) return null;
   if (options.resolutionMode === "unsure" || options.businessUseMode === "unsure") {
     return {
       taxCategory: category,
@@ -5627,13 +5655,14 @@ function TaxCategorySelect({ value, currentLabel, onChange, disabled = false, to
 }
 
 function taxCategoryOptionsForValue(value, currentLabel) {
+  if (TEMPORARY_TAX_CATEGORIES.has(value)) return TAX_CATEGORY_OPTIONS;
   if (!value || TAX_CATEGORY_OPTIONS.some((option) => option.value === value)) return TAX_CATEGORY_OPTIONS;
   return [{ value, label: currentLabel || formatTaxCategoryLabel(value) }, ...TAX_CATEGORY_OPTIONS];
 }
 
 function taxCategorySelectValue(row) {
   const value = row?.taxCategory || "";
-  return value === "unclassified" || value === "needs_review" ? "" : value;
+  return TEMPORARY_TAX_CATEGORIES.has(value) ? "" : value;
 }
 
 function formatTaxCategoryLabel(value) {

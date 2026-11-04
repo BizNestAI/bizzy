@@ -383,7 +383,7 @@ test("customer ownership and expiry are rejected before classifications or write
 test("browser confirmation cannot submit authoritative IDs, counts, amounts, authority, or treatment", () => {
   const client = readFileSync("src/services/tax/taxApiClient.js", "utf8");
   const route = readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
-  assert.match(client, /compact\(\{ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope \}\)/);
+  assert.match(client, /compact\(\{ previewId, answer, taxCategory, businessPurposeConfirmed, rentUse, currentYearConfirmed, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope \}\)/);
   assert.doesNotMatch(client, /confirmGroupedTaxDeductionDecision[\s\S]{0,500}(targetTransactionIds|scopeFingerprint|grossAmountCents)/);
   assert.match(route, /canonicalMutationBusinessId/);
   assert.match(route, /tenantContext\?\.mode === "admin_view"/);

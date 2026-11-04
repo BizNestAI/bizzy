@@ -1,3 +1,4 @@
+import { categoryResolutionFacts, categoryTreatmentForAnswer } from "./taxCategoryResolution.js";
 import { withTaxPreviewDeadline } from "./taxPreviewDeadline.js";
 import { createHash, randomUUID } from "node:crypto";
 import { listTaxClassifications } from "./taxClassification.repository.js";
@@ -139,7 +140,7 @@ async function applyFromPreview({ supabase, businessId, taxYear, preview, input,
   const first = currentRows.find((row) => businessIds.includes(String(row.transaction_id)));
   const changes = treatmentForAnswer(first, input);
   const reason = "Customer confirmed a grouped Tax question from a server preview.";
-  const scope = { taxCategory: first.tax_category, qboAccountId: accountId(first), decisionType: preview.decision_type, semanticFingerprint: preview.scope?.semantic_fingerprint };
+  const scope = { taxCategory: first.tax_category, qboAccountId: accountId(first), decisionType: preview.decision_type, resolutionFacts: categoryResolutionFacts(first), semanticFingerprint: preview.scope?.semantic_fingerprint };
   const scopeFingerprint = buildGroupedDeductionDecisionFingerprint({ businessId, taxYear, ...scope, transactionIds: targetIds, expectedPopulationTransactionIds: [...actionableIds], personalExceptionIds: [...exceptions], changes, reason });
   const vehicleExpenseEstimate = input.answer === "vehicle_method" ? calculateVehicleExpenseEstimate({ ...input, rows: currentRows.filter((row) => businessIds.includes(String(row.transaction_id))), taxCategory: first.tax_category }) : null;
   const result = await applyGroupedTaxDeductionDecision({ supabase, businessId, taxYear, actor, input: {
@@ -186,10 +187,12 @@ function classificationQuestionRow(row) {
 function taxDecisionTypeForClassification(row) {
   return taxDecisionTypeForRow({ taxScopeDisposition: "expense_cogs_in_matrix", taxCategory: row.tax_category,
     qboAccountName: row.source_qbo_account_name || row.metadata?.source_qbo_account_name,
-    ruleCode: row.rule_code, taxTreatment: row.tax_treatment?.type || row.tax_treatment });
+    metadata: row.metadata, ruleCode: row.rule_code, taxTreatment: row.tax_treatment?.type || row.tax_treatment });
 }
 
 function treatmentForAnswer(row, input) {
+  const decisionType = taxDecisionTypeForClassification(row);
+  if (["category_confirmation","rent_treatment"].includes(decisionType)) { if (input.answer !== "category_confirmation") throw validationError("category_answer_required","Choose a tax category and confirm the expense facts."); return categoryTreatmentForAnswer(input, decisionType); }
   if (input.answer === "vehicle_method") {
     try {
       return vehicleTreatmentForAnswer({ ...input, taxCategory: row.tax_category });
@@ -361,6 +364,7 @@ function previewTtlSeconds() { const value = Number(globalThis.process?.env?.TAX
 function fingerprintConfirmation(input = {}) {
   const payload = JSON.stringify({
     answer: text(input.answer),
+    ...(input.answer === "category_confirmation" ? { taxCategory: text(input.taxCategory), businessPurposeConfirmed: input.businessPurposeConfirmed === true, rentUse: text(input.rentUse), currentYearConfirmed: input.currentYearConfirmed === true } : {}),
     vehicleMethod: text(input.vehicleMethod),
     actualExpenseUse: text(input.actualExpenseUse),
     businessUsePercent: input.businessUsePercent == null ? null : Number(input.businessUsePercent),

@@ -208,7 +208,7 @@ export default function NavRail({
             onBlur={() => setSettingsTooltip(null)}
             onKeyDown={(event) => { if (event.key === "Escape") setSettingsTooltip(null); }}
             aria-describedby={settingsTooltip ? settingsTooltipId : undefined}
-            aria-label="Settings and sync"
+            aria-label="Settings"
             className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-white/85 transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/30"
           >
             <Settings size={17} strokeWidth={1.7} aria-hidden="true" />
@@ -240,7 +240,7 @@ export default function NavRail({
       </aside>
 
       {settingsTooltip && createPortal(
-        <AnimatePresence><Motion.div id={settingsTooltipId} role="tooltip" {...NAV_TOOLTIP_MOTION} className={NAV_TOOLTIP_CLASS} style={{ ...NAV_TOOLTIP_STYLE, ...settingsTooltip }}>Settings and sync</Motion.div></AnimatePresence>,
+        <AnimatePresence><Motion.div id={settingsTooltipId} role="tooltip" {...NAV_TOOLTIP_MOTION} className={NAV_TOOLTIP_CLASS} style={{ ...NAV_TOOLTIP_STYLE, ...settingsTooltip }}>Settings</Motion.div></AnimatePresence>,
         document.body
       )}
 

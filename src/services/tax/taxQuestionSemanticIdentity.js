@@ -1,3 +1,4 @@
+import { categoryResolutionFacts } from "./taxCategoryResolution.js";
 import { VEHICLE_QUESTION_ANSWER_CONTRACT } from "./taxVehicleQuestionContract.js";
 
 // User-facing questions are grouped by answer semantics. Classifier
@@ -17,6 +18,7 @@ export function buildTaxQuestionSemanticManifest({ row = {}, decisionType } = {}
     decisionType: text(decisionType),
     normalizedTaxCategory: taxCategory,
     subject,
+    ...(["category_confirmation","rent_treatment"].includes(decisionType) ? { resolutionFacts: categoryResolutionFacts(row) } : {}),
     answerContract: answerContract(decisionType, current),
     authorityContract: {
       actionableStatus: "needs_review",
@@ -43,6 +45,7 @@ export function buildTaxQuestionIdentity({ businessId, taxYear, row = {}, decisi
 }
 
 function answerContract(decisionType, current) {
+  if (["category_confirmation","rent_treatment"].includes(decisionType)) return { schema: { required: ["taxCategory","businessPurposeConfirmed"], temporaryCategoriesForbidden: true, rentClarificationRequired: decisionType === "rent_treatment" }, currentTreatment: current };
   if (decisionType === "business_use_percent") return {
     schema: { required: ["businessUsePercent"], businessUsePercent: { type: "number", minimum: 0, maximum: 100 } },
     outcomes: { percentage: { taxCategory: current.taxCategory, taxTreatment: "business_use_allocation", deductiblePercent: "input", deductibilityStatus: "derived_from_percent" } },
@@ -69,6 +72,7 @@ function confirmedTreatment(current) {
 }
 
 function canonicalCurrentTreatment(decisionType, current) {
+  if (["category_confirmation","rent_treatment"].includes(decisionType)) return { taxCategory: current.taxCategory, taxTreatment: decisionType, deductiblePercent: null, deductibilityStatus: "needs_review" };
   const status = text(current.deductibilityStatus).toLowerCase();
   const treatment = text(current.taxTreatment).toLowerCase();
   const unresolved = ["", "needs_review", "not_yet_determined"].includes(status);
@@ -88,7 +92,7 @@ function semanticSubject({ row, decisionType, taxCategory, qboAccountId }) {
   return { kind: "tax_category", key: taxCategory };
 }
 
-function normalizeTaxCategory(input) { return text(input).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); }
+function normalizeTaxCategory(input) { if (["unresolved","unclassified"].includes(text(input).toLowerCase())) return "unclassified"; return text(input).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); }
 function nullableNumber(input) { return input == null || input === "" ? null : Number(input); }
 function text(input) { return input == null ? "" : String(input).trim(); }
 function value(...values) { return values.find((item) => item != null && item !== ""); }

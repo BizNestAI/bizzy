@@ -621,7 +621,7 @@ function validateGroupedDecisionPreview(preview, { businessId, year, groupId, re
   });
 }
 
-export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds = [], vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal } = {}) {
+export async function confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, taxCategory, businessPurposeConfirmed, rentUse, currentYearConfirmed, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds = [], vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal } = {}) {
   requireBusinessId(businessId);
   requireValue(previewId, "previewId");
   const commandRequest = withBoundedCommandSignal(signal, { timeoutMs: 20_000 });
@@ -629,7 +629,7 @@ export async function confirmGroupedTaxDeductionDecision({ businessId, year, pre
     const result = unwrap(await request(`/api/tax/deduction-decisions/apply?${query({ businessId, year })}`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: compact({ previewId, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope }),
+      body: compact({ previewId, answer, taxCategory, businessPurposeConfirmed, rentUse, currentYearConfirmed, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope }),
       signal: commandRequest.signal,
     }));
     clearBusinessCache(businessId);

@@ -1,3 +1,4 @@
+import { assertFinalTaxCategory } from "./taxCategoryResolution.js";
 import { isVehicleExpenseRow, VEHICLE_WORKFLOW_AUTHORITY } from "./taxVehicleAuthority.js";
 // /src/services/tax/taxClassificationOverride.service.js
 import {
@@ -60,6 +61,7 @@ export async function confirmClassification({ supabase, businessId, taxYear, tra
   assertNoStaleWrite(current, expectedUpdatedAt);
   statusForActor(actor);
   if (isVehicleExpenseRow(current)) throw conflictError("vehicle_change_requires_preview", "Use Change treatment to confirm a vehicle method and preview its full effect.");
+  assertFinalTaxCategory(current.tax_category);
   const nextStatus = confirmationType === "cpa" ? TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED : TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED;
   const next = {
     ...current,
@@ -296,6 +298,7 @@ function buildUpdatedClassification({ current, input, actor, transaction, status
   const effectiveStatus = [TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW].includes(requestedStatus)
     ? requestedStatus
     : status;
+  if (!["needs_review","needs_tax_review"].includes(effectiveStatus)) assertFinalTaxCategory(input.taxCategory || current.tax_category);
   const deductibilityStatus = input.deductibilityStatus || current.deductibility_status;
   const deductiblePercent = input.deductiblePercent == null
     ? normalizeDeductiblePercent({ deductibilityStatus, deductiblePercent: current.deductible_percent })

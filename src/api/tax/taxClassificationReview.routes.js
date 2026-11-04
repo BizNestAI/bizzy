@@ -202,6 +202,10 @@ router.post("/deduction-decisions/apply", async (req, res) => {
         expectedActiveElectionId: req.body?.expectedActiveElectionId,
         eligibility: req.body?.eligibility,
         personalExceptionIds: req.body?.personalExceptionIds,
+        taxCategory: req.body?.taxCategory,
+        businessPurposeConfirmed: req.body?.businessPurposeConfirmed,
+        rentUse: req.body?.rentUse,
+        currentYearConfirmed: req.body?.currentYearConfirmed,
       },
       actor,
     });

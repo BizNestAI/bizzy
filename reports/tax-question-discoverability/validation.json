@@ -1,0 +1,59 @@
+{
+  "before": {
+    "tests": 3,
+    "passed": 0,
+    "failed": 3,
+    "evidence": "Initial tests before implementation failed for Rent discoverability, suggested-category grouping, and final-Unresolved rejection."
+  },
+  "focusedUnit": {
+    "tests": 243,
+    "passed": 240,
+    "failed": 3,
+    "timeoutMs": 45000
+  },
+  "newCategoryTests": {
+    "tests": 7,
+    "passed": 7
+  },
+  "mounted": {
+    "tests": 6,
+    "passed": 6,
+    "timeoutMs": 30000
+  },
+  "isolatedPostgres": {
+    "tests": 1,
+    "passed": 1,
+    "timeoutMs": 45000,
+    "assertions": [
+      "migration installs twice in an ephemeral database",
+      "preview confirmation writes all four classifications and immutable history",
+      "no future GL-wide rule",
+      "wrong owner and business rejected",
+      "changed amount rejected",
+      "partial membership rejected",
+      "protected authority rejected",
+      "stale projection rejected",
+      "rejected decisions write no override history",
+      "same request recovers one saved result",
+      "changed retry payload rejected",
+      "one reconciled projection moves four IDs from pending Unresolved to reviewed Supplies and removes the question",
+      "temporary final category rejected in SQL",
+      "authenticated role cannot execute service-only RPC"
+    ]
+  },
+  "baseline": {
+    "source": "untouched HEAD archive under /tmp/bizzi-category-head-baseline; workspace changes were never reverted",
+    "tests": 14,
+    "passed": 11,
+    "failed": 3,
+    "failures": [
+      "714-row workspace expects one read, actual five",
+      "sparse 713-row overlay expects one read, actual five",
+      "sparse overlay isolation expects one read, actual five"
+    ]
+  },
+  "lint": "passed",
+  "build": "passed; existing chunk-size warning",
+  "diffCheck": "passed",
+  "productionMutations": false
+}

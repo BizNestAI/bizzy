@@ -571,10 +571,10 @@ export function useTaxDeductions({
       sourceFingerprint,
       signal,
     }),
-    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal } = {}) => {
+    confirmGroupedDeductionDecision: async ({ previewId, idempotencyKey, answer, taxCategory, businessPurposeConfirmed, rentUse, currentYearConfirmed, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal } = {}) => {
       const operationOwner = workspaceOperationTrackerRef.current.acquire("grouped-decision-reconciliation");
       try {
-        const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal });
+        const result = await confirmGroupedTaxDeductionDecision({ businessId, year, previewId, idempotencyKey, answer, taxCategory, businessPurposeConfirmed, rentUse, currentYearConfirmed, vehicleMethod, actualExpenseUse, businessUsePercent, personalExceptionIds, vehicleId, expectedActiveElectionId, eligibility, vehicleScope, signal });
         applyGroupedDecisionResult({ result, setTransactions, setAllTransactions, setClassificationRows, setDecisionRules });
         const refreshed = await reconcileGroupedDecisionWorkspace(result, { signal });
         return { ...result, workspaceRefresh: { status: refreshed?.overview ? "updated" : "stale" } };

@@ -23,7 +23,7 @@ test("Settings is grouped above Live and the business profile instead of the pri
   const navRail = fs.readFileSync("src/layout/NavRail.jsx", "utf8");
   const tabs = sidebar.slice(sidebar.indexOf("const tabs = ["), sidebar.indexOf("];", sidebar.indexOf("const tabs = [")));
   assert.doesNotMatch(tabs, /label: ['"]Settings\/Sync['"]/);
-  const settingsButton = navRail.indexOf('aria-label="Settings and sync"');
+  const settingsButton = navRail.indexOf('aria-label="Settings"');
   const liveBadge = navRail.indexOf("title={`Data source mode:");
   const profileBadge = navRail.indexOf("<NavRailBusinessBadge />");
   assert.ok(settingsButton > -1, "bottom Settings control should exist");

@@ -1,3 +1,4 @@
+import { categoryResolutionFacts } from "./taxCategoryResolution.js";
 import { VEHICLE_WORKFLOW_AUTHORITY } from "./taxVehicleAuthority.js";
 // Atomic application of one customer deduction decision to one explicit GL
 // account/category population. This deliberately does not invoke the generic
@@ -105,7 +106,9 @@ export async function applyGroupedTaxDeductionDecision({
     actor,
   });
 
-  const rpcName = command.previewId
+  const categoryResolution = ["category_confirmation","rent_treatment"].includes(command.scope.decisionType);
+  if (categoryResolution && !command.previewId) throw validationError("missing_grouped_decision_preview","Category decisions require a current preview.");
+  const rpcName = categoryResolution ? "apply_grouped_tax_category_decision_from_preview" : command.previewId
     ? command.vehicleElection ? "apply_grouped_tax_vehicle_decision_from_preview" : "apply_grouped_tax_deduction_decision_from_preview"
     : "apply_grouped_tax_deduction_decision";
   const rpcParams = {
@@ -121,6 +124,7 @@ export async function applyGroupedTaxDeductionDecision({
       qbo_account_name: accountName,
       decision_type: command.scope.decisionType,
       semantic_fingerprint: semanticFingerprint,
+      resolution_facts: categoryResolutionFacts(first),
       expected_population_count: command.expectedPopulationTransactionIds.length,
     },
     p_scope_fingerprint: command.scopeFingerprint,
@@ -136,7 +140,7 @@ export async function applyGroupedTaxDeductionDecision({
   if (command.vehicleElection) rpcParams.p_vehicle_election = command.vehicleElection;
   const { data, error } = await supabase.rpc(rpcName, rpcParams);
   if (error) throw mapGroupedDecisionRpcError(error);
-  return normalizeGroupedDecisionResult(data, { fallbackRule: rule });
+  return normalizeGroupedDecisionResult(data, { fallbackRule: categoryResolution ? null : rule });
 }
 
 export async function getGroupedTaxDeductionDecisionOperation({ supabase, businessId, taxYear, idempotencyKey } = {}) {
@@ -194,7 +198,7 @@ export function normalizeGroupedDecisionInput({ input = {}, businessId, taxYear 
   if (!changes.taxCategory || !changes.deductibilityStatus || changes.deductiblePercent == null || !changes.taxTreatment) {
     throw validationError("incomplete_grouped_deduction_decision", "Tax category, deductibility, percentage, and treatment are required.");
   }
-  if (text(changes.taxCategory) !== taxCategory) {
+  if (text(changes.taxCategory) !== taxCategory && !["category_confirmation","rent_treatment"].includes(decisionType)) {
     throw validationError("invalid_grouped_decision_scope", "The requested tax treatment must remain within the displayed tax category.", { field: "changes.taxCategory" });
   }
   const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
@@ -296,6 +300,7 @@ function normalizeGroupedDecisionResult(data, { fallbackRule = null, operation =
 
 function mapGroupedDecisionRpcError(error) {
   const textValue = `${error?.code || ""} ${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  if (textValue.includes("grouped_decision_projection_stale")) return conflictError("stale_preview", "The Tax workspace changed. Refresh before confirming this category.", { action: "refresh_tax_deductions" });
   if (textValue.includes("grouped_decision_population_changed")) {
     return conflictError("scope_membership_changed", "The decision population changed before it could be saved. Refresh before trying again.", { action: "refresh_tax_deductions" });
   }

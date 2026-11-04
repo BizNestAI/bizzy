@@ -1,3 +1,4 @@
+import { categoryResolutionFacts, categoryResolutionTitle } from "./taxCategoryResolution.js";
 import { vehicleMethodNeedsConfirmation } from "./taxVehicleAuthority.js";
 // Tax Deductions UI projection
 //
@@ -74,6 +75,7 @@ export function taxClassificationBucketForDeductions(row = {}) {
   if (isOutsideDeductionsScope(row)) return "outside_deductions";
   if (status === "failed" || status === "classification_failed") return "failed";
   if (status === "needs_tax_review" || category === "tax_review_holding" || row.raw?.metadata?.is_holding === true) return "needs_tax_review";
+  if (status === "unclassified" && (row.raw?.classification_status === "needs_review" || row.raw?.classificationStatus === "needs_review")) return "needs_review";
   if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
   if (status === "needs_review" || status === "review_required" || ((row.requiresReview === true || row.requires_review === true) && !["user_confirmed", "cpa_confirmed", "accountant_reviewed", "bizzi_operator_confirmed"].includes(status))) return "needs_review";
   if (vehicleMethodNeedsConfirmation(row)) return "needs_review";
@@ -118,8 +120,9 @@ export function taxDecisionTypeForRow(row = {}) {
   // Generic Rent needs a dedicated commercial-premises/home-office authority.
   // Account or merchant text alone must never create an allocation question.
   if (category.includes("rent") || ruleCode.includes("rent_review") || treatment.includes("rent_review") || /\b(rent|lease)\b/.test(account)) {
-    return null;
+    return "rent_treatment";
   }
+  if (["unclassified", "unresolved", "unknown", "needs_review"].includes(category)) return "category_confirmation";
 
   if (category.includes("vehicle") || ruleCode.includes("vehicle") || treatment.includes("vehicle") || /\b(gas|fuel|auto|vehicle)\b/.test(account)) {
     return "vehicle_method";
@@ -300,6 +303,10 @@ function buildDecisionGroups({ entries, businessId, taxYear }) {
       businessId,
       taxYear,
       decisionType: entry.decisionType,
+      ...(["category_confirmation", "rent_treatment"].includes(entry.decisionType) ? {
+        resolutionFacts: categoryResolutionFacts(row),
+        resolutionTitle: categoryResolutionTitle(categoryResolutionFacts(row), entry.decisionType),
+      } : {}),
       qboAccountId: firstValue(row.qboAccountId, row.raw?.qboAccountId, row.raw?.source_qbo_account_id, null),
       qboAccountName: firstValue(row.qboAccountName, row.bookAccount, row.raw?.qboAccountName, row.raw?.source_qbo_account_name, "Unmapped QuickBooks account"),
       semanticManifest: semanticIdentity.manifest,

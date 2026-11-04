@@ -1,3 +1,4 @@
+import { assertFinalTaxCategory } from "./taxCategoryResolution.js";
 import { isVehicleExpenseRow } from "./taxVehicleAuthority.js";
 // Explicit, company-scoped deduction decisions. These are intentionally kept
 // separate from inferred classification statuses: a card is only shown when a
@@ -96,6 +97,7 @@ export function buildTaxDeductionDecisionRule({ businessId, taxYear, accountName
   if (!treatmentType || treatmentType === "needs_review" || treatmentType === "not_determined") {
     throw validationError("unsafe_deduction_decision_rule", "Only a completed tax treatment can become an automatic deduction rule.", { field: "taxTreatment" });
   }
+  assertFinalTaxCategory(taxCategory);
   const decisionType = normalizeDecisionType(input.decisionType ?? input.decision_type);
   const actorLabel = String(actor?.userId || "customer").slice(0, 80);
   return {

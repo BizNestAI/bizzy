@@ -1,0 +1,468 @@
+{
+  "auditedAt": "2026-11-04T04:28:14.620Z",
+  "businessId": "cffc2183-e77c-4148-a206-d5192e090925",
+  "taxYear": 2026,
+  "projectionId": "ec7a72d0-c5f8-4122-8707-5e29046cbd55",
+  "formulaVersion": "tax-deductions-v1:identity-contract-v2.6-election-evidence",
+  "persistedQuestionCount": 0,
+  "total": {
+    "count": 50,
+    "grossAmount": 5619.5
+  },
+  "rent": {
+    "count": 5,
+    "grossAmount": 8922.93
+  },
+  "composition": {
+    "month": [
+      {
+        "value": "2026-05",
+        "count": 4,
+        "grossCents": 11307,
+        "grossAmount": 113.07
+      },
+      {
+        "value": "2026-06",
+        "count": 16,
+        "grossCents": 236081,
+        "grossAmount": 2360.81
+      },
+      {
+        "value": "2026-07",
+        "count": 8,
+        "grossCents": 94865,
+        "grossAmount": 948.65
+      },
+      {
+        "value": "2026-08",
+        "count": 5,
+        "grossCents": 63480,
+        "grossAmount": 634.8
+      },
+      {
+        "value": "2026-09",
+        "count": 11,
+        "grossCents": 75208,
+        "grossAmount": 752.08
+      },
+      {
+        "value": "2026-10",
+        "count": 6,
+        "grossCents": 81009,
+        "grossAmount": 810.09
+      }
+    ],
+    "qboAccount": [
+      {
+        "value": "Auto:Gas",
+        "count": 1,
+        "grossCents": 1244,
+        "grossAmount": 12.44
+      },
+      {
+        "value": "Barber",
+        "count": 1,
+        "grossCents": 4937,
+        "grossAmount": 49.37
+      },
+      {
+        "value": "Business Licensing Fees",
+        "count": 1,
+        "grossCents": 20200,
+        "grossAmount": 202.0
+      },
+      {
+        "value": "CC Fees",
+        "count": 1,
+        "grossCents": 4000,
+        "grossAmount": 40.0
+      },
+      {
+        "value": "CC Interest",
+        "count": 3,
+        "grossCents": 7034,
+        "grossAmount": 70.34
+      },
+      {
+        "value": "Charitable Contributions",
+        "count": 4,
+        "grossCents": 11125,
+        "grossAmount": 111.25
+      },
+      {
+        "value": "Clothing",
+        "count": 7,
+        "grossCents": 139933,
+        "grossAmount": 1399.33
+      },
+      {
+        "value": "Entertainment",
+        "count": 25,
+        "grossCents": 101633,
+        "grossAmount": 1016.33
+      },
+      {
+        "value": "Gifts",
+        "count": 1,
+        "grossCents": 1839,
+        "grossAmount": 18.39
+      },
+      {
+        "value": "Uncategorized Expense",
+        "count": 6,
+        "grossCents": 270005,
+        "grossAmount": 2700.05
+      }
+    ],
+    "bookkeepingCategory": [
+      {
+        "value": "Auto:Gas",
+        "count": 1,
+        "grossCents": 1244,
+        "grossAmount": 12.44
+      },
+      {
+        "value": "Barber",
+        "count": 1,
+        "grossCents": 4937,
+        "grossAmount": 49.37
+      },
+      {
+        "value": "Business Licensing Fees",
+        "count": 1,
+        "grossCents": 20200,
+        "grossAmount": 202.0
+      },
+      {
+        "value": "CC Fees",
+        "count": 1,
+        "grossCents": 4000,
+        "grossAmount": 40.0
+      },
+      {
+        "value": "CC Interest",
+        "count": 3,
+        "grossCents": 7034,
+        "grossAmount": 70.34
+      },
+      {
+        "value": "Charitable Contributions",
+        "count": 4,
+        "grossCents": 11125,
+        "grossAmount": 111.25
+      },
+      {
+        "value": "Clothing",
+        "count": 7,
+        "grossCents": 139933,
+        "grossAmount": 1399.33
+      },
+      {
+        "value": "Entertainment",
+        "count": 25,
+        "grossCents": 101633,
+        "grossAmount": 1016.33
+      },
+      {
+        "value": "Gifts",
+        "count": 1,
+        "grossCents": 1839,
+        "grossAmount": 18.39
+      },
+      {
+        "value": "No final categorization; QBO posted account retained",
+        "count": 5,
+        "grossCents": 258775,
+        "grossAmount": 2587.75
+      },
+      {
+        "value": "Uncategorized Expense",
+        "count": 1,
+        "grossCents": 11230,
+        "grossAmount": 112.3
+      }
+    ],
+    "vendor": [
+      {
+        "value": "vendor-164d2280c6",
+        "count": 1,
+        "grossCents": 2000,
+        "grossAmount": 20.0
+      },
+      {
+        "value": "vendor-1f2a94881e",
+        "count": 1,
+        "grossCents": 2900,
+        "grossAmount": 29.0
+      },
+      {
+        "value": "vendor-297c6f0f5d",
+        "count": 2,
+        "grossCents": 27188,
+        "grossAmount": 271.88
+      },
+      {
+        "value": "vendor-2d67c3bed1",
+        "count": 2,
+        "grossCents": 65744,
+        "grossAmount": 657.44
+      },
+      {
+        "value": "vendor-40f6a7f94e",
+        "count": 1,
+        "grossCents": 600,
+        "grossAmount": 6.0
+      },
+      {
+        "value": "vendor-44b4b37456",
+        "count": 2,
+        "grossCents": 4000,
+        "grossAmount": 40.0
+      },
+      {
+        "value": "vendor-496ad96fc6",
+        "count": 1,
+        "grossCents": 11230,
+        "grossAmount": 112.3
+      },
+      {
+        "value": "vendor-4e610cb673",
+        "count": 1,
+        "grossCents": 4937,
+        "grossAmount": 49.37
+      },
+      {
+        "value": "vendor-524d93677f",
+        "count": 1,
+        "grossCents": 2662,
+        "grossAmount": 26.62
+      },
+      {
+        "value": "vendor-56e63222a2",
+        "count": 1,
+        "grossCents": 1949,
+        "grossAmount": 19.49
+      },
+      {
+        "value": "vendor-5d37b8d033",
+        "count": 2,
+        "grossCents": 4372,
+        "grossAmount": 43.72
+      },
+      {
+        "value": "vendor-6229d16742",
+        "count": 1,
+        "grossCents": 4763,
+        "grossAmount": 47.63
+      },
+      {
+        "value": "vendor-63241d4de9",
+        "count": 4,
+        "grossCents": 14807,
+        "grossAmount": 148.07
+      },
+      {
+        "value": "vendor-635550ae59",
+        "count": 2,
+        "grossCents": 4976,
+        "grossAmount": 49.76
+      },
+      {
+        "value": "vendor-669cb41ea1",
+        "count": 1,
+        "grossCents": 41292,
+        "grossAmount": 412.92
+      },
+      {
+        "value": "vendor-725b557644",
+        "count": 1,
+        "grossCents": 10558,
+        "grossAmount": 105.58
+      },
+      {
+        "value": "vendor-7757816a30",
+        "count": 4,
+        "grossCents": 207020,
+        "grossAmount": 2070.2
+      },
+      {
+        "value": "vendor-8ac7f427ea",
+        "count": 1,
+        "grossCents": 10097,
+        "grossAmount": 100.97
+      },
+      {
+        "value": "vendor-8d2f4abcba",
+        "count": 1,
+        "grossCents": 1244,
+        "grossAmount": 12.44
+      },
+      {
+        "value": "vendor-8e084b0b5b",
+        "count": 1,
+        "grossCents": 4000,
+        "grossAmount": 40.0
+      },
+      {
+        "value": "vendor-9a17173768",
+        "count": 1,
+        "grossCents": 20200,
+        "grossAmount": 202.0
+      },
+      {
+        "value": "vendor-9aed23da1e",
+        "count": 1,
+        "grossCents": 4000,
+        "grossAmount": 40.0
+      },
+      {
+        "value": "vendor-a1593ecc5a",
+        "count": 1,
+        "grossCents": 3966,
+        "grossAmount": 39.66
+      },
+      {
+        "value": "vendor-b451c8d3bb",
+        "count": 1,
+        "grossCents": 51755,
+        "grossAmount": 517.55
+      },
+      {
+        "value": "vendor-b919f9cdbf",
+        "count": 2,
+        "grossCents": 2000,
+        "grossAmount": 20.0
+      },
+      {
+        "value": "vendor-d38b5cbb7c",
+        "count": 1,
+        "grossCents": 16088,
+        "grossAmount": 160.88
+      },
+      {
+        "value": "vendor-d8be65912c",
+        "count": 1,
+        "grossCents": 1839,
+        "grossAmount": 18.39
+      },
+      {
+        "value": "vendor-dccf94b4ab",
+        "count": 1,
+        "grossCents": 7200,
+        "grossAmount": 72.0
+      },
+      {
+        "value": "vendor-e147ddf44b",
+        "count": 1,
+        "grossCents": 3090,
+        "grossAmount": 30.9
+      },
+      {
+        "value": "vendor-e9a791c18e",
+        "count": 4,
+        "grossCents": 2757,
+        "grossAmount": 27.57
+      },
+      {
+        "value": "vendor-ea6f1bcf66",
+        "count": 1,
+        "grossCents": 5577,
+        "grossAmount": 55.77
+      },
+      {
+        "value": "vendor-eaa7d5ed94",
+        "count": 1,
+        "grossCents": 4547,
+        "grossAmount": 45.47
+      },
+      {
+        "value": "vendor-f4c0daf3cb",
+        "count": 1,
+        "grossCents": 7200,
+        "grossAmount": 72.0
+      },
+      {
+        "value": "vendor-f53d3ba2fd",
+        "count": 1,
+        "grossCents": 5125,
+        "grossAmount": 51.25
+      },
+      {
+        "value": "vendor-fbf7063ca1",
+        "count": 1,
+        "grossCents": 267,
+        "grossAmount": 2.67
+      }
+    ],
+    "currentTaxClass": [
+      {
+        "value": "unclassified",
+        "count": 50,
+        "grossCents": 561950,
+        "grossAmount": 5619.5
+      }
+    ],
+    "suggestedTaxClass": [
+      {
+        "value": "None persisted",
+        "count": 50,
+        "grossCents": 561950,
+        "grossAmount": 5619.5
+      }
+    ],
+    "classificationSource": [
+      {
+        "value": "rule_engine",
+        "count": 50,
+        "grossCents": 561950,
+        "grossAmount": 5619.5
+      }
+    ],
+    "confidence": [
+      {
+        "value": "20 / low",
+        "count": 50,
+        "grossCents": 561950,
+        "grossAmount": 5619.5
+      }
+    ],
+    "reasonStatus": [
+      {
+        "value": "needs_review / no_matching_tax_rule",
+        "count": 50,
+        "grossCents": 561950,
+        "grossAmount": 5619.5
+      }
+    ],
+    "requiresUserInput": [
+      {
+        "value": "True",
+        "count": 50,
+        "grossCents": 561950,
+        "grossAmount": 5619.5
+      }
+    ],
+    "protection": [
+      {
+        "value": "user_override=False;cpa_override=False",
+        "count": 50,
+        "grossCents": 561950,
+        "grossAmount": 5619.5
+      }
+    ],
+    "questionGroup": [
+      {
+        "value": "None; unsupported/missing decision type",
+        "count": 50,
+        "grossCents": 561950,
+        "grossAmount": 5619.5
+      }
+    ]
+  },
+  "mayEvidence": {
+    "count": 4,
+    "grossAmount": 113.07,
+    "qboAccount": "Entertainment",
+    "persistedSuppliesSuggestion": false
+  }
+}
