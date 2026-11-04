@@ -9,12 +9,12 @@ const monthName = date => new Date(`${date}T00:00:00Z`).toLocaleDateString('en-U
 const periodLabel = rate => `${monthName(rate.effectiveStart)}–${monthName(rate.effectiveEnd)} ${rate.effectiveStart.slice(0,4)}`;
 const fieldClass = 'mt-1 w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/50';
 
-export default function BusinessMileagePanel({ workflows, gasContext, projectionKey = '', readOnly, onPreview, onSave, onMethodPreview, onMethodApply }) {
+export default function BusinessMileagePanel({ workflows, gasContext, projectionKey = '', expanded = false, readOnly, onPreview, onSave, onMethodPreview, onMethodApply }) {
   const vehicles = workflows?.vehicles || [];
   return <div className="mt-4 space-y-3">
     {vehicles.filter(v => v.election?.method === 'standard_mileage').map(vehicle => <MileageVehicle
       key={`${vehicle.id}:${vehicle.election.id}:${JSON.stringify(vehicle.mileage?.periods || [])}`}
-      {...{ vehicle, vehicles, gasContext, projectionKey, readOnly, onPreview, onSave, onMethodPreview, onMethodApply }} />)}
+      {...{ vehicle, vehicles, gasContext, projectionKey, expanded, readOnly, onPreview, onSave, onMethodPreview, onMethodApply }} />)}
     {vehicles.filter(v => v.election?.method === 'actual_expenses').map(vehicle => <VehicleTreatmentEditor key={vehicle.id} vehicles={vehicles} vehicleId={vehicle.id} defaultAction="amend" triggerLabel="Change vehicle method" compact readOnly={readOnly} onPreview={onMethodPreview} onApply={onMethodApply} />)}
   </div>;
 }
@@ -30,7 +30,7 @@ function GasContext({ context, vehicleId }) {
   </section>;
 }
 
-export function MileageVehicle({ vehicle, vehicles = [], gasContext, projectionKey, readOnly, onPreview, onSave, onMethodPreview, onMethodApply }) {
+export function MileageVehicle({ vehicle, vehicles = [], gasContext, projectionKey, expanded = false, readOnly, onPreview, onSave, onMethodPreview, onMethodApply }) {
   const rates = vehicle.availableRates || [];
   const savedPeriods = vehicle.mileage?.periods || [];
   const savedMiles = members => members.length ? members.reduce((sum,p)=>sum+Math.round(Number(p.businessMiles)*100),0)/100 : "";
@@ -94,11 +94,13 @@ export function MileageVehicle({ vehicle, vehicles = [], gasContext, projectionK
   };
   const updatePeriod=(key,value)=>{setPeriodValues(v=>({...v,[key]:value}));setSavedMessage('');};
   const summary=vehicle.election.finalized?'Finalized':savedPeriods.length?'Estimate saved':'Mileage needed · Add business miles';
-  return <details className="rounded-2xl border border-sky-300/20 bg-sky-300/[0.035] p-4" aria-label={`${vehicle.displayName} mileage deduction`}>
-    <summary className="cursor-pointer rounded-lg text-sm text-white/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/60">
+  const Container = expanded ? "section" : "details";
+  const Heading = expanded ? "div" : "summary";
+  return <Container className="rounded-2xl border border-sky-300/20 bg-sky-300/[0.035] p-4" aria-label={`${vehicle.displayName} mileage deduction`}>
+    <Heading className={expanded ? "text-sm text-white/85" : "cursor-pointer rounded-lg text-sm text-white/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/60"}>
       <span className="font-semibold">Mileage deduction · Standard mileage</span><span className="ml-2 text-xs text-white/55">{vehicle.displayName}</span>
       <span className="mt-1 block text-xs text-white/65">{summary}{savedPeriods.length ? ` · ${number(vehicle.mileage.businessMiles)} business miles · ${money(vehicle.mileage.deductionAmount)} estimated deduction` : ''}</span>
-    </summary>
+    </Heading>
     <p className="mt-3 text-xs text-white/60">Enter the business miles you drove during each period. Bizzi applies the applicable mileage rate. Your Gas expenses stay in your books but are not deducted separately.</p>
     <VehicleTreatmentEditor vehicles={vehicles} vehicleId={vehicle.id} defaultAction="amend" triggerLabel="Change vehicle method" compact readOnly={readOnly || saving} onPreview={onMethodPreview} onApply={onMethodApply} />
     <GasContext context={gasContext} vehicleId={vehicle.id} />
@@ -130,5 +132,5 @@ export function MileageVehicle({ vehicle, vehicles = [], gasContext, projectionK
     {(vehicle.mileage?.monthlyAllocation?.status !== 'complete' || !Object.values(monthlyMode).every(Boolean)) ? <p className="mt-3 text-xs text-white/55">Add monthly mileage to show your deduction by month. Period totals are included in your annual deduction; monthly allocation is unavailable without a breakdown.</p> : null}
     {error ? <p role="alert" className="mt-2 text-xs text-rose-200">{error}</p> : null}
     {savedMessage ? <p role="status" className="mt-2 text-xs text-emerald-100">{savedMessage}</p> : null}
-  </details>;
+  </Container>;
 }
