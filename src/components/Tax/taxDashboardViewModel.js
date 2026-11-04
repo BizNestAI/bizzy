@@ -1,3 +1,4 @@
+import { formatTaxCurrency } from "./taxCurrency.js";
 const SETUP_MESSAGES = {
   profile_incomplete: "Complete your tax profile so Bizzi can estimate your federal and state taxes.",
   entity_unknown: "Tell Bizzi how your LLC is taxed before using this estimate.",
@@ -396,9 +397,8 @@ function nullableNumber(value) {
   return Number(value);
 }
 
-function formatMoney(value) {
-  if (value == null || Number.isNaN(Number(value))) return "not available";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(value));
+function formatMoney(value, fallback = "not available") {
+  return formatTaxCurrency(value, fallback);
 }
 
 export default buildTaxDashboardViewModel;

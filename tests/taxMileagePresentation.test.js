@@ -51,3 +51,11 @@ test('matrix validates mileage composition separately from expense identities an
  const changed=structuredClone(p);changed.matrix[0].months['2026-01'].mileageDeductionAmount=726;
  assert.throws(()=>projection.validatePayload(changed),e=>e.code==='tax_workspace_mileage_reconciliation_failed');
 });
+
+test('Gas context keeps the authoritative 96 total / 70 assigned / 26 needing review partition',async()=>{
+ const {buildGasContext}=await import('../src/services/tax/taxVehicleMileagePresentation.js');
+ const fixture=JSON.parse(readFileSync(new URL('../reports/vehicle-deduction/election-label-audit.json',import.meta.url)));
+ const entries=fixture.classifications.map(r=>{const assigned=!r.user_override;return {id:r.transaction_id,outcome:assigned?'reviewed':'customer_input_required',row:{date:r.transaction_date,taxCategory:'vehicle_expense',qboAccountName:'Gas',signedAmount:r.book_amount,businessId:'business',taxYear:2026,vehicleId:assigned?'v':null,status:assigned?'user_confirmed':'needs_review',taxTreatment:assigned?'vehicle_standard_mileage_no_separate_gas':'vehicle_expense',vehicleElectionEvidence:assigned?{id:'election',businessId:'business',taxYear:2026,vehicleId:'v',method:'standard_mileage',status:'active',electedBy:'owner',electedAt:'2026-11-03',effectiveStart:'2026-01-01',effectiveEnd:'2026-12-31'}:null}};});
+ const result=buildGasContext(entries,{taxYear:2026,rates:[{effectiveStart:'2026-01-01',effectiveEnd:'2026-06-30'},{effectiveStart:'2026-07-01',effectiveEnd:'2026-12-31'}],vehicles:[{id:'v'}]});
+ assert.equal(result.total.transactionCount,96);assert.equal(result.byVehicle.v.transactionCount,70);assert.equal(result.requiresSeparateConfirmation.transactionCount,26);assert.equal(result.total.grossExpenseAmount,3934.47);assert.deepEqual(result.periods.map(p=>p.transactionCount),[32,64]);
+});

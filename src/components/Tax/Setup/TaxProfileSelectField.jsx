@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef,
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 
-export default function TaxProfileSelectField({ label, value, options, onChange, helper = "", id = null, required = false }) {
+export default function TaxProfileSelectField({ label, value, options, onChange, helper = "", id = null, required = false, disabled = false, ariaLabel = null }) {
   const buttonRef = useRef(null);
   const menuRef = useRef(null);
   const generatedId = useId();
@@ -71,13 +71,20 @@ export default function TaxProfileSelectField({ label, value, options, onChange,
     if (typeaheadTimerRef.current && typeof window !== "undefined") window.clearTimeout(typeaheadTimerRef.current);
   }, []);
 
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+
   const choose = (option) => {
+    if (disabled) return;
     onChange?.(option.value);
     setOpen(false);
     if (typeof window !== "undefined") window.requestAnimationFrame(() => buttonRef.current?.focus());
   };
 
   const onKeyDown = (event) => {
+    if (event.key === "Tab" && open) {
+      setOpen(false);
+      return;
+    }
     if (event.key === "Escape") {
       if (open) {
         event.preventDefault();
@@ -131,10 +138,12 @@ export default function TaxProfileSelectField({ label, value, options, onChange,
         ref={buttonRef}
         type="button"
         role="combobox"
+        disabled={disabled}
+        aria-label={ariaLabel || undefined}
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-controls={`${selectId}-listbox`}
-        aria-labelledby={`${selectId}-label`}
+        aria-labelledby={ariaLabel ? undefined : `${selectId}-label`}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={onKeyDown}
         className="dark-dropdown flex h-10 w-full items-center justify-between gap-2 rounded-[13px] border border-white/[0.13] bg-[#111513] px-3 text-left text-sm text-white outline-none transition shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_-8px_16px_rgba(0,0,0,0.14)] hover:border-emerald-200/28 hover:bg-white/[0.04] focus:ring-2 focus:ring-emerald-300/35"
@@ -142,7 +151,7 @@ export default function TaxProfileSelectField({ label, value, options, onChange,
         <span className={selectedOption.value === "" ? "text-white/42" : "text-white"}>{selectedOption.label}</span>
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-white/48 transition ${open ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
-      {open && menuStyle ? createPortal(
+      {open && !disabled && menuStyle ? createPortal(
         <div
           ref={menuRef}
           id={`${selectId}-listbox`}

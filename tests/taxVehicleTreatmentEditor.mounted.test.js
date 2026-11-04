@@ -26,10 +26,35 @@ test("mounted vehicle editor previews server totals and reuses the exact confirm
   try {
     await act(async () => root.render(React.createElement(Editor, props)));
     await act(async () => button(container, "Change treatment").click());
+    const comboboxes = () => elements(container, node => node.getAttribute("role") === "combobox");
+    assert.equal(comboboxes().length, 4);
+    for (const control of comboboxes()) {
+      await act(async () => control.click());
+      const menu = elements(document.body, node => node.getAttribute("role") === "listbox")[0];
+      assert.ok(menu);
+      assert.match(menu.getAttribute("class"), /bg-\[#080b0f\]/, "open menus use the app's dark surface rather than a native popup");
+      const controlHandlers = control[Object.keys(control).find(key => key.startsWith("__reactProps$"))];
+      await act(async () => controlHandlers.onKeyDown({ key: "Tab" }));
+      assert.equal(elements(document.body, node => node.getAttribute("role") === "listbox").length, 0, "Tab closes the menu and keeps normal form navigation");
+      await act(async () => control.click());
+      const reopenedMenu = elements(document.body, node => node.getAttribute("role") === "listbox")[0];
+      const selected = elements(reopenedMenu, node => node.getAttribute("role") === "option" && node.getAttribute("aria-selected") === "true")[0];
+      await act(async () => selected.click());
+    }
+    const chooseCorrection = async text => {
+      await act(async () => comboboxes()[0].click());
+      const option = elements(document.body, node => node.getAttribute("role") === "option" && node.textContent === text)[0];
+      await act(async () => option.click());
+    };
+    await chooseCorrection("Recategorize selected as non-vehicle expenses");
+    await act(async () => comboboxes().at(-1).click());
+    assert.match(elements(document.body, node => node.getAttribute("role") === "listbox")[0].getAttribute("class"), /bg-\[#080b0f\]/);
+    await act(async () => elements(document.body, node => node.getAttribute("role") === "option" && node.getAttribute("aria-selected") === "true")[0].click());
+    await chooseCorrection("Change vehicle method or business-use percentage for the year");
     await change("Amended business use percent", "80");
     await change("Vehicle correction reason", "Correct the year-wide business use");
     await act(async () => button(container, "Preview correction").click());
-    assert.match(container.textContent, /\$0\.00 → \$54\.40/);
+    assert.match(container.textContent, /\$0 → \$54/);
     assert.match(container.textContent, /Reviewed — actual expenses at 80%/);
     assert.equal(previews[0].businessUsePercent, "80");
     assert.equal(previews[0].transactionIds[0], "txn-1");

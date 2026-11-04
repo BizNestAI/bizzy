@@ -136,7 +136,7 @@ test("tax profile editor is a centered compact modal without a page-blur overlay
   assert.doesNotMatch(modal, /<select/);
   assert.match(selectField, /role="combobox"/);
   assert.match(selectField, /role="listbox"/);
-  assert.match(selectField, /open && menuStyle \? createPortal\(/);
+  assert.match(selectField, /open && !disabled && menuStyle \? createPortal\(/);
   assert.match(selectField, /document\.body/);
   assert.match(selectField, /z-\[120\]/);
   assert.match(selectField, /maxHeight/);

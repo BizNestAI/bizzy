@@ -21,16 +21,16 @@ test('collapsed mileage card, accessible controls, live validated preview, month
   assert.ok(button(container,'Change vehicle method'));assert.equal(button(container,'Preview deduction'),undefined);
   assert.ok(elements(container,n=>n.tagName==='SUMMARY'&&n.textContent==='Year-end options')[0]);
   await change('January–June 2026 business miles','1000');await change('July–December 2026 business miles','12000');
-  assert.match(container.textContent,/Estimated mileage deduction: \$9,845/);assert.equal(saves.length,0);assert.equal(initial.mileage.deductionAmount,0);
+  assert.match(container.textContent,/Estimated deduction: \$9,845/);assert.equal(saves.length,0);assert.equal(initial.mileage.deductionAmount,0);
   assert.equal(button(container,'Save mileage').hasAttribute('disabled'),true,'records and server validation required');
-  const record=elements(container,n=>n.tagName==='INPUT'&&n.type==='checkbox')[0] || elements(container,n=>n.tagName==='INPUT'&&n.getAttribute('type')==='checkbox')[0];
+  const record=elements(container,n=>n.tagName==='INPUT'&&n.type==='checkbox')[0] || elements(container,n=>n.tagName==='INPUT'&&(n.type==='checkbox'||n.getAttribute('type')==='checkbox'))[0];
   await act(async()=>handler(record).onChange({target:{checked:true}}));await settle();assert.ok(previews.length);assert.equal(button(container,'Save mileage').hasAttribute('disabled'),false);
   await act(async()=>button(container,'Save mileage').click());assert.equal(saves.length,1);assert.equal(saves[0].expectedPreview.totalDeduction,9845);assert.deepEqual(saves[0].entries.map(e=>e.businessMiles),['1000','12000']);
-  await change('January–June 2026 business miles','-1');assert.equal(button(container,'Save mileage').hasAttribute('disabled'),true);assert.doesNotMatch(container.textContent,/Estimated mileage deduction:/);
+  await change('January–June 2026 business miles','-1');assert.equal(button(container,'Save mileage').hasAttribute('disabled'),true);assert.doesNotMatch(container.textContent,/Estimated deduction:/);
   await change('January–June 2026 business miles','1000');
-  const monthly=elements(container,n=>n.tagName==='DETAILS'&&n.firstChild.textContent==='Enter monthly breakdown')[0];
-  await act(async()=>handler(monthly).onToggle({currentTarget:{open:true}}));await change('January business miles','1000');
-  assert.equal(handler(input('January–June 2026 business miles')).readOnly,true);assert.match(container.textContent,/sum of monthly deductions/);await settle();
+  const monthly=elements(container,n=>n.tagName==='DETAILS'&&n.firstChild.textContent==='Add miles by month')[0];
+  await act(async()=>handler(monthly).onToggle({currentTarget:{open:true}}));await change('January 2026 business miles','1000');
+  assert.equal(handler(input('January–June 2026 business miles')).readOnly,true);assert.match(container.textContent,/1,000 miles × 72.5¢/);await settle();
   assert.equal(previews.at(-1).entries.length,7);assert.equal(previews.at(-1).entries[0].businessMiles,'1000');
   // A response from a previous projection must never enable saving.
   deferred={};await act(async()=>root.render(React.createElement(Panel,{...props,projectionKey:'P2'})));assert.equal(button(container,'Save mileage').hasAttribute('disabled'),true);await settle();
@@ -41,5 +41,68 @@ test('collapsed mileage card, accessible controls, live validated preview, month
   const summary=elements(container,n=>n.tagName==='DETAILS')[0].firstChild;assert.match(summary.textContent,/Estimate saved.*13,000 business miles.*\$9,845/);assert.equal(summary.parentNode.hasAttribute('open'),false);
   await act(async()=>root.render(React.createElement(Panel,{...props,workflows:{vehicles:[{...saved,election:{...election,method:'actual_expenses'}}]}})));
   assert.equal(elements(container,n=>n.getAttribute('aria-label')==='Primary vehicle mileage deduction').length,0);assert.ok(button(container,'Change vehicle method'));
+  const zero={...initial,mileage:{...initial.mileage,periods:[{periodStart:'2026-01-01',periodEnd:'2026-06-30',businessMiles:0,deductionAmount:0},{periodStart:'2026-07-01',periodEnd:'2026-12-31',businessMiles:0,deductionAmount:0}]}};
+  await act(async()=>root.render(React.createElement(Panel,{...props,workflows:{vehicles:[zero]}})));
+  assert.equal(input('January–June 2026 business miles').value,'0','an intentional saved zero remains an answer');
+
+ }finally{await act(async()=>root.unmount());await vite.close();}
+});
+
+test('refined mileage copy, exact authoritative context, contextual validation, lossless mode switching, and controlled method modal',async()=>{
+ const container=installDom();const React=await import('react');const {act}=React;const {createRoot}=await import('react-dom/client');const {createServer}=await import('vite');const {default:react}=await import('@vitejs/plugin-react');
+ const vite=await createServer({configFile:false,plugins:[react()],optimizeDeps:{noDiscovery:true,include:[]},server:{middlewareMode:true,hmr:false},appType:'custom'});
+ const {default:Panel}=await vite.ssrLoadModule('/src/components/Tax/BusinessMileagePanel.jsx');const root=createRoot(container);const methodPreviews=[],methodSaves=[];
+ const context={taxYear:2026,total:{transactionCount:96,grossExpenseAmount:3934.47},periods:[{effectiveStart:'2026-01-01',effectiveEnd:'2026-06-30',transactionCount:32,grossExpenseAmount:2690.63},{effectiveStart:'2026-07-01',effectiveEnd:'2026-12-31',transactionCount:64,grossExpenseAmount:1243.84}],byVehicle:{vehicle:{transactionCount:70}},requiresSeparateConfirmation:{transactionCount:26}};
+ const methodPreview={previewId:'method-preview',affectedCount:70,beforeDeduction:0,afterDeduction:2869.6,beforeMileageDeduction:9845,afterMileageDeduction:0,rows:[],skipped:[]};
+ const props={workflows:{taxYear:2026,vehicles:[initial]},gasContext:context,projectionKey:'projection',onPreview:async input=>({...calculateVehicleMileagePeriods({entries:input.entries}),electionId:'election'}),onSave:async()=>{throw new Error('should not save');},onMethodPreview:async input=>{methodPreviews.push(input);return methodPreview;},onMethodApply:async input=>{methodSaves.push(input);if(methodSaves.length===1)throw new Error('network lost');return {appliedCount:70};}};
+ const handlers=n=>n[Object.keys(n).find(k=>k.startsWith('__reactProps$'))];
+ const input=label=>elements(document.body,n=>n.getAttribute('aria-label')===label)[0];
+ const change=async(label,value)=>{await act(async()=>handlers(input(label)).onChange({target:{value}}));};
+ const toggle=async(node,open)=>act(async()=>handlers(node).onToggle({currentTarget:{open}}));
+ const wait=()=>act(async()=>new Promise(resolve=>setTimeout(resolve,240)));
+ try{
+  await act(async()=>root.render(React.createElement(Panel,props)));
+  assert.equal(elements(container,n=>n.tagName==='SPAN'&&n.textContent==='Mileage deduction').length,1);
+  assert.match(container.textContent,/Standard mileage · Primary vehicle/);assert.match(container.textContent,/Mileage needed/);
+  assert.match(container.textContent,/Enter your business miles\. Bizzi applies the correct mileage rate, and Gas expenses are not deducted separately\./);
+  assert.doesNotMatch(container.textContent,/Add business miles|sum of monthly|active mileage|CPA|override|precedence|Gas expenses in your books/);
+  assert.match(container.textContent,/Gas purchases/);assert.match(container.textContent,/96 transactions · \$3,934/);assert.doesNotMatch(container.textContent,/3,934\.47/);
+  assert.match(container.textContent,/70 assigned to this vehicle · 26 still need review/);
+  assert.match(container.textContent,/Gas purchases do not affect your mileage deduction\./);
+  assert.ok(container.textContent.indexOf('Save mileage')<container.textContent.indexOf('Change vehicle method'));
+  assert.ok(container.textContent.indexOf('Change vehicle method')<container.textContent.indexOf('Year-end options'));
+  const monthDetails=elements(container,n=>n.tagName==='DETAILS'&&n.firstChild.textContent==='Add miles by month')[0];
+  assert.equal(input('January–June 2026 business miles').value,'');
+  await toggle(monthDetails,true);assert.equal(input('January–June 2026 business miles').value,'','disclosure never turns an unanswered period into zero or changes input mode');
+  assert.doesNotMatch(container.textContent,/Add mileage for at least one month\./);
+  await act(async()=>handlers(input('January 2026 business miles')).onBlur());assert.match(container.textContent,/Add mileage for at least one month\./);
+  await toggle(monthDetails,false);assert.doesNotMatch(container.textContent,/Add mileage for at least one month\./);
+  await change('January–June 2026 business miles','1000');await change('July–December 2026 business miles','12000');
+  assert.match(container.textContent,/1,000 miles × 72\.5¢ = \$725 estimated deduction/);assert.match(container.textContent,/Estimated deduction: \$9,845/);
+  await toggle(monthDetails,true);await change('January 2026 business miles','500');
+  assert.match(container.textContent,/Use monthly mileage for January–June\?/);assert.equal(input('January–June 2026 business miles').value,'1000','period amount remains in effect until confirmed');assert.equal(button(container,'Save mileage').hasAttribute('disabled'),true);
+  await act(async()=>button(container,'Use monthly mileage').click());assert.equal(input('January–June 2026 business miles').value,'500');
+  const grid=input('January 2026 business miles').parentNode.parentNode.parentNode;assert.match(grid.getAttribute('class'),/grid-cols-2.*md:grid-cols-3/);assert.equal(elements(grid,n=>n.tagName==='INPUT').length,6);assert.equal(elements(grid,n=>n.textContent==='miles'&&n.tagName==='SPAN'&&n.getAttribute('aria-hidden')==='true').length,6);
+  await act(async()=>button(container,'Enter one total for January–June').click());assert.equal(input('January–June 2026 business miles').value,'500');assert.equal(input('January 2026 business miles').value,'500','monthly values retained');
+  await change('January–June 2026 business miles','600');await act(async()=>button(container,'Use monthly mileage').click());assert.match(container.textContent,/Use monthly mileage for January–June\?/);await act(async()=>button(container,'Keep period total').click());assert.equal(input('January–June 2026 business miles').value,'600');
+  const trigger=button(container,'Change vehicle method');trigger.focus();await act(async()=>trigger.click());
+  const dialog=elements(document.body,n=>n.getAttribute('role')==='dialog')[0];assert.ok(dialog);assert.equal(dialog.getAttribute('aria-modal'),'true');assert.match(dialog.textContent,/This will update your 2026 vehicle deduction\./);
+  assert.doesNotMatch(dialog.textContent,/Explicit corrections|CPA|supersede|protected|vehicle\/year|Gas purchases|CorrectionVehicle/);
+  assert.ok(input('New method'));assert.ok(input('Ownership status'));assert.ok(input('Business-use percentage'));assert.ok(input('Reason for change'));
+  assert.equal(button(document.body,'Preview change').hasAttribute('disabled'),true);
+  await act(async()=>input('Ownership status').click());await act(async()=>elements(document.body,n=>n.getAttribute('role')==='option'&&n.textContent==='Owned')[0].click());
+  await change('Business-use percentage','80');await change('Reason for change','Correct this year’s method');
+  const confirmation=elements(dialog,n=>n.tagName==='INPUT'&&(n.type==='checkbox'||n.getAttribute('type')==='checkbox'))[0];await act(async()=>handlers(confirmation).onChange({target:{type:'checkbox',checked:true}}));
+  await act(async()=>button(document.body,'Preview change').click());assert.equal(methodPreviews[0].action,'amend');assert.equal(methodPreviews[0].confirmYearRecalculation,true);assert.equal(methodPreviews[0].supersedeManual,false);assert.equal(methodSaves.length,0);
+  assert.ok(button(document.body,'Confirm change'));assert.match(dialog.textContent,/\$0 → \$2,870/);
+  await change('Reason for change','Updated reason');assert.equal(button(document.body,'Confirm change'),undefined,'edits invalidate the authoritative preview');
+  await act(async()=>button(document.body,'Preview change').click());await act(async()=>button(document.body,'Confirm change').click());assert.equal(methodSaves.length,1);assert.deepEqual(Object.keys(methodSaves[0]).sort(),['idempotencyKey','previewId']);
+  assert.ok(button(document.body,'Retry same confirmation'));assert.equal(input('Close vehicle method dialog').hasAttribute('disabled'),true);
+  await act(async()=>button(document.body,'Retry same confirmation').click());assert.equal(methodSaves.length,2);assert.deepEqual(methodSaves[1],methodSaves[0]);
+  await act(async()=>document.dispatchEvent({type:'keydown',key:'Escape',preventDefault(){this.defaultPrevented=true;}}));assert.equal(elements(document.body,n=>n.getAttribute('role')==='dialog').length,0);assert.equal(document.activeElement,trigger);
+  await act(async()=>trigger.click());const reopened=elements(document.body,n=>n.getAttribute('role')==='dialog')[0];const backdrop=reopened.parentNode;await act(async()=>handlers(backdrop).onMouseDown({target:backdrop,currentTarget:backdrop}));assert.equal(elements(document.body,n=>n.getAttribute('role')==='dialog').length,0);
+  await act(async()=>root.render(React.createElement(Panel,{...props,gasContext:{...context,byVehicle:{vehicle:{transactionCount:69}},requiresSeparateConfirmation:{transactionCount:27}}})));
+  assert.match(container.textContent,/69 assigned to this vehicle · 27 still need review/);
+  await wait();
  }finally{await act(async()=>root.unmount());await vite.close();}
 });

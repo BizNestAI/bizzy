@@ -1,0 +1,33 @@
+{
+  "verdict": "READY",
+  "focused": {
+    "passed": 211,
+    "failed": 0,
+    "durationSeconds": 3.31,
+    "timeoutSeconds": 45
+  },
+  "finalKeyboardUi": {
+    "passed": 4,
+    "failed": 0,
+    "timeoutSeconds": 20
+  },
+  "additionalDashboardPlanning": {
+    "current": {
+      "passed": 21,
+      "failed": 3
+    },
+    "baseline": {
+      "passed": 21,
+      "failed": 3
+    },
+    "newFailures": 0
+  },
+  "lint": "passed",
+  "build": "passed",
+  "diffCheck": "passed",
+  "authoritativeServiceChanges": false,
+  "migrationsChanged": false,
+  "productionWrites": false,
+  "sharedCurrency": "whole-dollar USD display, exact cents unchanged",
+  "protectedWorkPreserved": true
+}

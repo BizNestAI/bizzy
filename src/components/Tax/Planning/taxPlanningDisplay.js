@@ -1,3 +1,4 @@
+import { formatTaxCurrency } from "../taxCurrency.js";
 export const PAYMENT_TYPES = [
   ["estimated_payment", "Estimated payment"],
   ["withholding", "Withholding"],
@@ -28,8 +29,7 @@ export const US_STATES = [
 ];
 
 export function formatMoney(value, fallback = "Not available") {
-  if (value == null || Number.isNaN(Number(value))) return fallback;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(value));
+  return formatTaxCurrency(value, fallback);
 }
 
 export function formatDate(value, fallback = "Not available") {
