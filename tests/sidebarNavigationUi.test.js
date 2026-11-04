@@ -18,13 +18,18 @@ test("sidebar does not expose the undeveloped Activity module", () => {
   assert.doesNotMatch(tabs, /\/dashboard\/activity/);
 });
 
-test("Settings is grouped directly above the business profile instead of the primary module stack", () => {
+test("Settings is grouped above Live and the business profile instead of the primary module stack", () => {
   const sidebar = fs.readFileSync("src/components/UserAdmin/Sidebar.jsx", "utf8");
   const navRail = fs.readFileSync("src/layout/NavRail.jsx", "utf8");
   const tabs = sidebar.slice(sidebar.indexOf("const tabs = ["), sidebar.indexOf("];", sidebar.indexOf("const tabs = [")));
   assert.doesNotMatch(tabs, /label: ['"]Settings\/Sync['"]/);
   const settingsButton = navRail.indexOf('aria-label="Settings and sync"');
+  const liveBadge = navRail.indexOf("title={`Data source mode:");
   const profileBadge = navRail.indexOf("<NavRailBusinessBadge />");
   assert.ok(settingsButton > -1, "bottom Settings control should exist");
-  assert.ok(profileBadge > settingsButton, "Settings should appear directly before the business profile badge");
+  assert.ok(settingsButton < liveBadge && liveBadge < profileBadge, "Settings should appear above Live, followed by the business profile");
+  assert.match(navRail, /onMouseEnter=\{showSettingsTooltip\}/);
+  assert.match(navRail, /onFocus=\{showSettingsTooltip\}/);
+  assert.match(navRail, /settingsTooltip && createPortal\(/);
+  assert.match(navRail, /role="tooltip"/);
 });

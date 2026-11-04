@@ -572,6 +572,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
   const matrixCellRequestRef = useRef({ sequence: 0, controller: null });
   const matrixCellRecoveryRef = useRef(null);
   const [workspaceView, setWorkspaceView] = useState("overview");
+  const [mileageOpen, setMileageOpen] = useState(false);
   const [classificationTab, setClassificationTab] = useState("all");
   const [focusedUpdatingIds, setFocusedUpdatingIds] = useState([]);
   const [reviewDecision, setReviewDecision] = useState(null);
@@ -581,6 +582,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
   const [deductionDefaultSetup, setDeductionDefaultSetup] = useState(null);
   const rulesPanelRef = useRef(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 }, enabled: !contextPending && Boolean(businessId) });
+  const hasStandardMileage = (deductions.workspaceProjection?.vehicleDeductions?.vehicles || []).some(vehicle => vehicle.election?.method === "standard_mileage");
   const refreshDeductions = deductions.refresh;
   // A server-side rebuild hint is not an owned client request and must not
   // retain the interaction lock after an authoritative projection commits.
@@ -1023,8 +1025,16 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
         value={workspaceView}
         onChange={setWorkspaceView}
         questionGroupCount={authoritativeQuestionCount}
+        mileageAction={hasStandardMileage ? <button
+          type="button"
+          aria-expanded={mileageOpen}
+          aria-controls="deductions-mileage-panel"
+          onClick={() => setMileageOpen(open => !open)}
+          className="rounded px-2 py-1.5 text-[12px] font-normal text-white/52 transition hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+        >Mileage deduction</button> : null}
       />
-      <BusinessMileagePanel
+      <div id="deductions-mileage-panel" hidden={hasStandardMileage && !mileageOpen}>
+      <BusinessMileagePanel expanded
         taxYear={year}
         workflows={deductions.workspaceProjection?.vehicleDeductions}
         gasContext={deductions.workspaceProjection?.gasContext}
@@ -1035,6 +1045,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
         onPreview={(input) => deductions.previewVehicleMileage(input)}
         onSave={(input) => deductions.saveVehicleMileage(input)}
       />
+      </div>
 
       {workspaceView === "overview" ? (
         <>

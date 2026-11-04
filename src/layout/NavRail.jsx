@@ -1,5 +1,5 @@
 // File: /src/components/layout/NavRail.jsx
-import React, { useEffect, useMemo, useRef, useLayoutEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useLayoutEffect, useState, useId } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../components/UserAdmin/Sidebar';
 import ChatDrawer from '../components/Bizzy/ChatDrawer';
@@ -12,6 +12,7 @@ import { getDemoMode } from '../services/demo/demoClient.js';
 import { useAdminView } from '../context/AdminViewContext.jsx';
 import { prefetchPlaidStatus } from '../services/bookkeeping/bookkeepingClient.js';
 import { Settings } from 'lucide-react';
+import { createPortal } from 'react-dom';
 
 function hexToRgba(hex, alpha = 1) {
   let c = (hex || '').replace('#', '');
@@ -52,6 +53,13 @@ export default function NavRail({
   const chatDrawerRef = useRef(null);
   const collapsed = true;
   const [dataMode, setDataMode] = useState(() => getDemoMode());
+  const [settingsTooltip, setSettingsTooltip] = useState(null);
+  const settingsTooltipId = useId();
+  const showSettingsTooltip = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setSettingsTooltip({ left: rect.right + 10, top: rect.top + rect.height / 2 });
+    if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId);
+  };
 
   useLayoutEffect(() => {
     const width = `${COLLAPSED_NAV_W}px`;
@@ -191,6 +199,21 @@ export default function NavRail({
           <button
             type="button"
             data-admin-view-navigation
+            onClick={() => { setSettingsTooltip(null); navigate('/dashboard/settings'); }}
+            onMouseEnter={showSettingsTooltip}
+            onMouseLeave={() => setSettingsTooltip(null)}
+            onFocus={showSettingsTooltip}
+            onBlur={() => setSettingsTooltip(null)}
+            onKeyDown={(event) => { if (event.key === "Escape") setSettingsTooltip(null); }}
+            aria-describedby={settingsTooltip ? settingsTooltipId : undefined}
+            aria-label="Settings and sync"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-white/85 transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/30"
+          >
+            <Settings size={17} strokeWidth={1.7} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            data-admin-view-navigation
             onClick={() => navigate('/dashboard/settings')}
             onMouseEnter={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
             onFocus={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
@@ -210,21 +233,14 @@ export default function NavRail({
             />
             {isLiveMode ? 'Live' : 'Mock'}
           </button>
-          <button
-            type="button"
-            data-admin-view-navigation
-            onClick={() => navigate('/dashboard/settings')}
-            onMouseEnter={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
-            onFocus={() => { if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId); }}
-            title="Settings and sync"
-            aria-label="Settings and sync"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-white/85 transition hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/30"
-          >
-            <Settings size={17} strokeWidth={1.7} aria-hidden="true" />
-          </button>
           <NavRailBusinessBadge />
         </div>
       </aside>
+
+      {settingsTooltip && createPortal(
+        <div id={settingsTooltipId} role="tooltip" className="pointer-events-none fixed z-[9999] -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/15 bg-[#14161a] px-3 py-1 text-xs text-white shadow-lg" style={settingsTooltip}>Settings and sync</div>,
+        document.body
+      )}
 
       {/* Scrim for mobile */}
       <button

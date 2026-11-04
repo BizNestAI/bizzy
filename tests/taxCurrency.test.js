@@ -10,6 +10,7 @@ test('Tax estimates share whole-dollar display precision without changing exact 
  assert.equal(exact,3934.47);assert.equal(formatTaxCurrency(null),'—');
  const dashboard=readFileSync(new URL('../src/pages/Tax/TaxDashboard.jsx',import.meta.url),'utf8');
  assert.match(dashboard,/formatTaxCurrency as formatCurrencyLocal/);
- assert.doesNotMatch(dashboard,/mileageAction=|Mileage deduction<\/button>/);
+ assert.match(dashboard,/aria-expanded=\{mileageOpen\}/);
+ assert.match(dashboard,/aria-controls="deductions-mileage-panel"/);
  const panel=readFileSync(new URL('../src/components/Tax/BusinessMileagePanel.jsx',import.meta.url),'utf8');assert.match(panel,/formatTaxCurrency as money/);
 });
