@@ -1,3 +1,4 @@
+import { clearModuleSessionCache } from './modules/moduleSessionCache.js';
 const AUTH_STORAGE_KEYS = [
   "access_token",
   "user_id",
@@ -20,6 +21,7 @@ const CUSTOMER_CACHE_PREFIXES = [
   "bizzy:insight:animated:",
   "bizzy:business-quick-prompts:",
   "bizzy:chatGreeting:",
+  "bizzi:books-review:",
   "bizzy:greeting:lastTyped:",
 ];
 
@@ -34,6 +36,7 @@ function removeCustomerCacheEntries(storage) {
 }
 
 export function clearStoredAuthAndBusinessState() {
+  clearModuleSessionCache();
   if (typeof window === "undefined") return;
   for (const key of AUTH_STORAGE_KEYS) {
     try {

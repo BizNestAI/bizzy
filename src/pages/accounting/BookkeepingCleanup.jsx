@@ -1,3 +1,6 @@
+import { moduleSessionIdentity, moduleCacheVersion, readModuleSnapshot, writeModuleSnapshot } from '../../services/modules/moduleSessionCache.js';
+import { resolveModuleDataState, unsafeModuleError } from '../../services/modules/moduleDataState.js';
+import ModuleDataStatus from '../../components/UI/ModuleDataStatus.jsx';
 /* global process */
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
@@ -227,7 +230,7 @@ const PANEL_BG = "#151717";
 const PANEL_BORDER = "rgba(255,255,255,0.06)";
 const BOOKS_ACCOUNT_CACHE_PREFIX = "bizzi:books-review:accounts:";
 const BOOKS_TXN_CACHE_PREFIX = "bizzi:books-review:transactions:";
-const BOOKS_TXN_CACHE_TTL_MS = 5 * 60 * 1000;
+
 const APPROVAL_LEDGER_CONFIRMATION_GRACE_MS = 5_000;
 
 function localIsoDate(date) {
@@ -346,7 +349,7 @@ function readAccountCardCache(businessId) {
   if (!cacheKey || typeof window === "undefined" || !window.sessionStorage) return [];
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(cacheKey) || "null");
-    return Array.isArray(parsed?.accounts) ? parsed.accounts : [];
+    return parsed?.sessionIdentity === moduleSessionIdentity() && Array.isArray(parsed?.accounts) ? parsed.accounts : [];
   } catch {
     return [];
   }
@@ -356,7 +359,7 @@ function writeAccountCardCache(businessId, accounts) {
   const cacheKey = buildAccountCacheKey(businessId);
   if (!cacheKey || !Array.isArray(accounts) || typeof window === "undefined" || !window.sessionStorage) return;
   try {
-    window.sessionStorage.setItem(cacheKey, JSON.stringify({ accounts, cachedAt: Date.now() }));
+    window.sessionStorage.setItem(cacheKey, JSON.stringify({ accounts, sessionIdentity: moduleSessionIdentity(), cachedAt: Date.now() }));
   } catch {
     // Account-card cache failures must never block Books Review.
   }
@@ -373,7 +376,8 @@ function readTransactionPageCache(cacheKey) {
   if (!cacheKey || typeof window === "undefined" || !window.sessionStorage) return null;
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(cacheKey) || "null");
-    if (!parsed || Date.now() - Number(parsed.cachedAt || 0) > BOOKS_TXN_CACHE_TTL_MS) return null;
+    const businessId = decodeURIComponent(cacheKey.slice(BOOKS_TXN_CACHE_PREFIX.length).split(':')[0]);
+    if (!parsed || parsed.sessionIdentity !== moduleSessionIdentity() || parsed.cacheVersion !== moduleCacheVersion('financials', businessId)) return null;
     if (isInconsistentEmptyTransactionPage(parsed)) {
       window.sessionStorage.removeItem(cacheKey);
       return null;
@@ -388,7 +392,7 @@ function writeTransactionPageCache(cacheKey, payload) {
   if (!cacheKey || typeof window === "undefined" || !window.sessionStorage) return;
   if (isInconsistentEmptyTransactionPage(payload)) return;
   try {
-    window.sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, cachedAt: Date.now() }));
+    window.sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, sessionIdentity: moduleSessionIdentity(), cacheVersion: moduleCacheVersion('financials', decodeURIComponent(cacheKey.slice(BOOKS_TXN_CACHE_PREFIX.length).split(':')[0])), cachedAt: Date.now() }));
   } catch {
     // Cache failures should never block bookkeeping.
   }
@@ -904,8 +908,16 @@ function BookkeepingCleanup() {
   });
   const [qboAccountTypes, setQboAccountTypes] = useState([]);
   const rawTransactions = React.useMemo(() => (usingDemo ? TXN_DATA : []), [usingDemo]);
-  const [transactions, setTransactions] = useState([]);
-  const [totalCount, setTotalCount] = useState(null);
+  const savedView = readModuleSnapshot("financials-view", { businessId })?.data;
+  const [activeTab, setActiveTab] = useState(() => savedView?.activeTab || "needs_review");
+  const [dateRange, setDateRange] = useState(() => savedView?.dateRange || "all");
+  const [accountFilter, setAccountFilter] = useState(() => { const cached = readAccountCardCache(businessId); const account = cached.find(item => item.connection_state === "connected") || cached[0]; return usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : savedView?.accountFilter || (account ? getAcctKey(account) : null); });
+  const [rowsPerPage, setRowsPerPage] = useState(() => savedView?.rowsPerPage || 25);
+  const [page, setPage] = useState(() => savedView?.page || 1);
+  const initialPage = usingDemo ? null : readTransactionPageCache(buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage }));
+  const [transactionDataKey, setTransactionDataKey] = useState([businessId || "", accountFilter || "", activeTab, dateRange, page, rowsPerPage].join("|"));
+  const [transactions, setTransactions] = useState(() => initialPage?.rows || []);
+  const [totalCount, setTotalCount] = useState(() => initialPage?.totalCount ?? null);
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingTxns, setLoadingTxns] = useState(false);
@@ -1042,15 +1054,10 @@ function BookkeepingCleanup() {
     }
   }, [rawTransactions, guessAccountId, usingDemo]);
 
-  const [activeTab, setActiveTab] = useState("needs_review");
-  const [dateRange, setDateRange] = useState("all");
   const dateFilter = useMemo(() => resolveBookkeepingDateFilter(dateRange), [dateRange]);
-  const [accountFilter, setAccountFilter] = useState(() => (usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : null));
-  const [rowsPerPage, setRowsPerPage] = useState(25);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkAccountId, setBulkAccountId] = useState("");
   const [showCategorized] = useState(false);
-  const [page, setPage] = useState(1);
 
   useEffect(() => {
     if (usingDemo || accountCacheBusinessIdRef.current === businessId) return;
@@ -1065,6 +1072,10 @@ function BookkeepingCleanup() {
     () => [businessId || "", accountFilter || "", activeTab || "", dateRange || "", page, rowsPerPage].join("|"),
     [activeTab, accountFilter, businessId, dateRange, page, rowsPerPage]
   );
+  useEffect(() => {
+    if (!usingDemo && businessId && accountFilter) writeModuleSnapshot('financials-view', { businessId }, { accountFilter, activeTab, dateRange, page, rowsPerPage });
+  }, [usingDemo, businessId, accountFilter, activeTab, dateRange, page, rowsPerPage]);
+  transactionViewKeyRef.current = transactionViewKey;
   const showPostedToast = () => window.alert("Already posted to QuickBooks.");
   const [mappingStatus, setMappingStatus] = useState(null);
   const [loadingMappingStatus, setLoadingMappingStatus] = useState(false);
@@ -1103,11 +1114,15 @@ function BookkeepingCleanup() {
   const [clarOpen, setClarOpen] = useState(false);
   const navigate = useNavigate();
 
-  useEffect(() => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    const discoveryRequests = ccDiscoveryAbortRef.current;
+    return () => {
     mountedRef.current = false;
     transactionRequestAbortRef.current?.abort();
-    ccDiscoveryAbortRef.current.forEach((controller) => controller?.abort?.());
-    ccDiscoveryAbortRef.current.clear();
+    discoveryRequests.forEach((controller) => controller?.abort?.());
+    discoveryRequests.clear();
+    };
   }, []);
 
   useEffect(() => {
@@ -1640,6 +1655,7 @@ function BookkeepingCleanup() {
   }
 
   const filteredTransactions = useMemo(() => {
+    if (!usingDemo && transactionDataKey !== transactionViewKey) return [];
     // Live pages have already been classified, filtered, and paginated by the
     // bounded server RPC. Reapplying lifecycle membership here can only make a
     // page shorter than its authoritative total (and was the Handled regression
@@ -1658,7 +1674,7 @@ function BookkeepingCleanup() {
     });
 
     return base;
-  }, [accountFilter, activeTab, dateRange, transactions, usingDemo]);
+  }, [accountFilter, activeTab, dateRange, transactions, usingDemo, transactionDataKey, transactionViewKey]);
 
   const displayedTabCounts = useMemo(() => {
     if (!usingDemo) return tabCounts;
@@ -1742,10 +1758,13 @@ function BookkeepingCleanup() {
   const hasRelevantProcessing = serverProcessingCount > 0;
   const isPreparingCategories = Boolean(categorizationStatus);
   const isEmpty = !loadingTxns && !isPreparingCategories && feedRows.length === 0;
-  const showLoadingState =
-    !plaidNeverConnected &&
-    !hasVisibleRows &&
-    (loadingTxns || isPreparingCategories || (!accountFilter && !usingDemo));
+  const moduleState = resolveModuleDataState({
+    hasData: usingDemo || (transactionDataKey === transactionViewKey && typeof totalCount === 'number'),
+    fetching: backgroundRefreshingTxns || loadingTxns,
+    error: transactionLoadError,
+    scopeMatches: transactionDataKey === transactionViewKey,
+  });
+  const showLoadingState = !plaidNeverConnected && ['initial_loading', 'scope_changing'].includes(moduleState);
   const categorizationMessage = useMemo(() => {
     if (!categorizationStatus) return null;
     if (categorizationStatus.phase === "enriching") {
@@ -3188,6 +3207,7 @@ function BookkeepingCleanup() {
         if (key) setAccountFilter(key);
       }
     } catch (e) {
+      if (unsafeModuleError(e)) { setAccounts([]); window.sessionStorage?.removeItem(buildAccountCacheKey(businessId)); }
       console.warn("[bookkeeping] accounts load failed", e?.message || e);
     } finally {
       setLoadingAccounts(false);
@@ -3271,9 +3291,11 @@ function BookkeepingCleanup() {
     transactionRequestAbortRef.current?.abort();
     const requestController = new AbortController();
     transactionRequestAbortRef.current = requestController;
-    const shouldShowBackgroundRefresh = showBackgroundRefresh === true;
+    void showBackgroundRefresh;
+    const shouldShowBackgroundRefresh = true;
     const cacheKey = buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage });
-    const previousPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
+    const previous = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
+    const previousPage = previous?.cacheVersion === moduleCacheVersion('financials', businessId) ? previous : null;
     const cachedPage = readTransactionPageCache(cacheKey) || previousPage;
     const suppressCachedMatchedTransitions = (rows = [], totalValue = null) => {
       const suppressIds = incomingDepositMatchedSuppressRef.current;
@@ -3291,6 +3313,7 @@ function BookkeepingCleanup() {
       const cachedMatched = suppressCachedMatchedTransitions(cachedPage.rows, typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
       const cached = suppressCachedUndoTransitions(cachedMatched.rows, cachedMatched.totalCount);
       const ledgerSuppressed = suppressLedgerRowsFromNeedsReview(cached.rows, typeof cached.totalCount === "number" ? cached.totalCount : cached.rows.length);
+      setTransactionDataKey(requestViewKey);
       setTransactions(ledgerSuppressed.rows);
       setTotalCount(typeof ledgerSuppressed.totalCount === "number" ? ledgerSuppressed.totalCount : ledgerSuppressed.rows.length);
       setLoadingTxns(false);
@@ -3401,7 +3424,9 @@ function BookkeepingCleanup() {
       }
       setTransactions(normalizedList);
       if (cacheKey) {
+        setTransactionDataKey(requestViewKey);
         lastSuccessfulTransactionPagesRef.current.set(cacheKey, {
+          cacheVersion: moduleCacheVersion('financials', businessId),
           rows: normalizedList,
           totalCount: nextTotalValue,
         });
@@ -3433,6 +3458,7 @@ function BookkeepingCleanup() {
         console.log("[Books] transactions response", res);
       }
       if (!isLatestRequest()) return;
+      setTransactionDataKey(requestViewKey);
       const txns = extractTxns(res);
       let normalized = normalizeTxns(txns);
       if (activeTab === "handled") {
@@ -3476,6 +3502,12 @@ function BookkeepingCleanup() {
       }
     } catch (e) {
       if (!isLatestRequest()) return;
+      if (unsafeModuleError(e)) {
+        window.sessionStorage?.removeItem(cacheKey);
+        lastSuccessfulTransactionPagesRef.current.delete(cacheKey);
+        setTransactions([]); setTotalCount(null); setTransactionLoadError({ message: 'Your access changed. Verify this business session before reloading.' });
+        return;
+      }
       console.warn("[bookkeeping] transactions load failed", e?.message || e);
       const timedOut = e?.name === "TimeoutError" || /timed out|abort/i.test(String(e?.message || ""));
       setTransactionLoadError({
@@ -3539,10 +3571,14 @@ function BookkeepingCleanup() {
     if (accountFilter) reloadTransactions();
   }, [usingDemo, accountFilter, reloadTransactions]);
 
+  const viewFilterKey = [accountFilter, activeTab, dateRange, rowsPerPage, showCategorized].join('|');
+  const previousViewFilterRef = useRef(viewFilterKey);
   useEffect(() => {
+    if (previousViewFilterRef.current === viewFilterKey) return;
+    previousViewFilterRef.current = viewFilterKey;
     setSelectedIds(new Set());
     setPage(1);
-  }, [accountFilter, activeTab, dateRange, rowsPerPage, showCategorized]);
+  }, [viewFilterKey]);
 
   useEffect(() => {
     if (!canBookkeepingWrite) setSelectedIds(new Set());
@@ -3878,7 +3914,7 @@ function BookkeepingCleanup() {
         </div>
       )}
 
-      {!usingDemo && hasVisibleRows && (categorizationMessage || processingMessage || completedProcessingMessage || backgroundRefreshingTxns) ? (
+      {!usingDemo && hasVisibleRows && (categorizationMessage || processingMessage || completedProcessingMessage) ? (
         <div
           className="mb-2 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs text-slate-300"
           style={{
@@ -3904,7 +3940,11 @@ function BookkeepingCleanup() {
         </div>
       ) : null}
 
-      <AnimatePresence mode="wait" initial={false}>
+      <div className="flex items-center gap-2 text-xs text-white/45">
+        {lastSyncAt ? <span>Updated {new Date(lastSyncAt).toLocaleString()}</span> : null}
+        <ModuleDataStatus state={moduleState} onRetry={() => reloadTransactions()} />
+      </div>
+      <AnimatePresence initial={false}>
         <motion.div
           key={`${activeTab}:${dateRange}:${rowsPerPage}:${accountFilter || "all"}:${page}`}
           initial={{ opacity: 0, y: 10 }}
@@ -3928,7 +3968,7 @@ function BookkeepingCleanup() {
                 </button>
               </div>
             </div>
-          ) : !usingDemo && transactionLoadError && !loadingTxns && !hasVisibleRows ? (
+          ) : !usingDemo && transactionLoadError && moduleState === "error_without_cache" ? (
             <div className="mt-10 flex flex-col items-center justify-center gap-3 text-center text-slate-300">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-500/10 text-rose-300">!</div>
               <p className="text-sm font-medium text-slate-100">Transactions couldn't load.</p>
@@ -4616,4 +4656,9 @@ function BookkeepingCleanup() {
   );
 }
 
-export default BookkeepingCleanup;
+export default function ScopedBookkeepingCleanup() {
+  const { businessId, currentBusiness } = useBusiness();
+  const adminView = useAdminView();
+  const scope = adminView.active ? adminView.businessId : businessId || currentBusiness?.id || localStorage.getItem('currentBusinessId');
+  return <BookkeepingCleanup key={`${moduleSessionIdentity()}:${scope}:${adminView.active}:${adminView.readOnly}`} />;
+}

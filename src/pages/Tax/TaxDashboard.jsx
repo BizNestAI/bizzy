@@ -1,3 +1,4 @@
+import ModuleDataStatus from '../../components/UI/ModuleDataStatus.jsx';
 import { CATEGORY_RESOLUTION_OPTIONS, TEMPORARY_TAX_CATEGORIES, categoryTreatmentForAnswer } from "../../services/tax/taxCategoryResolution.js";
 import { formatTaxCurrency as formatCurrencyLocal } from "../../components/Tax/taxCurrency.js";
 import BusinessMileagePanel from "../../components/Tax/BusinessMileagePanel.jsx";
@@ -884,6 +885,7 @@ export function TaxDashboardDeductions({ businessId, year, readOnly = false, con
 
         <div className="flex flex-wrap items-center gap-2 whitespace-nowrap">
           {updatedAt ? <span className="text-xs text-white/42">Updated {formatDateLocal(updatedAt)}</span> : null}
+          <ModuleDataStatus state={deductions.moduleState} onRetry={refreshDeductions} />
           <button
             type="button"
             onClick={refreshDeductions}

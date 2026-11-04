@@ -1,3 +1,5 @@
+import { moduleSessionIdentity } from '../../services/modules/moduleSessionCache.js';
+import { resolveModuleDataState, unsafeModuleError } from '../../services/modules/moduleDataState.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { buildMockTaxFixture } from "../../services/demo/mockTaxFixture.js";
@@ -20,6 +22,7 @@ import {
   getTaxDeductionTransactionDetail,
   getTaxDeductionTransactions,
   getTaxWorkspace,
+  getCachedTaxWorkspace,
   getTaxWorkspaceMatrixCell,
   getTaxWorkspaceTransactions,
   getTaxPostedTransactions,
@@ -51,11 +54,13 @@ export function useTaxDeductions({
   pagination = { limit: 50, offset: 0 },
   enabled = true,
 } = {}) {
+  const sessionIdentity = moduleSessionIdentity();
   const filterKey = useMemo(() => JSON.stringify(stableObject(filters)), [filters]);
   const paginationKey = useMemo(() => JSON.stringify(stableObject(pagination)), [pagination]);
-  const initialCachedOverview = null;
+  const initialWorkspace = enabled && !shouldUseDemoData() ? getCachedTaxWorkspace({ businessId, year }) : null;
+  const initialCachedOverview = initialWorkspace?.projection ? overviewFromWorkspace(initialWorkspace.projection) : null;
   const [overview, setOverview] = useState(initialCachedOverview);
-  const [workspaceSnapshot, setWorkspaceSnapshot] = useState({ projection: null, projectionId: null, projectionVersion: null, sourceFingerprint: null });
+  const [workspaceSnapshot, setWorkspaceSnapshot] = useState(() => ({ projection: null, projectionId: null, projectionVersion: null, sourceFingerprint: null, ...initialWorkspace, scopeKey: `${sessionIdentity}:${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}` }));
   const workspaceSnapshotRef = useRef(workspaceSnapshot);
   const workspaceProjection = workspaceSnapshot.projection;
   const workspaceProjectionId = workspaceSnapshot.projectionId;
@@ -76,10 +81,10 @@ export function useTaxDeductions({
   const [error, setError] = useState(null);
   const [resourceErrors, setResourceErrors] = useState({});
   const [requestStatus, setRequestStatus] = useState({
-    scopeKey: null,
-    overview: "idle",
-    matrix: "idle",
-    classification: "idle",
+    scopeKey: `${sessionIdentity}:${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`,
+    overview: initialCachedOverview ? "success" : "idle",
+    matrix: initialCachedOverview ? "success" : "idle",
+    classification: initialCachedOverview ? "success" : "idle",
   });
   const seq = useRef(0);
   const overviewRef = useRef(initialCachedOverview);
@@ -91,7 +96,7 @@ export function useTaxDeductions({
     workspaceOperationTrackerRef.current = createWorkspaceOperationTracker(setRefreshing);
   }
   const isDemo = shouldUseDemoData();
-  const scopeKey = `${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`;
+  const scopeKey = `${sessionIdentity}:${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`;
   const currentScopeRef = useRef(scopeKey);
   currentScopeRef.current = scopeKey;
   const requestEnabled = enabled && Boolean(businessId);
@@ -107,9 +112,11 @@ export function useTaxDeductions({
   useEffect(() => {
     if (isDemo) return;
     seq.current += 1;
-    const cached = null;
+    const savedWorkspace = enabled ? getCachedTaxWorkspace({ businessId, year }) : null;
+    const cached = savedWorkspace?.projection ? overviewFromWorkspace(savedWorkspace.projection) : null;
+    overviewRef.current = cached;
     setOverview(cached);
-    const emptyWorkspace = { projection: null, projectionId: null, projectionVersion: null, sourceFingerprint: null };
+    const emptyWorkspace = { projection: null, projectionId: null, projectionVersion: null, sourceFingerprint: null, ...savedWorkspace, scopeKey };
     workspaceSnapshotRef.current = emptyWorkspace;
     setWorkspaceSnapshot(emptyWorkspace);
     setTransactions(null);
@@ -122,9 +129,9 @@ export function useTaxDeductions({
     setDecisionRules([]);
     setRequestStatus({
       scopeKey,
-      overview: enabled && businessId ? "loading" : "idle",
-      matrix: enabled && businessId ? "loading" : "idle",
-      classification: enabled && businessId ? "loading" : "idle",
+      overview: cached ? "success" : enabled && businessId ? "loading" : "idle",
+      matrix: cached ? "success" : enabled && businessId ? "loading" : "idle",
+      classification: cached ? "success" : enabled && businessId ? "loading" : "idle",
     });
     setLoading(Boolean(enabled && businessId && !cached));
     setError(null);
@@ -146,6 +153,7 @@ export function useTaxDeductions({
     const nextWorkspace = {
       projection,
       projectionId,
+      scopeKey,
       projectionVersion: value?.projectionVersion || projection?.projectionVersion || null,
       formulaVersion: value?.formulaVersion || projection?.formulaVersion || null,
       sourceFingerprint: value?.sourceFingerprint || projection?.sourceFingerprint || null,
@@ -192,7 +200,7 @@ export function useTaxDeductions({
     try {
       const overviewPromise = settle(getTaxWorkspace({ businessId, year, refresh, signal }));
       const overviewResult = await overviewPromise;
-      if (request === seq.current) {
+      if (request === seq.current && currentScopeRef.current === scopeKey) {
         if (overviewResult.status === "fulfilled") {
           const workspace = overviewResult.value?.projection;
           commitWorkspaceSnapshot(overviewResult.value);
@@ -203,12 +211,17 @@ export function useTaxDeductions({
           if (refresh) setLastRefreshedAt(workspace?.refreshedAt || workspace?.generatedAt || new Date().toISOString());
         } else {
           setRequestStatus((current) => ({ ...current, scopeKey, overview: "error" }));
+          if (unsafeModuleError(overviewResult.reason)) {
+            overviewRef.current = null;
+            setOverview(null);
+            setWorkspaceSnapshot({ projection: null, projectionId: null, scopeKey });
+          }
           if (!overviewRef.current) setError(overviewResult.reason);
         }
         setLoading(false);
       }
       const primaryError = overviewResult.status === "rejected" ? overviewResult.reason : null;
-      if (request === seq.current && refresh) setRefreshError(primaryError);
+      if (request === seq.current && currentScopeRef.current === scopeKey && hasVerifiedWorkspace) setRefreshError(primaryError);
       return {
         overview: overviewResult.status === "fulfilled" ? overviewFromWorkspace(overviewResult.value?.projection) : null,
         workspaceSnapshot: overviewResult.status === "fulfilled" ? workspaceSnapshotRef.current : null,
@@ -221,11 +234,11 @@ export function useTaxDeductions({
         decisionRules: null,
       };
     } catch (err) {
-      if (err?.code !== "request_aborted" && request === seq.current) setError(err);
-      if (refresh && err?.code !== "request_aborted" && request === seq.current) setRefreshError(err);
+      if (err?.code !== "request_aborted" && request === seq.current && currentScopeRef.current === scopeKey) setError(err);
+      if (refresh && err?.code !== "request_aborted" && request === seq.current && currentScopeRef.current === scopeKey) setRefreshError(err);
       return null;
     } finally {
-      if (request === seq.current) setLoading(false);
+      if (request === seq.current && currentScopeRef.current === scopeKey) setLoading(false);
     }
   }, [businessId, year, enabled, isDemo, scopeKey, commitWorkspaceSnapshot]);
 
@@ -403,21 +416,24 @@ export function useTaxDeductions({
     return load({ signal, refresh: true });
   }, [commitWorkspaceSnapshot, load]);
 
+  const scopeMatches = isDemo || workspaceSnapshot.scopeKey === scopeKey;
+  const moduleState = resolveModuleDataState({ hasData: scopeMatches && Boolean(overview), fetching: refreshing || loading || rebuildPending, error: error || refreshError, scopeMatches });
   return {
-    overview,
-    workspaceProjection,
-    workspaceProjectionId,
-    workspaceSourceFingerprint: workspaceSnapshot.sourceFingerprint,
-    transactions,
-    allTransactions,
-    postedTransactions,
-    classificationCoverage,
-    classificationJobStatus,
-    classificationRows,
-    classificationReviewSummary,
-    decisionRules,
-    loading,
-    error,
+    moduleState,
+    overview: scopeMatches ? overview : null,
+    workspaceProjection: scopeMatches ? workspaceProjection : null,
+    workspaceProjectionId: scopeMatches ? workspaceProjectionId : null,
+    workspaceSourceFingerprint: scopeMatches ? workspaceSnapshot.sourceFingerprint : null,
+    transactions: scopeMatches ? transactions : null,
+    allTransactions: scopeMatches ? allTransactions : null,
+    postedTransactions: scopeMatches ? postedTransactions : null,
+    classificationCoverage: scopeMatches ? classificationCoverage : null,
+    classificationJobStatus: scopeMatches ? classificationJobStatus : null,
+    classificationRows: scopeMatches ? classificationRows : null,
+    classificationReviewSummary: scopeMatches ? classificationReviewSummary : null,
+    decisionRules: scopeMatches ? decisionRules : [],
+    loading: !scopeMatches || loading,
+    error: scopeMatches ? error : null,
     resourceErrors,
     sectionStatus: {
       overview: scopedRequestStatus.overview,
@@ -426,7 +442,7 @@ export function useTaxDeductions({
     },
     refreshing,
     rebuildPending,
-    refreshError,
+    refreshError: scopeMatches ? refreshError : null,
     lastRefreshedAt,
     isDemo,
     refetch: load,

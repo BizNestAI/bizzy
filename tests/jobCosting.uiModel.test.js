@@ -438,10 +438,10 @@ test("Suggested Jobs cards are wrapped in a card-level render boundary", async (
   assert.equal(source.includes("Unable to display this suggested job."), true);
 });
 
-test("Job Costing hydrates live route from a short-lived per-business memory cache", async () => {
+test("Job Costing hydrates live route from a session-scoped business cache", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
-  assert.equal(source.includes("const JOB_COSTING_LIVE_CACHE_TTL_MS = 5 * 60 * 1000"), true);
-  assert.equal(source.includes("const jobCostingLiveCache = new Map()"), true);
+  assert.equal(source.includes("JOB_COSTING_LIVE_CACHE_TTL_MS"), false);
+  assert.equal(source.includes("readModuleSnapshot('jobs'"), true);
   assert.equal(source.includes("readJobCostingLiveCache(businessId, readOnly)"), true);
   assert.equal(source.includes("useState(() => initialLiveCache?.transactions || [])"), true);
   assert.equal(source.includes("useState(() => initialLiveCache?.jobs || [])"), true);
@@ -460,8 +460,8 @@ test("Job Costing live refresh preserves cached data instead of showing empty ze
   assert.equal(loaderSource.includes("setLoading(!hasVisibleJobCostingDataRef.current)"), true);
   assert.equal(loaderSource.includes("writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions })"), true);
   assert.equal(loaderSource.includes("writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs })"), true);
-  assert.equal(loaderSource.includes("setTransactions([]);"), false);
-  assert.equal(loaderSource.includes("setJobs([]);"), false);
+  assert.equal(loaderSource.includes("if (unsafe)"), true);
+  assert.equal(loaderSource.includes("unsafeModuleError(result.reason)"), true);
 });
 
 test("Live candidate-created jobs expose the Back to Suggested action from production source fields", async () => {

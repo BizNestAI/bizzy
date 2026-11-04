@@ -1,3 +1,4 @@
+import { dedupeModuleRead, invalidateModuleSnapshots } from '../services/modules/moduleSessionCache.js';
 // /src/utils/safeFetch.js
 import { supabase } from "../services/supabaseClient";
 import apiBaseUrl, { getApiBase } from "./apiBase.js";
@@ -70,6 +71,31 @@ function normalizeBodyAndHeaders(init, headers) {
  * - Throws rich errors with status/url/body
  */
 export async function safeFetch(input, init = {}) {
+  const url = new URL(typeof input === 'string' ? apiUrl(input) : input.url, globalThis.location?.origin || 'http://localhost');
+  const module = /^\/api\/(jobs|job-costing|collections|ar)(\/|$)/.test(url.pathname) ? 'jobs'
+    : /^\/api\/(bookkeeping|accounting)(\/|$)/.test(url.pathname) ? 'financials' : null;
+  if (!module) return performSafeFetch(input, init);
+  const headers = new Headers(init.headers);
+  applyAdminViewHeaders(headers);
+  let payload; try { payload = typeof init.body === 'string' ? JSON.parse(init.body) : init.body; } catch { /* Non-JSON mutation body. */ }
+  const businessId = payload?.business_id || payload?.businessId || url.searchParams.get('business_id') || headers.get('x-business-id') || globalThis.localStorage?.getItem('currentBusinessId') || '';
+  if (!headers.has('x-business-id')) headers.set('x-business-id', businessId);
+  if (!headers.has('x-user-id')) headers.set('x-user-id', globalThis.localStorage?.getItem('user_id') || '');
+  if (!headers.has('x-data-mode')) headers.set('x-data-mode', globalThis.localStorage?.getItem('bizzy:dataMode') || globalThis.localStorage?.getItem('bizzy:demo') || 'auto');
+  const scopeHeaders = [...headers.entries()].filter(([name]) => !['accept', 'content-type', 'x-request-id'].includes(name)).sort();
+  url.searchParams.sort();
+  const method = String(init.method || (init.body ? 'POST' : 'GET')).toUpperCase();
+  if (method === 'GET') return dedupeModuleRead(module, { businessId, url: url.href, headers: JSON.stringify(scopeHeaders) },
+    signal => performSafeFetch(input, { ...init, signal }), { signal: init.signal, timeoutMs: init.timeoutMs || 20000 }).catch(error => {
+      if ([401, 403].includes(Number(error?.status))) invalidateModuleSnapshots(module, businessId);
+      throw error;
+    });
+  const result = await performSafeFetch(input, init);
+  invalidateModuleSnapshots(module, businessId);
+  return result;
+}
+
+async function performSafeFetch(input, init = {}) {
   // Resolve the URL (allow absolute URLs to pass through)
   const url = typeof input === 'string' ? apiUrl(input) : (input?.url || input);
 

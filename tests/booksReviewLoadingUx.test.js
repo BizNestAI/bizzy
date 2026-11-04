@@ -15,7 +15,7 @@ const postingWorkerSource = readFileSync(join(root, "src/jobs/interactivePosting
 
 test("Books Review keeps loaded rows visible while categorization continues", () => {
   assert.match(source, /const hasVisibleRows = feedRows\.length > 0/);
-  assert.match(source, /!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
+  assert.match(source, /resolveModuleDataState\([\s\S]*?hasData:[\s\S]*?typeof totalCount === 'number'/);
   assert.match(source, /const processingMessage = useMemo/);
   assert.match(source, /current_run/);
   assert.match(source, /Categorized \$\{processed\} of \$\{expected\} transactions/);
@@ -91,7 +91,7 @@ test("Books Review processing polling is read-only and only stays active while b
 });
 
 test("Books Review full loading state is reserved for true first load without renderable rows", () => {
-  assert.match(source, /const showLoadingState =[\s\S]*?!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
+  assert.match(source, /const showLoadingState =[\s\S]*?initial_loading[\s\S]*?scope_changing/);
   assert.doesNotMatch(source, /showLoadingState =[\s\S]*?hasInconsistentEmptyPage/);
   assert.match(source, /setTransactions\(\[\]\);[\s\S]*?setTotalCount\(null\);[\s\S]*?setLoadingTxns\(true\)/);
   assert.match(source, /const cachedPage = readTransactionPageCache\(cacheKey\) \|\| previousPage/);
@@ -145,7 +145,7 @@ test("Books Review feed loading is independent of interactive posting workers an
 
   assert.match(reloadBody, /fetchTransactions\(businessId/);
   assert.doesNotMatch(reloadBody, /claimInteractivePosting|runInteractivePosting|posting\/backlog|post-ready|plaid\/sync|retryBookkeepingProcessing/);
-  assert.match(source, /hasVisibleRows && \(categorizationMessage \|\| processingMessage \|\| completedProcessingMessage \|\| backgroundRefreshingTxns\)/);
+  assert.match(source, /hasVisibleRows && \(categorizationMessage \|\| processingMessage \|\| completedProcessingMessage\)/);
   assert.match(postingWorkerSource, /isMissingInteractivePostingCommandRpcError/);
   assert.match(postingWorkerSource, /nextInteractivePostingPollDelayMs/);
 });

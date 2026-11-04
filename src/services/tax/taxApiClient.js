@@ -1,3 +1,4 @@
+import { moduleSessionIdentity } from '../modules/moduleSessionCache.js';
 import { withTaxPreviewDeadline } from "./taxPreviewDeadline.js";
 import authenticatedFetch from "../api/authenticatedFetch.js";
 import { normalizeTaxOverview } from "./normalizeTaxOverview.js";
@@ -40,7 +41,7 @@ const inflight = new Map();
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function" && !window.__bizziTaxCacheInvalidationInstalled) {
   window.__bizziTaxCacheInvalidationInstalled = true;
-  for (const eventName of ["bizzy:auth-principal-changed", "bizzy:business-changed", "bizzy:admin-view-cleared"]) {
+  for (const eventName of ["bizzy:auth-cleared", "bizzy:auth-principal-changed", "bizzy:business-changed", "bizzy:admin-view-cleared"]) {
     window.addEventListener(eventName, () => clearTaxApiCache());
   }
 }
@@ -261,6 +262,17 @@ export async function getTaxWorkspace({ businessId, year, refresh = false, signa
     validate: (response) => validateTaxWorkspaceResponse(response, { businessId, year }),
   });
   return unwrap(payload);
+}
+
+// Only validated same-business/year workspace envelopes can supply immediate paint.
+export function getCachedTaxWorkspace({ businessId, year } = {}) {
+  if (!businessId) return null;
+  const params = query({ businessId, year, projectionVersion: "tax-workspace-v2" });
+  const cacheKey = key("taxWorkspace:tax-workspace-v2", params);
+  const hit = cache.get(cacheKey);
+  if (!hit || hit.sessionIdentity !== moduleSessionIdentity()) return null;
+  try { return unwrap(validateTaxWorkspaceResponse(hit.value, { businessId, year })); }
+  catch { cache.delete(cacheKey); return null; }
 }
 
 export async function scheduleTaxWorkspaceRefresh({ businessId, year, previousProjectionId, signal } = {}) {
@@ -978,10 +990,11 @@ function buildTrend(dto) {
 
 async function cachedGet(path, { signal, cacheKey = path, bypassCache = false, requestId = null, timeoutCode = "detail_timeout", timeoutMs = TAX_READ_TIMEOUT_MS, validate = null, persistSession = false } = {}) {
   const now = Date.now();
-  if (inflight.has(cacheKey)) return waitForCaller(inflight.get(cacheKey), signal);
+  const sessionIdentity = moduleSessionIdentity();
+  if (inflight.has(cacheKey) && inflight.get(cacheKey).sessionIdentity === sessionIdentity) return waitForCaller(inflight.get(cacheKey), signal);
   if (!bypassCache) {
     const hit = cache.get(cacheKey);
-    if (hit && now - hit.ts < CACHE_TTL_MS) {
+    if (hit && hit.sessionIdentity === sessionIdentity && now - hit.ts < CACHE_TTL_MS) {
       try {
         return validate ? validate(hit.value) : hit.value;
       } catch (error) {
@@ -994,13 +1007,18 @@ async function cachedGet(path, { signal, cacheKey = path, bypassCache = false, r
   // caller from observing the result; it cannot cancel the same-business/year
   // request being awaited by a prefetcher or a newly mounted route.
   const promise = requestWithReadTimeout(path, { requestId, timeoutCode, timeoutMs }).then((value) => {
+    if (inflight.get(cacheKey) !== promise || sessionIdentity !== moduleSessionIdentity()) throw Object.assign(new Error("Tax scope changed."), { code: "module_scope_invalidated" });
     const verified = validate ? validate(value) : value;
-    const entry = { ts: Date.now(), value };
+    const entry = { ts: Date.now(), value, sessionIdentity };
     cache.set(cacheKey, entry);
     if (persistSession) writeVerifiedTaxOverviewSessionCache(cacheKey, entry);
     trimCache();
     return verified;
-  }).finally(() => inflight.delete(cacheKey));
+  }).catch(error => {
+    if ([401, 403].includes(Number(error?.status)) || error?.code === 'tax_workspace_version_mismatch') cache.delete(cacheKey);
+    throw error;
+  }).finally(() => { if (inflight.get(cacheKey) === promise) inflight.delete(cacheKey); });
+  promise.sessionIdentity = sessionIdentity;
   inflight.set(cacheKey, promise);
   return waitForCaller(promise, signal);
 }

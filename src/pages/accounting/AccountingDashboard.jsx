@@ -1,3 +1,4 @@
+import { moduleSessionIdentity } from '../../services/modules/moduleSessionCache.js';
 // File: /src/pages/Accounting/AccountingDashboard.jsx
 import React, { lazy, Suspense, useMemo, useEffect, useState, useRef, useCallback } from 'react';
 import { useBusiness } from '../../context/BusinessContext';
@@ -154,7 +155,7 @@ const TEMP_DEBUG_MOCK_HERO = {
   dismissible: true,
 };
 
-export default function AccountingDashboard() {
+function AccountingDashboard() {
   const { currentBusiness, loading } = useBusiness();
   const adminView = useAdminView();
   const businessId =
@@ -918,4 +919,12 @@ export default function AccountingDashboard() {
       </div>
     </div>
   );
+}
+
+export default function ScopedAccountingDashboard() {
+  const { businessId, currentBusiness } = useBusiness();
+  const adminView = useAdminView();
+  const scope = adminView.active ? adminView.businessId : businessId || currentBusiness?.id || localStorage.getItem('currentBusinessId');
+  const period = useFinancialPeriod(scope);
+  return <AccountingDashboard key={`${moduleSessionIdentity()}:${scope}:${period.year}:${period.month}:${adminView.active}`} />;
 }

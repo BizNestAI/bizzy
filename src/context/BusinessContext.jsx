@@ -171,20 +171,23 @@ export const BusinessProvider = ({ children }) => {
     return () => { alive = false; };
   }, [adminView.loading, adminView.active, adminView.businessId, adminView.businessName, authLoading, businessId, user?.id, refreshGeneration]);
 
+  const verifiedBusiness = currentBusiness?.id === businessId &&
+    (adminView.active || (user?.id && (!currentBusiness?.user_id || currentBusiness.user_id === user.id)))
+    ? currentBusiness : null;
   const value = useMemo(
     () => ({
       // canonical id + setter
       businessId,
       setBusinessId,
       // legacy fields you already used
-      currentBusiness,
+      currentBusiness: verifiedBusiness,
       setCurrentBusiness,
-      loading,
+      loading: loading || authLoading || Boolean(businessId && !verifiedBusiness),
       refreshBusinessContext,
       adminView: adminView.active,
       readOnly: adminView.active ? adminView.readOnly : false,
     }),
-    [businessId, currentBusiness, loading, refreshBusinessContext, adminView.active, adminView.readOnly]
+    [businessId, verifiedBusiness, loading, authLoading, refreshBusinessContext, adminView.active, adminView.readOnly]
   );
 
   return <BusinessContext.Provider value={value}>{children}</BusinessContext.Provider>;

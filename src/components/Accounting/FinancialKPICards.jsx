@@ -3,7 +3,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext";
-import { apiFetch } from "../../utils/apiBase.js";
+import { safeFetch } from "../../utils/safeFetch.js";
+import { readModuleSnapshot, writeModuleSnapshot, invalidateModuleSnapshots, moduleSessionIdentity } from '../../services/modules/moduleSessionCache.js';
+import { resolveModuleDataState, unsafeModuleError } from '../../services/modules/moduleDataState.js';
+import ModuleDataStatus from '../UI/ModuleDataStatus.jsx';
 import KpiCard from "../UI/KpiCard.jsx";
 
 function fmtCurrency(n) {
@@ -55,9 +58,8 @@ function fmtMargin(value) {
   return `${rounded.toFixed(1)}%`;
 }
 
-const KPI_CACHE = new Map();
 
-export default function FinancialKPICards({
+function FinancialKPICards({
   userId: userIdProp,
   businessId: businessIdProp,
   year: yearProp,
@@ -68,8 +70,6 @@ export default function FinancialKPICards({
   onLoadingChange,
   refreshVersion = 0,
 }) {
-  const [kpis, setKpis] = useState([]);
-  const [loading, setLoading] = useState(true);
   const { currentBusiness } = useBusiness?.() || {};
 
   const userId = userIdProp || localStorage.getItem("user_id") || "";
@@ -82,6 +82,13 @@ export default function FinancialKPICards({
     () => !forceLive && shouldUseDemoData(currentBusiness),
     [currentBusiness, forceLive]
   );
+  const cacheScope = { businessId, year, month, resource: 'kpis', admin: currentBusiness?.admin_view === true };
+  const saved = readModuleSnapshot('financials', cacheScope)?.data;
+  const [kpis, setKpis] = useState(() => saved || []);
+  const [loading, setLoading] = useState(() => !saved);
+  const [updating, setUpdating] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [retry, setRetry] = useState(0);
   const onLiveDataRef = useRef(onLiveData);
   const onEmptyDataRef = useRef(onEmptyData);
   const onErrorRef = useRef(onError);
@@ -175,8 +182,10 @@ export default function FinancialKPICards({
         return;
       }
 
-      const cacheKey = `${businessId}:${year}:${month}`;
-      const cached = KPI_CACHE.get(cacheKey);
+      const cacheScope = { businessId, year, month, resource: "kpis", admin: currentBusiness?.admin_view === true };
+      const cached = readModuleSnapshot("financials", cacheScope)?.data;
+      setUpdating(Boolean(cached));
+      setLoadError(null);
       if (cached) {
         setKpis(cached);
         setLoading(false);
@@ -193,7 +202,7 @@ export default function FinancialKPICards({
           `&year=${encodeURIComponent(year)}` +
           `&month=${encodeURIComponent(month)}`;
 
-        const res = await apiFetch(url, {
+        const parsed = await safeFetch(url, {
           headers: {
             "Content-Type": "application/json",
             "x-user-id": userId || "",
@@ -203,18 +212,6 @@ export default function FinancialKPICards({
           cache: "no-store",
         });
 
-        const ct = res.headers.get("content-type") || "";
-        const raw = await res.text();
-
-        if (!res.ok) {
-          const error = new Error(`HTTP ${res.status}: ${raw.slice(0, 200)}`);
-          error.status = res.status;
-          throw error;
-        }
-        if (!ct.includes("application/json"))
-          throw new Error(`Non-JSON response (${ct}): ${raw.slice(0, 200)}`);
-
-        const parsed = JSON.parse(raw) || {};
         const m = parsed.metrics || parsed;
 
         const totalRevenue = m.total_revenue ?? m.totalRevenue ?? null;
@@ -249,6 +246,7 @@ export default function FinancialKPICards({
         const isEmptyPayload = parsed.empty === true || parsed.source === "cache_miss" || parsed.data_status === "missing" || parsed.data_status === "empty";
         if (isEmptyPayload || allNull) {
           setKpis([]);
+          writeModuleSnapshot("financials", cacheScope, []);
           onEmptyDataRef.current?.(parsed.data_status || (allNull ? "missing" : "empty"));
           return;
         }
@@ -278,17 +276,19 @@ export default function FinancialKPICards({
 
         if (!cancelled) {
           setKpis(formatted);
-          KPI_CACHE.set(cacheKey, formatted);
+          writeModuleSnapshot("financials", cacheScope, formatted);
           onLiveDataRef.current?.();
         }
       } catch (error) {
         if (error?.name === "AbortError") return;
         if (!cancelled) {
-          if (!cached) setKpis([]);
+          setLoadError(error);
+          if (!cached || unsafeModuleError(error)) setKpis([]);
+          if (unsafeModuleError(error)) invalidateModuleSnapshots('financials', businessId);
           onErrorRef.current?.(error);
         }
       } finally {
-        if (!cancelled && !cached) setLoading(false);
+        if (!cancelled) { setLoading(false); setUpdating(false); }
       }
     }
 
@@ -297,7 +297,7 @@ export default function FinancialKPICards({
       cancelled = true;
       ac.abort();
     };
-  }, [userId, businessId, year, month, usingDemo, populateDemoKpis, refreshVersion]);
+  }, [userId, businessId, year, month, usingDemo, populateDemoKpis, refreshVersion, retry, currentBusiness?.admin_view]);
 
   if (loading) {
     return (
@@ -318,6 +318,8 @@ export default function FinancialKPICards({
 
   return (
     <div className="grid w-full grid-cols-1 items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="col-span-full"><ModuleDataStatus state={resolveModuleDataState({ hasData: Boolean(saved) || kpis.length > 0, fetching: updating, error: loadError })} onRetry={() => setRetry(value => value + 1)} /></div>
+      {loadError && !kpis.length ? <p role="alert">Financial data couldn’t load. <button type="button" onClick={() => setRetry(value => value + 1)}>Retry</button></p> : null}
       {kpis.map((kpi, index) => (
         <KpiCard
           key={index}
@@ -342,4 +344,11 @@ function getKpiTone(kpi) {
   if (kpi.label === "Current Expenses") return "neutral";
   if (kpi.trend === "down") return "neutral";
   return "emerald";
+}
+
+export default function ScopedFinancialKPICards(props) {
+  const { currentBusiness } = useBusiness();
+  const businessId = props.businessId || currentBusiness?.id || localStorage.getItem('currentBusinessId');
+  const period = useFinancialPeriod(businessId);
+  return <FinancialKPICards key={`${moduleSessionIdentity()}:${businessId}:${props.year || period.year}:${props.month || period.month}:${currentBusiness?.admin_view === true}`} {...props} />;
 }

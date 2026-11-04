@@ -1,3 +1,6 @@
+import { readModuleSnapshot, writeModuleSnapshot, invalidateModuleSnapshots, moduleSessionIdentity } from '../../services/modules/moduleSessionCache.js';
+import { resolveModuleDataState, unsafeModuleError } from '../../services/modules/moduleDataState.js';
+import ModuleDataStatus from '../../components/UI/ModuleDataStatus.jsx';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateCollectionDraft } from "../../services/ar/collectionMessageDraft.js";
 import {
@@ -43,8 +46,7 @@ import {
 } from "./jobCostingUiModel.js";
 
 const DAILY_AR_SYNC_MS = 24 * 60 * 60 * 1000;
-const JOB_COSTING_LIVE_CACHE_TTL_MS = 5 * 60 * 1000;
-const jobCostingLiveCache = new Map();
+
 
 const glass =
   "rounded-[28px] bg-white/[0.04] border-0 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl";
@@ -74,46 +76,20 @@ function compactBadgeClass(tone = "slate") {
   return sourceBadgeTone[tone] || sourceBadgeTone.slate;
 }
 
-function getJobCostingCacheKey(businessId, readOnly) {
-  if (!businessId) return "";
-  return `${businessId}:${readOnly ? "readonly" : "live"}`;
-}
-
 function hasJobCostingCacheData(cache) {
-  return Boolean(
-    (Array.isArray(cache?.transactions) && cache.transactions.length > 0) ||
-    (Array.isArray(cache?.jobs) && cache.jobs.length > 0) ||
-    (Array.isArray(cache?.jobCandidates) && cache.jobCandidates.length > 0) ||
-    Number(cache?.jobCandidatesTotal || 0) > 0 ||
-    cache?.projectsCapability
-  );
+  // A verified empty result is usable data too.
+  return Array.isArray(cache?.transactions) || Array.isArray(cache?.jobs);
 }
-
 function readJobCostingLiveCache(businessId, readOnly = false) {
-  const key = getJobCostingCacheKey(businessId, readOnly);
-  if (!key) return null;
-  const cached = jobCostingLiveCache.get(key);
-  if (!cached) return null;
-  if (Date.now() - Number(cached.cachedAt || 0) > JOB_COSTING_LIVE_CACHE_TTL_MS) {
-    jobCostingLiveCache.delete(key);
-    return null;
-  }
-  return cached;
+  if (!businessId) return null;
+  return readModuleSnapshot('jobs', { businessId, readOnly, resource: 'job-costing' })?.data || null;
 }
-
 function writeJobCostingLiveCache(businessId, readOnly, patch) {
-  const key = getJobCostingCacheKey(businessId, readOnly);
-  if (!key || !patch || typeof patch !== "object") return;
-  const previous = jobCostingLiveCache.get(key) || {};
-  const sanitizedPatch = {
-    ...patch,
-    ...(Array.isArray(patch.jobs) ? { jobs: filterActiveUiJobs(patch.jobs) } : {}),
-  };
-  jobCostingLiveCache.set(key, {
-    ...previous,
-    ...sanitizedPatch,
-    cachedAt: Date.now(),
-  });
+  if (!businessId || !patch) return;
+  const scope = { businessId, readOnly, resource: 'job-costing' };
+  const previous = readModuleSnapshot('jobs', scope)?.data || {};
+  writeModuleSnapshot('jobs', scope, { ...previous, ...patch,
+    ...(Array.isArray(patch.jobs) ? { jobs: filterActiveUiJobs(patch.jobs) } : {}), cachedAt: Date.now() });
 }
 
 function SkeletonCard({ className = "", lines = 3 }) {
@@ -3060,6 +3036,8 @@ function JobAssignmentBoard({
   confirmingAssignment,
   listening,
   loading,
+  updating = false,
+  moduleState,
   assigningId,
   dragOverJobId,
   draggedTransactionId,
@@ -3388,16 +3366,17 @@ function JobAssignmentBoard({
             <UploadCloud className="h-3.5 w-3.5" />
             {importJobsLabel}
           </button>
+          <ModuleDataStatus state={moduleState} onRetry={onRefresh} />
           <button
             type="button"
             onClick={onRefresh}
-            disabled={loading}
+            disabled={loading || updating}
             className="inline-flex h-9 w-9 items-center justify-center rounded-full border text-white/85 transition hover:bg-white/14 hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/14 disabled:opacity-60"
             style={{ borderColor: "rgba(255,255,255,0.22)", background: "rgba(18,18,20,0.86)" }}
             aria-label="Refresh job costing"
             title="Refresh"
           >
-            <RefreshCcw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+            <RefreshCcw className={updating || loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
           </button>
         </div>
       </div>
@@ -6375,6 +6354,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
   const [transactions, setTransactions] = useState(() => initialLiveCache?.transactions || []);
   const [jobs, setJobs] = useState(() => initialLiveCache?.jobs || []);
   const [loading, setLoading] = useState(() => !hasJobCostingCacheData(initialLiveCache));
+  const [updating, setUpdating] = useState(false);
   const [error, setError] = useState("");
   const [transactionsError, setTransactionsError] = useState("");
   const [jobsError, setJobsError] = useState("");
@@ -6496,6 +6476,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
       return;
     }
     setLoading(!hasVisibleJobCostingDataRef.current);
+    setUpdating(hasVisibleJobCostingDataRef.current);
     setError("");
     setTransactionsError("");
     setJobsError("");
@@ -6508,8 +6489,16 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
         safeFetch(apiUrl(`/api/jobs/job-costing?business_id=${encodeURIComponent(businessId)}`), { signal: controller.signal }),
         safeFetch(apiUrl(`/api/job-costing/jobs/summary?business_id=${encodeURIComponent(businessId)}`), { signal: controller.signal }),
       ]);
-      if (jobCostingRequestRef.current.sequence !== sequence) return;
+      if (jobCostingRequestRef.current.sequence !== sequence || controller.signal.aborted) return;
 
+      const unsafe = [dataResult, summaryResult].find(result => result.status === 'rejected' && unsafeModuleError(result.reason));
+      if (unsafe) {
+        invalidateModuleSnapshots('jobs', businessId);
+        hasVisibleJobCostingDataRef.current = false;
+        setTransactions([]); setJobs([]);
+        setError('Access to this data changed. Reload after verifying your business session.');
+        return;
+      }
       if (dataResult.status === "fulfilled") {
         const data = dataResult.value || {};
         const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
@@ -6547,12 +6536,13 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
       console.warn("[JobCosting] load failed", e?.message || e);
       setError(e?.message || "Failed to load job costing.");
     } finally {
-      if (jobCostingRequestRef.current.sequence === sequence) setLoading(false);
+      if (jobCostingRequestRef.current.sequence === sequence) { setLoading(false); setUpdating(false); }
     }
   }, [businessId, readOnly, usingDemo]);
 
   useEffect(() => {
     loadJobCosting();
+    return () => { jobCostingRequestRef.current.sequence += 1; jobCostingRequestRef.current.controller?.abort(); };
   }, [loadJobCosting]);
 
   const loadSuggestions = useCallback(async () => {
@@ -8023,6 +8013,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false, allowTransact
             onStartVoice={startVoice}
             onAddJob={readOnly ? null : () => setAddJobOpen(true)}
             onImportJobs={readOnly ? null : () => setImportJobsOpen(true)}
+            updating={updating}
+            moduleState={resolveModuleDataState({ hasData: hasVisibleJobCostingDataRef.current, fetching: updating || loading, error: error || transactionsError || jobsError })}
             onRefresh={loadJobCosting}
             readOnly={readOnly}
             allowTransactionAssignment={allowTransactionAssignment}
@@ -8442,7 +8434,7 @@ function shouldRunDailySync(lastSyncedAt, businessId) {
   return true;
 }
 
-export default function JobsDashboard() {
+function JobsDashboard() {
   const location = useLocation();
   const { currentBusiness } = useBusiness?.() || {};
   const adminView = useAdminView();
@@ -8451,10 +8443,13 @@ export default function JobsDashboard() {
   const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem("currentBusinessId") || "");
   const [collectionsAsOf] = useState(() => new Date());
 
-  const [openInvoices, setOpenInvoices] = useState([]);
+  const initialCollections = readModuleSnapshot('jobs', { businessId, readOnly, resource: 'collections' })?.data;
+  const [openInvoices, setOpenInvoices] = useState(() => initialCollections?.rows || []);
+  const [collectionsUpdating, setCollectionsUpdating] = useState(false);
+  const [collectionsLoaded, setCollectionsLoaded] = useState(Boolean(initialCollections));
   const [hero, setHero] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [arStatus, setArStatus] = useState({ last_synced_at: null, open_count: null });
+  const [loading, setLoading] = useState(!initialCollections);
+  const [arStatus, setArStatus] = useState(() => initialCollections?.status || { last_synced_at: null, open_count: null });
   const [syncingAr, setSyncingAr] = useState(false);
   const [arError, setArError] = useState("");
   const [followupOverrides, setFollowupOverrides] = useState({});
@@ -8469,7 +8464,8 @@ export default function JobsDashboard() {
     void demoModeVersion;
     return shouldUseDemoData(currentBusiness || businessId);
   }, [businessId, currentBusiness, demoModeVersion]);
-  const canView = usingDemo || qbStatus === "connected";
+  const hasSavedModuleData = hasJobCostingCacheData(readJobCostingLiveCache(businessId, readOnly)) || Boolean(initialCollections);
+  const canView = usingDemo || qbStatus === "connected" || hasSavedModuleData;
   const normalizedPath = location.pathname.replace(/\/+$/, "");
   const isJobsBase = normalizedPath === "/dashboard/leads-jobs" || normalizedPath === "/dashboard/jobs";
   const isJobCosting = isJobsBase || location.pathname.includes("/job-costing");
@@ -8505,6 +8501,8 @@ export default function JobsDashboard() {
         getArStatus(businessId),
       ]);
       setOpenInvoices(refreshed || []);
+      setCollectionsLoaded(true);
+      writeModuleSnapshot('jobs', { businessId, readOnly, resource: 'collections' }, { rows: refreshed || [], status });
       if (status) setArStatus(status);
     } catch (e) {
       console.warn("[JobsDashboard] AR sync failed", e?.message || e);
@@ -8518,7 +8516,8 @@ export default function JobsDashboard() {
     if (!businessId || usingDemo) return;
     const refreshed = await getJobsTopUnpaid(businessId);
     setOpenInvoices(refreshed || []);
-  }, [businessId, usingDemo]);
+    writeModuleSnapshot('jobs', { businessId, readOnly, resource: 'collections' }, { rows: refreshed || [] });
+  }, [businessId, usingDemo, readOnly]);
 
   const applyFollowupOverride = useCallback((row, round, patch) => {
     const key = getInvoiceKey(row);
@@ -8603,7 +8602,9 @@ export default function JobsDashboard() {
         setLoading(false);
         return;
       }
-      setLoading(true);
+      const cached = readModuleSnapshot("jobs", { businessId, readOnly, resource: "collections" })?.data;
+      setLoading(!cached);
+      setCollectionsUpdating(Boolean(cached));
       setArError("");
       const [u, statusResult] = await Promise.allSettled([
         getJobsTopUnpaid(businessId),
@@ -8611,7 +8612,15 @@ export default function JobsDashboard() {
       ]);
       if (!alive) return;
       const nextStatus = statusResult.status === "fulfilled" ? statusResult.value : null;
-      setOpenInvoices(u.status === "fulfilled" ? (u.value || []) : []);
+      if (u.status === 'fulfilled') {
+        setOpenInvoices(u.value || []);
+        setCollectionsLoaded(true);
+        writeModuleSnapshot('jobs', { businessId, readOnly, resource: 'collections' }, { rows: u.value || [], status: nextStatus });
+      } else {
+        setArError('Collections could not refresh. Please retry.');
+        if (unsafeModuleError(u.reason)) { setOpenInvoices([]); setCollectionsLoaded(false); invalidateModuleSnapshots('jobs', businessId); }
+      }
+      setCollectionsUpdating(false);
       if (nextStatus) setArStatus(nextStatus);
       setLoading(false);
       if (!readOnly && !usingDemo && qbStatus === "connected" && shouldRunDailySync(nextStatus?.last_synced_at, businessId)) {
@@ -8668,7 +8677,7 @@ export default function JobsDashboard() {
     }));
   }, [followupOverrides, openInvoices, usingMock]);
 
-  if (qbStatusLoading) {
+  if (qbStatusLoading && !hasSavedModuleData) {
     return (
       <div className="w-full pt-0 pb-4">
         <div className="bizzy-page-width bizzy-page-width--workspace space-y-4">
@@ -8694,6 +8703,7 @@ export default function JobsDashboard() {
   if (isJobCosting) {
     return (
       <JobCostingPage
+        key={`${moduleSessionIdentity()}:${businessId}:${readOnly}`}
         businessId={businessId}
         usingDemo={usingDemo}
         readOnly={readOnly}
@@ -8712,6 +8722,7 @@ export default function JobsDashboard() {
           onDismissHero={() => setHero(null)}
         />
 
+        <ModuleDataStatus state={resolveModuleDataState({ hasData: collectionsLoaded, fetching: collectionsUpdating || syncingAr, error: arError })} onRetry={() => refreshAr({ force: true })} />
         {loading ? <CollectionsInitialLoadingState /> : (
           <>
             <AgingChart
@@ -8741,4 +8752,11 @@ export default function JobsDashboard() {
       </div>
     </div>
   );
+}
+
+export default function ScopedJobsDashboard() {
+  const { businessId, currentBusiness } = useBusiness();
+  const adminView = useAdminView();
+  const scope = adminView.active ? adminView.businessId : businessId || currentBusiness?.id || localStorage.getItem('currentBusinessId');
+  return <JobsDashboard key={`${moduleSessionIdentity()}:${scope}:${adminView.active}:${adminView.readOnly}`} />;
 }

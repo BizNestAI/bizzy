@@ -1,0 +1,131 @@
+{
+  "date": "2026-11-04",
+  "verdict": "READY",
+  "scope": "Local implementation and mocked validation. No production access or mutation, deployment, commit, push or migration.",
+  "preservation": "Started with git status; only the nested .claude/worktrees/elated-black-b3db40 worktree was dirty. Preserved it and all unrelated work. Earlier Tax implementation is part of HEAD and remains intact.",
+  "audit": {
+    "router": "src/main.jsx uses a persistent protected dashboard shell/BusinessProvider and an Outlet. Leaving a module normally unmounts its page. No unnecessary changing route key was found. No keep-alive, router-wide fetch delay, or fake loader was added. New keys change only for principal/business/access/financial-period scope.",
+    "queryLibraries": "These modules use custom React effects, API clients, Maps and sessionStorage, rather than TanStack Query or SWR.",
+    "financialsBooks": "Accounts could be restored from sessionStorage, but account selection initially remained null. Transactions were initialized empty and could not select their cached page until account initialization completed. Page caches expired after five minutes. Empty usable results and background refresh were not consistently distinguished. View selection reset on re-entry. Existing Books row lifecycle/mutation logic was retained.",
+    "financialsHealth": "FinancialKPICards had a business/year/month Map, restored only after mount and lacking session cleanup. It now initializes from scoped session snapshots and keeps usable data during background reads. Business/period keys prevent old-period cards/charts from flashing on a new scope.",
+    "jobs": "Job Costing already avoided foreground loading when its visible-data ref recognized cached data, but the cache expired after five minutes; its recognition relied on nonempty arrays or incidental capability data. The module-local Map lacked principal/session isolation. Primary successful empty results now count as usable. Collections also retains its scoped saved results.",
+    "taxPrefetch": "DashboardTaxPrefetcher is mounted under the authenticated dashboard and waits for business initialization before scheduling getTaxWorkspace at idle. It is dashboard/business bootstrap prefetch, not an unconditional login request. It prefetches the current calendar year. Financials and Jobs are not newly prefetched by this change.",
+    "taxCache": "The API had a sixty-second cache plus same-key in-flight deduplication. useTaxDeductions nevertheless initialized overview/workspace to null and reset them on scope effect. Prefetch could resolve the hook quickly, but could not provide synchronous first-render data. The hook now initializes from a validated cached workspace, preserves that snapshot while revalidating, and exposes Updating. Optional detail hydration does not gate the overview.",
+    "unsafeScope": "Tax previously cleared old hook data only in an effect, permitting an old-scope render before cleanup. Current results are synchronously masked when the requested scope differs. BusinessContext similarly withholds a profile belonging to the previous selected business/principal. Logout clears module caches and Books storage; Tax now also listens directly to auth-cleared and rejects late responses after invalidation. Tax hook scope keys and API cache entries also bind directly to the principal/access identity, independently of asynchronous business cleanup."
+  },
+  "sharedContract": {
+    "initial_loading": "No usable scoped result: show the existing module skeleton/loader. Empty successful arrays are usable data, not absence of data.",
+    "ready": "Usable same-session/current-scope data, with no pending revalidation or error.",
+    "refreshing": "Render usable saved data immediately; show the shared subtle Updating… status near refresh/data controls. No minimum loader duration.",
+    "error_with_cache": "Retain usable data with a non-blocking out-of-date warning and Retry.",
+    "error_without_cache": "Use the module error state and Retry; do not claim stale unsafe data is current.",
+    "scope_changing": "Synchronously hide previous-scope populations. Reuse only a cache for the new exact scope; otherwise load it.",
+    "unsafeErrors": "Authorization failures, invalidated session/scope responses, and incompatible Tax workspace contracts discard the unsafe cached content. Ordinary network/timeout failures preserve usable data with a warning.",
+    "timing": "Existing module fetch timing is retained. Jobs/Books and Tax can revalidate at different speeds; no artificial navigation delay or forced skeleton was introduced."
+  },
+  "cacheAndInvalidation": {
+    "sharedSessionSnapshots": "Identity includes principal, customer/admin mode and data mode. Snapshot scopes include business and resource, plus financial period or read-only mode where applicable. No five-minute expiry discards usable Jobs/Books data within a session.",
+    "books": "Transaction pages remain scoped by business/account/tab/date/page/page size, now stamped with session/access identity and financial mutation revision. Stale pages remain renderable while revalidating. Account/tab/date/page/size selection is retained in a session-scoped view snapshot. Existing local ledgers, optimistic transitions and authoritative server reloads remain in place.",
+    "jobs": "Job Costing and Collections snapshots are business/read-only/resource scoped. Successful empty primary responses are retained. Existing optimistic mutation patching is preserved.",
+    "tax": "Only validated v2 same-business/year workspace envelopes can provide immediate data. Existing tenant-scoped Tax mutation cache invalidation and authoritative projection reconciliation remain intact. Hook result masking also covers secondary transaction populations on scope change. Cached envelopes and shared in-flight reads are principal stamped; a changed principal cannot join or populate the prior principal’s request.",
+    "logout": "clearStoredAuthAndBusinessState clears shared snapshots, pending read ownership and Books sessionStorage entries; auth-principal/admin-view-clear events do the same. Tax API caches clear on auth-cleared/principal/business/admin events. Late results cannot repopulate an invalidated cache.",
+    "mutations": "Successful safeFetch mutations under accounting/bookkeeping invalidate Financials snapshots/pages for the affected business; jobs/job-costing/collections/ar mutations invalidate Jobs snapshots for that business. They do not blanket-clear Tax or another business. Tax mutations continue using their own business-scoped invalidation. View preferences contain no financial population and survive ordinary data mutations.",
+    "deduplication": "Concurrent equivalent GET reads share one request by normalized URL, business, session and authority headers. Transport-only Accept/Content-Type/request-ID differences do not split a logical read. An unmounted subscriber cancels only its observation, not the other subscriber or prefetch. Shared reads have explicit deadlines; mutation commands are not deduplicated or replayed by this layer."
+  },
+  "filesChanged": [
+    "src/components/Accounting/FinancialKPICards.jsx",
+    "src/context/BusinessContext.jsx",
+    "src/hooks/tax/useTaxDeductions.js",
+    "src/pages/LeadsJobs/JobsDashboard.jsx",
+    "src/pages/Tax/TaxDashboard.jsx",
+    "src/pages/accounting/AccountingDashboard.jsx",
+    "src/pages/accounting/BookkeepingCleanup.jsx",
+    "src/services/authSessionCleanup.js",
+    "src/services/tax/taxApiClient.js",
+    "src/utils/safeFetch.js",
+    "tests/booksReviewLoadingUx.test.js",
+    "tests/jobCosting.uiModel.test.js",
+    "tests/taxDeductionsLoadingState.test.js",
+    "src/services/modules/moduleDataState.js",
+    "src/services/modules/moduleSessionCache.js",
+    "src/components/UI/ModuleDataStatus.jsx",
+    "tests/moduleDataState.test.js",
+    "tests/moduleLoading.mounted.test.js",
+    "tests/moduleReadClient.test.js",
+    "reports/module-loading/audit.json"
+  ],
+  "validation": {
+    "newMountedAndClient": {
+      "passed": 10,
+      "failed": 0,
+      "timeoutMs": 35000,
+      "coverage": [
+        "cold Books/Jobs/Tax",
+        "cached re-entry for all three",
+        "Books/Jobs data older than the prior five-minute TTL",
+        "Tax cache older than sixty seconds",
+        "prefetched Tax synchronous render",
+        "subtle Updating indicator",
+        "transient errors retain usable data and warn",
+        "Books/Jobs business switch",
+        "Tax business/year switch",
+        "Financial KPI period switch",
+        "logout clears Books/Jobs/Tax caches",
+        "Tax late-response resurrection rejected",
+        "Tax and real safeFetch simultaneous reads deduplicate",
+        "real safeFetch mutation invalidates only affected module/business",
+        "Tax authorization failure removes cached content",
+        "active Tax hook synchronously masks the previous principal before effect cleanup"
+      ]
+    },
+    "contractAndTaxRegressions": {
+      "passed": 66,
+      "failed": 0,
+      "timeoutMs": 45000
+    },
+    "mountedIncludingExistingTaxFlows": {
+      "passed": 13,
+      "failed": 0,
+      "timeoutMs": 35000,
+      "coverage": [
+        "new module behavior",
+        "real client behavior",
+        "Tax grouped preview cancellation/recovery",
+        "Gas dashboard preview identity",
+        "Tax P2 adoption after a mutation"
+      ]
+    },
+    "broaderFocused": {
+      "passed": 137,
+      "failed": 7,
+      "timeoutMs": 45000,
+      "baseline": "The same seven failures reproduce from an untouched HEAD archive, run with its own working directory. Baseline passes 128 of 135 before adding the nine shared-contract cases."
+    },
+    "mutationHelperChecks": {
+      "passed": 15,
+      "failed": 1,
+      "timeoutMs": 45000,
+      "baseline": "The identical Posting-pill source-shape assertion fails on untouched HEAD. Other mutation helpers pass."
+    },
+    "baselineFailures": [
+      "Books inconsistent-empty-page source assertion",
+      "Books fallback/toast source assertion",
+      "Books undo source assertion",
+      "Books bounded-pagination source assertion",
+      "Tax initial-workspace source assertion",
+      "Tax headline-count source assertion",
+      "Tax Questions projection source assertion",
+      "Handled Posting-pill animation source assertion"
+    ],
+    "lint": "Changed implementation and tests: zero errors. Seven pre-existing BusinessContext hook/fast-refresh warnings remain.",
+    "productionBuild": "Passed after the final principal-scope correction in 9.10 seconds; existing large-chunk advisory remains. Explicit sixty-second process deadline.",
+    "diffCheck": "git diff --check passed",
+    "baselineMethod": "Read-only git archive of HEAD into /tmp/bizzi-module-head-baseline, with dependencies linked. No workspace changes were reverted or stashed."
+  },
+  "limits": [
+    "No deployed browser or live production API verification was performed; mounted tests mock HTTP and provider dependencies while exercising real page/hook loading behavior.",
+    "Existing unrelated baseline source-shape test failures and lint warnings remain documented.",
+    "This change standardizes module entry and background states; independent optional detail/chart requests can still load their own scoped sections.",
+    "An actual browser reload may perform fresh reads; the guaranteed reuse is same-session navigation with an intact, usable matching cache."
+  ]
+}

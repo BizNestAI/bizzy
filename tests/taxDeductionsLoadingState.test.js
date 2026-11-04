@@ -201,7 +201,7 @@ test("initial workspace projection resolves without detail hydration while refre
   const overviewCommit = source.indexOf("const overviewResult = await overviewPromise");
   assert.ok(overviewCommit > 0);
   assert.match(source, /getTaxWorkspace\(\{ businessId, year, refresh, signal \}\)/);
-  assert.match(source, /if \(request === seq\.current\)/);
+  assert.match(source, /if \(request === seq\.current && currentScopeRef\.current === scopeKey\)/);
   assert.match(source, /if \(refreshInFlight\.current\) return refreshInFlight\.current/);
   assert.match(source, /reason\?\.code !== "request_aborted"/);
   assert.match(source, /setOverview\(compatibleOverview\)/);
@@ -218,10 +218,10 @@ test("cold-route context hydration starts the v2 read and every current terminal
   assert.match(initialEffect, /load\(\{ signal: controller\.signal, refresh: hasSavedOverview \}\)/);
   assert.match(initialEffect, /\[asOfDate, businessId, load, year\]/);
   assert.match(loadBlock, /if \(!enabled \|\| !businessId\) return null/);
-  assert.match(loadBlock, /if \(request === seq\.current\)/);
+  assert.match(loadBlock, /if \(request === seq\.current && currentScopeRef\.current === scopeKey\)/);
   assert.match(loadBlock, /setRequestStatus\(\(current\) => \(\{ \.\.\.current, scopeKey, overview: "error" \}\)\)/);
   assert.doesNotMatch(loadBlock, /else if \(overviewResult\.reason\?\.code !== "request_aborted"\)/);
-  assert.match(loadBlock, /finally \{\s*if \(request === seq\.current\) setLoading\(false\)/);
+  assert.match(loadBlock, /finally \{\s*if \(request === seq\.current && currentScopeRef\.current === scopeKey\) setLoading\(false\)/);
 });
 
 test("the bounded initial failure state exposes Retry through the same workspace read", () => {
