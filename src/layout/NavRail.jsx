@@ -1,3 +1,5 @@
+import { NAV_TOOLTIP_CLASS, NAV_TOOLTIP_STYLE, NAV_TOOLTIP_MOTION } from "./navRailTooltipStyle.js";
+import { motion as Motion, AnimatePresence } from "framer-motion";
 // File: /src/components/layout/NavRail.jsx
 import React, { useEffect, useMemo, useRef, useLayoutEffect, useState, useId } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -56,8 +58,8 @@ export default function NavRail({
   const [settingsTooltip, setSettingsTooltip] = useState(null);
   const settingsTooltipId = useId();
   const showSettingsTooltip = (event) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    setSettingsTooltip({ left: rect.right + 10, top: rect.top + rect.height / 2 });
+    const rect = event.currentTarget.querySelector("svg")?.getBoundingClientRect() || event.currentTarget.getBoundingClientRect();
+    setSettingsTooltip({ left: rect.right + 10, top: rect.top + rect.height / 2 - 13 });
     if (!adminView.active) void prefetchPlaidStatus(effectiveBusinessId);
   };
 
@@ -238,7 +240,7 @@ export default function NavRail({
       </aside>
 
       {settingsTooltip && createPortal(
-        <div id={settingsTooltipId} role="tooltip" className="pointer-events-none fixed z-[9999] -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/15 bg-[#14161a] px-3 py-1 text-xs text-white shadow-lg" style={settingsTooltip}>Settings and sync</div>,
+        <AnimatePresence><Motion.div id={settingsTooltipId} role="tooltip" {...NAV_TOOLTIP_MOTION} className={NAV_TOOLTIP_CLASS} style={{ ...NAV_TOOLTIP_STYLE, ...settingsTooltip }}>Settings and sync</Motion.div></AnimatePresence>,
         document.body
       )}
 
