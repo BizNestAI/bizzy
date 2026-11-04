@@ -12,7 +12,6 @@ import { useAdminView } from "../../context/AdminViewContext.jsx";
 import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 import { useRightExtras } from "../../insights/RightExtrasContext";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
-import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 import useIntegrationManager from "../../hooks/useIntegrationManager.js";
 import useDemoMode from "../../hooks/useDemoMode.js";
@@ -83,8 +82,9 @@ export default function Forecasts() {
     const current = options.find((o) => o.value === value) || options[0];
     return (
       <Listbox value={current} onChange={(opt) => onChange(opt.value)}>
-        <div className="relative min-w-[112px]">
+        <div className="relative min-w-[104px]">
           <Listbox.Button
+            aria-label={options === horizonOptions ? "Forecast horizon" : "Comparison window"}
             className="flex w-full items-center justify-between gap-2 rounded-full border border-white/10 bg-black/24 px-2.5 py-1 text-xs font-semibold text-white/82 shadow-[0_10px_24px_rgba(0,0,0,0.28)] transition hover:border-white/18 hover:bg-white/[0.055] focus:outline-none focus:ring-2 focus:ring-emerald-400/35"
           >
             <span className="truncate">{current?.label}</span>
@@ -113,8 +113,8 @@ export default function Forecasts() {
   };
 
   const forecastControls = (
-    <div className="flex flex-wrap items-center justify-start gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.035] p-1.5 shadow-[0_12px_28px_rgba(0,0,0,0.22)] sm:flex-nowrap">
-      <div className="flex min-w-[176px] items-center justify-between gap-2 rounded-full bg-black/16 pl-3 pr-1">
+    <div className="flex flex-wrap items-center justify-start gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.035] p-1.5 shadow-[0_12px_28px_rgba(0,0,0,0.22)] min-w-0">
+      <div className="flex min-w-[156px] items-center justify-between gap-2 rounded-full bg-black/16 pl-3 pr-1">
         <span className="text-[11px] font-semibold text-white/48">Horizon</span>
         <DarkListbox
           value={editorMonths}
@@ -122,7 +122,7 @@ export default function Forecasts() {
           options={horizonOptions}
         />
       </div>
-      <div className="flex min-w-[176px] items-center justify-between gap-2 rounded-full bg-black/16 pl-3 pr-1">
+      <div className="flex min-w-[156px] items-center justify-between gap-2 rounded-full bg-black/16 pl-3 pr-1">
         <span className="text-[11px] font-semibold text-white/48">Compare</span>
         <DarkListbox
           value={compareMonths}
@@ -135,25 +135,15 @@ export default function Forecasts() {
 
   return (
     qbStatusLoading ? (
-      <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-8 text-white space-y-5">
-        <ModuleHeader
-          module="financials"
-          title="Operating Forecasts"
-          subtitle="Loading QuickBooks connection state for Admin View."
-          className="mb-2"
-        />
+      <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-36 text-white space-y-5">
+        <ForecastPageHeader loading />
         <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 text-sm text-white/55">
           Loading persisted customer forecast state...
         </div>
       </div>
     ) : canView ? (
-    <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-8 text-white space-y-5">
-      <ModuleHeader
-        module="financials"
-        title="Operating Forecasts"
-        subtitle="Plan revenue and operating costs from completed cash-basis QuickBooks activity, with your assumptions preserved."
-        className="mb-2"
-      />
+    <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-36 text-white space-y-5">
+      <ForecastPageHeader />
 
       <section>
         <ForecastEditorChart
@@ -180,4 +170,8 @@ export default function Forecasts() {
       <LiveModePlaceholder title="Connect QuickBooks to manage forecasts" />
     )
   );
+}
+
+function ForecastPageHeader({ loading = false }) {
+  return <header className="mb-2"><h1 className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-white">Operating Forecasts</h1><p className="mt-3 text-[13px] text-white/70">{loading ? 'Loading QuickBooks connection state for Admin View.' : 'Plan revenue and operating costs from completed cash-basis QuickBooks activity, with your assumptions preserved.'}</p></header>;
 }

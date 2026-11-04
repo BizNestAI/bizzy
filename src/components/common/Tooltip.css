@@ -1,0 +1,7 @@
+.bizzi-tooltip-anchor { display: inline-flex; position: relative; flex-shrink: 0; }
+.bizzi-tooltip-content { position: absolute; z-index: 50; top: calc(100% + 8px); right: 0; width: max-content; max-width: min(230px, calc(100vw - 40px)); padding: 7px 10px; border-radius: 8px; font-size: 12px; line-height: 1.45; font-weight: 400; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 120ms ease; }
+.bizzi-tooltip-anchor:hover > .bizzi-tooltip-content,
+.bizzi-tooltip-anchor:focus-within > .bizzi-tooltip-content { visibility: visible; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .bizzi-tooltip-content { transition: none; } }
+
+.bizzi-tooltip-anchor[data-align="start"] > .bizzi-tooltip-content { left: 0; right: auto; }
