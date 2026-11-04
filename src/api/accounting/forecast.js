@@ -7,7 +7,7 @@ import {
   ensureForecastV1Run,
   upsertForecastV1Overrides,
   resetForecastV1Overrides,
-} from "../../services/accounting/forecastV1Service.js";
+} from "../../services/accounting/operatingForecastService.js";
 
 const router = express.Router();
 
@@ -62,7 +62,7 @@ router.get("/", async (req, res) => {
 
 /**
  * POST /api/accounting/forecast/generate
- * Explicit, tenant-authorized generation from completed Cash Health snapshots.
+ * Explicit, tenant-authorized generation from reconciled completed Cash QBO account snapshots.
  */
 router.post("/generate", async (req, res) => {
   const businessId = readBusinessId(req);
@@ -137,6 +137,7 @@ router.post("/override/reset", async (req, res) => {
       businessId,
       forecastRunId,
       month: req.body?.month || null,
+      metric: req.body?.metric || null,
     });
     return res.status(200).json(forecast);
   } catch (err) {

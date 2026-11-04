@@ -18,7 +18,7 @@ import {
   HEALTH_ACCOUNTING_METHOD,
   refreshMonthlyQboFinancialSnapshot,
 } from "./accounting/healthMonthlySnapshotService.js";
-import { ensureForecastV1Run } from "./accounting/forecastV1Service.js";
+import { ensureForecastV1Run } from "./accounting/operatingForecastService.js";
 
 const MONTH_DELAY_MS = Number(process.env.QBO_BACKFILL_DELAY_MS || 300);
 
@@ -250,7 +250,7 @@ export async function runQboBackfill({
     finished: true,
   });
   if (finalStatus === "completed") {
-    await ensureForecastV1Run({ businessId: business_id, horizonMonths: 12 }).catch((err) => {
+    await ensureForecastV1Run({ businessId: business_id, reason: "backfill" }).catch((err) => {
       console.warn("[QBO BACKFILL] forecast_v1 generation skipped", err?.message || err);
     });
   }

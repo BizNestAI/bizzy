@@ -338,6 +338,12 @@ export async function fetchQboReport({
     throw new QboMonthlyPnlIngestionError("qbo_report_fetch_failed", response.status || 502, {
       report_name: reportName,
       provider_status: response.status || null,
+      retry_after_ms: (() => {
+        const header = response.headers?.get?.('retry-after');
+        if (!header) return 0;
+        const seconds = Number(header);
+        return Math.max(0, Number.isFinite(seconds) ? seconds * 1000 : (Date.parse(header) || 0) - Date.now());
+      })(),
       provider_error: summarizeProviderError(json || text),
     });
   }

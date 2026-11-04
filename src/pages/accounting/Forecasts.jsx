@@ -138,7 +138,7 @@ export default function Forecasts() {
       <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-8 text-white space-y-5">
         <ModuleHeader
           module="financials"
-          title="Cash Flow Forecasts"
+          title="Operating Forecasts"
           subtitle="Loading QuickBooks connection state for Admin View."
           className="mb-2"
         />
@@ -150,8 +150,8 @@ export default function Forecasts() {
     <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-8 text-white space-y-5">
       <ModuleHeader
         module="financials"
-        title="Cash Flow Forecasts"
-        subtitle="Bizzi studies your historical cash pulses, then projects the next 12 months so you can edit confidently."
+        title="Operating Forecasts"
+        subtitle="Plan revenue and operating costs from completed cash-basis QuickBooks activity, with your assumptions preserved."
         className="mb-2"
       />
 

@@ -96,7 +96,7 @@ import {
   getMonthlyQboPnlSnapshot,
   refreshMonthlyQboPnlSnapshot,
 } from "../../services/bookkeeping/qboMonthlyPnlIngestionService.js";
-import { ensureForecastV1Run } from "../../services/accounting/forecastV1Service.js";
+import { ensureForecastV1Run } from "../../services/accounting/operatingForecastService.js";
 import { getConnectedFinancialAccountsForBusiness } from "../../services/plaid/plaidIntegrationService.js";
 import { fetchAdminViewPersistedAccountMappings } from "../bookkeeping/routes/bookkeeping.accountMappings.routes.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../_shared/internalStaffAuth.js";
@@ -2144,7 +2144,7 @@ router.post("/runs/:runId/finalize", async (req, res) => {
       fetchActiveCloseAuthority(run.business_id, run.review_month),
     ]);
 
-    ensureForecastV1Run({ businessId: run.business_id, createdBy: req.user.id }).catch((err) => {
+    ensureForecastV1Run({ businessId: run.business_id, createdBy: req.user.id, reason: "completed_month" }).catch((err) => {
       console.warn("[monthly-review] post-close forecast ensure skipped", err?.message || err);
     });
 

@@ -11,6 +11,7 @@ import {
   CartesianGrid,
   LabelList,
 } from 'recharts';
+import { percentageError } from '../../utils/forecast/operatingForecastDisplay.js';
 import { safeFetch } from '../../utils/safeFetch';
 import { getDemoData, shouldUseDemoData } from '../../services/demo/demoClient.js';
 import { Loader2, AlertTriangle } from 'lucide-react';
@@ -18,15 +19,8 @@ import KpiCard from '../UI/KpiCard.jsx';
 
 const currency = (n) =>
   typeof n === 'number'
-    ? n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+    ? n.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '-';
-
-function mape(rows, actualKey, forecastKey) {
-  const pts = rows.filter((r) => r[actualKey] > 0 && r[forecastKey] >= 0);
-  if (!pts.length) return 0;
-  const s = pts.reduce((acc, r) => acc + Math.abs((r[actualKey] - r[forecastKey]) / r[actualKey]), 0);
-  return Math.round((s / pts.length) * 1000) / 10;
-}
 
 export default function ForecastVsActualChart({ userId, businessId, months = 6, useDemoData = false, readOnly = false }) {
   const [rows, setRows] = useState([]);
@@ -94,6 +88,7 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
     };
   }, [userId, businessId, months, isDemo, demoAccuracy, demoFinancials, readOnly]);
 
+  const metricLabel = metric === 'Expenses' ? 'Operating costs' : metric === 'Profit' ? 'Operating net' : metric;
   const keys = useMemo(() => {
     const base = metric;
     return {
@@ -103,8 +98,8 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
   }, [metric]);
 
   const stats = useMemo(() => {
-    const value = mape(rows, keys.actual, keys.forecast);
-    return { mapePct: value, accuracyPct: Math.max(0, Math.min(100, Math.round(1000 - value * 10) / 10)) };
+    const value = percentageError(rows, keys.actual, keys.forecast);
+    return { mapePct: value, accuracyPct: value == null ? null : Math.max(0, Math.min(100, Math.round(1000 - value * 10) / 10)) };
   }, [rows, keys]);
 
   const TooltipContent = ({ active, payload, label }) => {
@@ -153,7 +148,7 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
                   metric === m ? 'bg-emerald-300/18 font-semibold text-emerald-50 shadow-[0_0_18px_rgba(16,185,129,0.13)]' : 'text-white/72 hover:bg-white/8 hover:text-white'
                 }`}
               >
-                {m}
+                {m === 'Expenses' ? 'Operating costs' : m === 'Profit' ? 'Operating net' : m}
               </button>
             ))}
           </div>
@@ -165,20 +160,20 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
           <KpiCard
             compact
             label="MAPE"
-            value={`${stats.mapePct.toFixed(1)}%`}
+            value={stats.mapePct == null ? 'Unavailable' : `${stats.mapePct.toFixed(1)}%`}
             detail="Lower is better"
-            tone={stats.mapePct <= 5 ? 'emerald' : stats.mapePct <= 10 ? 'amber' : 'rose'}
+            tone={stats.mapePct == null ? 'neutral' : stats.mapePct <= 5 ? 'emerald' : stats.mapePct <= 10 ? 'amber' : 'rose'}
             className="min-h-[108px]"
           />
           <KpiCard
             compact
             label="Approx. accuracy"
-            value={`${stats.accuracyPct.toFixed(1)}%`}
+            value={stats.accuracyPct == null ? 'Unavailable' : `${stats.accuracyPct.toFixed(1)}%`}
             detail="Forecast fit"
-            tone={stats.accuracyPct >= 90 ? 'emerald' : stats.accuracyPct >= 75 ? 'amber' : 'rose'}
+            tone={stats.accuracyPct == null ? 'neutral' : stats.accuracyPct >= 90 ? 'emerald' : stats.accuracyPct >= 75 ? 'amber' : 'rose'}
             className="min-h-[108px]"
           />
-          <KpiCard compact label="Series" value={metric} detail="Active comparison" tone="neutral" className="min-h-[108px]" />
+          <KpiCard compact label="Series" value={metricLabel} detail="Active comparison" tone="neutral" className="min-h-[108px]" />
           <KpiCard compact label="Samples" value={`${rows.length} mo`} detail="Closed forecast months" tone="neutral" className="min-h-[108px]" />
         </div>
       )}
@@ -226,14 +221,14 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
               />
               <Tooltip content={<TooltipContent />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
               <Legend wrapperStyle={{ color: '#e3e8ff', fontWeight: 600 }} iconType="circle" />
-              <Bar dataKey={keys.actual} name={`Actual ${metric}`} fill="url(#actualBar)" radius={[10, 10, 4, 4]} filter="url(#glow)">
+              <Bar dataKey={keys.actual} name={`Actual ${metricLabel}`} fill="url(#actualBar)" radius={[10, 10, 4, 4]} filter="url(#glow)">
                 <LabelList
                   dataKey={(r) => formatDelta(r[keys.actual], r[keys.forecast])}
                   position="top"
                   className="text-[10px] fill-[#dbe2ff]"
                 />
               </Bar>
-              <Bar dataKey={keys.forecast} name={`Forecast ${metric}`} fill="url(#forecastBar)" radius={[10, 10, 4, 4]} opacity={0.9} />
+              <Bar dataKey={keys.forecast} name={`Forecast ${metricLabel}`} fill="url(#forecastBar)" radius={[10, 10, 4, 4]} opacity={0.9} />
             </BarChart>
           </ResponsiveContainer>
         )}
