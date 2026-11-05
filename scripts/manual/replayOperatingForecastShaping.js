@@ -1,0 +1,11 @@
+import { buildOperatingModel, shapeAccount, projectAccount, MODEL_VERSION, MODEL_CONFIG, cents } from '../../src/services/accounting/operatingForecastModel.js';
+import { operatingFixture } from '../../tests/fixtures/operatingForecast.js';
+const { months } = operatingFixture();
+const model = buildOperatingModel(months);
+const baseline = section => model.metadata.accounts.filter(a => section(a.section)).reduce((n, a) => n + a.projected_cents, 0);
+const revenue = baseline(s => s === 'Income'), costs = baseline(s => s !== 'Income');
+const prior = model.rows.map(r => ({ month: r.month, revenue: revenue / 100, operating_costs: costs / 100, operating_net: (revenue - costs) / 100 }));
+const shaped = model.rows.map(r => ({ month: r.month, revenue: r.baseline_revenue, operating_costs: r.baseline_expenses, operating_net: r.baseline_operating_net_cash_flow }));
+const totals = rows => Object.fromEntries(['revenue','operating_costs','operating_net'].map(k => [k, rows.reduce((n, r) => n + cents(r[k]), 0) / 100]));
+const intermittent = projectAccount([0,0,0,0,0,0,0,0,0,120000,0,0], { observedFrom: 0 });
+console.log(JSON.stringify({ fixture: 'Synthetic production-shaped fixture; not a live company replay', model_version: MODEL_VERSION, model_config: MODEL_CONFIG, prior_flat: prior, shaped, annual_before: totals(prior), annual_after: totals(shaped), annual_totals_preserved: JSON.stringify(totals(prior)) === JSON.stringify(totals(shaped)), examples: [...model.metadata.accounts.filter(a => ['rent','software','sales'].includes(a.qbo_account_id)), { qbo_account_id: 'illustrative-one-time-account', ...intermittent, ...shapeAccount(intermittent) }] }, null, 2));

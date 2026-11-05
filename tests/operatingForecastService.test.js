@@ -173,7 +173,7 @@ test('identical manual input reuses a completed run without claiming/generating'
   const fingerprint = db.calls[0].args.p_fingerprint;
   db.tables.forecast_runs = [{
     ...oldRun,
-    model_version: 'operating_accounts_launch_v1',
+    model_version: 'operating_accounts_monthly_v2',
     input_fingerprint: fingerprint
   }];
   db.calls.length = 0;
@@ -260,7 +260,7 @@ test('equivalent provider snapshot UUID refresh reuses financial-content version
   const payload = db.calls[0].args.p_payload;
   db.tables.forecast_runs = [{
     ...oldRun,
-    model_version: 'operating_accounts_launch_v1',
+    model_version: 'operating_accounts_monthly_v2',
     input_fingerprint: 'previous-exact-lineage',
     data_quality: payload.data_quality
   }];
@@ -342,8 +342,8 @@ test('generation rechecks sources and returns canonical completed operating cost
   });
   assert.equal(result.outcome, 'generated');
   assert.equal(result.forecast.months.length, 12);
-  assert.equal(result.forecast.months[0].expenses, 4505.64);
-  assert.equal(result.forecast.months[0].operating_net_cash_flow, -2479.9);
+  assert.equal(result.forecast.months[0].expenses, 4419.33);
+  assert.equal(result.forecast.months[0].operating_net_cash_flow, Math.round((result.forecast.months[0].revenue - result.forecast.months[0].expenses) * 100) / 100);
 });
 test('source change between claim and completion fails the claim without publishing', async () => {
   const db = fake();
@@ -377,4 +377,16 @@ test('actual cron evaluation awaits source completion and never generates after 
  const pending=evaluateForecastBusiness({businessId:BUSINESS,refresh:async()=>{calls.push('source-start');await new Promise(resolve=>{release=resolve;});calls.push('source-complete');},ensure:async()=>{calls.push('generate');return {outcome:'generated'};}});
  assert.deepEqual(calls,['source-start']);release();assert.equal((await pending).outcome,'generated');assert.deepEqual(calls,['source-start','source-complete','generate']);
  await assert.rejects(evaluateForecastBusiness({businessId:BUSINESS,refresh:async()=>{throw new Error('partial source refresh');},ensure:async()=>assert.fail('must not generate after source failure')}));
+});
+
+test('unchanged sources with a prior flat-model run request a new version and retain fallback visibility', async () => {
+  const db = fake();
+  db.tables.forecast_runs = [{ ...oldRun, model_version: 'operating_accounts_launch_v1', input_fingerprint: 'prior-flat-fingerprint' }];
+  const saved = await getForecastV1Status({ db, businessId: BUSINESS, now: NOW });
+  assert.equal(saved.run_id, oldRun.id);
+  assert.equal(saved.freshness, 'stale');
+  await ensureForecastV1Run({ db, businessId: BUSINESS, now: NOW });
+  assert.equal(db.calls[0].name, 'claim_operating_forecast');
+  assert.equal(db.calls[0].args.p_payload.model_version, 'operating_accounts_monthly_v2');
+  assert.equal(db.calls[0].args.p_payload.model_config.shaping.historicalWeight, 30);
 });

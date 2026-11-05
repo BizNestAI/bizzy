@@ -1,0 +1,924 @@
+{
+  "fixture": "Synthetic production-shaped fixture; not a live company replay",
+  "model_version": "operating_accounts_monthly_v2",
+  "model_config": {
+    "metadataVersion": 2,
+    "shaping": {
+      "baselineWeight": 70,
+      "historicalWeight": 30,
+      "minPercent": 50,
+      "maxPercent": 150,
+      "normalization": "bounded_equal_cents_calendar_order"
+    },
+    "recurringMinActive": 5,
+    "recurringTolerancePercent": 10,
+    "variableMinActive": 3,
+    "weights": [
+      50,
+      30,
+      20
+    ],
+    "historyMonths": 12,
+    "horizonMonths": 12
+  },
+  "prior_flat": [
+    {
+      "month": "2026-11-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2026-12-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-01-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-02-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-03-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-04-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-05-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-06-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-07-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-08-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-09-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    },
+    {
+      "month": "2027-10-01",
+      "revenue": 2025.74,
+      "operating_costs": 4505.64,
+      "operating_net": -2479.9
+    }
+  ],
+  "shaped": [
+    {
+      "month": "2026-11-01",
+      "revenue": 2076.55,
+      "operating_costs": 4419.33,
+      "operating_net": -2342.78
+    },
+    {
+      "month": "2026-12-01",
+      "revenue": 2076.55,
+      "operating_costs": 4419.32,
+      "operating_net": -2342.77
+    },
+    {
+      "month": "2027-01-01",
+      "revenue": 2076.55,
+      "operating_costs": 4419.32,
+      "operating_net": -2342.77
+    },
+    {
+      "month": "2027-02-01",
+      "revenue": 2076.55,
+      "operating_costs": 4419.32,
+      "operating_net": -2342.77
+    },
+    {
+      "month": "2027-03-01",
+      "revenue": 2076.55,
+      "operating_costs": 4419.32,
+      "operating_net": -2342.77
+    },
+    {
+      "month": "2027-04-01",
+      "revenue": 2076.55,
+      "operating_costs": 4419.32,
+      "operating_net": -2342.77
+    },
+    {
+      "month": "2027-05-01",
+      "revenue": 2076.55,
+      "operating_costs": 4419.32,
+      "operating_net": -2342.77
+    },
+    {
+      "month": "2027-06-01",
+      "revenue": 2076.56,
+      "operating_costs": 4419.32,
+      "operating_net": -2342.76
+    },
+    {
+      "month": "2027-07-01",
+      "revenue": 2076.56,
+      "operating_costs": 4419.32,
+      "operating_net": -2342.76
+    },
+    {
+      "month": "2027-08-01",
+      "revenue": 2494.29,
+      "operating_costs": 4871.42,
+      "operating_net": -2377.13
+    },
+    {
+      "month": "2027-09-01",
+      "revenue": 1619.06,
+      "operating_costs": 4905.72,
+      "operating_net": -3286.66
+    },
+    {
+      "month": "2027-10-01",
+      "revenue": 1506.56,
+      "operating_costs": 4516.65,
+      "operating_net": -3010.09
+    }
+  ],
+  "annual_before": {
+    "revenue": 24308.88,
+    "operating_costs": 54067.68,
+    "operating_net": -29758.8
+  },
+  "annual_after": {
+    "revenue": 24308.88,
+    "operating_costs": 54067.68,
+    "operating_net": -29758.8
+  },
+  "annual_totals_preserved": true,
+  "examples": [
+    {
+      "qbo_account_id": "rent",
+      "section": "Expense",
+      "classification": "recurring",
+      "projected_cents": 180000,
+      "months_observed": 12,
+      "averaging_months": 12,
+      "limited_history": false,
+      "history_basis": "first_report_observation",
+      "creation_verified": false,
+      "recent_cents": [
+        180000,
+        180000,
+        180000,
+        180000,
+        180000,
+        180000
+      ],
+      "calculation": {
+        "series_cents": [
+          180000,
+          180000,
+          180000,
+          180000,
+          180000,
+          180000,
+          180000,
+          180000,
+          180000,
+          180000,
+          180000,
+          180000
+        ],
+        "recent_active_median_cents": 180000,
+        "weights": [
+          50,
+          30,
+          20
+        ],
+        "rounding": "half_away_from_zero"
+      },
+      "monthly_projected_cents": [
+        180000,
+        180000,
+        180000,
+        180000,
+        180000,
+        180000,
+        180000,
+        180000,
+        180000,
+        180000,
+        180000,
+        180000
+      ],
+      "shaping": {
+        "applied": false,
+        "reason": "classification_stays_flat",
+        "baseline_cents": 180000,
+        "annual_target_cents": 2160000,
+        "config": {
+          "baselineWeight": 70,
+          "historicalWeight": 30,
+          "minPercent": 50,
+          "maxPercent": 150,
+          "normalization": "bounded_equal_cents_calendar_order"
+        },
+        "months": [
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2025-11-01",
+            "forecast_month": "2026-11-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2025-12-01",
+            "forecast_month": "2026-12-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-01-01",
+            "forecast_month": "2027-01-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-02-01",
+            "forecast_month": "2027-02-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-03-01",
+            "forecast_month": "2027-03-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-04-01",
+            "forecast_month": "2027-04-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-05-01",
+            "forecast_month": "2027-05-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-06-01",
+            "forecast_month": "2027-06-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-07-01",
+            "forecast_month": "2027-07-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-08-01",
+            "forecast_month": "2027-08-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-09-01",
+            "forecast_month": "2027-09-01"
+          },
+          {
+            "historical_cents": 180000,
+            "blended_cents": 180000,
+            "pre_normalization_cents": 180000,
+            "cap_applied": false,
+            "final_cents": 180000,
+            "normalization_adjustment_cents": 0,
+            "source_month": "2026-10-01",
+            "forecast_month": "2027-10-01"
+          }
+        ]
+      }
+    },
+    {
+      "qbo_account_id": "software",
+      "section": "Expense",
+      "classification": "variable",
+      "projected_cents": 73125,
+      "months_observed": 12,
+      "averaging_months": 12,
+      "limited_history": false,
+      "history_basis": "first_report_observation",
+      "creation_verified": false,
+      "recent_cents": [
+        60000,
+        82500,
+        60000,
+        82500,
+        60000,
+        82500
+      ],
+      "calculation": {
+        "series_cents": [
+          60000,
+          82500,
+          60000,
+          82500,
+          60000,
+          82500,
+          60000,
+          82500,
+          60000,
+          82500,
+          60000,
+          82500
+        ],
+        "recent_active_median_cents": 71250,
+        "weights": [
+          50,
+          30,
+          20
+        ],
+        "rounding": "half_away_from_zero"
+      },
+      "monthly_projected_cents": [
+        69750,
+        76500,
+        69750,
+        76500,
+        69750,
+        76500,
+        69750,
+        76500,
+        69750,
+        76500,
+        69750,
+        76500
+      ],
+      "shaping": {
+        "applied": true,
+        "reason": "historical_calendar_month_blend",
+        "baseline_cents": 73125,
+        "annual_target_cents": 877500,
+        "config": {
+          "baselineWeight": 70,
+          "historicalWeight": 30,
+          "minPercent": 50,
+          "maxPercent": 150,
+          "normalization": "bounded_equal_cents_calendar_order"
+        },
+        "months": [
+          {
+            "historical_cents": 60000,
+            "blended_cents": 69188,
+            "pre_normalization_cents": 69188,
+            "cap_applied": false,
+            "final_cents": 69750,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2025-11-01",
+            "forecast_month": "2026-11-01"
+          },
+          {
+            "historical_cents": 82500,
+            "blended_cents": 75938,
+            "pre_normalization_cents": 75938,
+            "cap_applied": false,
+            "final_cents": 76500,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2025-12-01",
+            "forecast_month": "2026-12-01"
+          },
+          {
+            "historical_cents": 60000,
+            "blended_cents": 69188,
+            "pre_normalization_cents": 69188,
+            "cap_applied": false,
+            "final_cents": 69750,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-01-01",
+            "forecast_month": "2027-01-01"
+          },
+          {
+            "historical_cents": 82500,
+            "blended_cents": 75938,
+            "pre_normalization_cents": 75938,
+            "cap_applied": false,
+            "final_cents": 76500,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-02-01",
+            "forecast_month": "2027-02-01"
+          },
+          {
+            "historical_cents": 60000,
+            "blended_cents": 69188,
+            "pre_normalization_cents": 69188,
+            "cap_applied": false,
+            "final_cents": 69750,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-03-01",
+            "forecast_month": "2027-03-01"
+          },
+          {
+            "historical_cents": 82500,
+            "blended_cents": 75938,
+            "pre_normalization_cents": 75938,
+            "cap_applied": false,
+            "final_cents": 76500,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-04-01",
+            "forecast_month": "2027-04-01"
+          },
+          {
+            "historical_cents": 60000,
+            "blended_cents": 69188,
+            "pre_normalization_cents": 69188,
+            "cap_applied": false,
+            "final_cents": 69750,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-05-01",
+            "forecast_month": "2027-05-01"
+          },
+          {
+            "historical_cents": 82500,
+            "blended_cents": 75938,
+            "pre_normalization_cents": 75938,
+            "cap_applied": false,
+            "final_cents": 76500,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-06-01",
+            "forecast_month": "2027-06-01"
+          },
+          {
+            "historical_cents": 60000,
+            "blended_cents": 69188,
+            "pre_normalization_cents": 69188,
+            "cap_applied": false,
+            "final_cents": 69750,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-07-01",
+            "forecast_month": "2027-07-01"
+          },
+          {
+            "historical_cents": 82500,
+            "blended_cents": 75938,
+            "pre_normalization_cents": 75938,
+            "cap_applied": false,
+            "final_cents": 76500,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-08-01",
+            "forecast_month": "2027-08-01"
+          },
+          {
+            "historical_cents": 60000,
+            "blended_cents": 69188,
+            "pre_normalization_cents": 69188,
+            "cap_applied": false,
+            "final_cents": 69750,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-09-01",
+            "forecast_month": "2027-09-01"
+          },
+          {
+            "historical_cents": 82500,
+            "blended_cents": 75938,
+            "pre_normalization_cents": 75938,
+            "cap_applied": false,
+            "final_cents": 76500,
+            "normalization_adjustment_cents": 562,
+            "source_month": "2026-10-01",
+            "forecast_month": "2027-10-01"
+          }
+        ]
+      }
+    },
+    {
+      "qbo_account_id": "sales",
+      "section": "Income",
+      "classification": "variable",
+      "projected_cents": 202574,
+      "months_observed": 12,
+      "averaging_months": 12,
+      "limited_history": false,
+      "history_basis": "first_report_observation",
+      "creation_verified": false,
+      "recent_cents": [
+        250000,
+        250000,
+        250000,
+        389245,
+        97500,
+        60000
+      ],
+      "calculation": {
+        "series_cents": [
+          250000,
+          250000,
+          250000,
+          250000,
+          250000,
+          250000,
+          250000,
+          250000,
+          250000,
+          389245,
+          97500,
+          60000
+        ],
+        "recent_active_median_cents": 250000,
+        "weights": [
+          50,
+          30,
+          20
+        ],
+        "rounding": "half_away_from_zero"
+      },
+      "monthly_projected_cents": [
+        207655,
+        207655,
+        207655,
+        207655,
+        207655,
+        207655,
+        207655,
+        207656,
+        207656,
+        249429,
+        161906,
+        150656
+      ],
+      "shaping": {
+        "applied": true,
+        "reason": "historical_calendar_month_blend",
+        "baseline_cents": 202574,
+        "annual_target_cents": 2430888,
+        "config": {
+          "baselineWeight": 70,
+          "historicalWeight": 30,
+          "minPercent": 50,
+          "maxPercent": 150,
+          "normalization": "bounded_equal_cents_calendar_order"
+        },
+        "months": [
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207655,
+            "normalization_adjustment_cents": -9147,
+            "source_month": "2025-11-01",
+            "forecast_month": "2026-11-01"
+          },
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207655,
+            "normalization_adjustment_cents": -9147,
+            "source_month": "2025-12-01",
+            "forecast_month": "2026-12-01"
+          },
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207655,
+            "normalization_adjustment_cents": -9147,
+            "source_month": "2026-01-01",
+            "forecast_month": "2027-01-01"
+          },
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207655,
+            "normalization_adjustment_cents": -9147,
+            "source_month": "2026-02-01",
+            "forecast_month": "2027-02-01"
+          },
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207655,
+            "normalization_adjustment_cents": -9147,
+            "source_month": "2026-03-01",
+            "forecast_month": "2027-03-01"
+          },
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207655,
+            "normalization_adjustment_cents": -9147,
+            "source_month": "2026-04-01",
+            "forecast_month": "2027-04-01"
+          },
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207655,
+            "normalization_adjustment_cents": -9147,
+            "source_month": "2026-05-01",
+            "forecast_month": "2027-05-01"
+          },
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207656,
+            "normalization_adjustment_cents": -9146,
+            "source_month": "2026-06-01",
+            "forecast_month": "2027-06-01"
+          },
+          {
+            "historical_cents": 250000,
+            "blended_cents": 216802,
+            "pre_normalization_cents": 216802,
+            "cap_applied": false,
+            "final_cents": 207656,
+            "normalization_adjustment_cents": -9146,
+            "source_month": "2026-07-01",
+            "forecast_month": "2027-07-01"
+          },
+          {
+            "historical_cents": 389245,
+            "blended_cents": 258575,
+            "pre_normalization_cents": 258575,
+            "cap_applied": false,
+            "final_cents": 249429,
+            "normalization_adjustment_cents": -9146,
+            "source_month": "2026-08-01",
+            "forecast_month": "2027-08-01"
+          },
+          {
+            "historical_cents": 97500,
+            "blended_cents": 171052,
+            "pre_normalization_cents": 171052,
+            "cap_applied": false,
+            "final_cents": 161906,
+            "normalization_adjustment_cents": -9146,
+            "source_month": "2026-09-01",
+            "forecast_month": "2027-09-01"
+          },
+          {
+            "historical_cents": 60000,
+            "blended_cents": 159802,
+            "pre_normalization_cents": 159802,
+            "cap_applied": false,
+            "final_cents": 150656,
+            "normalization_adjustment_cents": -9146,
+            "source_month": "2026-10-01",
+            "forecast_month": "2027-10-01"
+          }
+        ]
+      }
+    },
+    {
+      "qbo_account_id": "illustrative-one-time-account",
+      "classification": "intermittent",
+      "projected_cents": 10000,
+      "months_observed": 12,
+      "averaging_months": 12,
+      "limited_history": false,
+      "history_basis": "first_report_observation",
+      "creation_verified": false,
+      "recent_cents": [
+        0,
+        0,
+        0,
+        120000,
+        0,
+        0
+      ],
+      "calculation": {
+        "series_cents": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          120000,
+          0,
+          0
+        ],
+        "recent_active_median_cents": 120000,
+        "weights": [
+          50,
+          30,
+          20
+        ],
+        "rounding": "half_away_from_zero"
+      },
+      "monthly_projected_cents": [
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000
+      ],
+      "shaping": {
+        "applied": false,
+        "reason": "classification_stays_flat",
+        "baseline_cents": 10000,
+        "annual_target_cents": 120000,
+        "config": {
+          "baselineWeight": 70,
+          "historicalWeight": 30,
+          "minPercent": 50,
+          "maxPercent": 150,
+          "normalization": "bounded_equal_cents_calendar_order"
+        },
+        "months": [
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 120000,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          },
+          {
+            "historical_cents": 0,
+            "blended_cents": 10000,
+            "pre_normalization_cents": 10000,
+            "cap_applied": false,
+            "final_cents": 10000,
+            "normalization_adjustment_cents": 0
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -210,9 +210,9 @@ export default function ForecastEditorChart({
         {meta?.assumptions_preserved && <span className="forecast-badge forecast-badge-green"><CheckCircle2 size={12} aria-hidden="true" />Saved assumptions preserved</span>}
       </div>
       {meta?.history?.start && <p>Based on {label(meta.history.start)}–{label(meta.history.end)} cash-basis QuickBooks activity</p>}
-      {meta?.forecast?.start && <p className="forecast-coverage">Coverage: {label(meta.forecast.start)}–{label(meta.forecast.end)}<span aria-hidden="true"> · </span>{meta.model_version === 'operating_accounts_launch_v1' ? 'Account-based estimates' : isDemo ? 'Demo estimates' : 'Previous forecast method'}</p>}
+      {meta?.forecast?.start && <p className="forecast-coverage">Coverage: {label(meta.forecast.start)}–{label(meta.forecast.end)}<span aria-hidden="true"> · </span>{['operating_accounts_launch_v1', 'operating_accounts_monthly_v2'].includes(meta.model_version) ? 'Account-based estimates' : isDemo ? 'Demo estimates' : 'Previous forecast method'}</p>}
       <details className="forecast-method"><summary><Info size={13} aria-hidden="true" />How this forecast works<ChevronDown size={12} aria-hidden="true" /></summary>
-        <p>{meta?.model_version === 'forecast_v1' ? 'This saved version uses the previous forecast method. Refresh with complete QuickBooks history to use account-based estimates.' : 'Recurring accounts use a recent normal amount. Variable accounts blend recent activity; intermittent accounts use their observed average. Projections are flat monthly estimates.'} Your saved assumptions stay separate from the system estimate.</p>
+        <p>{meta?.model_version === 'forecast_v1' ? 'This saved version uses the previous forecast method. Refresh with complete QuickBooks history to use account-based estimates.' : meta?.model_version === 'operating_accounts_launch_v1' ? 'This saved account-based version uses flat monthly estimates. Refresh to use modest historical monthly patterns.' : 'Fixed recurring accounts stay level. Variable accounts reflect recent performance and modest historical monthly patterns. Occasional expenses are smoothed.'} Your saved assumptions are preserved.</p>
       </details>
     </div>
 

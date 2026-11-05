@@ -1,4 +1,8 @@
 import test from 'node:test';
+import { buildOperatingModel } from '../src/services/accounting/operatingForecastModel.js';
+import { operatingFixture } from './fixtures/operatingForecast.js';
+import { formatForecastCurrency, forecastTotals } from '../src/utils/forecast/forecastPresentation.js';
+import { displayStats } from '../src/utils/forecast/operatingForecastDisplay.js';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import React from 'react';
@@ -318,4 +322,26 @@ test('the actual Forecast page renders one semantic Operating Forecasts heading'
   const previous=globalThis.localStorage;globalThis.localStorage={getItem:()=>null};let renderer;
   try{await act(async()=>{renderer=create(React.createElement(m.exports.default));});assert.equal(renderer.root.findAllByType('h1').length,1);assert.equal(renderer.root.findByType('h1').children.join(''),'Operating Forecasts');}
   finally{if(renderer)await act(async()=>renderer.unmount());if(previous===undefined)delete globalThis.localStorage;else globalThis.localStorage=previous;}
+});
+
+test('shaped persisted months are shared by cards, chart, table and total row', async () => {
+  const { rows } = buildOperatingModel(operatingFixture().months);
+  const persisted = rows.map(r => row(r.month, r.effective_revenue, r.effective_expenses));
+  const renderer = await mounted(async () => response(persisted, { model_version: 'operating_accounts_monthly_v2', freshness: 'current' }));
+  try {
+    const chart = renderer.root.findByType('linechart').props.data;
+    assert.equal(chart.length, 12);
+    for (const [i, r] of chart.entries()) {
+      assert.equal(r.revenue, persisted[i].revenue);
+      assert.equal(r.expenses, persisted[i].expenses);
+      assert.equal(renderer.root.findAllByType('input')[i * 2].props.value, formatForecastCurrency(r.revenue).replace('$', ''));
+    }
+    const markup = JSON.stringify(renderer.toJSON());
+    const stats = displayStats(chart);
+    for (const v of Object.values(stats)) assert.ok(markup.includes(formatForecastCurrency(v)));
+    const totals = forecastTotals(chart);
+    const footer = renderer.root.findByType('tfoot').findAllByType('td');
+    for (const [i, k] of ['revenue', 'expenses', 'operating_net_cash_flow'].entries()) assert.equal(footer[i].children[0], formatForecastCurrency(totals[k]));
+    assert.match(markup, /Fixed recurring accounts stay level/);
+  } finally { await close(renderer); }
 });

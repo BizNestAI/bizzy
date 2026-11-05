@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { operatingFixture, BUSINESS } from './fixtures/operatingForecast.js';
-import { buildOperatingModel, MODEL_CONFIG, reconcileMonth } from '../src/services/accounting/operatingForecastModel.js';
+import { buildOperatingModel, MODEL_CONFIG, MODEL_VERSION, reconcileMonth } from '../src/services/accounting/operatingForecastModel.js';
 const enabled = process.env.OPERATING_FORECAST_LOCAL_DB === '1';
 const container = process.env.OPERATING_FORECAST_PG_CONTAINER || 'bizzi-vehicle-validation-continuation';
 let dbname = `operating_forecast_test_${process.pid}`;
@@ -60,7 +60,9 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
     const unchangedBefore = sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_runs t;") + sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_months t;") + sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_overrides t;");
     const migration = readFileSync(new URL('../supabase/migrations/20261104120000_operating_forecast_launch.sql', import.meta.url), 'utf8');
     sql(migration);
-    sql(migration);
+    const shapingMigration = readFileSync(new URL('../supabase/migrations/20261104130000_operating_forecast_monthly_shaping.sql', import.meta.url), 'utf8');
+    sql(shapingMigration);
+    sql(shapingMigration);
     const unchangedAfter = sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_runs t;") + sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_months t;") + sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_overrides t;");
     assert.equal(unchangedAfter, unchangedBefore);
     const {
@@ -120,10 +122,13 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
       }
     };
     const claim = (fingerprint, routine = false) => `select claim_operating_forecast(${quote(BUSINESS)},${quote(fingerprint.repeat(64))},${quote(JSON.stringify(payload))}::jsonb,${routine});`;
-    const finish = id => `select complete_operating_forecast(${quote(BUSINESS)},${quote(id)},${quote(JSON.stringify(model.rows))}::jsonb);`;
+    const finish = (id, rows = model.rows) => `select complete_operating_forecast(${quote(BUSINESS)},${quote(id)},${quote(JSON.stringify(rows))}::jsonb);`;
     const first = JSON.parse(sql(claim('a')));
     assert.equal(sql(claim('b')), '');
-    sql(finish(first.id));
+    const flatRevenue = model.metadata.accounts.filter(a => a.section === 'Income').reduce((n, a) => n + a.projected_cents, 0) / 100;
+    const flatExpenses = model.metadata.monthly_cogs + model.metadata.monthly_operating_expenses;
+    const flatRows = model.rows.map(r => ({ ...r, baseline_revenue: flatRevenue, effective_revenue: flatRevenue, baseline_expenses: flatExpenses, effective_expenses: flatExpenses, baseline_operating_net_cash_flow: Math.round((flatRevenue - flatExpenses) * 100) / 100, effective_operating_net_cash_flow: Math.round((flatRevenue - flatExpenses) * 100) / 100 }));
+    sql(finish(first.id, flatRows));
     if (seeded) assert.equal(sql(`select expense_override||','||reason from forecast_overrides where forecast_run_id=${quote(first.id)} and month='2026-12-01';`), '222.22,existing assumption');
     assert.equal(JSON.parse(sql(claim('a'))).id, first.id);
     const month = model.rows[0].month;
@@ -135,7 +140,10 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
       revenue_override: 123.45
     }));
     assert.equal(sql(`select expense_override is null from forecast_overrides where forecast_run_id=${quote(first.id)} and month=${quote(month)};`), 't');
-    const second = JSON.parse(sql(claim('b')));
+    payload.model_version = MODEL_VERSION;
+    const second = JSON.parse(sql(claim('b', true)));
+    assert.notEqual(second.id, first.id);
+    assert.equal(second.model_version, MODEL_VERSION);
     // An edit holds the shared advisory lock while completion waits, then completion
     // reads the committed latest predecessor assumptions (not a stale JS copy).
     await Promise.all([concurrent(`begin;select pg_advisory_xact_lock(hashtextextended('operating:'||${quote(BUSINESS)},0));${edit(first.id, {
@@ -177,7 +185,7 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
     sql(`update forecast_runs set status='failed' where id=${quote(recovered.id)};`);
     const races = await Promise.all([concurrent(claim('e')), concurrent(claim('f'))]);
     assert.equal(races.filter(Boolean).length, 1);
-    assert.equal(sql(`select count(*) from forecast_runs where status='generating' and model_version='operating_accounts_launch_v1';`), '1');
+    assert.equal(sql(`select count(*) from forecast_runs where status='generating' and model_version='operating_accounts_monthly_v2';`), '1');
     // Cross-tenant requests and malformed/special numeric values cannot mutate rows.
     const otherBusiness = '00000000-0000-4000-8000-000000000002';
     assert.throws(() => sql(`select edit_operating_forecast_overrides(${quote(otherBusiness)},${quote(second.id)},'[{"month":"2026-11-01","revenue_override":1}]');`));
@@ -188,6 +196,16 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
     assert.throws(() => sql(`select claim_operating_forecast(${quote(BUSINESS)},null,'{}');`));
     for (const role of ['anon', 'authenticated']) for (const signature of ['claim_operating_forecast(uuid,text,jsonb,boolean)', 'complete_operating_forecast(uuid,uuid,jsonb)', 'edit_operating_forecast_overrides(uuid,uuid,jsonb,uuid)']) assert.equal(sql(`select has_function_privilege(${quote(role)},${quote('public.' + signature)},'EXECUTE');`), 'f');
     assert.equal(sql("select has_function_privilege('service_role','public.complete_operating_forecast(uuid,uuid,jsonb)','EXECUTE');"), 't');
+    sql("update forecast_runs set status='failed' where status='generating';");
+    sql(`update monthly_review_qbo_pnl_snapshots set expenses=expenses-1 where id=${quote(months[0].snapshot.id)};`);
+    payload.model_config = { ...MODEL_CONFIG, shaping: { ...MODEL_CONFIG.shaping, historicalWeight: 20, baselineWeight: 80 } };
+    const configured = JSON.parse(sql(claim('9', true)));
+    assert.notEqual(configured.id, first.id);
+    assert.notEqual(configured.id, second.id);
+    sql(finish(configured.id));
+    assert.equal(sql(`select effective_revenue from forecast_months where forecast_run_id=${quote(configured.id)} and month=${quote(month)};`), '555.55');
+    assert.equal(sql(`select effective_expenses=baseline_expenses from forecast_months where forecast_run_id=${quote(configured.id)} and month=${quote(month)};`), 't');
+    assert.equal(sql(`select status from forecast_runs where id=${quote(first.id)};`), 'completed');
     assert.equal(sql('select count(*) from accounting_period_closes;'), '0');
   } finally {
     sql(`drop database ${dbname} with (force);`, 'postgres');

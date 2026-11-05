@@ -1,9 +1,10 @@
 import { decimalCents } from '../../utils/forecast/money.js';
 import { createHash } from 'node:crypto';
 import { buildMonthlyPnlContentFingerprint } from './monthlyPnlContentFingerprint.js';
-export const MODEL_VERSION = 'operating_accounts_launch_v1';
+export const MODEL_VERSION = 'operating_accounts_monthly_v2';
 export const MODEL_CONFIG = Object.freeze({
-  metadataVersion: 1,
+  metadataVersion: 2,
+  shaping: Object.freeze({ baselineWeight: 70, historicalWeight: 30, minPercent: 50, maxPercent: 150, normalization: 'bounded_equal_cents_calendar_order' }),
   recurringMinActive: 5,
   recurringTolerancePercent: 10,
   variableMinActive: 3,
@@ -92,6 +93,48 @@ export function projectAccount(series, {
     }
   };
 }
+// The source window and future horizon each contain every calendar month once,
+// in the same order. Normalize by equal cent adjustments among uncapped months;
+// stable calendar order receives indivisible remainders. Bounds apply AFTER normalization.
+export function shapeAccount(account, config = MODEL_CONFIG.shaping) {
+  const { baselineWeight, historicalWeight, minPercent, maxPercent, normalization } = config;
+  if (![baselineWeight, historicalWeight, minPercent, maxPercent].every(Number.isSafeInteger)
+    || baselineWeight < 0 || historicalWeight < 0 || baselineWeight + historicalWeight !== 100
+    || minPercent < 0 || minPercent > 100 || maxPercent < 100
+    || normalization !== 'bounded_equal_cents_calendar_order') throw new Error('invalid_shaping_config');
+  const baseline = account.projected_cents;
+  const target = sum(Array(12).fill(baseline));
+  const shaped = account.classification === 'variable' && baseline !== 0;
+  const magnitude = Math.abs(baseline), sign = Math.sign(baseline);
+  const lower = Number((BigInt(magnitude) * BigInt(minPercent) + 99n) / 100n), upper = Number(BigInt(magnitude) * BigInt(maxPercent) / 100n);
+  if (!Number.isSafeInteger(upper)) throw new Error('money_precision_limit');
+  const details = account.calculation.series_cents.map(historical => {
+    const numerator = BigInt(baselineWeight) * BigInt(baseline) + BigInt(historicalWeight) * BigInt(historical);
+    const rounded = Number((numerator < 0n ? -1n : 1n) * (( (numerator < 0n ? -numerator : numerator) + 50n) / 100n));
+    if (!Number.isSafeInteger(rounded)) throw new Error('money_precision_limit');
+    const blended = shaped ? rounded : baseline;
+    const bounded = shaped ? sign * Math.max(lower, Math.min(upper, sign * blended)) : baseline;
+    return { historical_cents: historical, blended_cents: blended, pre_normalization_cents: bounded, cap_applied: bounded !== blended };
+  });
+  const values = details.map(d => d.pre_normalization_cents);
+  let delta = target - sum(values);
+  while (delta !== 0) {
+    const direction = Math.sign(delta);
+    const eligible = values.map((v, i) => ({ i, capacity: direction > 0 ? (sign > 0 ? upper : -lower) - v : v - (sign > 0 ? lower : -upper) })).filter(x => x.capacity > 0);
+    if (!eligible.length) throw new Error('shaping_normalization_unreachable');
+    const step = Math.max(1, Math.floor(Math.abs(delta) / eligible.length));
+    for (const { i, capacity } of eligible) {
+      const adjustment = Math.min(capacity, step, Math.abs(delta));
+      values[i] += direction * adjustment;
+      delta -= direction * adjustment;
+    }
+  }
+  return { monthly_projected_cents: values, shaping: {
+    applied: shaped, reason: shaped ? 'historical_calendar_month_blend' : baseline === 0 ? 'zero_baseline' : 'classification_stays_flat',
+    baseline_cents: baseline, annual_target_cents: target, config,
+    months: details.map((d, i) => ({ ...d, final_cents: values[i], normalization_adjustment_cents: values[i] - d.pre_normalization_cents }))
+  } };
+}
 export function reconcileMonth(snapshot, accounts, businessId, month, config) {
   if (snapshot.business_id !== businessId || snapshot.accounting_method !== 'Cash' || !['current', 'validated'].includes(snapshot.status) || !snapshot.is_current || `${snapshot.review_year}-${String(snapshot.review_month).padStart(2, '0')}-01` !== month) throw new Error('snapshot_identity_mismatch');
   const end = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
@@ -148,26 +191,33 @@ export function buildOperatingModel(months) {
       observedFrom: a.observedFrom
     })
   }));
+  accounts.forEach(a => Object.assign(a, shapeAccount(a)));
   const total = section => sum(accounts.filter(a => a.section === section).map(a => a.projected_cents));
-  const revenue = total('Income'),
-    cogs = total('Cost of Goods Sold'),
+  const cogs = total('Cost of Goods Sold'),
     expenses = total('Expense');
   const start = new Date(`${months.at(-1).month}T00:00:00Z`);
   const rows = Array.from({
     length: 12
-  }, (_, i) => ({
-    month: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i + 1, 1)).toISOString().slice(0, 10),
-    baseline_revenue: money(revenue),
-    baseline_expenses: money(cogs + expenses),
-    baseline_operating_net_cash_flow: money(revenue - cogs - expenses),
-    effective_revenue: money(revenue),
-    effective_expenses: money(cogs + expenses),
-    effective_operating_net_cash_flow: money(revenue - cogs - expenses)
-  }));
+  }, (_, i) => {
+    const monthly = section => sum(accounts.filter(a => a.section === section).map(a => a.monthly_projected_cents[i]));
+    const revenue = monthly('Income'), cogs = monthly('Cost of Goods Sold'), expenses = monthly('Expense');
+    return {
+      month: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i + 1, 1)).toISOString().slice(0, 10),
+      baseline_revenue: money(revenue),
+      baseline_expenses: money(cogs + expenses),
+      baseline_operating_net_cash_flow: money(revenue - cogs - expenses),
+      effective_revenue: money(revenue),
+      effective_expenses: money(cogs + expenses),
+      effective_operating_net_cash_flow: money(revenue - cogs - expenses)
+    };
+  });
+  accounts.forEach(a => a.shaping.months.forEach((m, i) => Object.assign(m, { source_month: months[i].month, forecast_month: rows[i].month })));
   return {
     rows,
     metadata: {
-      schema: 'operating_accounts_v1',
+      schema: 'operating_accounts_v2',
+      calendar_month_mapping: months.map(m => m.month),
+      monthly_components: rows.map((r, i) => ({ month: r.month, cogs_cents: sum(accounts.filter(a => a.section === 'Cost of Goods Sold').map(a => a.monthly_projected_cents[i])), operating_expenses_cents: sum(accounts.filter(a => a.section === 'Expense').map(a => a.monthly_projected_cents[i])) })),
       accounts,
       monthly_cogs: money(cogs),
       monthly_operating_expenses: money(expenses),
@@ -177,7 +227,7 @@ export function buildOperatingModel(months) {
         other_expense_cents: sum(m.accounts.filter(a => a.account_type === 'Other Expense').map(a => cents(a.total_amount))),
         excluded_from_operating_forecast: true
       })),
-      limitations: ['creation_dates_unverified', 'flat_baseline', 'no_seasonality', 'no_current_month_actuals']
+      limitations: ['creation_dates_unverified', 'single_year_monthly_patterns', 'intermittent_smoothed', 'no_current_month_actuals']
     }
   };
 }

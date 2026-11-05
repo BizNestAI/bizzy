@@ -2,7 +2,7 @@
 
 ## Contract and scope
 
-`operating_accounts_launch_v1` uses the latest twelve completed calendar months in
+`operating_accounts_monthly_v2` uses the latest twelve completed calendar months in
 `business_financial_reporting_config.reporting_timezone`. Reporting configuration
 must be verified (USD for this launch). It never writes or certifies accounting
 period closes. A current authoritative Cash snapshot (current/validated status)
@@ -35,8 +35,8 @@ Rules apply in order:
 
 Money is converted from decimal text to safe integer cents. Weighted averages
 round once, half away from zero; intermediate averages are not rounded. Unsafe
-integer operations fail rather than silently approximate. Forecasts are flat for
-all twelve persisted months after the historical window. Existing expense fields
+integer operations fail rather than silently approximate. The original `operating_accounts_launch_v1` repeats these baselines flat. The new
+`operating_accounts_monthly_v2` shapes variable accounts as described below. Existing expense fields
 store **COGS plus operating expenses**. Other Income/Other Expense are reconciled
 independently when summary components are present, retained in `excluded_sections`,
 and identified as deliberately excluded. Missing/invalid timezone falls back to a
@@ -45,7 +45,7 @@ blocked result, never to the server/browser timezone.
 ## Existing storage and metadata
 
 No new tables or columns. `forecast_runs.data_quality` has schema
-`operating_accounts_v1`, `accounts[]` (stable ID, section, classification, observed
+`operating_accounts_v2`, `accounts[]` (stable ID, section, classification, observed
 months, recent values, complete calculation series, projected cents, limited-history
 flag), monthly COGS/operating-expense split, limitations, generation reason,
 timezone and source guards. `model_config` records thresholds/weights. A future
@@ -358,3 +358,49 @@ was restricted to zero-row GETs and OpenAPI metadata.
 Implementation verdict: **READY FOR STAGING migration rehearsal**. Authenticated
 staging application tests and production readiness remain gated on the verified
 missing/unexposed schema and RPC prerequisites above.
+
+
+## Month-aware launch shaping (v2)
+
+LAUNCH REQUIRED: Keep classifications and baseline arithmetic unchanged. Recurring,
+intermittent and inactive accounts remain flat (inactive zero). No cadence detection.
+For each variable account, pair each future calendar month with the same month in
+its twelve completed source months. Blend 70% baseline with 30% that signed
+historical value, rounding half away from zero to cents. A zero baseline stays zero.
+Clamp magnitudes to ceil(50% baseline magnitude) through floor(150% magnitude),
+using the baseline sign so a credit remains a credit even when historical signs differ.
+
+Normalize with equal cent adjustments among months with remaining capacity in the
+required direction. Saturated months drop out; indivisible cents go to earliest
+forecast months first. Repeat until the total is exactly 12 × baseline cents. The
+final values also obey the caps. This bounded additive normalization is deliberately
+simple; it can reduce or remove variation when the source evidence and caps warrant.
+All money and normalization operate in integer cents; unsafe arithmetic fails closed.
+Weights, caps and the named normalization rule live in `MODEL_CONFIG.shaping`, are
+persisted as `model_config`, and participate in both input fingerprints.
+
+`data_quality.accounts[]` retains the flat baseline and twelve monthly projections.
+Each shaping month records source/forecast dates, historical cents, blended cents,
+cap application, bounded pre-normalization cents, normalization adjustment and final
+cents. `monthly_components[]` records the shaped COGS and expense splits. The older
+`monthly_cogs` and `monthly_operating_expenses` fields remain baseline monthly averages.
+The UI uses persisted effective months for all cards, chart, inputs and totals.
+
+The forward migration `20261104130000_operating_forecast_monthly_shaping.sql` changes
+existing functions and indexes only. Apply it before enabling the new backend model.
+It accepts both account-model versions, shares one business claim across versions,
+requires matching model AND configuration for reuse/daily suppression, and carries
+sparse overrides from the latest completed predecessor. Prior runs remain unchanged.
+It has been tested locally; it has NOT been applied remotely. Rollback to the flat
+backend can use the same compatible RPCs; retain historical shaped runs for audit.
+
+POST-LAUNCH: vendor decomposition, cadence detection, cross-company ML, advanced
+seasonality, industry models, AR/AP timing and a complete cash-flow model remain
+deferred. A single year of monthly activity is modest shaping evidence, not proof of
+seasonality. New/limited-history accounts still use the existing observation policy.
+
+Replay: `node scripts/manual/replayOperatingForecastShaping.js` emits the committed
+`docs/operating-forecast-shaping-replay.json` content: prior flat rows, shaped rows,
+annual totals and rent/software/revenue/intermittent explanations. The source fixture
+is synthetic, shaped like the Nov 2025–Oct 2026 production window, and does not
+reproduce the live company's $2,794.88 / $4,980.38 averages. No live data is fetched.

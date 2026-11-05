@@ -108,7 +108,7 @@ function matches(run, fingerprint, businessId, h) {
   return run?.input_fingerprint === fingerprint || run?.model_version === MODEL_VERSION && run?.data_quality?.financial_input_hash === financialIdentity(businessId, h);
 }
 async function latest(db, businessId) {
-  return await query(db.from('forecast_runs').select('*').eq('business_id', businessId).eq('status', 'completed').in('model_version', [MODEL_VERSION, 'forecast_v1']).order('generated_at', {
+  return await query(db.from('forecast_runs').select('*').eq('business_id', businessId).eq('status', 'completed').in('model_version', [MODEL_VERSION, 'operating_accounts_launch_v1', 'forecast_v1']).order('generated_at', {
     ascending: false
   }).limit(1).maybeSingle());
 }
