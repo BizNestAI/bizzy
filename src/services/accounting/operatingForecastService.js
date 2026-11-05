@@ -1,4 +1,4 @@
-import { parseOperatingClaim, malformedClaim } from './operatingForecastClaim.js';
+import { parseOperatingClaim, malformedClaim, claimValidationPredicate } from './operatingForecastClaim.js';
 import { log } from '../../utils/reviews/logger.js';
 import fetch from 'node-fetch';
 import { fetchQboReport } from '../bookkeeping/qboMonthlyPnlIngestionService.js';
@@ -227,6 +227,7 @@ export async function ensureForecastV1Run({
     p_business_id: businessId,
     p_fingerprint: fingerprint,
     p_payload: {
+      input_fingerprint: fingerprint,
       model_version: MODEL_VERSION,
       history_start: h.window[0],
       history_end: h.window[11],
@@ -279,7 +280,7 @@ export async function ensureForecastV1Run({
   const claimResponse = await db.rpc('claim_operating_forecast', claimArgs);
   if (claimResponse?.error) {
     const rejected = claimResponse.error.message === 'invalid_forecast_claim';
-    logger.warn('[Operating Forecast Claim]', { outcome: rejected ? 'rejected' : 'rpc_error', run_id: null, model_version: MODEL_VERSION, routine: claimArgs.p_routine, database_code: claimResponse.error.code || null });
+    logger.warn('[Operating Forecast Claim]', { outcome: rejected ? 'rejected' : 'rpc_error', run_id: null, model_version: MODEL_VERSION, routine: claimArgs.p_routine, database_code: claimResponse.error.code || null, validation_predicate: claimValidationPredicate(claimResponse.error.details) });
     if (rejected) throw new ForecastV1Error('forecast_claim_rejected', 503, { reason: 'database_claim_validation_failed', cause: 'invalid_forecast_claim', model_version: MODEL_VERSION });
     await query(Promise.resolve(claimResponse));
   }

@@ -1,0 +1,377 @@
+{
+  "before_patch": {
+    "rpc": "claim_operating_forecast",
+    "business_uuid_valid": true,
+    "routine": false,
+    "payload": {
+      "model_version": {
+        "type": "string",
+        "length": 29,
+        "value": "operating_accounts_monthly_v2"
+      },
+      "history_start": {
+        "type": "string",
+        "length": 10,
+        "value": "2025-11-01"
+      },
+      "history_end": {
+        "type": "string",
+        "length": 10,
+        "value": "2026-10-01"
+      },
+      "forecast_start": {
+        "type": "string",
+        "length": 10,
+        "value": "2026-11-01"
+      },
+      "forecast_end": {
+        "type": "string",
+        "length": 10,
+        "value": "2027-10-01"
+      },
+      "source_snapshot_ids": {
+        "type": "array",
+        "length": 12
+      },
+      "source_snapshot_ids_hash": {
+        "type": "string",
+        "length": 64
+      },
+      "model_config": {
+        "type": "object"
+      },
+      "data_quality": {
+        "type": "object"
+      },
+      "created_by": {
+        "type": "null"
+      }
+    },
+    "configuration_keys": [
+      "metadataVersion",
+      "shaping",
+      "recurringMinActive",
+      "recurringTolerancePercent",
+      "variableMinActive",
+      "weights",
+      "historyMonths",
+      "horizonMonths"
+    ],
+    "shaping_keys": [
+      "baselineWeight",
+      "historicalWeight",
+      "minPercent",
+      "maxPercent",
+      "normalization"
+    ],
+    "fingerprint": {
+      "length": 64,
+      "format": true,
+      "matches_recomputed_final_config": true,
+      "embedded_input_fingerprint_present": false
+    },
+    "snapshot_ids": {
+      "length": 12,
+      "unique": 12,
+      "all_uuid": true,
+      "hash_length": 64,
+      "hash_matches": true
+    },
+    "sources": {
+      "length": 12,
+      "keys": [
+        "id",
+        "fingerprint",
+        "guard"
+      ],
+      "identity_keys": [
+        "business_id",
+        "qbo_realm_id",
+        "accounting_method",
+        "source_start_date",
+        "source_end_date",
+        "review_year",
+        "review_month"
+      ],
+      "guard_keys": [
+        "identity",
+        "revenue",
+        "cogs",
+        "expenses",
+        "net_profit",
+        "accounts"
+      ],
+      "all_ids_match": true,
+      "fingerprint_lengths": [
+        93
+      ],
+      "all_financial_formats": true,
+      "periods": [
+        {
+          "start": "2025-11-01",
+          "end": "2025-11-30"
+        },
+        {
+          "start": "2025-12-01",
+          "end": "2025-12-31"
+        },
+        {
+          "start": "2026-01-01",
+          "end": "2026-01-31"
+        },
+        {
+          "start": "2026-02-01",
+          "end": "2026-02-28"
+        },
+        {
+          "start": "2026-03-01",
+          "end": "2026-03-31"
+        },
+        {
+          "start": "2026-04-01",
+          "end": "2026-04-30"
+        },
+        {
+          "start": "2026-05-01",
+          "end": "2026-05-31"
+        },
+        {
+          "start": "2026-06-01",
+          "end": "2026-06-30"
+        },
+        {
+          "start": "2026-07-01",
+          "end": "2026-07-31"
+        },
+        {
+          "start": "2026-08-01",
+          "end": "2026-08-31"
+        },
+        {
+          "start": "2026-09-01",
+          "end": "2026-09-30"
+        },
+        {
+          "start": "2026-10-01",
+          "end": "2026-10-31"
+        }
+      ]
+    },
+    "metadata_keys": [
+      "schema",
+      "calendar_month_mapping",
+      "monthly_components",
+      "accounts",
+      "monthly_cogs",
+      "monthly_operating_expenses",
+      "excluded_sections",
+      "limitations",
+      "financial_input_hash",
+      "reason",
+      "timezone",
+      "source_identity",
+      "sources"
+    ],
+    "inspection_scope": "Production-source reconstruction intercepted immediately before RPC; created_by null for this read-only rehearsal, not a captured authenticated browser request."
+  },
+  "after_patch": {
+    "rpc": "claim_operating_forecast",
+    "business_uuid_valid": true,
+    "routine": false,
+    "payload": {
+      "input_fingerprint": {
+        "type": "string",
+        "length": 64
+      },
+      "model_version": {
+        "type": "string",
+        "length": 29,
+        "value": "operating_accounts_monthly_v2"
+      },
+      "history_start": {
+        "type": "string",
+        "length": 10,
+        "value": "2025-11-01"
+      },
+      "history_end": {
+        "type": "string",
+        "length": 10,
+        "value": "2026-10-01"
+      },
+      "forecast_start": {
+        "type": "string",
+        "length": 10,
+        "value": "2026-11-01"
+      },
+      "forecast_end": {
+        "type": "string",
+        "length": 10,
+        "value": "2027-10-01"
+      },
+      "source_snapshot_ids": {
+        "type": "array",
+        "length": 12
+      },
+      "source_snapshot_ids_hash": {
+        "type": "string",
+        "length": 64
+      },
+      "model_config": {
+        "type": "object"
+      },
+      "data_quality": {
+        "type": "object"
+      },
+      "created_by": {
+        "type": "null"
+      }
+    },
+    "configuration_keys": [
+      "metadataVersion",
+      "shaping",
+      "recurringMinActive",
+      "recurringTolerancePercent",
+      "variableMinActive",
+      "weights",
+      "historyMonths",
+      "horizonMonths"
+    ],
+    "shaping_keys": [
+      "baselineWeight",
+      "historicalWeight",
+      "minPercent",
+      "maxPercent",
+      "normalization"
+    ],
+    "fingerprint": {
+      "length": 64,
+      "format": true,
+      "matches_recomputed_final_config": true,
+      "embedded_input_fingerprint_present": true,
+      "embedded_matches": true
+    },
+    "snapshot_ids": {
+      "length": 12,
+      "unique": 12,
+      "all_uuid": true,
+      "hash_length": 64,
+      "hash_matches": true
+    },
+    "sources": {
+      "length": 12,
+      "keys": [
+        "id",
+        "fingerprint",
+        "guard"
+      ],
+      "identity_keys": [
+        "business_id",
+        "qbo_realm_id",
+        "accounting_method",
+        "source_start_date",
+        "source_end_date",
+        "review_year",
+        "review_month"
+      ],
+      "guard_keys": [
+        "identity",
+        "revenue",
+        "cogs",
+        "expenses",
+        "net_profit",
+        "accounts"
+      ],
+      "all_ids_match": true,
+      "fingerprint_lengths": [
+        93
+      ],
+      "all_financial_formats": true,
+      "periods": [
+        {
+          "start": "2025-11-01",
+          "end": "2025-11-30"
+        },
+        {
+          "start": "2025-12-01",
+          "end": "2025-12-31"
+        },
+        {
+          "start": "2026-01-01",
+          "end": "2026-01-31"
+        },
+        {
+          "start": "2026-02-01",
+          "end": "2026-02-28"
+        },
+        {
+          "start": "2026-03-01",
+          "end": "2026-03-31"
+        },
+        {
+          "start": "2026-04-01",
+          "end": "2026-04-30"
+        },
+        {
+          "start": "2026-05-01",
+          "end": "2026-05-31"
+        },
+        {
+          "start": "2026-06-01",
+          "end": "2026-06-30"
+        },
+        {
+          "start": "2026-07-01",
+          "end": "2026-07-31"
+        },
+        {
+          "start": "2026-08-01",
+          "end": "2026-08-31"
+        },
+        {
+          "start": "2026-09-01",
+          "end": "2026-09-30"
+        },
+        {
+          "start": "2026-10-01",
+          "end": "2026-10-31"
+        }
+      ]
+    },
+    "coverage": {
+      "monthly_components_count": 12,
+      "months": [
+        "2026-11-01",
+        "2026-12-01",
+        "2027-01-01",
+        "2027-02-01",
+        "2027-03-01",
+        "2027-04-01",
+        "2027-05-01",
+        "2027-06-01",
+        "2027-07-01",
+        "2027-08-01",
+        "2027-09-01",
+        "2027-10-01"
+      ],
+      "account_projection_lengths": [
+        12
+      ]
+    },
+    "metadata_keys": [
+      "schema",
+      "calendar_month_mapping",
+      "monthly_components",
+      "accounts",
+      "monthly_cogs",
+      "monthly_operating_expenses",
+      "excluded_sections",
+      "limitations",
+      "financial_input_hash",
+      "reason",
+      "timezone",
+      "source_identity",
+      "sources"
+    ],
+    "inspection_scope": "Production-source reconstruction intercepted immediately before RPC; created_by null for this read-only rehearsal, not a captured authenticated browser request."
+  }
+}

@@ -395,6 +395,8 @@ test('unchanged sources with a prior flat-model run request a new version and re
   assert.equal(db.calls[0].args.p_payload.model_version, 'operating_accounts_monthly_v2');
   assert.equal(db.calls[0].args.p_payload.model_config.shaping.historicalWeight, 30);
   assert.equal(db.calls[0].args.p_routine, false);
+  assert.equal(db.calls[0].args.p_payload.input_fingerprint, db.calls[0].args.p_fingerprint);
+  assert.equal(typeof db.calls[0].args.p_payload.model_config, 'object');
 });
 
 test('null without a live database claim and malformed RPC outputs fail closed before completion', async () => {
@@ -424,9 +426,10 @@ test('routine daily limit returns a recognized stale completed version; manual r
 });
 test('database validation rejection is diagnosed without financial payload or credential logging', async () => {
   const db = fake(), logs = [];
-  db.rpc = async () => ({ data: null, error: { code: 'P0001', message: 'invalid_forecast_claim' } });
+  db.rpc = async () => ({ data: null, error: { code: 'P0001', message: 'invalid_forecast_claim', details: '{"predicate":"model_version"}' } });
   await assert.rejects(ensureForecastV1Run({ db, businessId: BUSINESS, now: NOW, logger: { warn: (...args) => logs.push(args) } }), e => e.error === 'forecast_claim_rejected' && e.details.cause === 'invalid_forecast_claim');
   assert.equal(logs[0][1].outcome, 'rejected');
+  assert.equal(logs[0][1].validation_predicate, 'model_version');
   assert.equal(logs[0][1].routine, false);
   assert.equal(logs[0][1].run_id, null);
   assert.doesNotMatch(JSON.stringify(logs), /series_cents|financial_input_hash|total_amount|source_snapshot_ids|service_role|token/i);

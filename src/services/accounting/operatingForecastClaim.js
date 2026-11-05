@@ -34,3 +34,11 @@ export function forecastGenerationHttpStatus(forecast) {
   if (forecast.outcome === 'unchanged' || forecast.outcome === 'routine_limited') return 200;
   return forecast.data_status === 'available' ? 201 : 409;
 }
+
+// DETAIL is database-controlled but may contain arbitrary text on other failures.
+// Only known structural predicate names may enter logs; never echo raw DETAIL.
+export function claimValidationPredicate(detail) {
+  const allowed = new Set(['business_id', 'payload_object', 'model_version', 'model_config_object', 'fingerprint_format', 'fingerprint_mismatch', 'routine_boolean', 'created_by_uuid', 'data_quality_object', 'source_arrays', 'source_count', 'snapshot_uuid', 'snapshot_unique', 'snapshot_hash', 'source_membership', 'date_format', 'date_coverage', 'date_values', 'source_guard', 'source_fingerprint']);
+  try { const predicate = JSON.parse(detail).predicate; return allowed.has(predicate) ? predicate : 'unspecified'; }
+  catch { return 'unspecified'; }
+}

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { operatingFixture, BUSINESS } from './fixtures/operatingForecast.js';
-import { buildOperatingModel, MODEL_CONFIG, MODEL_VERSION, reconcileMonth } from '../src/services/accounting/operatingForecastModel.js';
+import { buildOperatingModel, MODEL_CONFIG, MODEL_VERSION, hash, reconcileMonth } from '../src/services/accounting/operatingForecastModel.js';
 const enabled = process.env.OPERATING_FORECAST_LOCAL_DB === '1';
 const container = process.env.OPERATING_FORECAST_PG_CONTAINER || 'bizzi-vehicle-validation-continuation';
 let dbname = `operating_forecast_test_${process.pid}`;
@@ -60,9 +60,9 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
     const unchangedBefore = sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_runs t;") + sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_months t;") + sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_overrides t;");
     const migration = readFileSync(new URL('../supabase/migrations/20261104120000_operating_forecast_launch.sql', import.meta.url), 'utf8');
     sql(migration);
-    const shapingMigration = readFileSync(new URL('../supabase/migrations/20261104130000_operating_forecast_monthly_shaping.sql', import.meta.url), 'utf8');
-    sql(shapingMigration);
-    sql(shapingMigration);
+    const validationMigration = readFileSync(new URL('../supabase/migrations/20261105100000_operating_forecast_claim_validation.sql', import.meta.url), 'utf8');
+    sql(validationMigration);
+    sql(validationMigration);
     const unchangedAfter = sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_runs t;") + sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_months t;") + sql("select md5(coalesce(string_agg(row_to_json(t)::text,',' order by id),'')) from forecast_overrides t;");
     assert.equal(unchangedAfter, unchangedBefore);
     const {
@@ -84,9 +84,11 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
       forecast_start: model.rows[0].month,
       forecast_end: model.rows[11].month,
       source_snapshot_ids: months.map(m => m.snapshot.id),
-      source_snapshot_ids_hash: 'fixture',
+      source_snapshot_ids_hash: hash(months.map(m => m.snapshot.id)),
       model_config: MODEL_CONFIG,
       data_quality: {
+        ...model.metadata,
+        reason: 'manual',
         timezone: 'America/New_York',
         source_identity: {
           realm: 'fixture-realm',
@@ -121,7 +123,7 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
         }))
       }
     };
-    const claim = (fingerprint, routine = false) => `select claim_operating_forecast(${quote(BUSINESS)},${quote(fingerprint.repeat(64))},${quote(JSON.stringify(payload))}::jsonb,${routine});`;
+    const claim = (fingerprint, routine = false) => `select claim_operating_forecast(${quote(BUSINESS)},${quote(fingerprint.repeat(64))},${quote(JSON.stringify({ ...payload, input_fingerprint: fingerprint.repeat(64) }))}::jsonb,${routine});`;
     const finish = (id, rows = model.rows) => `select complete_operating_forecast(${quote(BUSINESS)},${quote(id)},${quote(JSON.stringify(rows))}::jsonb);`;
     // Reproduce the production drift with the exact original claim body: v2 is
     // rejected BEFORE insertion. The already-reviewed forward migration fixes it.
@@ -130,8 +132,27 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
     payload.model_version = MODEL_VERSION;
     assert.throws(() => sql(claim('8')), /invalid_forecast_claim/);
     assert.equal(sql("select count(*) from forecast_runs where status='generating';"), '0');
-    sql(shapingMigration);
+    sql(validationMigration);
     payload.model_version = 'operating_accounts_launch_v1';
+    const invalidPayload = (patch, fingerprint = '7'.repeat(64)) => `select claim_operating_forecast(${quote(BUSINESS)},${quote(fingerprint)},${quote(JSON.stringify({ ...payload, model_version: MODEL_VERSION, ...patch }))}::jsonb,false);`;
+    for (const [patch, fingerprint] of [
+      [{}, 'not-a-hash'], [{ input_fingerprint: '6'.repeat(64) }, '7'.repeat(64)],
+      [{ history_start: '2025-13-01' }], [{ forecast_end: '2027-11-01' }],
+      [{ source_snapshot_ids: ['not-a-uuid', ...payload.source_snapshot_ids.slice(1)] }],
+      [{ source_snapshot_ids: Array(12).fill(payload.source_snapshot_ids[0]) }],
+      [{ model_config: JSON.stringify(MODEL_CONFIG) }], [{ source_snapshot_ids_hash: '0'.repeat(64) }],
+      [{ model_version: 'unrelated_model' }], [{ model_config: null }], [{ created_by: 'invalid-uuid' }]
+    ]) {
+      const predicate = fingerprint === 'not-a-hash' ? 'fingerprint_format' : 'input_fingerprint' in patch ? 'fingerprint_mismatch' : 'history_start' in patch ? 'date_values' : 'forecast_end' in patch ? 'date_coverage' : 'source_snapshot_ids' in patch ? (patch.source_snapshot_ids[0] === 'not-a-uuid' ? 'snapshot_uuid' : 'snapshot_unique') : 'model_config' in patch ? 'model_config_object' : 'source_snapshot_ids_hash' in patch ? 'snapshot_hash' : 'created_by' in patch ? 'created_by_uuid' : 'model_version';
+      assert.throws(() => sql(invalidPayload(patch, fingerprint)), error => error.message.includes(JSON.stringify({ predicate })));
+    }
+    assert.equal(sql("select count(*) from forecast_runs where status='generating';"), '0');
+    // Existing deployed v2 requests lack the optional echoed fingerprint.
+    // Accept that exact pre-patch structure to support migration-first rollout.
+    const prePatchV2 = JSON.parse(sql(invalidPayload({})));
+    assert.ok(prePatchV2.id);
+    assert.equal(prePatchV2.model_version, MODEL_VERSION);
+    sql(`update forecast_runs set status='failed' where id=${quote(prePatchV2.id)};`);
     const first = JSON.parse(sql(claim('a')));
     assert.equal(sql(claim('b')), '');
     const flatRevenue = model.metadata.accounts.filter(a => a.section === 'Income').reduce((n, a) => n + a.projected_cents, 0) / 100;
@@ -150,7 +171,7 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
     }));
     assert.equal(sql(`select expense_override is null from forecast_overrides where forecast_run_id=${quote(first.id)} and month=${quote(month)};`), 't');
     payload.model_version = MODEL_VERSION;
-    const second = JSON.parse(sql(claim('b', true)));
+    const second = JSON.parse(sql(claim('b', false)));
     assert.notEqual(second.id, first.id);
     assert.equal(second.model_version, MODEL_VERSION);
     // An edit holds the shared advisory lock while completion waits, then completion
@@ -215,6 +236,14 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
     assert.equal(sql(`select effective_revenue from forecast_months where forecast_run_id=${quote(configured.id)} and month=${quote(month)};`), '555.55');
     assert.equal(sql(`select effective_expenses=baseline_expenses from forecast_months where forecast_run_id=${quote(configured.id)} and month=${quote(month)};`), 't');
     assert.equal(sql(`select status from forecast_runs where id=${quote(first.id)};`), 'completed');
+    payload.model_version = 'operating_accounts_monthly_v3';
+    const future = JSON.parse(sql(claim('4')));
+    assert.ok(future.id);
+    assert.equal(future.model_version, payload.model_version);
+    sql(finish(future.id));
+    assert.equal(sql(`select effective_revenue from forecast_months where forecast_run_id=${quote(future.id)} and month=${quote(month)};`), '555.55');
+    sql(validationMigration); // populated v1/v2/v3 rerun preserves data and uniqueness
+    assert.equal(sql(`select status from forecast_runs where id=${quote(future.id)};`), 'completed');
     assert.equal(sql('select count(*) from accounting_period_closes;'), '0');
   } finally {
     sql(`drop database ${dbname} with (force);`, 'postgres');

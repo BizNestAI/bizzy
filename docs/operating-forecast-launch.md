@@ -496,3 +496,99 @@ replacement, concurrency, source rechecks and override preservation. Changed-fil
 ESLint, `git diff --check` and the production Vite build passed (existing bundle-size
 warnings remain). No production generation was replayed; the reported production
 exception was traced through installed code and reproduced locally.
+
+## Precise v2 validation repair (November 5)
+
+This section supersedes the earlier repair instruction to apply only the monthly
+allowlist migration. Production was re-inspected read-only: all three RPC definition
+MD5 values above are unchanged. The one-generating index still covers only flat v1;
+the old completed-input index still excludes only flat v1. Forecast month/override
+check-constraint inspection returned no check constraints, consistent with the
+installed signed-value launch behavior. No forecast RPCs were invoked and no
+forecast data or migration was changed during this diagnosis.
+
+The single failing predicate is still:
+`p_payload->>'model_version' is distinct from 'operating_accounts_launch_v1'`.
+The reconstructed production-source request contains `operating_accounts_monthly_v2`
+at that exact key. All OTHER conditions in the first OR block pass. Its exception
+precedes every second-block validation, lease/routine check and insert. This is
+production migration drift and historical-version validator incompatibility, not
+an application construction/type defect or a daily-limit defect.
+
+### Complete original/reviewed validator inventory
+
+| Boundary | Exact requirements and failure behavior |
+| --- | --- |
+| SQL arguments | `p_business_id uuid`, `p_fingerprint text`, `p_payload jsonb`, `p_routine boolean DEFAULT false`. Invalid textual UUID/JSON/boolean arguments fail PostgreSQL input casts before the function, not via `invalid_forecast_claim`. |
+| First RAISE block | Non-null business ID; original accepts only flat v1, monthly migration accepts flat v1 or monthly v2; fingerprint matches `^[a-f0-9]{64}$`; `source_snapshot_ids` and `data_quality.sources` must be JSON arrays. Any false requirement raises `invalid_forecast_claim`. |
+| Source arrays | Both lengths exactly 12; 12 distinct snapshot strings and 12 distinct source IDs. Each source ID must be a member of the snapshot array. |
+| Guard structure | `guard` and `guard.identity` are objects; identity contains `business_id,qbo_realm_id,accounting_method,source_start_date,source_end_date,review_year,review_month`; guard contains `revenue,cogs,expenses,net_profit,accounts`; accounts is an array. |
+| Financial fingerprints | Each source fingerprint has prefix `qbo-pnl-financial-content-v1:` plus 64 lowercase hexadecimal characters. Claim validation checks format; application reconciliation recomputes financial content, and completion retains source/guard/fingerprint rechecks. |
+| Dates/coverage | `history_start` is non-null and month-aligned; `history_end=history_start+11 months`; `forecast_start=history_end+1 month`; `forecast_end=forecast_start+11 months`. Invalid date text may originally raise a PostgreSQL cast error. These dates imply twelve historical and twelve future months. No `coverage_start`, `coverage_end`, or top-level `source_start`/`source_end` aliases are expected. |
+| Snapshot authority | The 12 UUID-cast IDs must identify this business's current/validated Cash snapshots inside the source window. Failure has the distinct message `invalid_forecast_claim_sources`. UUID casts occur here/insertion; original SQL does not explicitly regex-validate UUID strings. |
+| Configuration | Original/reviewed SQL stores `model_config` and the monthly migration compares it for reuse/daily limiting, but neither explicitly rejects a string-valued config. The actual application already supplies an object. |
+| Snapshot hash | Original/reviewed SQL stores `source_snapshot_ids_hash`; it does not recompute it during claim validation. Actual application hash was verified against the array. |
+| Input hash | Original/reviewed SQL has no embedded `p_payload.input_fingerprint` requirement. It stores `p_fingerprint`; application identity hashes business, Cash basis, source window/IDs/content, model version and final configuration. Missing embedded hash was not a defect. |
+| Routine/manual | Routine is a typed separate boolean, not a payload status. Only `reason='daily'` sets true. Daily limiting occurs after validation; manual was false. There is no claim-time submitted monthly-row-count field. Completion requires exactly 12 rows through the existing finalizer. |
+
+### Captured safe request structure
+
+`docs/operating-forecast-claim-payload-structure.json` contains before/after structural
+captures from the actual evaluation service, with production-source reads and the
+RPC intercepted locally BEFORE sending it. It records key names/types, lengths,
+allowed dates, model version, configuration keys and match booleans only. No tokens,
+snapshot UUID values, financial amounts, account names or account IDs are included.
+This is a reconstruction, not a capture of the historical browser request; its
+optional `created_by` is null, while authenticated requests may supply a UUID.
+
+Observed: business UUID valid; routine false; model string length 29; four ISO date
+strings length 10; history 2025-11-01–2026-10-01; forecast 2026-11-01–2027-10-01;
+12 unique UUID snapshot IDs; source hash length 64 and matching; 12 matching source
+entries; each financial fingerprint length 93 and valid format; model_config is an
+object, including object-valued shaping config; recomputing the final-config input
+identity exactly matches the 64-character RPC fingerprint. The after-patch capture
+also verifies equal embedded/argument fingerprints, twelve monthly component dates,
+and twelve projection entries per account. Shaping changed no previously valid
+field type.
+
+### Reviewed forward repair
+
+`20261105100000_operating_forecast_claim_validation.sql` accepts structurally valid
+account-model identifiers matching `^operating_accounts_[a-z][a-z0-9_]{0,63}$` rather
+than enumerating historical versions. It updates the same model-family predicates
+in the existing completion/edit functions and two existing indexes, so future
+versions retain shared claims, version/config-aware reuse and override carry. It
+adds no tables or columns and changes no historical run data. Source locking,
+reconciliation, leases, atomic completion, grants and search_path remain intact.
+
+The claim validator retains all original requirements and adds named predicates
+for payload/config object types, fingerprint format/echo mismatch, non-null routine,
+optional creator UUID, array shapes/counts, UUID validity/uniqueness, exact snapshot
+hash, membership, date formats/values/coverage, source guards and source fingerprint
+formats. `model_config` must be a nonempty JSON object. Optional echoed input hash
+must equal the argument; absence remains accepted for the existing deployed v2 app.
+The application now includes that echo from the already computed canonical identity.
+The database does not independently recompute the entire application identity hash.
+
+Each structural RAISE retains message `invalid_forecast_claim` with DETAIL containing
+only `{"predicate":"known_name"}`. The service allowlists those names for internal
+logs and never echoes raw DETAIL. The public `forecast_claim_rejected` response
+remains unchanged. Old functions lacking DETAIL log `validation_predicate=unspecified`.
+
+This migration includes the compatibility work from `20261104130000`; it can be
+applied directly to the inspected production original-launch state. Clean and seeded
+local tests explicitly exercise that direct upgrade and reruns. Do not modify old
+migration files or run a blanket push against the incomplete production ledger.
+After explicit approval: apply the new migration transaction, verify function bodies,
+index predicates/ACLs, then deploy the small application patch. A normal migration
+pipeline may apply pending files chronologically; the new migration must be last.
+Production remains unrepaired until that approved database change occurs.
+
+
+Validation for this repair: 153 focused unit/component/service tests passed; both
+clean and populated local database integration cases passed, including direct
+original-launch upgrade, per-predicate rejection, pre-patch v2 compatibility, v2
+manual replacement with returned ID, future v3 completion/carry and migration reruns.
+Changed-file ESLint, whitespace checks and production build passed; existing bundle
+size warnings remain. No application deployment, production migration, claim cleanup
+or production forecast generation was performed.
