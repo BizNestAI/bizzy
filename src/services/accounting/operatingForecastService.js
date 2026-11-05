@@ -1,3 +1,5 @@
+import { parseOperatingClaim, malformedClaim } from './operatingForecastClaim.js';
+import { log } from '../../utils/reviews/logger.js';
 import fetch from 'node-fetch';
 import { fetchQboReport } from '../bookkeeping/qboMonthlyPnlIngestionService.js';
 import { SOURCE_REFRESH_POLICY, retryOperatingReport, waitForSource } from './operatingForecastRefresh.js';
@@ -195,7 +197,8 @@ export async function ensureForecastV1Run({
   createdBy = null,
   now = new Date(),
   reason = 'manual',
-  clock = () => new Date()
+  clock = () => new Date(),
+  logger = log
 } = {}) {
   if (!businessId) throw new ForecastV1Error('missing_business_id');
   const h = await loadOperatingHistory({
@@ -211,15 +214,16 @@ export async function ensureForecastV1Run({
     missing_months: h.missing_months
   });
   const fingerprint = identity(businessId, h);
-  if (matches(previous, fingerprint, businessId, h)) return serialize(db, previous, {
-    outcome: 'unchanged'
-  });
+  if (matches(previous, fingerprint, businessId, h)) {
+    logger.info('[Operating Forecast Claim]', { outcome: 'reused', status: 'completed', run_id: previous.id, model_version: previous.model_version, routine: reason === 'daily' });
+    return serialize(db, previous, { outcome: 'unchanged' });
+  }
   const {
     rows: monthly,
     metadata
   } = buildOperatingModel(h.months);
   // Claim RPC serializes different fingerprints and expires abandoned leases.
-  const claim = await query(db.rpc('claim_operating_forecast', {
+  const claimArgs = {
     p_business_id: businessId,
     p_fingerprint: fingerprint,
     p_payload: {
@@ -271,16 +275,37 @@ export async function ensureForecastV1Run({
       created_by: createdBy
     },
     p_routine: reason === 'daily'
-  }));
-  if (!claim?.id) return serialize(db, previous, {
-    data_status: previous ? 'available' : 'generation_in_progress',
-    freshness: 'stale',
-    outcome: 'stale_source',
-    refresh_required: true
+  };
+  const claimResponse = await db.rpc('claim_operating_forecast', claimArgs);
+  if (claimResponse?.error) {
+    const rejected = claimResponse.error.message === 'invalid_forecast_claim';
+    logger.warn('[Operating Forecast Claim]', { outcome: rejected ? 'rejected' : 'rpc_error', run_id: null, model_version: MODEL_VERSION, routine: claimArgs.p_routine, database_code: claimResponse.error.code || null });
+    if (rejected) throw new ForecastV1Error('forecast_claim_rejected', 503, { reason: 'database_claim_validation_failed', cause: 'invalid_forecast_claim', model_version: MODEL_VERSION });
+    await query(Promise.resolve(claimResponse));
+  }
+  let parsed;
+  try {
+    parsed = parseOperatingClaim(claimResponse?.data, { businessId, payload: claimArgs.p_payload, fingerprint, routine: claimArgs.p_routine, timezone: h.timezone, matches: run => matches(run, fingerprint, businessId, h), now: clock() });
+    if (parsed.outcome === 'verify_busy') {
+      const active = await query(db.from('forecast_runs').select('id,business_id,status,model_version,generation_started_at,generation_lease_expires_at').eq('business_id', businessId).eq('status', 'generating').in('model_version', [MODEL_VERSION, 'operating_accounts_launch_v1']));
+      const live = (active || []).find(r => r.id && r.business_id === businessId && Number.isFinite(Date.parse(r.generation_started_at)) && Date.parse(r.generation_lease_expires_at) > clock().getTime());
+      if (!live) throw malformedClaim('null_without_live_claim');
+      parsed = { outcome: 'busy', run: live };
+    }
+  } catch (error) {
+    logger.warn('[Operating Forecast Claim]', { outcome: 'malformed', run_id: null, model_version: MODEL_VERSION, routine: claimArgs.p_routine, reason: error.details?.reason || 'inspection_failed' });
+    throw error;
+  }
+  const claim = parsed.run;
+  logger.info('[Operating Forecast Claim]', { outcome: parsed.outcome, status: claim.status, run_id: claim.id, model_version: claim.model_version, routine: claimArgs.p_routine });
+  if (parsed.outcome === 'busy') return serialize(db, previous, {
+    data_status: 'generation_in_progress', freshness: 'stale', outcome: 'busy', claim_run_id: claim.id, refresh_required: true
   });
-  if (claim.status === 'completed') return serialize(db, claim, {
-    outcome: matches(claim, fingerprint, businessId, h) ? 'unchanged' : 'stale_source',
-    freshness: matches(claim, fingerprint, businessId, h) ? 'current' : 'stale'
+  if (parsed.outcome === 'expired') throw new ForecastV1Error('forecast_claim_expired', 409, { outcome: 'stale_source', run_id: claim.id });
+  if (parsed.outcome === 'reused' || parsed.outcome === 'routine_limited') return serialize(db, claim, {
+    outcome: parsed.outcome === 'reused' ? 'unchanged' : 'routine_limited',
+    freshness: parsed.outcome === 'reused' ? 'current' : 'stale',
+    refresh_required: parsed.outcome === 'routine_limited'
   });
   try {
     const recheck = await loadOperatingHistory({

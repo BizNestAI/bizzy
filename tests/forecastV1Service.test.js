@@ -574,7 +574,8 @@ test("Forecasts Live frontend and routes do not silently persist sample data", (
   assert.match(editor, /visible.map/);
   assert.doesNotMatch(editor, /alignForecastHorizon/);
   assert.match(editor, /\/api\/accounting\/forecast\/override\/reset/);
-  assert.match(route, /generation_in_progress/);
+  assert.match(route, /forecastGenerationHttpStatus\(forecast\)/);
+  assert.match(read("src/services/accounting/operatingForecastClaim.js"), /generation_in_progress/);
   assert.match(route, /router\.post\("\/override\/reset"/);
   assert.match(accuracyRoute, /run:forecast_runs!forecast_months_run_business_fkey/);
   assert.match(accuracyRoute, /no_completed_forecast_samples/);

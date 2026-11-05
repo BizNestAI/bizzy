@@ -123,6 +123,15 @@ for (const seeded of [false, true]) test(`${seeded ? 'existing V1' : 'clean'} lo
     };
     const claim = (fingerprint, routine = false) => `select claim_operating_forecast(${quote(BUSINESS)},${quote(fingerprint.repeat(64))},${quote(JSON.stringify(payload))}::jsonb,${routine});`;
     const finish = (id, rows = model.rows) => `select complete_operating_forecast(${quote(BUSINESS)},${quote(id)},${quote(JSON.stringify(rows))}::jsonb);`;
+    // Reproduce the production drift with the exact original claim body: v2 is
+    // rejected BEFORE insertion. The already-reviewed forward migration fixes it.
+    const originalClaim = migration.slice(migration.indexOf('create or replace function public.claim_operating_forecast'), migration.indexOf('create or replace function public.complete_operating_forecast'));
+    sql(originalClaim);
+    payload.model_version = MODEL_VERSION;
+    assert.throws(() => sql(claim('8')), /invalid_forecast_claim/);
+    assert.equal(sql("select count(*) from forecast_runs where status='generating';"), '0');
+    sql(shapingMigration);
+    payload.model_version = 'operating_accounts_launch_v1';
     const first = JSON.parse(sql(claim('a')));
     assert.equal(sql(claim('b')), '');
     const flatRevenue = model.metadata.accounts.filter(a => a.section === 'Income').reduce((n, a) => n + a.projected_cents, 0) / 100;

@@ -1,5 +1,6 @@
 // File: /src/api/accounting/forecast.js
 import express from "express";
+import { forecastGenerationHttpStatus } from "../../services/accounting/operatingForecastClaim.js";
 import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 import {
   ForecastV1Error,
@@ -76,13 +77,9 @@ router.post("/generate", async (req, res) => {
   }
 
   try {
-    const forecast = await ensureForecastV1Run({ businessId, createdBy: userId || null });
+    const forecast = await ensureForecastV1Run({ businessId, createdBy: userId || null, reason: "manual" });
     res.set("Cache-Control", "no-store");
-    const status = forecast.data_status === "available"
-      ? 201
-      : forecast.data_status === "generation_in_progress"
-        ? 202
-        : 409;
+    const status = forecastGenerationHttpStatus(forecast);
     return res.status(status).json(forecast);
   } catch (err) {
     console.error("[Forecast Generate Error]", err?.message || err);

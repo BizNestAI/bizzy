@@ -101,10 +101,10 @@ function fake() {
         name,
         args
       });
-      if (name === 'claim_operating_forecast') return {
-        data: null,
-        error: null
-      };
+      if (name === 'claim_operating_forecast') {
+        tables.forecast_runs.push({ id: 'other-active-claim', business_id: BUSINESS, status: 'generating', model_version: args.p_payload.model_version, generation_started_at: NOW.toISOString(), generation_lease_expires_at: '2030-01-01T00:00:00Z' });
+        return { data: null, error: null };
+      }
       if (name === 'edit_operating_forecast_overrides') return {
         data: tables.forecast_runs[0].id,
         error: null
@@ -312,6 +312,8 @@ test('generation rechecks sources and returns canonical completed operating cost
         id: 'new',
         business_id: BUSINESS,
         status: 'generating',
+        generation_started_at: NOW.toISOString(),
+        generation_lease_expires_at: '2030-01-01T00:00:00Z',
         input_fingerprint: args.p_fingerprint
       };
       db.tables.forecast_runs = [run];
@@ -353,7 +355,10 @@ test('source change between claim and completion fails the claim without publish
       ...args.p_payload,
       id: 'new',
       business_id: BUSINESS,
-      status: 'generating'
+      status: 'generating',
+      input_fingerprint: args.p_fingerprint,
+      generation_started_at: NOW.toISOString(),
+      generation_lease_expires_at: '2030-01-01T00:00:00Z'
     };
     db.tables.forecast_runs = [run];
     db.tables.monthly_review_qbo_pnl_snapshots[0].expenses += 1;
@@ -381,7 +386,7 @@ test('actual cron evaluation awaits source completion and never generates after 
 
 test('unchanged sources with a prior flat-model run request a new version and retain fallback visibility', async () => {
   const db = fake();
-  db.tables.forecast_runs = [{ ...oldRun, model_version: 'operating_accounts_launch_v1', input_fingerprint: 'prior-flat-fingerprint' }];
+  db.tables.forecast_runs = [{ ...oldRun, model_version: 'operating_accounts_launch_v1', generated_at: NOW.toISOString(), history_start: '2025-11-01', history_end: '2026-10-01', forecast_start: '2026-11-01', forecast_end: '2027-10-01', input_fingerprint: 'prior-flat-fingerprint' }];
   const saved = await getForecastV1Status({ db, businessId: BUSINESS, now: NOW });
   assert.equal(saved.run_id, oldRun.id);
   assert.equal(saved.freshness, 'stale');
@@ -389,4 +394,55 @@ test('unchanged sources with a prior flat-model run request a new version and re
   assert.equal(db.calls[0].name, 'claim_operating_forecast');
   assert.equal(db.calls[0].args.p_payload.model_version, 'operating_accounts_monthly_v2');
   assert.equal(db.calls[0].args.p_payload.model_config.shaping.historicalWeight, 30);
+  assert.equal(db.calls[0].args.p_routine, false);
+});
+
+test('null without a live database claim and malformed RPC outputs fail closed before completion', async () => {
+  for (const data of [null, undefined, {}, [], '', { id: 'bad', status: 'failed' }]) {
+    const db = fake();
+    db.rpc = async () => ({ data, error: null });
+    await assert.rejects(ensureForecastV1Run({ db, businessId: BUSINESS, now: NOW, clock: () => NOW }), e => e.error === 'forecast_claim_response_invalid');
+    assert.equal(db.tables.forecast_months.length, 0);
+  }
+});
+test('routine daily limit returns a recognized stale completed version; manual requests are explicitly non-routine', async () => {
+  for (const reason of ['daily', 'manual']) {
+    const db = fake();
+    let routine;
+    db.rpc = async (name, args) => {
+      assert.equal(name, 'claim_operating_forecast');
+      routine = args.p_routine;
+      return { data: { ...args.p_payload, id: 'limited', business_id: BUSINESS, status: 'completed', generated_at: NOW.toISOString(), input_fingerprint: 'b'.repeat(64), data_quality: { financial_input_hash: 'b'.repeat(64) } }, error: null };
+    };
+    if (reason === 'daily') {
+      const result = await ensureForecastV1Run({ db, businessId: BUSINESS, now: NOW, reason, clock: () => NOW });
+      assert.equal(result.outcome, 'routine_limited');
+      assert.equal(result.freshness, 'stale');
+    } else await assert.rejects(ensureForecastV1Run({ db, businessId: BUSINESS, now: NOW, reason, clock: () => NOW }), e => e.details.reason === 'unexpected_completed_input');
+    assert.equal(routine, reason === 'daily');
+  }
+});
+test('database validation rejection is diagnosed without financial payload or credential logging', async () => {
+  const db = fake(), logs = [];
+  db.rpc = async () => ({ data: null, error: { code: 'P0001', message: 'invalid_forecast_claim' } });
+  await assert.rejects(ensureForecastV1Run({ db, businessId: BUSINESS, now: NOW, logger: { warn: (...args) => logs.push(args) } }), e => e.error === 'forecast_claim_rejected' && e.details.cause === 'invalid_forecast_claim');
+  assert.equal(logs[0][1].outcome, 'rejected');
+  assert.equal(logs[0][1].routine, false);
+  assert.equal(logs[0][1].run_id, null);
+  assert.doesNotMatch(JSON.stringify(logs), /series_cents|financial_input_hash|total_amount|source_snapshot_ids|service_role|token/i);
+});
+
+test('live claim returns explicit busy with saved coverage; expired claim output cannot be finalized', async () => {
+  const db = fake();
+  db.tables.forecast_runs = [oldRun];
+  const busy = await ensureForecastV1Run({ db, businessId: BUSINESS, now: NOW, clock: () => NOW });
+  assert.equal(busy.outcome, 'busy');
+  assert.equal(busy.data_status, 'generation_in_progress');
+  assert.equal(busy.run_id, oldRun.id);
+  assert.equal(busy.claim_run_id, 'other-active-claim');
+  db.rpc = async (name, args) => {
+    assert.equal(name, 'claim_operating_forecast');
+    return { data: { ...args.p_payload, id: 'expired', business_id: BUSINESS, status: 'generating', input_fingerprint: args.p_fingerprint, generation_started_at: '2026-11-04T11:00:00Z', generation_lease_expires_at: '2026-11-04T11:10:00Z' }, error: null };
+  };
+  await assert.rejects(ensureForecastV1Run({ db, businessId: BUSINESS, now: NOW, clock: () => NOW }), e => e.error === 'forecast_claim_expired' && e.status === 409);
 });

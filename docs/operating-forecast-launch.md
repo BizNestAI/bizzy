@@ -404,3 +404,95 @@ Replay: `node scripts/manual/replayOperatingForecastShaping.js` emits the commit
 annual totals and rent/software/revenue/intermittent explanations. The source fixture
 is synthetic, shaped like the Nov 2025–Oct 2026 production window, and does not
 reproduce the live company's $2,794.88 / $4,980.38 averages. No live data is fetched.
+
+## Production `invalid_forecast_claim` incident
+
+Read-only production catalog and run inspection confirmed the database still has
+all three original launch RPC bodies, byte-for-byte equal to their bodies in
+`20261104120000_operating_forecast_launch.sql`. It does not have the bodies from
+`20261104130000_operating_forecast_monthly_shaping.sql`. No remotely applied changes
+or generation attempts were made during this investigation.
+
+The exact rejection is the claim function's FIRST validation block:
+`p_payload->>'model_version' is distinct from 'operating_accounts_launch_v1'`.
+The deployed month-aware application submits `operating_accounts_monthly_v2`.
+The PostgreSQL exception `invalid_forecast_claim` (default RAISE SQLSTATE P0001)
+is propagated as a Supabase RPC error, then was wrapped by `query()` as
+`forecast_storage_unavailable`/503 with that cause. It is NOT a malformed successful
+claim response. The other `invalid_forecast_claim` RAISE is the second validation
+block (source array/guard shapes and contiguous history/forecast dates). The
+separate authoritative snapshot-count failure is `invalid_forecast_claim_sources`.
+No application parser originally raised this exact message. This original-body/v2-payload mismatch is reproduced in the local
+DB integration tests before applying the pending migration.
+
+The exception happens before source-count checking, lease recovery, routine-limit
+checking and insertion. Production has no generating run or active/expired claim.
+There are three failed legacy `forecast_v1` runs from September 2 with null leases
+(`forecast_finalization_failed` / `forecast_expected_months_invalid`), unrelated to
+this failure. The latest completed run is `9c7823a4-6f21-4cce-ae45-eaa2178f896d`,
+flat model v1, generated November 4 at 22:25:12.318584 UTC, history November
+2025–October 2026, coverage November 2026–October 2027. Its predecessor is
+`fda6a5bf-10cc-477b-9543-b7f3a11fd6f1`. Its input fingerprint is
+`2acc153eb8aa1a640ce562d5ab99b9db6f5566492b5c729fce1d579556adebbd`.
+There is no v2 run from the failed refresh. The inspected flat config is the
+original metadataVersion 1, 50/30/20 weights, 12-month history/horizon, recurring
+minimum 5 and tolerance 10%, variable minimum 3, without shaping configuration.
+
+Verified production contract:
+
+- Claim signature: `(p_business_id uuid, p_fingerprint text, p_payload jsonb,
+  p_routine boolean DEFAULT false) RETURNS jsonb`.
+- Results are a complete `forecast_runs` JSON record with status `generating`
+  (new lease), or `completed` (identical-input reuse or routine daily limit).
+  SQL null means another live claim. There are no status-envelope objects.
+- All three RPCs are SECURITY DEFINER, `search_path=pg_catalog, public`.
+  Execute ACL is postgres and service_role only; no public/anon/authenticated grant.
+- `pg_get_functiondef` MD5: claim `3b3e7e32baccc43fc12ab35d1635c7a4`,
+  complete `6705200758787d6ac3951b0623cf4ecc`,
+  edit `2eebfd3d9d80ce47eafd0e4f8e8f6f7a`.
+- Neither `20261104120000` nor `20261104130000` is recorded in the inspected
+  production migration ledger. Installed bodies, not ledger presence, establish
+  which logic is active; the original bodies exist despite the missing ledger entry.
+- Reviewed forward migration SHA-256:
+  `cbf546584603eff8798eae4815957f181eba422898b296c956e211ff6dc9e278`.
+  Original launch file SHA-256:
+  `557e7ca111f80c10a6fbfb857b19b4e177c95e5cb519c5a4df80037818a2691c`.
+
+Manual request trace: authenticated tenant route → `ensureForecastV1Run` with
+`reason='manual'` → validated source history → model/config fingerprints → shaped
+rows → claim RPC with `p_routine=false`. Only `reason='daily'` sends true. The
+manual flag was already correct; it is now explicit in the route. Thus the earlier
+same-day flat run did NOT trigger this error through routine limiting. Successful
+claims still undergo a fresh source read and the existing atomic completion RPC;
+that RPC rechecks sources and carries matching-month sparse overrides under lock.
+
+Application hardening validates successful claim tenant, model/config, window,
+fingerprint, status and lease fields before completion. Null is verified against
+a live database claim before returning busy; unproven null/empty/malformed responses
+fail closed. Recognized outcomes are logged with run ID/status/model/routine flag,
+without account details or financial payloads. Database validation rejection has
+internal code `forecast_claim_rejected` and reason `database_claim_validation_failed`.
+Expired lease output gets `forecast_claim_expired`/409; the next request uses the
+existing SQL recovery path. Generated responses are 201; identical reuse and routine
+limit are 200; busy is 202 even when previous saved coverage is displayed. Routine
+limits retain stale freshness rather than implying new data was generated.
+
+Safe repair order: obtain explicit approval, apply ONLY the reviewed monthly-shaping
+migration in its transaction, verify installed function bodies/index predicates/ACLs,
+then deploy the application hardening. Do not run a blanket migration push against
+an incomplete ledger. Do not clear runs or leases. Then perform one authenticated
+manual Refresh: expect a shaped v2 replacement (201), preserved user overrides and
+retained flat predecessor. A repeated identical Refresh should return reuse (200);
+a concurrent writer should return busy (202). The database repair is still pending;
+application diagnostics alone do not make production accept v2.
+
+
+Incident validation: 152 focused Node tests passed, including every documented
+claim return form, invalid output, manual/daily flags, same-day model replacement,
+HTTP status selection and safe rejection logging. Both clean and legacy-seeded
+local PostgreSQL integration cases passed, including original-body rejection before
+claim insertion, forward-migration reruns, active/expired leases, configuration
+replacement, concurrency, source rechecks and override preservation. Changed-file
+ESLint, `git diff --check` and the production Vite build passed (existing bundle-size
+warnings remain). No production generation was replayed; the reported production
+exception was traced through installed code and reproduced locally.
