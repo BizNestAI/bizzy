@@ -634,50 +634,56 @@ const DashboardContent = ({ children }) => {
               )
             }
 
-            <aside
-              ref={rightAsideRef}
-              className="hidden lg:flex"
-              aria-hidden={!railOpen}
-              style={{
-                position: "fixed",
-                top: 0,
-                right: 0,
-                height: "100vh",
-                width: `${RIGHT_RAIL_W}px`,
-                overscrollBehavior: "contain",
-                "--chat-clearance": `${chatClearance}px`,
-                zIndex: LAYERS.INSIGHTS_RAIL,
-                background: "transparent",
-                overflow: "visible",
-                opacity: railOpen ? 1 : 0,
-                transition: "transform 260ms cubic-bezier(0.2,0.85,0.25,1), opacity 180ms ease",
-                transform: railOpen ? "translateX(0)" : "translateX(calc(100% + 10px))",
-                pointerEvents: railOpen ? "auto" : "none",
-                willChange: "transform, opacity",
-              }}
-            >
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-0 z-0 bizzy-bg-textured"
-                style={{ backgroundColor: "var(--bg)" }}
-              />
-
-              <div
-                className="h-full w-full"
+            {/* Keep viewport-fixed chrome outside clipped or transformed route shells. */}
+            {createPortal(
+              <aside
+                ref={rightAsideRef}
+                className="bizzy-app-shell hidden lg:flex min-w-0 font-sans"
+                aria-label="Insights rail"
+                aria-hidden={!railOpen}
                 style={{
-                  paddingRight: 0,
+                  position: "fixed",
+                  top: 0,
+                  right: 0,
+                  height: "100vh",
+                  width: `${RIGHT_RAIL_W}px`,
+                  maxWidth: "100vw",
+                  overscrollBehavior: "contain",
+                  "--chat-clearance": `${chatClearance}px`,
+                  zIndex: LAYERS.INSIGHTS_RAIL,
+                  background: "transparent",
+                  overflow: "visible",
+                  opacity: railOpen ? 1 : 0,
+                  transition: "transform 260ms cubic-bezier(0.2,0.85,0.25,1), opacity 180ms ease",
+                  transform: railOpen ? "translateX(0)" : "translateX(calc(100% + 10px))",
                   pointerEvents: railOpen ? "auto" : "none",
-                  height: "100%",
-                  position: "relative",
+                  willChange: "transform, opacity",
                 }}
               >
-                <InsightsRail
-                  userId={userId}
-                  businessId={businessId}
-                  isOpen={railOpen}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 z-0 bizzy-bg-textured"
+                  style={{ backgroundColor: "var(--bg)" }}
                 />
-              </div>
-            </aside>
+
+                <div
+                  className="h-full w-full min-w-0"
+                  style={{
+                    paddingRight: 0,
+                    pointerEvents: railOpen ? "auto" : "none",
+                    height: "100%",
+                    position: "relative",
+                  }}
+                >
+                  <InsightsRail
+                    userId={userId}
+                    businessId={businessId}
+                    isOpen={railOpen}
+                  />
+                </div>
+              </aside>,
+              document.body
+            )}
           </>
         )}
       </div>
@@ -688,8 +694,10 @@ const DashboardContent = ({ children }) => {
     chatBounds.width > 0 &&
         createPortal(
           (() => {
+            // Navigation stays visible on Docs/Settings even when Insights is disabled.
+            // Keep the composer curtain out of the sidebar on every desktop route.
             const navWidthPx =
-              showRail && typeof window !== "undefined"
+              typeof window !== "undefined"
                 ? Number.parseFloat(
                     window
                       .getComputedStyle(document.documentElement)

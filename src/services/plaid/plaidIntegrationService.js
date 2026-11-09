@@ -1,3 +1,5 @@
+import { getPlaidAccountRecoveryStatus, recoveryWorkerEligibility } from "./plaidAccountRecoveryStatus.js";
+import { businessHasPaidEntitlement } from "../billing/entitledBusinesses.js";
 /* global process */
 import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
@@ -381,6 +383,9 @@ export async function exchangePublicToken({ businessId, userId, publicToken, met
 }
 
 export async function getPlaidStatus({ businessId }) {
+  const accountRecovery = await getPlaidAccountRecoveryStatus({ db: supabase, businessId, plaidEnv: plaidEnvName,
+    eligibility: recoveryWorkerEligibility(await businessHasPaidEntitlement(businessId, { db: supabase })) });
+  const recoveryAccountById = new Map(accountRecovery.accounts.map(a => [a.id, a]));
   const [itemResult, disconnectedResult, accountResult, successfulRunResult, mappingResult, businessResult] = await Promise.all([
     supabase.from("plaid_items")
       .select("plaid_item_id,institution_name,institution_id,status,last_sync_at,last_success_at,error_code,updated_at,is_active,disconnected_at,sync_in_progress,replacement_recovery_status")
@@ -400,8 +405,8 @@ export async function getPlaidStatus({ businessId }) {
   if (itemErr) throw itemErr;
   const { count: disconnectedCount, error: disconnectedErr } = disconnectedResult;
   if (disconnectedErr) throw disconnectedErr;
-  const { data: accounts, error: acctErr } = accountResult;
-  if (acctErr) throw acctErr;
+  if (accountResult.error) throw accountResult.error;
+  const accounts = accountRecovery.accounts.map(a => ({ ...a, plaid_account_id: a.id }));
   const { data: successfulRuns, error: successfulRunsErr } = successfulRunResult;
   if (successfulRunsErr) throw successfulRunsErr;
   const lastSuccessfulByItem = new Map();
@@ -460,32 +465,49 @@ export async function getPlaidStatus({ businessId }) {
     const acctList = (accounts || []).filter((a) => a.plaid_item_id === it.plaid_item_id);
     const projectedAccounts = acctList.map((a) => ({
       ...a,
-      connection_state: projectPlaidAccountConnectionState({ account: a, item: it }),
-      mapped_to_qbo: mappedSet.has(a.plaid_account_id),
+      connection_state: a.connection_state === "closed_historical" ? "closed_historical"
+        : recoveryAccountById.get(a.plaid_account_id)?.recovery_status.bank_connection.state === "institution_unavailable" ? "connected"
+          : recoveryAccountById.get(a.plaid_account_id)?.recovery_status.bank_connection.state || projectPlaidAccountConnectionState({ account: a, item: it }),
+      mapped_to_qbo: recoveryAccountById.get(a.plaid_account_id)?.mapped_to_qbo ?? mappedSet.has(a.plaid_account_id),
     }));
     const institutionConnection = summarizePlaidInstitutionConnection(projectedAccounts);
     const status = institutionConnection.state;
     const recovery = recoveryByItem.get(it.plaid_item_id) || null;
-    const syncHealth = recovery?.sync_health || deriveRecoverySyncHealth({
+    const historicalSyncHealth = recovery?.sync_health || deriveRecoverySyncHealth({
       item: it,
       latestRun: latestRunByItem.get(it.plaid_item_id) || null,
       latestSuccessfulRun: lastSuccessfulByItem.has(it.plaid_item_id)
         ? { finished_at: lastSuccessfulByItem.get(it.plaid_item_id) }
         : null,
     });
+    const statuses = projectedAccounts.map(a => recoveryAccountById.get(a.plaid_account_id)?.recovery_status).filter(Boolean);
+    const currentImport = statuses[0]?.transaction_import;
+    const syncHealth = currentImport ? {
+      ...historicalSyncHealth,
+      status: currentImport.reason_code === "internal_transaction_persistence_failure" ? "internal_failure"
+        : statuses[0].bank_connection.reason_code === "plaid_reauthentication_required" ? "reauthentication_required"
+          : currentImport.state === "current" ? "active" : currentImport.state,
+      reason: currentImport.customer_copy,
+      automatic_retry_scheduled: false,
+      last_successful_sync_at: currentImport.last_completed_checkpoint_at,
+      transactions_imported_through: statuses.map(s => s.transaction_import.latest_active_transaction_date).filter(Boolean).sort().at(-1) || null,
+    } : historicalSyncHealth;
     return {
       plaid_item_id: it.plaid_item_id,
       institution_name: it.institution_name,
       institution_id: it.institution_id,
       status,
       connection_summary: institutionConnection,
+      accounts_count: projectedAccounts.length,
+      syncing_accounts_count: institutionConnection.syncing,
       disconnected_at: it.disconnected_at || null,
-      last_sync_at: lastSuccessfulByItem.get(it.plaid_item_id) || it.last_sync_at || null,
-      recovery,
+      last_sync_at: currentImport?.item_last_completed_checkpoint_at || lastSuccessfulByItem.get(it.plaid_item_id) || it.last_sync_at || null,
+      recovery: recovery ? { ...recovery, sync_health: syncHealth } : null,
       sync_health: syncHealth,
       accounts: projectedAccounts.map((a) => ({
         ...a,
-        sync_health: syncHealth,
+        recovery_status: recoveryAccountById.get(a.plaid_account_id)?.recovery_status || null,
+        sync_health: { ...syncHealth, transactions_imported_through: recoveryAccountById.get(a.plaid_account_id)?.recovery_status.transaction_import.latest_active_transaction_date || null },
       })),
     };
   });
@@ -498,11 +520,14 @@ export async function getPlaidStatus({ businessId }) {
       plaid_item_id: "unknown",
       institution_name: "Unknown institution",
       institution_id: null,
-      status: "connected",
+      status: "attention_required",
+      accounts_count: orphanAccounts.length,
+      syncing_accounts_count: 0,
       last_sync_at: null,
       accounts: orphanAccounts.map((a) => ({
         ...a,
-        mapped_to_qbo: mappedSet.has(a.plaid_account_id),
+        mapped_to_qbo: recoveryAccountById.get(a.plaid_account_id)?.mapped_to_qbo ?? mappedSet.has(a.plaid_account_id),
+        recovery_status: recoveryAccountById.get(a.plaid_account_id)?.recovery_status || null,
       })),
     });
   }
@@ -512,13 +537,14 @@ export async function getPlaidStatus({ businessId }) {
     count + (institution.accounts || []).filter((account) => account.connection_state === "connected").length, 0);
   const institutions_count = institutions?.length || 0;
   const has_disconnected = (disconnectedCount || 0) > 0;
-  devLog("status_built", { businessId, institutions_count, accounts_count });
+  devLog("status_built", { businessId, institutions_count, accounts_count, syncing_accounts_count });
 
   return {
     ok: true,
-    institutions_count,
-    accounts_count,
-    syncing_accounts_count,
+    institutions_count: accountRecovery.institutions_count,
+    accounts_count: accountRecovery.accounts_count,
+    syncing_accounts_count: accountRecovery.syncing_accounts_count,
+    account_recovery: accountRecovery,
     institutions,
     has_disconnected,
     disconnected_items_count: disconnectedCount || 0,

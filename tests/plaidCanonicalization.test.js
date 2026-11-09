@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -23,7 +24,7 @@ test("same transaction replay and cursor replay remain DB-upsert protected by Pl
   const migration = read("supabase/migrations/20260825_plaid_canonical_identity_phase1.sql");
   const schema = read("supabase/live_schema_snapshot.sql");
 
-  assert.match(sync, /upsertRowsInChunks\("bank_transactions", rowsForPlaidUpsert, "business_id,plaid_transaction_id"\)/);
+  assert.match(sync, /upsertRowsInChunks\(supabase, "bank_transactions", rowsForPlaidUpsert, "business_id,plaid_transaction_id"\)/);
   assert.match(schema, /bank_transactions_business_plaid_txn_uq/);
   assert.match(schema, /\("business_id", "plaid_transaction_id"\)/);
   assert.match(migration, /bank_txn_business_canonical_deterministic_uq/);
@@ -245,7 +246,7 @@ test("modified unposted transactions still update by canonical row id", () => {
 
   assert.match(sync, /rowsForIdUpsert/);
   assert.match(sync, /safeRowsForIdUpsert/);
-  assert.match(sync, /upsertRowsInChunks\("bank_transactions", safeRowsForIdUpsert, "id"\)/);
+  assert.match(sync, /updatePlaidBankRows\(\{ db: supabase, businessId, rows: safeRowsForIdUpsert/);
 });
 
 test("modified posted transactions are flagged for accounting review instead of silently changing accounting truth", () => {

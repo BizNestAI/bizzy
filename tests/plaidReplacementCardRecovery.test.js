@@ -384,9 +384,10 @@ test("automatic sync accepts connected and active items, persists cursor evidenc
   const sync = read("src/services/plaid/plaidSyncService.js");
   const cron = read("src/cron/plaidSync.cron.js");
   assert.match(sync, /const originalCursor = item\.cursor \|\| null/);
-  assert.match(sync, /cursor_input_sha256: cursorDigest\(originalCursor\)/);
-  assert.match(sync, /next_cursor_sha256: cursorDigest\(cursor\)/);
-  assert.match(sync, /last_success_at: now/);
+  const admission = read("supabase/migrations/20261109173000_plaid_durable_sync_admission.sql");
+  assert.match(admission, /cursor_input_sha256/);
+  assert.match(admission, /next_cursor_sha256/);
+  assert.match(admission, /last_success_at = p_completed_at/);
   assert.match(cron, /\.in\("status", \["connected", "active"\]\)/);
   assert.doesNotMatch(sync, /posting_hold/);
 });

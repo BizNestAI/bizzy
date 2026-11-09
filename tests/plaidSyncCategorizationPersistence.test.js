@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import dotenv from "dotenv";
+import { safePlaidPersistenceDiagnostic } from "../src/services/plaid/plaidSyncPersistence.js";
 
 import {
   isPlaidReauthenticationRequired,
@@ -37,7 +38,7 @@ test("new and previously persisted transactions use the idempotent categorizatio
   }]);
 });
 
-test("categorization failure is stage-specific and prevents cursor commit", async () => {
+test("categorization errors are classified and sync uses atomic durable admission", async () => {
   const { classifyPlaidSyncFailure, ensurePlaidTransactionCategorizations } = await syncService();
   const db = { rpc: async () => ({ data: null, error: { code: "23514", message: "sensitive detail" } }) };
   await assert.rejects(
@@ -46,8 +47,9 @@ test("categorization failure is stage-specific and prevents cursor commit", asyn
   );
   assert.equal(classifyPlaidSyncFailure({ supabase: { code: "23514" } }), "database_persistence_failure");
   const source = read("src/services/plaid/plaidSyncService.js");
-  assert.ok(source.indexOf("failureStage = \"categorization_persistence\"") < source.indexOf("failureStage = \"cursor_commit\""));
-  assert.ok(source.indexOf("await ensurePlaidTransactionCategorizations") < source.indexOf(".update({\n        cursor,"));
+  assert.match(source, /failureStage = "downstream_admission"/);
+  assert.match(source, /await completePlaidSyncAdmission/);
+  assert.doesNotMatch(source, /enqueueBookkeepingProcessingForTransactions|triggerBookkeepingProcessingWake/);
   assert.match(source, /source_error_code: safeDiagnosticCode\(error\)/);
   const failureMeta = source.slice(
     source.indexOf("meta: {", source.indexOf("catch (error)")),
@@ -93,4 +95,23 @@ test("customer surfaces reserve reconnect actions for actual reauthentication", 
   assert.match(books, /sync_availability === "temporarily_unavailable"/);
   assert.match(books, /Reconnect in Settings/);
   assert.doesNotMatch(books, /Repair in Settings/);
+});
+
+test("persistence diagnostics retain identifier slots and discard raw rows, descriptions, secrets and cursors", () => {
+  const safe = safePlaidPersistenceDiagnostic({
+    operation: "posted_review_update",
+    supabase: { code: "23502", message: 'null value in column "business_id" of relation "bank_transactions" violates not-null constraint',
+      details: 'Failing row contains (RAW_CURSOR, SECRET_TOKEN, SENSITIVE_DESCRIPTION)' },
+  });
+  assert.equal(safe.table, "bank_transactions");
+  assert.equal(safe.column, "business_id");
+  assert.equal(safe.predicate, "business_id_and_id");
+  assert.doesNotMatch(JSON.stringify(safe), /RAW_CURSOR|SECRET_TOKEN|SENSITIVE_DESCRIPTION/);
+  const rpc = safePlaidPersistenceDiagnostic({ operation: "durable_admission", supabase: {
+    details: JSON.stringify({ table: "bookkeeping_processing_requests", constraint: "safe_constraint",
+      column: "unsafe description with spaces", stage: "processing_admission", cursor: "RAW_CURSOR" }),
+  } });
+  assert.equal(rpc.constraint, "safe_constraint"); assert.equal(rpc.column, null);
+  assert.equal(rpc.database_stage, "processing_admission");
+  assert.doesNotMatch(JSON.stringify(rpc), /RAW_CURSOR|unsafe description/);
 });

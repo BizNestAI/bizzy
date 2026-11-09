@@ -209,11 +209,11 @@ export default function InsightsRail({
       data-open={isOpen ? 'true' : 'false'}
       className={[
         'insights-rail',
-        'absolute inset-0 isolate flex flex-col overflow-hidden',
+        'absolute inset-0 isolate flex min-w-0 max-w-full flex-col overflow-hidden',
         'transition-opacity duration-150 ease-out',
         isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
       ].join(' ')}
-      style={{ marginTop: 0, paddingTop: 0, width: '100%' }}
+      style={{ position: 'absolute', inset: 0, marginTop: 0, paddingTop: 0, width: '100%', minWidth: 0, maxWidth: '100%' }}
     >
       {/* ===== GLASS: single continuous surface under content ===== */}
       <div
@@ -246,10 +246,10 @@ export default function InsightsRail({
       />
 
       {/* ===== CONTENT: transparent scroll host ===== */}
-      <div className="relative w-full flex-1 min-h-0 pb-3 z-10 flex flex-col">
+      <div className="relative w-full min-w-0 flex-1 min-h-0 pb-3 z-10 flex flex-col">
         <div
           ref={listRef}
-          className="rail-content flex-1 min-h-0 px-2 pt-12 pb-10 space-y-6 overflow-y-auto touch-scroll no-scrollbar"
+          className="rail-content w-full min-w-0 max-w-full flex-1 min-h-0 px-2 pt-12 pb-10 space-y-6 overflow-y-auto touch-scroll no-scrollbar"
           style={{
             background: 'transparent',
             scrollbarWidth: 'none',
@@ -288,7 +288,7 @@ export default function InsightsRail({
 
           {/* Insight cards */}
           {displayItems.length === 0 ? (
-            <div className="ml-2 text-sm leading-5 text-secondary">
+            <div className="ml-2 min-w-0 break-words text-sm leading-5 text-secondary">
               No insights yet. I’ll surface things here while you work.
             </div>
           ) : (

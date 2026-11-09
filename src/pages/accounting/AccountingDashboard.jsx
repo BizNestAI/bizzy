@@ -477,7 +477,13 @@ function AccountingDashboard() {
       const refreshedAt = response?.snapshot?.last_successful_refresh_at || response?.last_refreshed_at || null;
       const parsed = refreshedAt ? Date.parse(refreshedAt) : NaN;
       if (Number.isFinite(parsed)) setLastRefreshed(parsed);
-      setRefreshNotice("QuickBooks data refreshed.");
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "success",
+          title: "QuickBooks data refreshed.",
+          timeout: 4000,
+        },
+      }));
       setFinancialRefreshVersion((version) => version + 1);
     } catch (e) {
       if (import.meta.env.MODE !== "production") {

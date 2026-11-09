@@ -1,0 +1,1089 @@
+{
+  "read_at": "2026-11-09T17:04:53.525Z",
+  "connections": [],
+  "batches": [
+    {
+      "id": "b551bd2e-8921-4440-a151-cc70721beb31",
+      "status": "abandoned",
+      "posting_hold": true,
+      "created_at": "2026-10-06T23:52:33.803718+00:00",
+      "updated_at": "2026-10-08T02:51:52.201358+00:00",
+      "released_at": null,
+      "summary": {
+        "pages": 6,
+        "ambiguous": 0,
+        "represented": 0,
+        "total_added": 453,
+        "genuinely_new": 113,
+        "total_removed": 0,
+        "exact_existing": 336,
+        "total_modified": 0,
+        "new_after_cutoff": 113,
+        "mutation_restarts": 0,
+        "probable_duplicates": 0,
+        "unknown_account_ids": [],
+        "pending_replacements": 4,
+        "historical_discrepancies": 0
+      }
+    },
+    {
+      "id": "3ec55b60-7ddc-49e3-b7b6-f962d0c54fb6",
+      "status": "failed",
+      "posting_hold": true,
+      "created_at": "2026-10-08T02:51:52.201358+00:00",
+      "updated_at": "2026-10-08T02:51:57.201+00:00",
+      "released_at": null,
+      "summary": {
+        "rebuild_previous_expected_count": 113
+      }
+    },
+    {
+      "id": "fe1aa1c7-8c9b-40d2-94fa-cbb0ce98f54f",
+      "status": "failed",
+      "posting_hold": true,
+      "created_at": "2026-10-08T02:54:58.81172+00:00",
+      "updated_at": "2026-10-08T02:55:03.616+00:00",
+      "released_at": null,
+      "summary": {
+        "rebuild_previous_expected_count": 113
+      }
+    },
+    {
+      "id": "23892cf6-799a-4061-877b-1bdfc6d758ed",
+      "status": "released",
+      "posting_hold": false,
+      "created_at": "2026-10-08T03:06:26.517167+00:00",
+      "updated_at": "2026-10-09T18:19:21.557+00:00",
+      "released_at": "2026-10-09T18:19:21.557+00:00",
+      "summary": {
+        "pages": 6,
+        "admitted": 114,
+        "selected": 114,
+        "ambiguous": 0,
+        "admitted_at": "2026-10-08T17:08:06.308867+00:00",
+        "quarantined": 0,
+        "represented": 0,
+        "total_added": 454,
+        "genuinely_new": 114,
+        "total_removed": 0,
+        "exact_existing": 336,
+        "total_modified": 0,
+        "new_after_cutoff": 114,
+        "mutation_restarts": 0,
+        "probable_duplicates": 0,
+        "pending_replacements": 4,
+        "historical_discrepancies": 0,
+        "rebuild_previous_expected_count": 113
+      }
+    }
+  ],
+  "accounts": [
+    {
+      "mask": "1008",
+      "item": "…eaD0MX",
+      "account": "…q5YJ1V",
+      "total": 211,
+      "active": 211,
+      "max_date": "2026-11-08",
+      "latest_insert": "2026-11-09T05:04:35.720792+00:00",
+      "latest_seen": "2026-11-09T05:49:34.336+00:00",
+      "cats": {
+        "excluded": 18,
+        "posted": 139,
+        "needs_review": 1,
+        "handled": 4,
+        "auto_approved": 1
+      },
+      "cat_count": 163,
+      "jobs": {
+        "skipped": 130,
+        "completed": 14
+      },
+      "job_count": 144,
+      "job_errors": {
+        "already_handled_or_posted": 130,
+        "null": 14
+      },
+      "blocked": {
+        "null": 138,
+        "review_or_suspense_account": 3,
+        "pending_transaction_not_postable": 1,
+        "safe_pair_created": 1,
+        "personal_or_owner_review": 1
+      },
+      "last_processed": "2026-10-16T05:15:11.565+00:00",
+      "post_attempts": {
+        "attempted": 142,
+        "posted": 139,
+        "skipped": 152,
+        "failed": 5
+      },
+      "last_attempt": "2026-10-17T17:18:22.216+00:00",
+      "last_posted": "2026-10-17T17:18:22.216+00:00",
+      "posted": {
+        "posted": 139
+      },
+      "holds": 0,
+      "scheduled": 0,
+      "missing_cat": 48,
+      "nojob_count": 67,
+      "first_nojob": {
+        "id": "f5f03d89-c0f5-4719-ad3d-dfa0508d4e44",
+        "date": "2026-08-16",
+        "created_at": "2026-08-17T05:13:47.40313+00:00"
+      },
+      "runs": {
+        "failed|supabase_update_failed||": {
+          "count": 32,
+          "first": "2026-10-07T05:03:05.252+00:00",
+          "last": "2026-10-08T05:49:17.6+00:00"
+        },
+        "completed|||": {
+          "count": 30,
+          "first": "2026-10-09T05:12:07.983+00:00",
+          "last": "2026-10-15T05:05:45.203+00:00"
+        },
+        "failed|transaction_sync_failed|incremental_sync|": {
+          "count": 7,
+          "first": "2026-10-16T05:10:23.787+00:00",
+          "last": "2026-10-16T05:55:11.802+00:00"
+        },
+        "failed|database_persistence_failure|transaction_persistence|23502": {
+          "count": 91,
+          "first": "2026-10-17T05:13:24.484+00:00",
+          "last": "2026-11-09T05:49:33.202+00:00"
+        }
+      },
+      "cursor_hashes": [
+        "f48433965aafae96d9bd60bf08581206f5c56b625b63e0b20bba602bb64756cb",
+        "bec537315a25fadc6bb962dfcec2a680f5750b33f89d5c56e02074bfd8457829",
+        "a46d654eec30334f96950c20d3a50ad528cdbbc7f22cc21df2cbf32e65ac8514",
+        "4525c222c36295ccbfef27b10c9abe8eb14ed60831a49bd1b1e46476c0d6fd9e",
+        "8d6d49660308db7df86242dd2496ce42bc3ab435b6fb33a3c1aa2b2daa49e83d",
+        "58d657e139f0317ee3b1031d3738afeb2aefbdda01e4b9cc7e85aebf09ec1c00",
+        "1de43226c4dd57816e2237adabe50e169f5de86593f17ba06fa6ed262423994a",
+        "8a5b757fc8acdfe5cc878eb6d0fe7689416e2c0560e0ea50572f77a6e6421609"
+      ],
+      "latest_run": {
+        "started_at": "2026-11-09T05:49:33.202+00:00",
+        "finished_at": "2026-11-09T05:49:35.566+00:00",
+        "status": "failed",
+        "added_count": 0,
+        "modified_count": 0,
+        "removed_count": 0,
+        "failure_code": "database_persistence_failure",
+        "meta": {
+          "failure_stage": "transaction_persistence",
+          "source_error_code": "23502",
+          "cursor_input_sha256": "8a5b757fc8acdfe5cc878eb6d0fe7689416e2c0560e0ea50572f77a6e6421609",
+          "cursor_input_present": true,
+          "automatic_retry_scheduled": true
+        }
+      },
+      "daily": {
+        "2026-11-06": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-27": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-11": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-13": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 3,
+          "job_rows": 3,
+          "posted": 3
+        },
+        "2026-10-12": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-29": {
+          "persisted": 6,
+          "normalized": 6,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-23": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-26": {
+          "persisted": 5,
+          "normalized": 5,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-14": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 0
+        },
+        "2026-11-05": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-20": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-25": {
+          "persisted": 2,
+          "normalized": 2,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-21": {
+          "persisted": 5,
+          "normalized": 5,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-16": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 0,
+          "posted": 1
+        },
+        "2026-11-09": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-17": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-07": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 3,
+          "job_rows": 2,
+          "posted": 2
+        },
+        "2026-10-02": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 3,
+          "job_rows": 2,
+          "posted": 2
+        },
+        "2026-10-04": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-09": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-11-02": {
+          "persisted": 2,
+          "normalized": 2,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-03": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-07": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-01": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-30": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-08": {
+          "persisted": 2,
+          "normalized": 2,
+          "categorization_rows": 2,
+          "job_rows": 2,
+          "posted": 1
+        },
+        "2026-10-31": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-08": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        }
+      }
+    },
+    {
+      "mask": "9734",
+      "item": "…Zer6pL",
+      "account": "…X593nN",
+      "total": 49,
+      "active": 49,
+      "max_date": "2026-10-12",
+      "latest_insert": "2026-10-16T05:10:12.813788+00:00",
+      "latest_seen": "2026-10-16T05:10:12.112+00:00",
+      "cats": {
+        "posted": 45,
+        "matched": 2,
+        "handled": 2
+      },
+      "cat_count": 49,
+      "jobs": {
+        "skipped": 36,
+        "completed": 12,
+        "dead_letter": 1
+      },
+      "job_count": 49,
+      "job_errors": {
+        "23514": 1,
+        "already_handled_or_posted": 36,
+        "null": 12
+      },
+      "blocked": {
+        "null": 48,
+        "statement_credit_rewards_income": 1
+      },
+      "last_processed": "2026-10-16T05:10:14.434+00:00",
+      "post_attempts": {
+        "attempted": 45,
+        "posted": 44,
+        "skipped": 11,
+        "failed": 3
+      },
+      "last_attempt": "2026-10-17T05:18:21.719+00:00",
+      "last_posted": "2026-10-17T05:18:21.719+00:00",
+      "posted": {
+        "posted": 45
+      },
+      "holds": 0,
+      "scheduled": 0,
+      "missing_cat": 0,
+      "nojob_count": 0,
+      "first_nojob": null,
+      "runs": {
+        "failed|supabase_update_failed||": {
+          "count": 32,
+          "first": "2026-10-07T05:03:09.498+00:00",
+          "last": "2026-10-08T05:49:15.375+00:00"
+        },
+        "completed|||": {
+          "count": 36,
+          "first": "2026-10-09T05:12:04.506+00:00",
+          "last": "2026-10-18T05:07:50.633+00:00"
+        },
+        "failed|provider_reauthentication_required|provider_fetch|ITEM_LOGIN_REQUIRED": {
+          "count": 83,
+          "first": "2026-10-20T05:07:08.213+00:00",
+          "last": "2026-11-09T05:49:41.69+00:00"
+        }
+      },
+      "cursor_hashes": [
+        "aecf0ca169072d0a834192e5506d4e78030dd19a0aafe8cb937209bab2ba1459",
+        "03683d2e8e7d23b109aff050a67314fb5d453c489cb5f5e700f26d2af4300ddb",
+        "c8dfe24acb10824649609f07128e5dbff9c6f33c982253a3e7cc62364421d0a5",
+        "7763a329febee0d4001fa0805894e3655b896c2b35a7157597158928219a25ec",
+        "ac1d759a3acb4a1b989cfcb6ce5a8688660afbc2c4356ef5ea53a55a808c450d"
+      ],
+      "latest_run": {
+        "started_at": "2026-11-09T05:49:41.69+00:00",
+        "finished_at": "2026-11-09T05:49:42.091+00:00",
+        "status": "failed",
+        "added_count": 0,
+        "modified_count": 0,
+        "removed_count": 0,
+        "failure_code": "provider_reauthentication_required",
+        "meta": {
+          "failure_stage": "provider_fetch",
+          "source_error_code": "ITEM_LOGIN_REQUIRED",
+          "cursor_input_sha256": "ac1d759a3acb4a1b989cfcb6ce5a8688660afbc2c4356ef5ea53a55a808c450d",
+          "cursor_input_present": true,
+          "automatic_retry_scheduled": true
+        }
+      },
+      "daily": {
+        "2026-10-02": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-10": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-13": {
+          "persisted": 2,
+          "normalized": 2,
+          "categorization_rows": 2,
+          "job_rows": 2,
+          "posted": 2
+        },
+        "2026-10-14": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-16": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-03": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-07": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-08": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        }
+      }
+    },
+    {
+      "mask": "6735",
+      "item": "…AEwrXe",
+      "account": "…wwZyoZ",
+      "total": 547,
+      "active": 547,
+      "max_date": "2026-11-08",
+      "latest_insert": "2026-11-09T05:04:42.561639+00:00",
+      "latest_seen": "2026-11-09T05:49:37.355+00:00",
+      "cats": {
+        "posted": 476,
+        "handled": 3,
+        "needs_review": 2,
+        "matched": 2
+      },
+      "cat_count": 483,
+      "jobs": {
+        "completed": 233,
+        "dead_letter": 127,
+        "skipped": 7,
+        "processing": 1
+      },
+      "job_count": 368,
+      "job_errors": {
+        "23502": 4,
+        "23514": 123,
+        "null": 234,
+        "already_handled_or_posted": 6,
+        "operator_response_awaiting_accountant_review": 1
+      },
+      "blocked": {
+        "business_personal_ambiguity": 9,
+        "possible_qbo_duplicate": 2,
+        "null": 281,
+        "routine_expense_fully_resolved": 20,
+        "review_or_suspense_account": 40,
+        "personal_or_owner_review": 3,
+        "vendor_rule_learned": 2,
+        "pending_transaction_not_postable": 2,
+        "no_safe_pair": 2,
+        "plaid_accounting_review_required": 4,
+        "business_merchant_rule": 3
+      },
+      "last_processed": "2026-10-20T05:12:05.491+00:00",
+      "post_attempts": {
+        "attempted": 478,
+        "posted": 476,
+        "skipped": 373,
+        "failed": 7
+      },
+      "last_attempt": "2026-10-21T05:12:45.065+00:00",
+      "last_posted": "2026-10-21T05:12:45.065+00:00",
+      "posted": {
+        "posted": 476
+      },
+      "holds": 0,
+      "scheduled": 0,
+      "missing_cat": 64,
+      "nojob_count": 179,
+      "first_nojob": {
+        "id": "845715c0-364b-45bc-a489-ed1df0dbe7b1",
+        "date": "2026-05-22",
+        "created_at": "2026-08-14T17:22:56.34851+00:00"
+      },
+      "runs": {
+        "failed|TypeError: fetch failed||": {
+          "count": 32,
+          "first": "2026-10-07T05:02:57.56+00:00",
+          "last": "2026-10-08T05:49:11.015+00:00"
+        },
+        "completed|||": {
+          "count": 36,
+          "first": "2026-10-09T05:11:59.743+00:00",
+          "last": "2026-10-18T05:07:54.295+00:00"
+        },
+        "failed|database_persistence_failure|transaction_persistence|23502": {
+          "count": 83,
+          "first": "2026-10-20T05:07:10.915+00:00",
+          "last": "2026-11-09T05:49:36.277+00:00"
+        }
+      },
+      "cursor_hashes": [
+        "a3a6f022bbb77791e7157ffbc30405df73fc4942908c723dd2ee8cecec3b5314",
+        "b45ff86c2c5cdad39eead481f493b1e01f1220d3ce7ff9671fcebde801fcf876",
+        "ac8b19318fdac98f02f6d22fb50f7afa901114300a209e96a02107a3424352ba",
+        "a75c4c949dee31c2e0989ab2f119569891d9991c40659395ee156d1cab157626",
+        "10e488f84fcf6528335b7c6da03fdb350c78aea9e3b07bfb08cb43306ecded2a",
+        "cfb1926895431604b706f635b530798ede1da648e4e03647274ca6e7c9a749c5",
+        "ce4fe1d93a6ca5f6f70102a6e1fa043e4f80540f97b384186d08eed64faea260",
+        "d604a906fe4003cad5af631463453f8028a5587e8886ef3b12c68d4d7285a920",
+        "8d4b8b61aff0d932d279efeac5b9e80f173c30aa0feddbbeea02aaac3f01fb83",
+        "1aa69c19a68fad615647ced9ed521fb5116539e13c3a25c2b31ded1aec2759f6",
+        "9739316d6d98790aa817ebe7ad407820fca2d19ae8af1b2ec256a0ddc2efb6de"
+      ],
+      "latest_run": {
+        "started_at": "2026-11-09T05:49:36.277+00:00",
+        "finished_at": "2026-11-09T05:49:39.027+00:00",
+        "status": "failed",
+        "added_count": 0,
+        "modified_count": 0,
+        "removed_count": 0,
+        "failure_code": "database_persistence_failure",
+        "meta": {
+          "failure_stage": "transaction_persistence",
+          "source_error_code": "23502",
+          "cursor_input_sha256": "9739316d6d98790aa817ebe7ad407820fca2d19ae8af1b2ec256a0ddc2efb6de",
+          "cursor_input_present": true,
+          "automatic_retry_scheduled": true
+        }
+      },
+      "daily": {
+        "2026-10-10": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 3,
+          "job_rows": 3,
+          "posted": 3
+        },
+        "2026-10-24": {
+          "persisted": 2,
+          "normalized": 2,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-08": {
+          "persisted": 114,
+          "normalized": 114,
+          "categorization_rows": 114,
+          "job_rows": 114,
+          "posted": 113
+        },
+        "2026-10-11": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 3,
+          "job_rows": 3,
+          "posted": 3
+        },
+        "2026-10-12": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-13": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 3,
+          "job_rows": 3,
+          "posted": 3
+        },
+        "2026-10-20": {
+          "persisted": 6,
+          "normalized": 6,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-14": {
+          "persisted": 2,
+          "normalized": 2,
+          "categorization_rows": 2,
+          "job_rows": 2,
+          "posted": 2
+        },
+        "2026-10-15": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-16": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 4,
+          "job_rows": 4,
+          "posted": 3
+        },
+        "2026-11-01": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-30": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-05": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-07": {
+          "persisted": 5,
+          "normalized": 5,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-17": {
+          "persisted": 6,
+          "normalized": 6,
+          "categorization_rows": 6,
+          "job_rows": 6,
+          "posted": 5
+        },
+        "2026-10-21": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-09": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 3,
+          "job_rows": 3,
+          "posted": 3
+        },
+        "2026-10-18": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 3,
+          "job_rows": 3,
+          "posted": 3
+        },
+        "2026-10-23": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-29": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-26": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-28": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-25": {
+          "persisted": 2,
+          "normalized": 2,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-04": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-22": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-02": {
+          "persisted": 5,
+          "normalized": 5,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-27": {
+          "persisted": 5,
+          "normalized": 5,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-08": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-09": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-06": {
+          "persisted": 3,
+          "normalized": 3,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        }
+      }
+    },
+    {
+      "mask": "8626",
+      "item": "…9KJAYb",
+      "account": "…LLR3xr",
+      "total": 109,
+      "active": 109,
+      "max_date": "2026-11-05",
+      "latest_insert": "2026-11-07T05:04:42.059331+00:00",
+      "latest_seen": "2026-11-09T05:49:40.322+00:00",
+      "cats": {
+        "matched_existing_qbo": 20,
+        "needs_review": 12,
+        "handled": 9,
+        "posted": 56,
+        "matched": 4,
+        "auto_approved": 1
+      },
+      "cat_count": 102,
+      "jobs": {
+        "skipped": 51,
+        "completed": 51
+      },
+      "job_count": 102,
+      "job_errors": {
+        "already_handled_or_posted": 51,
+        "null": 51
+      },
+      "blocked": {
+        "null": 83,
+        "no_safe_pair": 5,
+        "review_or_suspense_account": 5,
+        "quickbooks_payments_match_required": 4,
+        "cc_payment_source_environment_unknown": 2,
+        "not_normal_outflow": 1,
+        "pending_transaction_not_postable": 1,
+        "existing_pair": 1
+      },
+      "last_processed": "2026-11-09T16:20:10.087+00:00",
+      "post_attempts": {
+        "posted": 56,
+        "attempted": 63,
+        "failed": 8,
+        "skipped": 23
+      },
+      "last_attempt": "2026-11-05T05:20:34.487+00:00",
+      "last_posted": "2026-11-05T05:20:34.487+00:00",
+      "posted": {
+        "unknown": 1,
+        "posted": 56,
+        "pending": 7
+      },
+      "holds": 0,
+      "scheduled": 0,
+      "missing_cat": 7,
+      "nojob_count": 7,
+      "first_nojob": {
+        "id": "3c5876f9-c9f5-4d34-b408-7625396515d6",
+        "date": "2026-11-04",
+        "created_at": "2026-11-05T05:00:37.215755+00:00"
+      },
+      "runs": {
+        "failed|supabase_update_failed||": {
+          "count": 32,
+          "first": "2026-10-07T05:03:02.508+00:00",
+          "last": "2026-10-08T05:49:21.368+00:00"
+        },
+        "completed|||": {
+          "count": 52,
+          "first": "2026-10-09T05:12:13.414+00:00",
+          "last": "2026-11-04T05:19:17.869+00:00"
+        },
+        "failed|database_persistence_failure|transaction_persistence|23502": {
+          "count": 20,
+          "first": "2026-11-05T05:00:36.035+00:00",
+          "last": "2026-11-09T05:49:39.639+00:00"
+        }
+      },
+      "cursor_hashes": [
+        "c9adcbfaa5b8666b4fc247f5c895e2fa434ac08084042301208ebc8ca8d8ab75",
+        "35e15e5d7df34ea2c11f4ad82a44fde224a6d238141c3c36bbf8f570b1dc77c1",
+        "889f9512d284eb28672c22eb6267df518e9dbd396dd0cf665e75d0d5de1b4912",
+        "3147e40dbc4d18106a938636a38a4efcfa4e0b4a49cd1e59c7b762eb5b8c830c",
+        "8d651bf9420f752fa6c4ecbfe7bdd3d41ee630b203cdb3adf5fe95998aa10bd4",
+        "68544ebc1b790ad4e65046837d9c50fe8377ef484bfa5c5283e6c581a18a0eab",
+        "0d74c1d0d283c61db0c2476cb0d27100557d5721fb7ea393dd2772cec0e968ee",
+        "6e4785c4b8ea32c910d61aca74fabc84bed02484008bfbe6fdfdc19842e64588",
+        "38359396c079493aefc3e88748a5759aa1f8121e9b9f8df62529c5e3c479d3f6",
+        "2ec9a4c413e5055ea515ac887afdf0c304f2492ff8a7e6f002fc01df9b48c395",
+        "986ce9b22f3b4ae65fa07439525bc9186e16ca45c90b4430d99def8bd3f0eb01",
+        "ec8c5cf4253eca0d2f3a6a520f0e7d84ce62304fdc1cddb6fe0f734044133ccd",
+        "c01148d439d0d918d8bcbf743828dde0b86b79ea17128b5d8e5ecdf590558beb"
+      ],
+      "latest_run": {
+        "started_at": "2026-11-09T05:49:39.639+00:00",
+        "finished_at": "2026-11-09T05:49:41.134+00:00",
+        "status": "failed",
+        "added_count": 0,
+        "modified_count": 0,
+        "removed_count": 0,
+        "failure_code": "database_persistence_failure",
+        "meta": {
+          "failure_stage": "transaction_persistence",
+          "source_error_code": "23502",
+          "cursor_input_sha256": "c01148d439d0d918d8bcbf743828dde0b86b79ea17128b5d8e5ecdf590558beb",
+          "cursor_input_present": true,
+          "automatic_retry_scheduled": true
+        }
+      },
+      "daily": {
+        "2026-10-25": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-11": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-04": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-28": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 0
+        },
+        "2026-11-05": {
+          "persisted": 5,
+          "normalized": 5,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-10-16": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 0
+        },
+        "2026-10-29": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 0
+        },
+        "2026-10-23": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 0
+        },
+        "2026-10-09": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 0
+        },
+        "2026-10-03": {
+          "persisted": 2,
+          "normalized": 2,
+          "categorization_rows": 2,
+          "job_rows": 2,
+          "posted": 2
+        },
+        "2026-10-01": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-10-08": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-11-03": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 4,
+          "job_rows": 4,
+          "posted": 1
+        },
+        "2026-11-04": {
+          "persisted": 4,
+          "normalized": 4,
+          "categorization_rows": 4,
+          "job_rows": 4,
+          "posted": 0
+        },
+        "2026-10-24": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 0
+        },
+        "2026-10-31": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 1,
+          "job_rows": 1,
+          "posted": 1
+        },
+        "2026-11-07": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        },
+        "2026-11-06": {
+          "persisted": 1,
+          "normalized": 1,
+          "categorization_rows": 0,
+          "job_rows": 0,
+          "posted": 0
+        }
+      }
+    }
+  ]
+}

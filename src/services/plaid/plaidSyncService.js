@@ -1,11 +1,8 @@
 /* global process */
-import { supabase } from "../supabaseAdmin.js";
+import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 import { triggerContractorCfoInsightsBestEffort } from "../insights/contractorCfoTriggerService.js";
-import {
-  enqueueBookkeepingProcessingForTransactions,
-  processPendingBookkeepingRequestsUntilIdle,
-} from "../bookkeeping/backgroundBookkeepingProcessingService.js";
+import { updatePlaidBankRows, completePlaidSyncAdmission, safePlaidPersistenceDiagnostic } from "./plaidSyncPersistence.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../bookkeeping/operatorRequestSummaryService.js";
 import { resolveStoredPlaidAccessToken } from "./plaidTokenCrypto.js";
 import {
@@ -22,6 +19,8 @@ import {
 } from "../bookkeeping/accountingDatePolicy.js";
 import crypto from "crypto";
 import { filterPlaidSyncEventsForEligibleAccounts } from "./plaidAccountConnectionState.js";
+
+const supabase = defaultSupabase;
 
 function normalizeDate(d) {
   return normalizePlaidPostedDate(d);
@@ -138,28 +137,12 @@ function isoDateAddDays(isoDate, deltaDays) {
   return d.toISOString().slice(0, 10);
 }
 
-function triggerBookkeepingProcessingWake({ businessId }) {
-  const batchSize = Math.max(1, Math.min(Number(process.env.BOOKKEEPING_PROCESSING_PLAID_WAKE_BATCH_SIZE || 10), 50));
-  const maxBatches = Math.max(1, Math.min(Number(process.env.BOOKKEEPING_PROCESSING_PLAID_WAKE_MAX_BATCHES || 1), 4));
-  processPendingBookkeepingRequestsUntilIdle({
-    businessId,
-    batchSize,
-    maxBatches,
-    workerId: `bookkeeping-plaid-wake:${process.env.HOSTNAME || "local"}:${process.pid}`,
-  }).catch((err) => {
-    console.warn("[plaid][sync] immediate bookkeeping processing failed", {
-      business_id: businessId,
-      error: err?.message || String(err),
-    });
-  });
-}
-
-async function upsertRowsInChunks(table, rows, onConflict, chunkSize = 200) {
+async function upsertRowsInChunks(db, table, rows, onConflict, chunkSize = 200) {
   if (!rows.length) return;
   for (let i = 0; i < rows.length; i += chunkSize) {
     const slice = rows.slice(i, i + chunkSize);
-    const { error } = await supabase.from(table).upsert(slice, { onConflict });
-    if (error) throw error;
+    const { error } = await db.from(table).upsert(slice, { onConflict });
+    if (error) throw Object.assign(new Error("plaid_new_transaction_upsert_failed"), { supabase: error, operation: "new_transaction_upsert" });
   }
 }
 
@@ -227,14 +210,15 @@ export async function recoverExpiredPlaidSyncLease({ businessId, plaidItemId, ac
   return { plaid_item_id: plaidItemId, outcome: "expired_lease_recovered", released, provider_called: false };
 }
 
-async function runSyncForItem(plaid, businessId, item, options = {}) {
-  void options;
+export async function runSyncForItem(plaid, businessId, item, options = {}) {
+  const supabase = options.db || defaultSupabase;
+  const resolveToken = options.resolveToken || resolveStoredPlaidAccessToken;
   const itemLockKey = `${businessId}:${item.plaid_item_id}`;
   if (memoryLocks.has(itemLockKey)) {
     return { skipped: true, reason: "memory_lock" };
   }
   const workerId = `plaid-sync:${process.env.HOSTNAME || "local"}:${process.pid}:${crypto.randomUUID()}`;
-  const gotDbLock = await acquireDbLock(item.id, businessId, workerId);
+  const gotDbLock = await acquireDbLock(item.id, businessId, workerId, supabase);
   if (!gotDbLock) return { skipped: true, reason: "db_lock" };
   memoryLocks.add(itemLockKey);
   const runId = crypto.randomUUID();
@@ -250,7 +234,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
   });
   if (runStartError) {
     memoryLocks.delete(itemLockKey);
-    await releaseDbLock(item.id, businessId, workerId);
+    await releaseDbLock(item.id, businessId, workerId, supabase);
     throw runStartError;
   }
 
@@ -262,7 +246,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
     const added = [];
     const modified = [];
     const removed = [];
-    const accessToken = await resolveStoredPlaidAccessToken({
+    const accessToken = await resolveToken({
       storedToken: item.plaid_access_token,
       persistEncrypted: async (encrypted) => {
         await supabase
@@ -383,7 +367,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       .filter((tx) => {
         const hasId = !!tx.transaction_id;
         if (!hasId && process.env.NODE_ENV !== "production") {
-          console.warn("[plaid][sync] skipping txn without plaid_transaction_id", { name: tx.name, date: tx.date });
+          console.warn("[plaid][sync] skipping txn without plaid_transaction_id", { reason: "missing_provider_transaction_identity" });
         }
         return hasId;
       })
@@ -449,17 +433,6 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         };
       });
 
-    if (process.env.NODE_ENV !== "production" && rows.length) {
-      const sample = rows[0];
-      console.info("[plaid][sync] sample txn", {
-        plaid_amount_raw: sample.plaid_amount_raw,
-        amount: sample.amount,
-        direction: sample.direction,
-        name: sample.name,
-        merchant_name: sample.merchant_name,
-      });
-    }
-
     let resolvedTxnIds = [];
 
     failureStage = "transaction_persistence";
@@ -490,24 +463,25 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       );
 
       const fetchedRows = [];
-      if (exactPlaidIds.length) {
+      for (let offset = 0; offset < exactPlaidIds.length; offset += 200) {
+        const identityChunk = exactPlaidIds.slice(offset, offset + 200);
         const { data: byTxnId, error: byTxnIdErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state,pending_source_transaction_id"
           )
           .eq("business_id", businessId)
-          .in("plaid_transaction_id", exactPlaidIds);
+          .in("plaid_transaction_id", identityChunk);
         if (byTxnIdErr) throw byTxnIdErr;
         fetchedRows.push(...(byTxnId || []));
 
         const { data: byPendingId, error: byPendingIdErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state,pending_source_transaction_id"
           )
           .eq("business_id", businessId)
-          .in("pending_transaction_id", exactPlaidIds);
+          .in("pending_transaction_id", identityChunk);
         if (byPendingIdErr) throw byPendingIdErr;
         fetchedRows.push(...(byPendingId || []));
       }
@@ -518,7 +492,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const { data: candidateRows, error: candidateErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state,pending_source_transaction_id"
           )
           .eq("business_id", businessId)
           .eq("is_archived", false)
@@ -535,7 +509,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const { data: physicalRows, error: physicalErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state,pending_source_transaction_id"
           )
           .eq("business_id", businessId)
           .eq("is_archived", false)
@@ -550,7 +524,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         const { data: byCanonical, error: byCanonicalErr } = await supabase
           .from("bank_transactions")
           .select(
-            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state"
+            "id,physical_account_id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,signed_amount,is_archived,duplicate_fingerprint,canonical_fingerprint,canonical_fingerprint_confidence,pending_resolution_state,pending_source_transaction_id"
           )
           .eq("business_id", businessId)
           .eq("is_archived", false)
@@ -619,7 +593,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
             pending: existing.pending_resolution_state === "promoted_to_settled" && row.pending === true ? false : row.pending,
             pending_resolution_state: existing.pending_resolution_state || null,
             id: existing.id,
-            pending_source_transaction_id: existing.pending && !row.pending ? existing.id : null,
+            pending_source_transaction_id: existing.pending && !row.pending ? existing.id : existing.pending_source_transaction_id || null,
             canonical_match_reason: existing.pending && !row.pending ? "pending_lifecycle_merge" : row.canonical_match_reason,
           });
           continue;
@@ -656,12 +630,12 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
 
       const matchedIds = rowsForIdUpsert.map((r) => r.id).filter(Boolean);
       const catByTxnId = new Map();
-      if (matchedIds.length) {
+      for (let offset = 0; offset < matchedIds.length; offset += 200) {
         const { data: catRows, error: catFetchErr } = await supabase
           .from("transaction_categorizations")
           .select("transaction_id,status,qbo_txn_id,posted_at,reconciled_at,excluded_at,meta")
           .eq("business_id", businessId)
-          .in("transaction_id", matchedIds);
+          .in("transaction_id", matchedIds.slice(offset, offset + 200));
         if (catFetchErr) throw catFetchErr;
         for (const cat of catRows || []) catByTxnId.set(cat.transaction_id, cat);
       }
@@ -710,9 +684,9 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       }
 
       try {
-        await upsertRowsInChunks("bank_transactions", safeRowsForIdUpsert, "id");
-        await upsertRowsInChunks("bank_transactions", rowsForPlaidUpsert, "business_id,plaid_transaction_id");
-        await upsertRowsInChunks("bank_transactions", postedReviewUpdates, "id");
+        await updatePlaidBankRows({ db: supabase, businessId, rows: safeRowsForIdUpsert, operation: "existing_transaction_update" });
+        await upsertRowsInChunks(supabase, "bank_transactions", rowsForPlaidUpsert, "business_id,plaid_transaction_id");
+        await updatePlaidBankRows({ db: supabase, businessId, rows: postedReviewUpdates, operation: "posted_review_update" });
         for (const reopened of excludedFinalizedReopens) {
           const { data: currentCat, error: currentCatErr } = await supabase
             .from("transaction_categorizations")
@@ -774,7 +748,8 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         }
       } catch (txnErr) {
         const e = new Error("supabase_upsert_failed");
-        e.supabase = txnErr;
+        e.supabase = txnErr.supabase || txnErr;
+        e.operation = txnErr.operation;
         throw e;
       }
 
@@ -833,13 +808,14 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
             excludedBank?.plaid_transaction_id && String(row.pending_transaction_id || "") === String(excludedBank.plaid_transaction_id)
           );
           if (!replacement) continue;
-          const { data: excludedCat } = await supabase
+          const { data: excludedCat, error: excludedFetchError } = await supabase
             .from("transaction_categorizations")
             .select("meta")
             .eq("business_id", businessId)
             .eq("transaction_id", excludedId)
             .maybeSingle();
-          await supabase.from("transaction_categorizations").update({
+          if (excludedFetchError) throw excludedFetchError;
+          const { error: excludedUpdateError } = await supabase.from("transaction_categorizations").update({
             meta: {
               ...(excludedCat?.meta || {}),
               pending_authorization_replaced: true,
@@ -849,7 +825,8 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
             },
             updated_at: now,
           }).eq("business_id", businessId).eq("transaction_id", excludedId);
-          await supabase.from("bookkeeping_exclusion_events").insert({
+          if (excludedUpdateError) throw excludedUpdateError;
+          const { error: exclusionEventError } = await supabase.from("bookkeeping_exclusion_events").insert({
             business_id: businessId,
             transaction_id: excludedId,
             connected_account_id: excludedBank?.plaid_account_id || null,
@@ -860,6 +837,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
             reason: "finalized_transaction_imported_independently",
             details: { replacement_transaction_id: replacement.id || null, replacement_plaid_transaction_id: replacement.plaid_transaction_id || null },
           });
+          if (exclusionEventError) throw exclusionEventError;
         }
 
         const archivePayload = unpostedArchiveTxnIds.map((id) => ({
@@ -869,7 +847,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
           archived_reason: "plaid_removed",
           updated_at: now,
         }));
-        await upsertRowsInChunks("bank_transactions", archivePayload, "id");
+        await updatePlaidBankRows({ db: supabase, businessId, rows: archivePayload, operation: "removed_archive_update" });
         if (unpostedArchiveTxnIds.length) {
           const { error: catArchiveErr } = await supabase
             .from("transaction_categorizations")
@@ -879,17 +857,16 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
           if (catArchiveErr) throw catArchiveErr;
         }
         if (postedRemovedTxnIds.length) {
-          await upsertRowsInChunks(
-            "bank_transactions",
-            postedRemovedTxnIds.map((id) => ({
+          resolvedTxnIds.push(...postedRemovedTxnIds);
+          await updatePlaidBankRows({ db: supabase, businessId, operation: "posted_removed_review_update",
+            rows: postedRemovedTxnIds.map((id) => ({
               id,
               accounting_review_required: true,
               accounting_review_reason: "plaid_removed_after_qbo_post",
               accounting_review_payload: { removed_at: now, source: "plaid_removed" },
               updated_at: now,
             })),
-            "id"
-          );
+          });
           const { error: removedReviewErr } = await supabase
             .from("transaction_categorizations")
             .update({
@@ -905,151 +882,34 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       }
 
       // Resolve ids after upsert to avoid duplicate categs
-      const plaidIds = rowsForPlaidUpsert.map((r) => r.plaid_transaction_id).filter(Boolean);
-      resolvedTxnIds = safeRowsForIdUpsert.map((r) => r.id).filter(Boolean);
-      if (plaidIds.length) {
+      const plaidIds = [...new Set(rowsForPlaidUpsert.map((r) => r.plaid_transaction_id).filter(Boolean))];
+      resolvedTxnIds.push(...[...safeRowsForIdUpsert, ...postedReviewUpdates].map((r) => r.id).filter(Boolean));
+      for (let offset = 0; offset < plaidIds.length; offset += 200) {
+        const identityChunk = plaidIds.slice(offset, offset + 200);
         const { data: bankResolved, error: bankResolveErr } = await supabase
           .from("bank_transactions")
           .select("id,plaid_transaction_id")
           .eq("business_id", businessId)
-          .in("plaid_transaction_id", plaidIds);
+          .in("plaid_transaction_id", identityChunk);
         if (bankResolveErr) throw bankResolveErr;
+        if (bankResolved?.length !== identityChunk.length) throw new Error("plaid_persisted_identity_resolution_incomplete");
         resolvedTxnIds.push(...(bankResolved || []).map((r) => r.id).filter(Boolean));
       }
 
       resolvedTxnIds = Array.from(new Set(resolvedTxnIds));
     }
 
-    failureStage = "categorization_persistence";
-    await ensurePlaidTransactionCategorizations({ db: supabase, businessId, transactionIds: resolvedTxnIds });
-
-    failureStage = "cursor_commit";
-    let lastSyncAt = now;
-    const { error: updateErr } = await supabase
-      .from("plaid_items")
-      .update({
-        cursor,
-        last_sync_at: now,
-        last_success_at: now,
-        status: "connected",
-        error_code: null,
-        error_message: null,
-        is_active: true,
-        disconnected_at: null,
-        updated_at: now,
-      })
-      .eq("business_id", businessId)
-      .eq("plaid_item_id", item.plaid_item_id);
-    if (updateErr) {
-      const e = new Error("supabase_update_failed");
-      e.supabase = updateErr;
-      throw e;
-    }
-    const syncedAccountIds = Array.from(new Set([...added, ...modified].map((tx) => tx?.account_id).filter(Boolean)));
-    if (syncedAccountIds.length) {
-      const { error: accountSyncErr } = await supabase.from("plaid_accounts").update({ last_sync_at: now, updated_at: now })
-        .eq("business_id", businessId).in("plaid_account_id", syncedAccountIds);
-      if (accountSyncErr) throw accountSyncErr;
-    }
-
-    const addedCount = Number.isFinite(added.length) ? added.length : 0;
-    const modifiedCount = Number.isFinite(modified.length) ? modified.length : 0;
-    const removedCount = Number.isFinite(removed.length) ? removed.length : 0;
-
-    const { error: syncLogErr } = await supabase.from("bank_sync_runs").update({
-      added_count: addedCount,
-      modified_count: modifiedCount,
-      removed_count: removedCount,
-      finished_at: now,
-      status: "completed",
-      failure_code: null,
-      error_message: null,
-      meta: {
-        cursor_input_present: Boolean(originalCursor),
-        cursor_input_sha256: cursorDigest(originalCursor),
-        next_cursor_present: Boolean(cursor),
-        next_cursor_sha256: cursorDigest(cursor),
-        mutation_restarts: mutationRestarts,
-      },
-    }).eq("id", runId).eq("worker_id", workerId);
-    if (syncLogErr) {
-      const e = new Error("supabase_sync_log_failed");
-      e.supabase = syncLogErr;
-      throw e;
-    }
-
-    // Backfill legacy rows to canonical amount/direction
-    try {
-      const { data: missingRows, error: missingErr } = await supabase
-        .from("bank_transactions")
-        .select("id,amount,plaid_amount_raw,direction,signed_amount")
-        .eq("business_id", businessId)
-        .or("plaid_amount_raw.is.null,direction.is.null,amount.is.null,signed_amount.is.null")
-        .limit(5000);
-      if (missingErr) throw missingErr;
-      if (missingRows && missingRows.length) {
-        const updates = missingRows.map((row) => {
-          let raw = row.plaid_amount_raw;
-          let amount = row.amount;
-          let direction = row.direction;
-          let signed_amount = row.signed_amount;
-
-          if (raw == null && amount != null) {
-            raw = Number(amount);
-            amount = raw * -1;
-            direction = raw > 0 ? "OUTFLOW" : raw < 0 ? "INFLOW" : "UNKNOWN";
-            signed_amount = amount;
-          } else if (raw != null) {
-            raw = Number(raw);
-            if (!direction) direction = raw > 0 ? "OUTFLOW" : raw < 0 ? "INFLOW" : "UNKNOWN";
-            if (amount == null) amount = raw * -1;
-            if (signed_amount == null) signed_amount = amount;
-          }
-
-          return {
-            id: row.id,
-            plaid_amount_raw: raw,
-            amount,
-            direction,
-            signed_amount,
-          };
-        });
-        const cleaned = updates.filter((u) => u.id);
-        const chunkSize = 200;
-        for (let i = 0; i < cleaned.length; i += chunkSize) {
-          const slice = cleaned.slice(i, i + chunkSize);
-          const { error: updErr } = await supabase
-            .from("bank_transactions")
-            .upsert(slice, { onConflict: "id" });
-          if (updErr) throw updErr;
-        }
-      }
-    } catch (backfillErr) {
-      console.warn("[plaid][sync] amount/direction backfill failed", backfillErr?.message || backfillErr);
-    }
-
-    let bookkeepingEnqueued = 0;
-    if (resolvedTxnIds.length) {
-      try {
-        const queued = await enqueueBookkeepingProcessingForTransactions({
-          businessId,
-          transactionIds: resolvedTxnIds,
-          source: "plaid_sync",
-          priority: 10,
-          supabase,
-        });
-        bookkeepingEnqueued = Number(queued?.enqueued || 0);
-        if (bookkeepingEnqueued > 0) {
-          triggerBookkeepingProcessingWake({ businessId });
-        }
-      } catch (bookkeepingErr) {
-        console.warn("[plaid][sync] bookkeeping enqueue failed", {
-          business_id: businessId,
-          count: resolvedTxnIds.length,
-          error: bookkeepingErr?.message || String(bookkeepingErr),
-        });
-      }
-    }
+    // Admission and checkpoint are one database transaction. No inline QBO or
+    // bookkeeping worker is invoked; the ordinary worker consumes durable work.
+    failureStage = "downstream_admission";
+    const admitted = await completePlaidSyncAdmission({
+      db: supabase, businessId, item, runId, workerId,
+      transactionIds: resolvedTxnIds, cursor, now,
+      addedCount: added.length, modifiedCount: modified.length, removedCount: removed.length,
+      mutationRestarts,
+    });
+    const bookkeepingEnqueued = admitted.admitted_count;
+    const lastSyncAt = now;
 
     return {
       ok: true,
@@ -1061,8 +921,9 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
     };
   } catch (error) {
     const failureCode = classifyPlaidSyncFailure(error);
+    console.warn("[plaid][sync] failed", { failure_stage: failureStage, source_error_code: safeDiagnosticCode(error), ...safePlaidPersistenceDiagnostic(error) });
     try {
-      await supabase.from("bank_sync_runs").update({
+      const { error: diagnosticRunError } = await supabase.from("bank_sync_runs").update({
         status: "failed",
         finished_at: nowIso(),
         failure_code: failureCode,
@@ -1070,24 +931,28 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         meta: {
           failure_stage: failureStage,
           source_error_code: safeDiagnosticCode(error),
+          ...safePlaidPersistenceDiagnostic(error),
           automatic_retry_scheduled: true,
           cursor_input_present: Boolean(item.cursor),
           cursor_input_sha256: cursorDigest(item.cursor),
         },
       }).eq("id", runId).eq("worker_id", workerId);
-      await supabase.from("plaid_items").update({
+      if (diagnosticRunError) throw diagnosticRunError;
+      const { error: diagnosticItemError } = await supabase.from("plaid_items").update({
         error_code: failureCode,
         error_message: "Transaction synchronization did not complete. Automatic retry remains enabled.",
         updated_at: nowIso(),
-      }).eq("business_id", businessId).eq("plaid_item_id", item.plaid_item_id);
-    } catch {
-      // Preserve the original sync failure when diagnostic persistence is unavailable.
+      }).eq("business_id", businessId).eq("id", item.id).eq("sync_lease_owner", workerId);
+      if (diagnosticItemError) throw diagnosticItemError;
+    } catch (diagnosticError) {
+      console.error("[plaid][sync] failure evidence unavailable", { source_error_code: safeDiagnosticCode(diagnosticError) });
+      // The durable running run remains incomplete and its expired lease is retriable.
     }
     throw error;
   } finally {
     memoryLocks.delete(itemLockKey);
     try {
-      await releaseDbLock(item.id, businessId, workerId);
+      await releaseDbLock(item.id, businessId, workerId, supabase);
     } catch {
       // The owner-scoped lease will expire and can be recovered without provider access.
     }
@@ -1112,6 +977,7 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
   if (!items || !items.length) return { ok: true, synced: 0, skipped: 0 };
 
   let synced = 0;
+  let failed = 0;
   let skipped = 0;
   let bookkeepingEnqueued = 0;
   for (const item of items) {
@@ -1133,11 +999,11 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
       }
       await new Promise((r) => setTimeout(r, 250)); // small delay to avoid hammering Plaid
     } catch (err) {
+      failed += 1;
       console.error("[plaid][sync] failed", {
         business_id: businessId,
-        item: item.plaid_item_id,
-        message: err?.message,
-        supabase: err?.supabase || null,
+        ...safePlaidPersistenceDiagnostic(err),
+        source_error_code: safeDiagnosticCode(err),
       });
     }
   }
@@ -1154,7 +1020,7 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
     });
   }
 
-  return { ok: true, synced, skipped, bookkeeping_enqueued: bookkeepingEnqueued };
+  return { ok: failed === 0, synced, failed, skipped, bookkeeping_enqueued: bookkeepingEnqueued };
 }
 
 // Operator-triggered pending resolution must not sweep every connected Item.

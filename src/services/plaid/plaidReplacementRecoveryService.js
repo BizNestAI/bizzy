@@ -89,14 +89,16 @@ export function deriveRecoverySyncHealth({ item = {}, latestRun = null, latestSu
   const disconnected = item.is_active === false || item.status === "disconnected";
   const updating = !disconnected && (item.sync_in_progress === true || latestRun?.status === "running");
   const reauthenticationRequired = !disconnected && isPlaidReauthenticationRequired(item);
+  const internalFailure = latestFailed && (latestRun?.failure_code === "database_persistence_failure" || ["transaction_persistence", "downstream_admission"].includes(latestRun?.meta?.failure_stage));
   const active = !disconnected && !updating && ["connected", "active"].includes(item.status) && !latestFailed;
   return {
-    status: disconnected ? "disconnected" : updating ? "updating" : reauthenticationRequired ? "reauthentication_required" : active ? "active" : "temporarily_unavailable",
+    status: disconnected ? "disconnected" : updating ? "updating" : reauthenticationRequired ? "reauthentication_required" : active ? "active" : internalFailure ? "internal_failure" : "temporarily_unavailable",
     reason: active || updating ? null : reauthenticationRequired ? "Plaid requires you to reconnect this institution before synchronization can continue."
-      : latestFailed ? "Sync is temporarily unavailable. Bizzi will retry automatically."
+      : internalFailure ? "Transaction import needs attention. Retained-cursor replay is required after repair."
+      : latestFailed ? "Transaction import needs attention."
       : disconnected ? "The Plaid connection is disconnected."
-        : "Sync is temporarily unavailable. Bizzi will retry automatically.",
-    automatic_retry_scheduled: latestFailed && !disconnected && !reauthenticationRequired && ["connected", "active"].includes(item.status),
+        : "Transaction import needs attention.",
+    automatic_retry_scheduled: false,
     last_successful_sync_at: lastSuccessfulSyncAt,
     transactions_imported_through: importedThrough,
     latest_run: latestRun ? {
@@ -258,6 +260,7 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
   const { data: batches, error: batchError } = await db.from("plaid_recovery_batches")
     .select("id,status,cutoff_date,posting_hold,summary,failure_code,failure_detail,rebuild_source_batch_id,created_by,released_by,released_at,created_at,updated_at,staged_next_cursor")
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
+    .or("summary->>workflow_kind.is.null,summary->>workflow_kind.neq.residual_orphan")
     .order("created_at", { ascending: false }).limit(20);
   if (batchError) throw batchError;
   // Never hydrate an abandoned audit record. Prefer the newest usable preview;
@@ -399,7 +402,7 @@ export async function listReplacementRecoveryRows({ businessId, plaidItemId, bat
     .select("id,status,cutoff_date,posting_hold,summary")
     .eq("id", batchId).eq("business_id", businessId).eq("plaid_env", item.plaid_env).eq("plaid_item_id", plaidItemId).maybeSingle();
   if (batchError) throw batchError;
-  if (!batch || !["preview_ready", "imported_held"].includes(batch.status)) throw recoveryError("recovery_batch_not_reviewable", "The active recovery preview could not be found.", 404);
+  if (!batch || batch.summary?.workflow_kind === "residual_orphan" || !["preview_ready", "imported_held"].includes(batch.status)) throw recoveryError("recovery_batch_not_reviewable", "The active recovery preview could not be found.", 404);
   const { data, error } = await db.from("plaid_recovery_batch_rows")
     .select("id,plaid_transaction_id,plaid_account_id,transaction_date,authorized_date,amount,signed_amount,pending,disposition,payload,admitted_transaction_id")
     .eq("business_id", businessId).eq("batch_id", batchId).eq("plaid_account_id", item.replacement_recovery_account_id)
@@ -436,10 +439,10 @@ export async function admitReplacementRecoveryBatch({ businessId, plaidItemId, b
   const item = await scopedItem({ db, businessId, plaidItemId });
   if (!Array.isArray(selectedRowIds) || selectedRowIds.length === 0) throw recoveryError("recovery_selection_required", "Select at least one staged transaction.", 400);
   if (new Set(selectedRowIds).size !== selectedRowIds.length) throw recoveryError("duplicate_recovery_row_selection", "The transaction selection contains duplicates.", 400);
-  const { data: batch, error: batchError } = await db.from("plaid_recovery_batches").select("id,status")
+  const { data: batch, error: batchError } = await db.from("plaid_recovery_batches").select("id,status,summary")
     .eq("id", batchId).eq("business_id", businessId).eq("plaid_env", item.plaid_env).eq("plaid_item_id", plaidItemId).maybeSingle();
   if (batchError) throw batchError;
-  if (!batch || batch.status !== "preview_ready") throw recoveryError("recovery_batch_not_admissible", "Only the active valid recovery preview can be admitted.", 409);
+  if (!batch || batch.summary?.workflow_kind === "residual_orphan" || batch.status !== "preview_ready") throw recoveryError("recovery_batch_not_admissible", "Only the active valid recovery preview can be admitted.", 409);
   const { data, error } = await db.rpc("admit_plaid_recovery_batch", {
     p_business_id: businessId,
     p_batch_id: batchId,
@@ -475,6 +478,7 @@ export async function createReplacementRecoveryPreview({ businessId, plaidItemId
   const { data: activeBatches, error: activeBatchError } = await db.from("plaid_recovery_batches")
     .select("id,status,cutoff_date,posting_hold,summary")
     .eq("business_id", businessId).eq("plaid_env", item.plaid_env).eq("plaid_item_id", plaidItemId)
+    .or("summary->>workflow_kind.is.null,summary->>workflow_kind.neq.residual_orphan")
     .eq("cutoff_date", cutoffDate).in("status", ["staging", "preview_ready", "lineage_confirmation_required", "imported_held"])
     .order("created_at", { ascending: false }).limit(1);
   if (activeBatchError) throw activeBatchError;
@@ -616,10 +620,11 @@ export async function rebuildReplacementRecoveryPreview({ businessId, plaidItemI
 }
 
 export async function releaseReplacementRecoveryHold({ businessId, batchId, actorUserId, db = supabase }) {
-  const { data: batch, error } = await db.from("plaid_recovery_batches").select("id,status,posting_hold")
+  const { data: batch, error } = await db.from("plaid_recovery_batches").select("id,status,posting_hold,summary")
     .eq("id", batchId).eq("business_id", businessId).maybeSingle();
   if (error) throw error;
   if (!batch?.id) throw recoveryError("recovery_batch_not_found", "Recovery batch not found.", 404);
+  if (batch.summary?.workflow_kind === "residual_orphan") throw recoveryError("residual_hold_requires_reconciliation", "Residual recovery holds require their own reconciliation workflow.");
   if (batch.status !== "imported_held") throw recoveryError("recovery_batch_not_reviewed", "Import and review the recovery batch before releasing its posting hold.");
   const heldRows = await db.from("transaction_categorizations").select("transaction_id")
     .eq("business_id", businessId).eq("posting_hold_batch_id", batchId).limit(100);

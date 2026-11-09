@@ -1,6 +1,8 @@
 .financial-health { min-width: 0; }
-.health-snapshot { margin-top: 10px; }
-.health-workspace-content { display: flex; flex-direction: column; gap: 0; }
+.health-snapshot { margin-top: 10px; isolation: isolate; }
+/* Keep the month menu above the summary and chart stacking contexts. */
+.health-snapshot > .forecast-header { position: relative; z-index: 2; }
+.health-workspace-content { position: relative; z-index: 0; display: flex; flex-direction: column; gap: 0; }
 .health-header-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .health-month-button { display: inline-flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; background: rgba(0,0,0,.24); color: #c7d0ca; font-size: 12px; font-weight: 600; }
 .health-month-button:hover { border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.055); }

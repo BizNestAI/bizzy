@@ -1,3 +1,5 @@
+import { requireInternalRole, INTERNAL_STAFF_ROLES } from "../_shared/internalStaffAuth.js";
+import { residualReconciliationHandler } from "./plaidResidualReconciliation.controller.js";
 /* global process */
 import crypto from "crypto";
 import { Router } from "express";
@@ -24,6 +26,9 @@ import { createRateLimiter } from "../_shared/rateLimit.js";
 import { ENTITLEMENT_CAPABILITIES, requireBusinessRole, requireEntitlementCapability } from "../_shared/entitlementAuth.js";
 import { consumePlaidLinkState, createPlaidLinkState } from "../../services/plaid/plaidLinkStateService.js";
 import { setPlaidAccountConnectionState } from "../../services/plaid/plaidAccountConnectionState.js";
+import { getPlaidAccountRecoveryStatus, recoveryWorkerEligibility } from "../../services/plaid/plaidAccountRecoveryStatus.js";
+import { recoverResidualPlaidOrphans } from "../../services/plaid/plaidResidualRecoveryService.js";
+import { businessHasPaidEntitlement } from "../../services/billing/entitledBusinesses.js";
 
 const router = Router();
 const primaryOwner = requireBusinessRole(["owner"]);
@@ -74,6 +79,34 @@ router.get("/status", requireAuth, async (req, res) => {
     return res.status(500).json({ ok: false, error: "plaid_status_failed" });
   }
 });
+
+router.get("/recovery-status", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const eligibility = recoveryWorkerEligibility(await businessHasPaidEntitlement(businessId, { db: supabase }));
+    return res.json({ ok: true, ...(await getPlaidAccountRecoveryStatus({ db: supabase, businessId, plaidEnv: plaidEnvName, eligibility })) });
+  } catch {
+    return res.status(503).json({ ok: false, error: "plaid_recovery_status_unavailable" });
+  }
+});
+
+router.post("/accounts/:plaidAccountId/residual-recovery", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    return res.json({ ok: true, ...(await recoverResidualPlaidOrphans({ db: supabase, businessId, plaidEnv: plaidEnvName,
+      plaidAccountId: req.params.plaidAccountId, actorUserId: req.auth?.userId || req.user?.id,
+      execute: req.body?.execute === true, batchId: req.body?.batch_id || null })) });
+  } catch (error) {
+    return res.status(error.status || 409).json({ ok: false, error: error.code || "plaid_residual_recovery_failed" });
+  }
+});
+
+// Operator-only tenant-authenticated reconciliation; never a customer Books action.
+router.post("/accounts/:plaidAccountId/residual-recovery/:batchId/reconciliation", requireAuth,
+  plaidMutationRateLimit, requireInternalRole(INTERNAL_STAFF_ROLES),
+  residualReconciliationHandler({ db: supabase, plaidEnv: plaidEnvName }));
 
 router.post("/link-token", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
   const businessId = ensureBusinessId(req, res);

@@ -593,7 +593,7 @@ test("source wiring preserves server-side authority and removes Books Review bac
   const suggestRoute = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.suggest.routes.js"), "utf8");
   const migration = readFileSync(join(root, "supabase/migrations/20260830_background_bookkeeping_processing.sql"), "utf8");
 
-  assert.match(plaidSync, /enqueueBookkeepingProcessingForTransactions/);
+  assert.match(plaidSync, /completePlaidSyncAdmission/);
   assert.match(server, /startBookkeepingProcessingWorker\(\)/);
   assert.match(service, /runBookkeepingSuggestionPass/);
   assert.match(service, /reconsiderNeedsReviewTransactions/);
@@ -712,16 +712,13 @@ test("business-scoped processing does not claim another business during Plaid wa
   assert.equal(supabase.store.bookkeeping_processing_requests.find((row) => row.transaction_id === "txn-b").status, "pending");
 });
 
-test("Plaid sync wires enqueue to a bounded best-effort business wake without making sync fragile", () => {
+test("Plaid sync admits durable work atomically and leaves processing to the asynchronous worker", () => {
   const plaidSync = readFileSync(join(root, "src/services/plaid/plaidSyncService.js"), "utf8");
-
-  assert.match(plaidSync, /processPendingBookkeepingRequestsUntilIdle/);
-  assert.match(plaidSync, /function triggerBookkeepingProcessingWake/);
-  assert.match(plaidSync, /BOOKKEEPING_PROCESSING_PLAID_WAKE_BATCH_SIZE \|\| 10/);
-  assert.match(plaidSync, /BOOKKEEPING_PROCESSING_PLAID_WAKE_MAX_BATCHES \|\| 1/);
-  assert.match(plaidSync, /businessId,\s*batchSize,\s*maxBatches/s);
-  assert.match(plaidSync, /\.catch\(\(err\) => \{/);
-  assert.match(plaidSync, /immediate bookkeeping processing failed/);
+  const admission = readFileSync(join(root, "supabase/migrations/20261109173000_plaid_durable_sync_admission.sql"), "utf8");
+  assert.match(plaidSync, /await completePlaidSyncAdmission/);
+  assert.doesNotMatch(plaidSync, /triggerBookkeepingProcessingWake|processPendingBookkeepingRequestsUntilIdle|enqueueBookkeepingProcessingForTransactions/);
+  assert.match(admission, /insert into public\.bookkeeping_processing_requests/);
+  assert.ok(admission.indexOf("insert into public.bookkeeping_processing_requests") < admission.indexOf("update public.plaid_items set cursor"));
 });
 
 test("recurring worker uses sequential multi-batch drain with a bounded cap", () => {
