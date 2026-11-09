@@ -7,7 +7,9 @@ import useModuleTheme from '../../hooks/useModuleTheme';
 import { useNavigate } from 'react-router-dom';
 import AgendaWidget from '../Calendar/AgendaWidget.jsx';
 
-import ModuleHeader from '../../components/layout/ModuleHeader/ModuleHeader';
+import Tooltip from '../../components/common/Tooltip.jsx';
+import '../../components/Accounting/OperatingForecast.css';
+import '../../components/Accounting/FinancialHealth.css';
 
 import FinancialKPICards from '../../components/Accounting/FinancialKPICards';
 import MonthlyBriefCard from '../../components/Accounting/MonthlyBriefCard';
@@ -25,22 +27,11 @@ const ExpenseBreakdownChart = lazy(() => import('../../components/Accounting/Exp
 import { useRightExtras } from '../../insights/RightExtrasContext';
 import LiveModePlaceholder from '../../components/common/LiveModePlaceholder.jsx';
 import { shouldUseDemoData } from '../../services/demo/demoClient.js';
-import { ACCENT_HEX } from '../../config/accent';
-
-/* ------------------ Visual constants ------------------ */
-const ACCOUNTING_ACCENT = ACCENT_HEX;
-// Graphite / chrome neutrals (slightly darker than before)
-const CHROME_BORDER        = 'rgba(165,167,169,0.10)';  // subtle neutral border
-const CHROME_BORDER_HOVER  = 'rgba(165,167,169,0.14)';
-const EMERALD_DARK_BORDER  = 'rgba(255,255,255,0.06)'; // keep cards neutral (no green frame)
-
-// Panel surface (same as before)
-const PANEL_BG = 'var(--panel)';
 
 /* ------------------ Skeleton ------------------ */
 const CardSkeleton = ({ h = "h-56", lines = 3 }) => (
   <div
-    className={`rounded-2xl ${h} p-4 sm:p-5 bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl animate-pulse`}
+    className={`forecast-chart-surface ${h} p-4 health-skeleton`} role="status" aria-label="Loading financial section"
   >
     <div className="space-y-3">
       <div className="h-3 w-24 bg-white/15 rounded-full" />
@@ -57,7 +48,7 @@ const CardSkeleton = ({ h = "h-56", lines = 3 }) => (
 );
 
 /* ------------------ Helpers ------------------ */
-const RowGap = ({ children }) => <div className="flex flex-col gap-6 md:gap-7">{children}</div>;
+const RowGap = ({ children }) => <div className="health-workspace-content">{children}</div>;
 const padMonth = (m) => String(m).padStart(2, '0');
 const DEFAULT_HEALTH_HISTORY_YEARS = 3;
 
@@ -109,40 +100,6 @@ function buildCalendarMonthOptions({
   }
 
   return options;
-}
-
-/** Card container with switchable frame variant */
-function CardFrame({
-  children,
-  padded = true,
-  className = '',
-  style = {},
-  variant = 'chrome', // 'chrome' | 'emerald-dark'
-}) {
-  const borderColor =
-    variant === 'emerald-dark' ? EMERALD_DARK_BORDER : CHROME_BORDER;
-
-  return (
-    <div
-      className={`rounded-2xl overflow-hidden shadow-bizzi transition-colors ${padded ? 'p-3' : ''} ${className}`}
-      style={{
-        border: `1px solid ${borderColor}`,
-        background: PANEL_BG,
-        backgroundClip: 'padding-box',
-        ...style,
-      }}
-      // subtle hover lift without neon glow
-      onMouseEnter={e => {
-        e.currentTarget.style.borderColor =
-          variant === 'emerald-dark' ? EMERALD_DARK_BORDER : CHROME_BORDER_HOVER;
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.borderColor = borderColor;
-      }}
-    >
-      <div className="rounded-[inherit] overflow-visible">{children}</div>
-    </div>
-  );
 }
 
 /** ⛑️ Temporary client mock (remove when API returns hero) */
@@ -434,13 +391,8 @@ function AccountingDashboard() {
   if (!businessId) return <div className="text-rose-400 p-4">Select a business to view financials.</div>;
   if (qbStatusLoading) {
     return (
-      <div className={`${bgColor} ${textColor} px-3 md:px-4 pt-0 pb-8 space-y-6`}>
-        <ModuleHeader
-          module="financials"
-          title="Financial Hub"
-          subtitle="Loading persisted QuickBooks status for Admin View."
-          className="mb-2"
-        />
+      <div className={`financial-health ${bgColor} ${textColor} px-3 md:px-4 pt-0 pb-8 space-y-6`}>
+        <header><h1 className="text-[20px] font-semibold tracking-[0.2em]">Financial Health</h1><p className="mt-3 text-[13px] text-white/70">Loading persisted QuickBooks status for Admin View.</p></header>
         <CardSkeleton h="h-40" lines={4} />
       </div>
     );
@@ -622,15 +574,14 @@ function AccountingDashboard() {
     /**
      * ⚠️ Keep this root NON-scrolling. No h-screen/min-h-full/overflow here.
      */
-    <div className={`w-full pt-0 pb-2 ${bgColor} ${textColor}`}>
+    <div className={`financial-health w-full pt-0 pb-36 ${bgColor} ${textColor}`}>
       <div className="bizzy-page-width bizzy-page-width--workspace">
         {/* Header */}
-        <ModuleHeader
-          module="financials"
-          title="Financial Health"
-          className="mb-4"
-          right={
-            <div className="flex items-center gap-3 flex-wrap justify-end">
+        <header className="mb-2"><h1 className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-white">Financial Health</h1><p className="mt-3 text-[13px] text-white/70">Understand your recent revenue, spending, and profitability.</p></header>
+        <section className="operating-forecast health-snapshot" aria-label="Monthly snapshot">
+          <header className="forecast-header">
+            <div className="forecast-heading"><p className="forecast-eyebrow">Monthly snapshot</p><h2>{year && month ? new Date(year, month - 1, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' }) : 'Selected month'} overview</h2></div>
+            <div className="health-header-actions">
               <div className="flex items-center gap-2 text-xs text-white/70">
                 <div
                   ref={periodMenuRef}
@@ -639,16 +590,27 @@ function AccountingDashboard() {
                   <button
                     type="button"
                     onClick={() => setPeriodOpen((open) => !open)}
+                    aria-label="Selected financial month"
                     aria-haspopup="listbox"
                     aria-expanded={periodOpen}
-                    className="appearance-none bg-[rgba(18,18,20,0.92)] border border-white/18 rounded-md pl-3 pr-7 py-[6px] text-xs text-white/90 cursor-pointer shadow-[0_8px_18px_rgba(0,0,0,0.32)] backdrop-blur-md transition-all duration-150 ease-out hover:bg-[rgba(28,28,32,0.98)] hover:border-white/30 focus:outline-none focus:ring-2 focus:ring-white/14"
+                    onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setPeriodOpen(true); requestAnimationFrame(() => periodMenuRef.current?.querySelector('[role="option"]:not(:disabled)')?.focus()); } }}
+                    className="health-month-button"
                     style={{ minWidth: '110px', lineHeight: 1.05 }}
                   >
-                    {monthOptions.find((o) => o.value === periodValue)?.label || periodValue}
+                    {monthOptions.find((o) => o.value === periodValue)?.label || periodValue}<ChevronDown size={14} aria-hidden="true"/>
                   </button>
                   {periodOpen && (
                     <div
                       role="listbox"
+                      aria-label="Financial month"
+                      onKeyDown={event => {
+                        if (!['ArrowDown','ArrowUp','Home','End'].includes(event.key)) return;
+                        event.preventDefault();
+                        const options = [...event.currentTarget.querySelectorAll('[role="option"]:not(:disabled)')];
+                        const index = options.indexOf(document.activeElement);
+                        const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+                        options[next]?.focus();
+                      }}
                       className="absolute left-0 mt-1 w-56 max-h-72 overflow-y-auto rounded-md border border-white/14 bg-[#0b0c10] shadow-[0_18px_42px_rgba(0,0,0,0.55)] z-30 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
                       style={{ top: '100%' }}
                     >
@@ -657,6 +619,7 @@ function AccountingDashboard() {
                           key={opt.value}
                           type="button"
                           role="option"
+                          tabIndex={opt.value === periodValue ? 0 : -1}
                           aria-selected={opt.value === periodValue}
                           disabled={!opt.selectable}
                           onClick={() => {
@@ -693,44 +656,15 @@ function AccountingDashboard() {
                   <span className="text-[11px] text-amber-200">Months unavailable</span>
                 ) : null}
               </div>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => runHealthRefresh({ source: "toolbar" })}
-                  disabled={refreshing || adminView.active}
-                  className="inline-flex items-center justify-center rounded-full border w-8 h-8 text-white/85 transition disabled:opacity-60 hover:bg-white/14 hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/14"
-                  style={{ borderColor: "rgba(255,255,255,0.22)", background: "rgba(18,18,20,0.86)" }}
-                  aria-label={adminView.active ? "Live refresh unavailable in Admin View" : "Refresh live data"}
-                  title={adminView.active ? "Live refresh is unavailable in read-only Admin View." : "Refresh"}
-                >
-                  <RefreshCcw className={refreshing ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+              <Tooltip content={adminView.active ? 'Live refresh is unavailable in read-only Admin View.' : 'Refresh live data'} align="end">
+                <button type="button" onClick={() => runHealthRefresh({ source: "toolbar" })} disabled={refreshing || adminView.active} className="forecast-icon-button" aria-label={adminView.active ? "Live refresh unavailable in Admin View" : "Refresh live data"} aria-busy={refreshing}>
+                  <RefreshCcw size={16} className={refreshing ? 'forecast-spinning' : ''}/>
                 </button>
-                {lastRefreshed ? (
-                  <div className="relative group">
-                    <span className="text-xs text-white/70">
-                      {refreshing ? "Refreshing..." : `Last refreshed ${formatElapsed(lastRefreshed)}`}
-                    </span>
-                    <div
-                      className="absolute left-1/2 -translate-x-1/2 mt-1 px-2 py-[6px] rounded bg-black/80 text-[11px] text-white/85 opacity-0 group-hover:opacity-100 pointer-events-none shadow-lg border border-white/10"
-                      style={{ whiteSpace: "nowrap", lineHeight: 1.2 }}
-                    >
-                      {new Date(lastRefreshed).toLocaleString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                        hour12: true,
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  <span className="text-xs text-white/50">{refreshing ? "Refreshing..." : "No refresh yet"}</span>
-                )}
-              </div>
+              </Tooltip>
+              <span className="health-freshness" role="status">{refreshing ? 'Refreshing…' : lastRefreshed ? `Last refreshed ${formatElapsed(lastRefreshed)}` : 'No refresh yet'}</span>
             </div>
-          }
-        />
+          </header>
+          <div className="forecast-metadata-line health-source"><span className="forecast-badge forecast-badge-green">{usingDemo ? 'Demo data' : qbConnected ? 'Cash-basis QuickBooks' : 'QuickBooks not connected'}</span>{lastRefreshed && <Tooltip content={new Date(lastRefreshed).toLocaleString()}><time tabIndex={0} dateTime={new Date(lastRefreshed).toISOString()}>Updated {new Date(lastRefreshed).toLocaleDateString()}</time></Tooltip>}</div>
 
         {/* Main content */}
         <RowGap>
@@ -841,8 +775,8 @@ function AccountingDashboard() {
         ) : null}
 
         {/* KPI cards row */}
-        <CardFrame padded={false} variant="emerald-dark">
-          <div className="rounded-[inherit] p-3">
+
+          <div>
             <FinancialKPICards
               userId={userId}
               businessId={businessId}
@@ -855,12 +789,12 @@ function AccountingDashboard() {
               refreshVersion={financialRefreshVersion}
             />
           </div>
-        </CardFrame>
+
 
         {/* Charts — Revenue full-width row */}
-        <CardFrame variant="emerald-dark">
+
           <Suspense fallback={<CardSkeleton h={`h-[${H_REVENUE}px]`} />}>
-            <div className="rounded-[inherit] overflow-hidden" style={{ height: H_REVENUE }}>
+            <div className="health-revenue-slot" style={{ minHeight: H_REVENUE }}>
               <RevenueChart
                 userId={userId}
                 businessId={businessId}
@@ -871,13 +805,13 @@ function AccountingDashboard() {
               />
             </div>
           </Suspense>
-        </CardFrame>
+
 
         {/* Expense + Profit side-by-side */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <CardFrame variant="emerald-dark">
+        <div className="health-secondary-charts">
+
             <Suspense fallback={<CardSkeleton h={`h-[${H_EXPENSE}px]`} />}>
-              <div className="rounded-[inherit]" style={{ height: H_EXPENSE }}>
+              <div className="health-secondary-slot" style={{ minHeight: H_EXPENSE }}>
                 <ExpenseBreakdownChart
                   userId={userId}
                   businessId={businessId}
@@ -889,11 +823,11 @@ function AccountingDashboard() {
                 />
               </div>
             </Suspense>
-          </CardFrame>
 
-          <CardFrame variant="emerald-dark">
+
+
             <Suspense fallback={<CardSkeleton h={`h-[${H_PROFIT}px]`} />}>
-              <div className="rounded-[inherit]" style={{ height: H_PROFIT }}>
+              <div className="health-secondary-slot" style={{ minHeight: H_PROFIT }}>
                 <NetProfitChart
                   userId={userId}
                   businessId={businessId}
@@ -906,16 +840,17 @@ function AccountingDashboard() {
                 />
               </div>
             </Suspense>
-          </CardFrame>
+
         </div>
 
         {/* Insights below the charts */}
-        <CardFrame padded={false} variant="emerald-dark">
+
           <div className="rounded-[inherit] overflow-hidden">
-            <MonthlyBriefCard />
+            <MonthlyBriefCard presentation="health" />
           </div>
-        </CardFrame>
+
       </RowGap>
+        </section>
       </div>
     </div>
   );

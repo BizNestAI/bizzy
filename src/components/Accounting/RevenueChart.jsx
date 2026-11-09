@@ -1,5 +1,8 @@
+import useMeasure from "./useChartMeasure.js";
+import HealthChartTooltip from "./HealthChartTooltip.jsx";
+import { FORECAST_COLORS, formatForecastAxis } from "../../utils/forecast/forecastPresentation.js";
 // /src/components/Accounting/RevenueChart.jsx
-import React, { useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useState } from "react";
 import {
   ComposedChart,
   Area,
@@ -13,10 +16,10 @@ import {
   ReferenceDot,
 } from "recharts";
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
-import CardHeader from "../UI/CardHeader"; // shared header (Pulse style)
+
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { apiFetch } from "../../utils/apiBase.js";
-import { buildCurrencyAxis, formatCurrencyTick } from "../../utils/currencyAxis.js";
+import { buildCurrencyAxis } from "../../utils/currencyAxis.js";
 
 /* ---------------- helpers ---------------- */
 function monthShortLabel(y, m) {
@@ -41,7 +44,8 @@ function toChartData(rows) {
   return rows.map((r, idx) => ({
     month: monthShortLabel(r.year, r.month),
     revenue: r.found === false || r.revenue === null || r.revenue === undefined ? null : Number(r.revenue),
-    isCurrent: idx === rows.length - 1,
+    isSelected: idx === rows.length - 1,
+    fullMonth: new Date(r.year, r.month - 1, 1).toLocaleString(undefined, { month: "short", year: "numeric" }),
   }));
 }
 function allSame(values) {
@@ -83,37 +87,7 @@ function buildSlidingDemoRows(windowMonths, sourceRows = [], valueKey = "revenue
 const REVENUE_SERIES_CACHE = new Map();
 
 /* ——— tiny measure hook (ResizeObserver) ——— */
-function useMeasure() {
-  const ref = useRef(null);
-  const [rect, setRect] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      const cr = entry?.contentRect;
-      if (cr) setRect({ width: cr.width, height: cr.height });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, rect];
-}
 
-function RevenueTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-  const point = payload.find((entry) => entry?.dataKey === "revenue");
-  if (!point) return null;
-  return (
-    <div className="rounded-lg border border-white/10 bg-black/90 px-3 py-2 shadow-lg text-sm text-white/90">
-      <div className="text-xs text-white/70 mb-1">{label}</div>
-      <div>
-        Revenue: <span className="font-semibold text-white">${Number(point.value).toLocaleString()}</span>
-      </div>
-    </div>
-  );
-}
-
-/* ----------------------------------------- */
 export default function RevenueChart({
   userId: userIdProp,
   businessId: businessIdProp,
@@ -240,10 +214,11 @@ export default function RevenueChart({
               });
               if (!r.ok) throw new Error(`HTTP ${r.status}`);
               const payload = await r.json();
-              const revenue = Number(coalesceRevenue(payload) ?? 0);
-              return { year, month, revenue };
+              const rawRevenue = coalesceRevenue(payload);
+              const found = rawRevenue != null && Number.isFinite(Number(rawRevenue));
+              return { year, month, revenue: found ? Number(rawRevenue) : null, found };
             } catch {
-              return { year, month, revenue: 0 };
+              return { year, month, revenue: null, found: false };
             }
           })
         );
@@ -280,167 +255,28 @@ export default function RevenueChart({
   // Measure container to tune margins/ticks/dots responsively
   const [measureRef, { width: w }] = useMeasure();
 
-  if (status === "loading") {
-    return (
-      <div className={`rounded-xl bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 ${className} animate-pulse`}>
-        <div className="space-y-3">
-          <div className="h-3 w-32 bg-white/15 rounded-full" />
-          <div className="h-5 w-48 bg-white/18 rounded-md" />
-          <div className="h-[180px] w-full bg-white/8 rounded-lg" />
-        </div>
-      </div>
-    );
-  }
-  if (!series || series.length === 0) return null;
-
-  const isMock = source === "mock";
-  const badgeClass = "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
-
-  // Responsive styling tweaks
   const small = (w || 0) < 520;
-
-  const xTickCount = small ? 6 : 12;
-  const leftMargin = small ? 30 : 42;
-  const rightMargin = small ? 12 : 22;
-  const topMargin = 14;
-  const bottomMargin = small ? 44 : 34;
-
-  const lineColor = "#3BE6C7";
-  const lineColorSoft = "rgba(59,230,199,0.28)";
-  const axisColor = "rgba(255,255,255,0.18)";
-  const tickColor = "rgba(255,255,255,0.58)";
-  const dotR = small ? 2.25 : 2.75;
-  const activeDotR = small ? 5 : 6.5;
-  const strokeW = small ? 2 : 2.6;
-
-  const xTickStyle = { fill: tickColor, fontSize: small ? 10 : 11, fontWeight: 600, dy: 6 };
-  const importedValues = series.map((row) => row.revenue).filter((value) => Number.isFinite(Number(value)));
-  const importedCount = importedValues.length;
-  const selectedPoint = series[series.length - 1] || null;
-  const currentPoint = Number.isFinite(Number(selectedPoint?.revenue)) ? selectedPoint : null;
-  const onlyImportedPoint = importedCount === 1 ? series.find((row) => Number.isFinite(Number(row.revenue))) : null;
-  const axis = buildCurrencyAxis(importedValues, { includeZero: true, minAtZero: true, tickCount: 5, headroom: 0.15 });
-
-  return (
-    <div className={`relative flex h-full flex-col overflow-hidden rounded-xl border border-white/10 bg-[var(--panel)] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.42)] ${className}`}>
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/[0.035] via-transparent to-black/10" />
-      {/* Compact CardHeader to match Pulse sizing */}
-      <div className="relative">
-        <CardHeader
-          title="REVENUE — PRIOR 12 MONTHS"
-          right={isMock ? null : <span className={badgeClass}>QuickBooks</span>}
-          size="sm"
-          dense
-          className="mb-2"
-          titleClassName="text-[13px]" // safe override if supported
-        />
-      </div>
-
-      <div ref={measureRef} className="relative min-h-0 flex-1">
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart
-            data={series}
-            margin={{ top: topMargin, right: rightMargin, left: leftMargin, bottom: bottomMargin }}
-          >
-            <defs>
-              <linearGradient id={`${gradientId}-revenueArea`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="35%" stopColor={lineColor} stopOpacity={0.22} />
-                <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
-              </linearGradient>
-              <filter id={`${gradientId}-lineGlow`} x="-20%" y="-20%" width="140%" height="140%">
-                <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor={lineColor} floodOpacity="0.28" />
-              </filter>
-            </defs>
-
-            {showGrid && (
-              <CartesianGrid
-                vertical={false}
-                strokeDasharray="4 8"
-                stroke="rgba(255,255,255,0.065)"
-              />
-            )}
-
-            <XAxis
-              dataKey="month"
-              stroke={axisColor}
-              tickLine={false}
-              axisLine={false}
-              interval={0}
-              tickCount={xTickCount}
-              minTickGap={4}
-              tickMargin={10}
-              tick={xTickStyle}
-              height={36}
-            />
-            <YAxis
-              stroke={axisColor}
-              tickLine={false}
-              axisLine={false}
-              domain={axis.domain}
-              ticks={axis.ticks}
-              tickFormatter={formatCurrencyTick}
-              width={leftMargin + 4}
-              tick={{ fill: tickColor, fontSize: small ? 10 : 11, fontWeight: 600 }}
-            />
-            <Tooltip content={<RevenueTooltip />} wrapperStyle={{ zIndex: 30 }} />
-            {currentPoint ? (
-              <ReferenceLine
-                x={currentPoint.month}
-                stroke="rgba(59,230,199,0.24)"
-                strokeDasharray="4 5"
-                label={{
-                  value: "Current",
-                  fill: "rgba(209,250,229,0.78)",
-                  fontSize: 11,
-                  position: "insideTopRight",
-                }}
-              />
-            ) : null}
-
-            {/* Area under the line */}
-            <Area
-              type="monotone"
-              dataKey="revenue"
-              stroke="none"
-              fill={`url(#${gradientId}-revenueArea)`}
-              isAnimationActive={false}
-            />
-
-            {/* Line on top */}
-            <Line
-              type="monotone"
-              dataKey="revenue"
-              connectNulls={false}
-              stroke={lineColor}
-              strokeWidth={strokeW}
-              filter={`url(#${gradientId}-lineGlow)`}
-              dot={{ r: dotR, stroke: lineColor, fill: lineColorSoft }}
-              activeDot={{ r: activeDotR, stroke: lineColor, fill: lineColor }}
-              isAnimationActive={false}
-            />
-            {onlyImportedPoint ? (
-              <ReferenceDot
-                x={onlyImportedPoint.month}
-                y={onlyImportedPoint.revenue}
-                r={activeDotR}
-                stroke={lineColor}
-                fill={lineColor}
-              />
-            ) : null}
-            {currentPoint ? (
-              <ReferenceDot
-                x={currentPoint.month}
-                y={currentPoint.revenue}
-                r={activeDotR}
-                fill="var(--panel)"
-                stroke={lineColor}
-                strokeWidth={2.5}
-                isFront
-              />
-            ) : null}
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
+  const values = (series || []).map(r => r.revenue).filter(v => v != null && Number.isFinite(Number(v)));
+  const axis = buildCurrencyAxis(values, { includeZero: true, minAtZero: values.every(v => v >= 0), tickCount: 5, headroom: 0.15 });
+  const selectedPoint = series?.at(-1);
+  const currentPoint = selectedPoint?.revenue != null ? selectedPoint : null;
+  const lineColor = FORECAST_COLORS.revenue;
+  return <section className={`forecast-chart-surface health-chart-panel financial-health-visual ${className}`} aria-label="Revenue trend">
+    <header className="health-panel-header"><h3>Revenue · prior 12 months</h3>{['mock','demo'].includes(source) && <span className="forecast-badge">Sample data</span>}</header>
+    {status === 'loading' ? <div className="health-skeleton health-chart-skeleton" role="status">Loading revenue history…</div> : !values.length ? <div className="forecast-empty">No revenue history available for the selected window.</div> : <div ref={measureRef} className="health-chart-canvas health-revenue-canvas">
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={series} margin={{ top: 18, right: small ? 24 : 40, left: 12, bottom: 10 }}>
+          <defs><linearGradient id={`${gradientId}-revenueArea`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={lineColor} stopOpacity={0.09}/><stop offset="100%" stopColor={lineColor} stopOpacity={0}/></linearGradient></defs>
+          {showGrid && <CartesianGrid vertical={false} strokeDasharray="3 6" stroke="rgba(255,255,255,0.07)"/>}
+          <XAxis dataKey="month" axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={16} tickMargin={10} height={30} tick={{ fill: '#a3aea7', fontSize: 11 }}/>
+          <YAxis width={70} axisLine={false} tickLine={false} domain={axis.domain} ticks={axis.ticks} tickFormatter={formatForecastAxis} tick={{ fill: '#a3aea7', fontSize: 11 }}/>
+          <Tooltip content={<HealthChartTooltip />} wrapperStyle={{ zIndex: 30 }} cursor={{ stroke: 'rgba(255,255,255,0.24)' }}/>
+          {currentPoint && <ReferenceLine x={currentPoint.month} stroke="rgba(255,255,255,0.16)" strokeDasharray="3 5" label={{ value: 'Selected', fill: '#a3aea7', fontSize: 10, position: 'insideTopRight' }}/>}
+          <Area type="monotone" dataKey="revenue" stroke="none" fill={`url(#${gradientId}-revenueArea)`} isAnimationActive={false}/>
+          <Line type="monotone" dataKey="revenue" connectNulls={false} stroke={lineColor} strokeWidth={2.5} dot={values.length === 1 ? {r:4} : false} activeDot={{r:5,stroke:'#0c110e',strokeWidth:2}} isAnimationActive={false}/>
+          {currentPoint && <ReferenceDot x={currentPoint.month} y={currentPoint.revenue} r={4} fill="#0c110e" stroke={lineColor} strokeWidth={2} isFront/>}
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>}
+  </section>;
 }

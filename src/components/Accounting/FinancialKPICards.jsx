@@ -7,12 +7,11 @@ import { safeFetch } from "../../utils/safeFetch.js";
 import { readModuleSnapshot, writeModuleSnapshot, invalidateModuleSnapshots, moduleSessionIdentity } from '../../services/modules/moduleSessionCache.js';
 import { resolveModuleDataState, unsafeModuleError } from '../../services/modules/moduleDataState.js';
 import ModuleDataStatus from '../UI/ModuleDataStatus.jsx';
-import KpiCard from "../UI/KpiCard.jsx";
+import HealthKpiStrip from "./HealthKpiStrip.jsx";
+import { formatForecastCurrency } from "../../utils/forecast/forecastPresentation.js";
 
 function fmtCurrency(n) {
-  const v = Number(n ?? 0);
-  if (!Number.isFinite(v)) return "$0";
-  return `$${v.toLocaleString()}`;
+  return n == null || !Number.isFinite(Number(n)) ? '—' : formatForecastCurrency(n);
 }
 function fmtCompactCurrency(n) {
   const v = Number(n ?? 0);
@@ -38,6 +37,7 @@ function fmtPoints(n) {
   return `${rounded > 0 ? "+" : ""}${rounded.toFixed(Math.abs(rounded) % 1 === 0 ? 0 : 1)} pts`;
 }
 function pctDelta(current, prior) {
+  if (current == null || prior == null) return null;
   const currentNum = Number(current);
   const priorNum = Number(prior);
   if (!Number.isFinite(currentNum) || !Number.isFinite(priorNum) || priorNum === 0) return null;
@@ -49,11 +49,10 @@ function metricTrend(change, { lowerIsBetter = false } = {}) {
   return lowerIsBetter ? (Number(change) > 0 ? "down" : "up") : (Number(change) > 0 ? "up" : "down");
 }
 function fmtMargin(value) {
-  if (value === null || value === undefined || value === "") return "0.0%";
+  if (value === null || value === undefined || value === "") return "—";
   const num = Number(value);
-  if (!Number.isFinite(num)) return "0.0%";
-  // If the stored value looks like a ratio (-0.37), scale to percent; otherwise use as-is
-  const pct = Math.abs(num) <= 1 ? num * 100 : num;
+  if (!Number.isFinite(num)) return "—";
+  const pct = num; // Callers have already normalized ratios to percentage points.
   const rounded = Math.round(pct * 10) / 10; // nearest tenth
   return `${rounded.toFixed(1)}%`;
 }
@@ -141,10 +140,10 @@ function FinancialKPICards({
     const topCategoryPrev = fin?.prevMonth?.topSpendingCategory || k.prevTopSpendingCategory || "N/A";
 
     const demoKpis = [
-      { label: "Current Revenue", value: fmtCurrency(revenue), detail: revenuePrev != null ? `Prior month ${fmtCompactCurrency(revPrevNum)}` : "This month's revenue", trend: Number(revChange) >= 0 ? "up" : "down", change: fmtPct(revChange), tint: "emerald" },
-      { label: "Current Expenses", value: fmtCurrency(expenses), detail: expensesPrev != null ? `Prior month ${fmtCompactCurrency(expPrevNum)}` : "This month's spend", trend: Number(expChange) >= 0 ? "up" : "down", change: fmtPct(expChange), tint: "amber" },
-      { label: "Net Profit", value: fmtCurrency(profit), detail: profitPrev != null ? `Prior month ${fmtCompactCurrency(profitPrevNum)}` : "Revenue after expenses", trend: Number(profitChange) >= 0 ? "up" : "down", change: fmtPct(profitChange), tint: "emerald" },
-      { label: "Profit Margin", value: `${Number.isFinite(margin) ? margin.toFixed(1) : "0.0"}%`, detail: Number.isFinite(marginPrevNum) ? `Prior month ${marginPrevNum.toFixed(1)}%` : "Net profit as % of revenue", trend: Number(marginChange) >= 0 ? "up" : "down", change: fmtPoints(marginChange), tint: "rose" },
+      { label: "Current Revenue", value: fmtCurrency(revenue), detail: revenuePrev != null ? `Prior month ${fmtCompactCurrency(revPrevNum)}` : "This month's revenue", trend: metricTrend(revChange), change: fmtPct(revChange), tint: "emerald" },
+      { label: "Current Expenses", value: fmtCurrency(expenses), detail: expensesPrev != null ? `Prior month ${fmtCompactCurrency(expPrevNum)}` : "This month's spend", trend: metricTrend(expChange, { lowerIsBetter: true }), change: fmtPct(expChange), tint: "amber" },
+      { label: "Net Profit", value: fmtCurrency(profit), detail: profitPrev != null ? `Prior month ${fmtCompactCurrency(profitPrevNum)}` : "Revenue after expenses", trend: metricTrend(profitChange), change: fmtPct(profitChange), tint: "emerald" },
+      { label: "Profit Margin", value: `${Number.isFinite(margin) ? margin.toFixed(1) : "0.0"}%`, detail: Number.isFinite(marginPrevNum) ? `Prior month ${marginPrevNum.toFixed(1)}%` : "Net profit as % of revenue", trend: metricTrend(marginChange), change: fmtPoints(marginChange), tint: "rose" },
       {
         label: "Top Spending Category",
         value: topCategoryCurrent,
@@ -218,7 +217,7 @@ function FinancialKPICards({
         const totalExpenses = m.total_expenses ?? m.totalExpenses ?? null;
         const netProfit = m.net_profit ?? m.netProfit ?? null;
         const rawMargin = m.profit_margin ?? m.profitMargin ?? null;
-        const profitMarginPct = rawMargin == null ? null : (Math.abs(Number(rawMargin)) <= 1 ? Number(rawMargin) * 100 : Number(rawMargin));
+        const profitMarginPct = rawMargin == null ? null : Number(rawMargin);
         const rawTopSpendingCategory = m.top_spending_category ?? m.topSpendingCategory ?? null;
         const topSpendingCategory = typeof rawTopSpendingCategory === "object" && rawTopSpendingCategory !== null
           ? rawTopSpendingCategory.name ?? rawTopSpendingCategory.category ?? null
@@ -231,7 +230,7 @@ function FinancialKPICards({
         const priorExpenses = prior.total_expenses ?? prior.totalExpenses ?? null;
         const priorNet = prior.net_profit ?? prior.netProfit ?? null;
         const rawPriorMargin = prior.profit_margin ?? prior.profitMargin ?? null;
-        const priorMarginPct = rawPriorMargin == null ? null : (Math.abs(Number(rawPriorMargin)) <= 1 ? Number(rawPriorMargin) * 100 : Number(rawPriorMargin));
+        const priorMarginPct = rawPriorMargin == null ? null : Number(rawPriorMargin);
         const rawPriorTopCategory = prior.top_spending_category ?? prior.topSpendingCategory ?? null;
         const priorTopCategory = typeof rawPriorTopCategory === "object" && rawPriorTopCategory !== null
           ? rawPriorTopCategory.name ?? rawPriorTopCategory.category ?? null
@@ -254,7 +253,7 @@ function FinancialKPICards({
         const revChange = priorAvailable ? pctDelta(totalRevenue, priorRevenue) : null;
         const expChange = priorAvailable ? pctDelta(totalExpenses, priorExpenses) : null;
         const profitChange = priorAvailable ? pctDelta(netProfit, priorNet) : null;
-        const marginChange = priorAvailable && Number.isFinite(Number(profitMarginPct)) && Number.isFinite(Number(priorMarginPct))
+        const marginChange = priorAvailable && profitMarginPct != null && priorMarginPct != null && Number.isFinite(Number(profitMarginPct)) && Number.isFinite(Number(priorMarginPct))
           ? Number(profitMarginPct) - Number(priorMarginPct)
           : null;
         const unavailable = "Prior month unavailable";
@@ -263,7 +262,7 @@ function FinancialKPICards({
           { label: "Current Revenue", value: fmtCurrency(totalRevenue), detail: priorAvailable ? `Prior month ${fmtCompactCurrency(priorRevenue)}` : unavailable, trend: metricTrend(revChange), change: fmtPct(revChange), tint: "emerald" },
           { label: "Current Expenses", value: fmtCurrency(totalExpenses), detail: priorAvailable ? `Prior month ${fmtCompactCurrency(priorExpenses)}` : unavailable, trend: metricTrend(expChange, { lowerIsBetter: true }), change: fmtPct(expChange), tint: "amber" },
           { label: "Net Profit", value: fmtCurrency(netProfit), detail: priorAvailable ? `Prior month ${fmtCompactCurrency(priorNet)}` : unavailable, trend: metricTrend(profitChange), change: fmtPct(profitChange), tint: "emerald" },
-          { label: "Profit Margin", value: fmtMargin(profitMarginPct ?? 0), detail: priorAvailable ? `Prior month ${fmtMargin(priorMarginPct)}` : unavailable, trend: metricTrend(marginChange), change: fmtPoints(marginChange), tint: "rose" },
+          { label: "Profit Margin", value: fmtMargin(profitMarginPct), detail: priorAvailable ? `Prior month ${fmtMargin(priorMarginPct)}` : unavailable, trend: metricTrend(marginChange), change: fmtPoints(marginChange), tint: "rose" },
           {
             label: "Top Spending Category",
             value: topSpendingCategory || "N/A",
@@ -299,51 +298,13 @@ function FinancialKPICards({
     };
   }, [userId, businessId, year, month, usingDemo, populateDemoKpis, refreshVersion, retry, currentBusiness?.admin_view]);
 
-  if (loading) {
-    return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 w-full">
-        {[1, 2, 3, 4].map((i) => (
-          <div
-            key={i}
-            className="rounded-[18px] bg-white/[0.05] shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 sm:p-5 space-y-3 animate-pulse"
-          >
-            <div className="h-3 w-24 bg-white/[0.15] rounded-full" />
-            <div className="h-6 w-32 bg-white/[0.18] rounded-md" />
-            <div className="h-3 w-20 bg-white/[0.12] rounded-full" />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid w-full grid-cols-1 items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-      <div className="col-span-full"><ModuleDataStatus state={resolveModuleDataState({ hasData: Boolean(saved) || kpis.length > 0, fetching: updating, error: loadError })} onRetry={() => setRetry(value => value + 1)} /></div>
-      {loadError && !kpis.length ? <p role="alert">Financial data couldn’t load. <button type="button" onClick={() => setRetry(value => value + 1)}>Retry</button></p> : null}
-      {kpis.map((kpi, index) => (
-        <KpiCard
-          key={index}
-          label={kpi.label}
-          value={kpi.value}
-          detail={kpi.detail}
-          trend={kpi.trend}
-          change={kpi.change}
-          tone={getKpiTone(kpi)}
-          variant="financial"
-          className="min-h-[148px] outline-none"
-          multilineValue={kpi.label === "Top Spending Category"}
-          valueClassName={kpi.label === "Top Spending Category" ? "text-[clamp(1.15rem,1.15vw,1.42rem)] leading-snug" : ""}
-        />
-      ))}
-    </div>
-  );
-}
-
-function getKpiTone(kpi) {
-  if (kpi.label === "Top Spending Category") return "neutral";
-  if (kpi.label === "Current Expenses") return "neutral";
-  if (kpi.trend === "down") return "neutral";
-  return "emerald";
+  if (loading) return <HealthKpiStrip loading />;
+  return <div>
+    <ModuleDataStatus state={resolveModuleDataState({ hasData: Boolean(saved) || kpis.length > 0, fetching: updating, error: loadError })} onRetry={() => setRetry(value => value + 1)} />
+    {loadError && !kpis.length ? <p className="forecast-error" role="alert">Financial data couldn’t load. <button type="button" onClick={() => setRetry(value => value + 1)}>Retry</button></p> : null}
+    <HealthKpiStrip kpis={kpis} />
+    <p className="health-accounting-note">Net profit includes cost of goods sold and other income or expenses reported by QuickBooks.</p>
+  </div>;
 }
 
 export default function ScopedFinancialKPICards(props) {

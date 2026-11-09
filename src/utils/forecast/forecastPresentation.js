@@ -23,8 +23,10 @@ export function parseForecastInput(text) {
   catch { return null; }
 }
 
+export const FORECAST_COLORS = Object.freeze({ revenue: '#2dd4bf', expenses: '#fbbf24', positive: '#34d399', negative: '#f0b8bd' });
+
 export const FORECAST_SERIES = [
-  { key: 'revenue', label: 'Revenue', color: '#2dd4bf' },
-  { key: 'expenses', label: 'Operating costs', color: '#fbbf24' },
-  { key: 'operating_net_cash_flow', label: 'Operating net', color: '#34d399' },
+  { key: 'revenue', label: 'Revenue', color: FORECAST_COLORS.revenue },
+  { key: 'expenses', label: 'Operating costs', color: FORECAST_COLORS.expenses },
+  { key: 'operating_net_cash_flow', label: 'Operating net', color: FORECAST_COLORS.positive },
 ];

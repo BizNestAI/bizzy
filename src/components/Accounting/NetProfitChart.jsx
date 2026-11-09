@@ -1,19 +1,22 @@
+import useMeasure from "./useChartMeasure.js";
+import HealthChartTooltip from "./HealthChartTooltip.jsx";
+import { FORECAST_COLORS, formatForecastAxis } from "../../utils/forecast/forecastPresentation.js";
 // File: /src/components/Accounting/NetProfitChart.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  BarChart, Bar, Cell, ReferenceLine, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
-import CardHeader from "../UI/CardHeader"; // ⬅️ shared header
+
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { apiFetch } from "../../utils/apiBase.js";
-import { buildCurrencyAxis, formatCurrencyTick } from "../../utils/currencyAxis.js";
+import { buildCurrencyAxis } from "../../utils/currencyAxis.js";
 
 /* ---------- helpers ---------- */
 function monthShortLabel(y,m){ return new Date(y, m-1, 1).toLocaleString(undefined,{month:"short"});}
 function seqLastNMonths({year,month,n=12}){ const out=[]; let y=year,m=month; for(let i=0;i<n;i++){out.unshift({year:y,month:m}); if(--m<1){m=12;y--;}} return out;}
 function allSame(values){ if(!values.length) return true; return values.every(v=>Number(v)===Number(values[0])); }
-function toChartData(rows){ return rows.map(r=>({ month: monthShortLabel(r.year,r.month), profit: r.found === false || r.profit === null || r.profit === undefined ? null : Number(r.profit) })); }
+function toChartData(rows){ return rows.map(r=>({ month: monthShortLabel(r.year,r.month), fullMonth: new Date(r.year,r.month-1,1).toLocaleString(undefined,{month:"short",year:"numeric"}), profit: r.found === false || r.profit === null || r.profit === undefined ? null : Number(r.profit) })); }
 function buildMock(windowMonths){
   const base=[7200,8200,10400,9300,8700,11600,12300,9900,13800,14200,15500,15700];
   const months = windowMonths.length ? windowMonths : seqLastNMonths({year:new Date().getFullYear(), month:new Date().getMonth()+1, n:12});
@@ -45,23 +48,7 @@ function coalesceProfit(payload){
 }
 
 /* tiny measure hook (ResizeObserver) */
-function useMeasure() {
-  const ref = useRef(null);
-  const [rect, setRect] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      const cr = entry?.contentRect;
-      if (cr) setRect({ width: cr.width, height: cr.height });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, rect];
-}
 
-/* ---------- component ---------- */
 export default function NetProfitChart({
   userId: userIdProp,
   businessId: businessIdProp,
@@ -174,9 +161,10 @@ export default function NetProfitChart({
             if(!r.ok) throw new Error(`HTTP ${r.status}`);
             const payload = await r.json();
             const profit = coalesceProfit(payload);
-            return { year, month, profit: Number(profit ?? 0) };
+            const found = profit != null && Number.isFinite(Number(profit));
+            return { year, month, profit: found ? Number(profit) : null, found };
           }catch{
-            return { year, month, profit: 0 };
+            return { year, month, profit: null, found: false };
           }
         }));
 
@@ -211,106 +199,23 @@ export default function NetProfitChart({
   // Measure container to tune margins / bar size responsively
   const [measureRef, { width: w }] = useMeasure();  // keep above returns
 
-  if(status==="loading"){
-    return (
-      <div className={`rounded-xl bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 ${className} animate-pulse`}>
-        <div className="space-y-3">
-          <div className="h-3 w-28 bg-white/15 rounded-full" />
-          <div className="h-5 w-44 bg-white/18 rounded-md" />
-          <div className="h-[160px] w-full bg-white/8 rounded-lg" />
-        </div>
-      </div>
-    );
-  }
-  if(!series || !series.length) return null;
-
-  const isMock = source === "mock";
-  const badgeClass = "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
-
-  // Responsive visuals
+  const values = (series || []).map(r => r.profit).filter(v => v != null && Number.isFinite(Number(v)));
+  const axis = buildCurrencyAxis(values, { includeZero: true, minAtZero: values.every(v => v >= 0), tickCount: 5, headroom: 0.15 });
   const small = (w || 0) < 520;
-  const angledLabels = small || compact;
-
-  const xTickCount  = small ? 6 : 12;              // months shown (we still force all labels)
-  const leftMargin  = small ? 18 : 24;
-  const rightMargin = small ? 4 : 6;
-  const topMargin   = compact ? 4 : 4;
-  const bottomMargin= angledLabels ? 26 : 24;      // month labels
-
-  const xTickStyle  = { fill: "rgba(255,255,255,0.66)", fontSize: small ? 10 : 11, fontWeight: 700 };
-  const importedValues = series.map((row) => row.profit).filter((value) => Number.isFinite(Number(value)));
-  const axis = buildCurrencyAxis(importedValues, { includeZero: true, minAtZero: importedValues.every((value) => Number(value) >= 0), tickCount: 5, headroom: 0.15 });
-
-  // Compute a reasonable barSize from width (12 months)
-  const paddingPerBar = small ? 1 : 1;
-  const approxBarSize = Math.max(
-    compact ? 22 : 24,
-    Math.floor(((w || 0) - leftMargin - rightMargin) / 12) - paddingPerBar - (compact ? 4 : 0)
-  );
-
-  // Darker emerald to match Insight cards
-  const BAR_COLOR = "#00D59C";
-
-  return (
-    <div className={`flex h-full flex-col rounded-xl border border-white/10 bg-[var(--panel)] px-3 pb-1 pt-4 shadow-[0_18px_40px_rgba(0,0,0,0.32)] ${className}`}>
-      {/* Compact CardHeader to match Pulse sizing */}
-      <CardHeader
-        title="NET PROFIT"
-        right={isMock ? null : <span className={badgeClass}>QuickBooks</span>}
-        size="sm"
-        dense
-        className="mb-1"
-        titleClassName="text-[13px]" // safe override if supported
-      />
-
-      <div ref={measureRef} className="min-h-0 flex-1">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart
-            data={series}
-            margin={{ top: topMargin, right: rightMargin, left: leftMargin, bottom: bottomMargin }}
-          >
-            {/* Grid hidden by default to remove dotted background lines */}
-            {showGrid && (
-              <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
-            )}
-
-            <XAxis
-              dataKey="month"
-              tick={xTickStyle}
-              tickLine={false}
-              axisLine={false}
-              interval={0}       // force all month labels
-              tickCount={xTickCount}
-              tickMargin={4}
-              minTickGap={0}
-              angle={angledLabels ? -35 : 0}
-              textAnchor={angledLabels ? "end" : "middle"}
-              height={angledLabels ? 34 : 30}
-            />
-            <YAxis
-              tick={{ fill: "rgba(255,255,255,0.62)", fontSize: small ? 11 : 13, fontWeight: 700 }}
-              tickLine={false}
-              axisLine={false}
-              width={leftMargin + 2}
-              domain={axis.domain}
-              ticks={axis.ticks}
-              tickFormatter={formatCurrencyTick}
-            />
-            <Tooltip
-              contentStyle={{ backgroundColor: "#111", border: "1px solid #333" }}
-              labelStyle={{ color: "#aaa" }}
-              formatter={(value)=>[`$${Number(value).toLocaleString()}`,"Net Profit"]}
-              wrapperStyle={{ zIndex: 30 }}
-            />
-            <Bar
-              dataKey="profit"
-              fill={BAR_COLOR}
-              radius={[4,4,0,0]}
-              barSize={approxBarSize}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
+  return <section className={`forecast-chart-surface health-chart-panel financial-health-visual ${className}`} aria-label="Net profit trend">
+    <header className="health-panel-header"><h3>Net profit · prior 12 months</h3>{['mock','demo'].includes(source) && <span className="forecast-badge">Sample data</span>}</header>
+    {status === 'loading' ? <div className="health-skeleton health-chart-skeleton" role="status">Loading profit history…</div> : !values.length ? <div className="forecast-empty">No profit history available for the selected window.</div> : <div ref={measureRef} className="health-chart-canvas">
+      <ResponsiveContainer width="100%" height="100%"><BarChart data={series} margin={{top:18,right:small ? 24 : 40,left:12,bottom:10}}>
+        {showGrid && <CartesianGrid vertical={false} strokeDasharray="3 6" stroke="rgba(255,255,255,0.07)"/>}
+        <XAxis dataKey="month" tick={{fill:'#a3aea7',fontSize:11}} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={compact ? 10 : 16} tickMargin={10} height={30}/>
+        <YAxis width={70} tick={{fill:'#a3aea7',fontSize:11}} tickLine={false} axisLine={false} domain={axis.domain} ticks={axis.ticks} tickFormatter={formatForecastAxis}/>
+        <ReferenceLine y={0} stroke="rgba(251,191,36,0.28)" strokeDasharray="4 5"/>
+        {series?.length > 0 && <ReferenceLine x={series.at(-1).month} stroke="rgba(255,255,255,0.16)" strokeDasharray="3 5" label={{value:'Selected',fill:'#a3aea7',fontSize:10,position:'insideTopRight'}}/>}
+        <Tooltip content={<HealthChartTooltip kind="profit"/>} wrapperStyle={{zIndex:30}} cursor={{fill:'rgba(255,255,255,0.035)'}}/>
+        <Bar dataKey="profit" radius={[3,3,3,3]} maxBarSize={26} isAnimationActive={false}>
+          {series.map((r,i)=><Cell key={i} fill={r.profit < 0 ? FORECAST_COLORS.negative : FORECAST_COLORS.positive} fillOpacity={i === series.length-1 ? 1 : 0.8} stroke={i === series.length-1 ? (r.profit < 0 ? FORECAST_COLORS.negative : FORECAST_COLORS.positive) : 'none'} strokeWidth={2}/>)}
+        </Bar>
+      </BarChart></ResponsiveContainer>
+    </div>}
+  </section>;
 }

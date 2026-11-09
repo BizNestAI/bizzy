@@ -67,7 +67,7 @@ test("Health distinguishes empty, auth, QBO, and backend load failure states", (
 });
 
 test("Health refresh is non-blocking and uses backend refresh metadata", () => {
-  assert.match(dashboard, /Refreshing\.\.\./);
+  assert.match(dashboard, /Refreshing(?:\.\.\.|…)/);
   assert.match(dashboard, /selectedMonthMeta\.lastRefreshedAt/);
   assert.doesNotMatch(dashboard, /bizzy:lastFinancialRefresh/);
   assert.match(dashboard, /setFinancialRefreshVersion\(\(version\) => version \+ 1\)/);
@@ -181,7 +181,7 @@ test("monthly-summary top spending category comes from QBO snapshot expense rows
 });
 
 test("Health widgets cache rendered persisted data for stale-while-revalidate", () => {
-  assert.match(kpis, /const KPI_CACHE = new Map\(\)/);
+  assert.match(kpis, /readModuleSnapshot\("financials", cacheScope\)/);
   assert.match(revenue, /const REVENUE_SERIES_CACHE = new Map\(\)/);
   assert.match(profit, /const NET_PROFIT_SERIES_CACHE = new Map\(\)/);
   assert.match(expenses, /const EXPENSE_BREAKDOWN_CACHE = new Map\(\)/);
