@@ -123,7 +123,7 @@ Database cases cover the preceding persistence/recovery regressions plus reconci
 
 Validation results:
 
-- Database integration: **23/23 pass** (22 scenarios plus the parent suite).
+- Database integration: **24/24 pass** (23 scenarios plus the parent suite).
 - Focused existing and new contract regressions: **90/90 pass**.
 - Changed JavaScript/test ESLint: **passes**.
 - Production build: **passes**, with existing bundle-size warnings.
@@ -139,3 +139,11 @@ The harness no longer blanket-grants all function execution to service_role; doi
 4. Define the operational live-ledger review procedure/evidence expectations and operator responsibilities. Attestation is deliberately minimal and contains no external payload; no automatic duplicate conclusion is inferred from missing local indicators.
 5. A later, separately authorized posting activation must recheck mappings, scope, protected workflows, current duplicate/receipt evidence and eligibility. This release workflow never supplies that activation.
 6. Adapt Books UI to the four-dimensional status contract, required missing-admission counts and latest-transaction versus last-checked semantics. Confirm the configurable SLA and neutral tones for intentional holds/disconnections before customer rollout.
+
+## Managed-role compatibility correction
+
+The original migration explicitly regranted ADMIN to `postgres` twice. A managed, non-superuser role creator can receive SQLSTATE `0LP01` (“ADMIN option cannot be granted back to your own grantor”) from those statements. The earlier superuser-only fixture missed this. The corrected migration adjusts only SET/INHERIT membership options, preserving the automatically supplied creator ADMIN authority. Function ACL cleanup now occurs before temporary inherited ownership is relinquished.
+
+An added disposable PostgreSQL test uses a non-superuser CREATEROLE login: the original ADMIN regrant reproduces the exact error; corrected grants, function ownership transfer, private ACL changes and removal of SET/INHERIT succeed. The role retains explicit helper execution without runtime role inheritance. The existing full lifecycle/privilege regression suite also runs against the corrected migration. This models the relevant managed-role behavior; it does not inspect the remote Supabase role catalog.
+
+For an attempted SQL-editor application, inspect state before retrying: the screenshot alone cannot establish whether any earlier statements committed. In the usual all-statements-in-one-transaction execution, the error rolls back that execution. If statements were run separately, the policies may already exist. Do not drop the executor role or weaken hold guards to retry. The migration is not a general rerunnable script (its CREATE POLICY statements deliberately reject duplicates).

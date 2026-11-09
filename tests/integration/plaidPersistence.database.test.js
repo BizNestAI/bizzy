@@ -129,6 +129,35 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
       if (r.status === 0) break;
       await pause();
     }
+    await t.test("managed non-superuser role creator rejects ADMIN regrant; temporary ownership transfer remains restricted", () => {
+      sql(`create role managed_migration_fixture login createrole;
+        grant create, usage on schema public to managed_migration_fixture with grant option;`);
+      const rejected = spawnSync("docker", ["exec", "-i", name, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-At"], {
+        input: `set session authorization managed_migration_fixture;
+          create role managed_executor_fixture nologin noinherit;
+          grant managed_executor_fixture to managed_migration_fixture with admin true, inherit true, set true;`, encoding: "utf8"
+      });
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /ADMIN option cannot be granted back to your own grantor/);
+      sql(`set session authorization managed_migration_fixture;
+        grant managed_executor_fixture to managed_migration_fixture with inherit true, set true;
+        grant create, usage on schema public to managed_executor_fixture;
+        create function public.managed_role_fixture() returns integer language sql security definer as 'select 1';
+        alter function public.managed_role_fixture() owner to managed_executor_fixture;
+        revoke create on schema public from managed_executor_fixture;
+        revoke all on function public.managed_role_fixture() from public;
+        grant execute on function public.managed_role_fixture() to managed_migration_fixture;
+        grant managed_executor_fixture to managed_migration_fixture with inherit false, set false;
+        reset session authorization;`);
+      assert.equal(sql("select pg_has_role('managed_migration_fixture','managed_executor_fixture','USAGE'), pg_has_role('managed_migration_fixture','managed_executor_fixture','SET')"), "f|f");
+      assert.equal(sql("set session authorization managed_migration_fixture; select public.managed_role_fixture()" ).split("\n").at(-1), "1");
+      sql(`set session authorization managed_migration_fixture;
+        revoke all on schema public from managed_executor_fixture;
+        reset session authorization;
+        drop function public.managed_role_fixture();
+        drop owned by managed_executor_fixture; drop role managed_executor_fixture;
+        drop owned by managed_migration_fixture; drop role managed_migration_fixture;`);
+    });
     sql(schema());
     const port = docker(["run", "--pull=never", "--name", apiName, "--network", network,
       "-p", "127.0.0.1::3000", "-e", `PGRST_DB_URI=postgres://postgres:local-only@${name}:5432/postgres`,

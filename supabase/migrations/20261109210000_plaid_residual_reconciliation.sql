@@ -181,7 +181,7 @@ $$;
 -- Only the outer vetted reconciliation RPC (owned by postgres) can invoke it.
 -- Temporary migration-owner membership permits safe ownership transfer even
 -- on managed Postgres. Application roles are never members.
-grant plaid_residual_hold_executor to postgres with admin true, inherit true, set true;
+grant plaid_residual_hold_executor to postgres with inherit true, set true;
 grant create on schema public to plaid_residual_hold_executor;
 create or replace function public.clear_approved_plaid_residual_holds(p_business_id uuid,p_batch_id uuid,p_manifest_id uuid,p_ids uuid[])
 returns integer language plpgsql security definer set search_path=pg_catalog,public as $$
@@ -199,10 +199,13 @@ $$;
 alter function public.clear_approved_plaid_residual_holds(uuid,uuid,uuid,uuid[]) owner to plaid_residual_hold_executor;
 revoke create on schema public from plaid_residual_hold_executor;
 -- Retain only role-management authority for future reviewed migrations;
--- postgres does not inherit this helper role or obtain SET ROLE through it.
-grant plaid_residual_hold_executor to postgres with admin true, inherit false, set false;
+-- Never regrant ADMIN to the creator: managed Postgres already grants ADMIN
+-- through the bootstrap role. Only adjust this migration's SET/INHERIT grant.
+-- Perform function ACL changes before giving up inherited owner privileges.
 revoke all on function public.clear_approved_plaid_residual_holds(uuid,uuid,uuid,uuid[]) from public,anon,authenticated,service_role;
 grant execute on function public.clear_approved_plaid_residual_holds(uuid,uuid,uuid,uuid[]) to postgres;
+grant plaid_residual_hold_executor to postgres with inherit false, set false;
+
 
 create or replace function public.protect_plaid_residual_recovery_hold()
 returns trigger language plpgsql security invoker set search_path=pg_catalog,public as $$
