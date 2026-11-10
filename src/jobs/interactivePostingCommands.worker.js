@@ -1,4 +1,5 @@
 /* global process */
+import { createPollBackoff } from "./adaptiveWorkerPolling.js";
 import { supabase } from "../services/supabaseAdmin.js";
 import { postSingleBookkeepingTransactionNow } from "./booksPost.cron.js";
 import {
@@ -19,6 +20,8 @@ const CHANNEL = "bookkeeping_interactive_posting_commands";
 
 let pollTimer = null;
 let pollRunning = false;
+let pollStopped = true;
+const pollBackoff = createPollBackoff({ baseMs: Math.max(1, POLL_SECONDS) * 1000, maxMs: 30_000 });
 let listenClient = null;
 let listenerStarted = false;
 let missingRpcLogged = false;
@@ -169,7 +172,7 @@ function handlePollFailure(err) {
     workerHealth.last_error = err?.message || String(err);
     workerHealth.last_error_code = err?.code || err?.status || null;
     workerHealth.last_error_at = new Date().toISOString();
-    workerHealth.next_poll_delay_ms = Math.max(1, POLL_SECONDS) * 1000;
+    workerHealth.next_poll_delay_ms = pollBackoff.next();
     return workerHealth.next_poll_delay_ms;
   }
 
@@ -255,25 +258,31 @@ export function startInteractivePostingCommandWorker() {
     console.info("[interactive-posting-command-worker] disabled via env");
     return null;
   }
+  pollStopped = false;
+  pollBackoff.reset();
   startPgListener().catch((err) => {
     console.warn("[interactive-posting-command-worker] listener startup failed", err?.message || err);
   });
   const baseIntervalMs = Math.max(1, POLL_SECONDS) * 1000;
   const scheduleNext = (delayMs = baseIntervalMs) => {
+    if (pollStopped) return;
     const nextDelayMs = delayMs === 0 ? 0 : Math.max(baseIntervalMs, delayMs);
     pollTimer = setTimeout(tick, nextDelayMs);
     pollTimer.unref?.();
   };
   const tick = () => {
+    if (pollStopped) return;
     if (pollRunning) {
       scheduleNext(baseIntervalMs);
       return;
     }
     pollRunning = true;
     runInteractivePostingCommandWorkerOnce()
-      .then(() => {
+      .then((result) => {
         markWorkerHealthy();
-        scheduleNext(baseIntervalMs);
+        const delayMs = result.claimed > 0 ? pollBackoff.reset() : pollBackoff.next();
+        workerHealth.next_poll_delay_ms = delayMs;
+        scheduleNext(delayMs);
       })
       .catch((err) => {
         const delayMs = handlePollFailure(err);
@@ -292,6 +301,7 @@ export function startInteractivePostingCommandWorker() {
 }
 
 export async function stopInteractivePostingCommandWorker() {
+  pollStopped = true;
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
   if (listenClient) {

@@ -1,5 +1,6 @@
 /* global process */
 import crypto from "crypto";
+import { createAdaptivePollLoop } from "./adaptiveWorkerPolling.js";
 import { supabase } from "../services/supabaseAdmin.js";
 import { getQBOClient } from "../utils/qboClient.js";
 import { qboEnvName } from "../utils/qboEnv.js";
@@ -3963,15 +3964,25 @@ export function startBooksPostingCron() {
   if (process.env.DISABLE_MERCHANT_APPROVAL_QUEUE === "true") return;
   const queueIntervalMs = Math.max(1, MERCHANT_APPROVAL_QUEUE_SECONDS) * 1000;
   log.info("[books-post] merchant approval queue started, interval seconds:", MERCHANT_APPROVAL_QUEUE_SECONDS);
-  setInterval(() => {
-    if (merchantApprovalQueueRunning) return;
-    merchantApprovalQueueRunning = true;
-    runMerchantApprovalQueueOnce()
-      .catch((err) => log.error("[books-post] merchant approval queue error", err))
-      .finally(() => {
+  createAdaptivePollLoop({
+    baseMs: queueIntervalMs,
+    maxMs: 30_000,
+    run: async () => {
+      if (merchantApprovalQueueRunning) return null;
+      merchantApprovalQueueRunning = true;
+      try {
+        const result = await runMerchantApprovalQueueOnce();
+        if (result.ok === false || result.merchant_approval_operations?.failed_count > 0) {
+          throw new Error("merchant_approval_sweep_failed");
+        }
+        return result;
+      } finally {
         merchantApprovalQueueRunning = false;
-      });
-  }, queueIntervalMs);
+      }
+    },
+    hasWork: (result) => Number(result?.merchant_approval_operations?.scanned || 0) > 0,
+    onError: (err) => log.error("[books-post] merchant approval queue error", { error_class: sanitizedErrorClass(err) }),
+  }).start();
   setInterval(() => {
     if (vendorRuleLearningQueueRunning) return;
     vendorRuleLearningQueueRunning = true;
@@ -4146,7 +4157,7 @@ export async function runMerchantApprovalQueueOnce(options = {}) {
   const businessId = options?.businessId || null;
   const targetedTransactionIds = Array.isArray(options?.transactionIds) ? options.transactionIds : [];
   const targetedOperationIds = Array.isArray(options?.operationIds) ? options.operationIds : [];
-  for (const operationId of targetedOperationIds.length ? targetedOperationIds : [null]) {
+  for (const operationId of options?.targeted ? (targetedOperationIds.length ? targetedOperationIds : [null]) : []) {
     logMerchantApprovalTimeline("approval_claim_attempted", {
       operation_id: operationId,
       business_id: businessId,

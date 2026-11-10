@@ -1,6 +1,7 @@
 // /src/server.js
 /* global process */
 import "dotenv/config";
+import { startBackgroundWorkers } from "./jobs/backgroundWorkerStartup.js";
 import express from "express";
 import fileUpload from "express-fileupload";
 import morgan from "morgan";
@@ -350,27 +351,24 @@ app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
 
-if (String(process.env.DISABLE_BACKGROUND_WORKERS || "").toLowerCase() !== "true") {
-  startForecastCron();
-  startBooksPostingCron();
-  startInteractivePostingCommandWorker();
-  startBookkeepingProcessingWorker();
-  startOperatorRequestSummaryCron();
-  startPlaidDailySyncCron();
-  startContractorCfoInsightsCron();
-  startTaxClassificationWorker();
-  startTaxRecalculationWorker();
-  startTaxScheduler();
-  startQboJobCostingSyncCron();
-  startQboFinancialHealthCron();
-  startMonthlyFinancialPulseCron();
-  if (String(process.env.DISABLE_RECON_CRON || "").toLowerCase() !== "true") {
-    startReconciliationCron();
-  } else {
-    console.info("[recon-cron] disabled via env");
-  }
-} else {
-  console.info("[background-workers] disabled via env");
-}
+startBackgroundWorkers({ workers: [
+  startForecastCron,
+  startBooksPostingCron,
+  startInteractivePostingCommandWorker,
+  startBookkeepingProcessingWorker,
+  startOperatorRequestSummaryCron,
+  startPlaidDailySyncCron,
+  startContractorCfoInsightsCron,
+  startTaxClassificationWorker,
+  startTaxRecalculationWorker,
+  startTaxScheduler,
+  startQboJobCostingSyncCron,
+  startQboFinancialHealthCron,
+  startMonthlyFinancialPulseCron,
+  () => {
+    if (String(process.env.DISABLE_RECON_CRON || "").toLowerCase() !== "true") startReconciliationCron();
+    else console.info("[recon-cron] disabled via env");
+  },
+] });
 
 export default app;

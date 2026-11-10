@@ -1,4 +1,5 @@
 /* global process */
+import { createTaxOutboxCircuitBreaker } from "./taxOutboxCircuitBreaker.js";
 import { supabase } from "../../supabaseAdmin.js";
 import { processPendingTaxRecalculationRequests } from "./processTaxRecalculationRequests.js";
 import { processTaxWorkspaceProjectionRequests } from "../processTaxWorkspaceProjectionRequests.js";
@@ -7,6 +8,8 @@ import { processTaxBookkeepingChangeOutbox } from "../processTaxBookkeepingChang
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_BATCH_SIZE = 10;
 let timer = null;
+let inFlight = false;
+const processOutbox = createTaxOutboxCircuitBreaker({ run: processTaxBookkeepingChangeOutbox });
 
 export function isTaxRecalculationWorkerEnabled() {
   const raw = process.env.TAX_RECALCULATION_WORKER_ENABLED;
@@ -25,11 +28,17 @@ export function startTaxRecalculationWorker({
     return null;
   }
   const run = () => {
-    Promise.all([
+    if (inFlight) return;
+    inFlight = true;
+    Promise.allSettled([
       processPendingTaxRecalculationRequests({ supabase, workerId, batchSize }),
       processTaxWorkspaceProjectionRequests({ supabase, workerId: `${workerId}:workspace`, batchSize: Math.min(batchSize, 5) }),
-      processTaxBookkeepingChangeOutbox({ supabase, workerId: `${workerId}:bookkeeping-tax`, batchSize }),
-    ]).then(([result, workspace, bookkeepingTax]) => {
+      processOutbox({ supabase, workerId: `${workerId}:bookkeeping-tax`, batchSize }),
+    ]).then((outcomes) => {
+        for (const outcome of outcomes) {
+          if (outcome.status === "rejected") console.warn("[tax-recalculation-worker] failed", outcome.reason?.code || "worker_failed");
+        }
+        const [result, workspace, bookkeepingTax] = outcomes.map((outcome) => outcome.status === "fulfilled" ? outcome.value : { processed: 0 });
         if (result.processed > 0) {
           console.info("[tax-recalculation-worker] processed", {
             workerId,
@@ -42,7 +51,8 @@ export function startTaxRecalculationWorker({
         if (workspace.processed > 0) console.info("[tax-workspace-worker] processed", { workerId, ...workspace });
         if (bookkeepingTax.processed > 0) console.info("[tax-bookkeeping-outbox] processed", { workerId, ...bookkeepingTax });
       })
-      .catch((err) => console.warn("[tax-recalculation-worker] failed", err?.message || err));
+      .catch((err) => console.warn("[tax-recalculation-worker] failed", err?.code || "worker_failed"))
+      .finally(() => { inFlight = false; });
   };
   timer = setInterval(run, Math.max(5_000, intervalMs));
   timer.unref?.();
