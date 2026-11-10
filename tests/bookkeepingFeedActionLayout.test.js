@@ -14,11 +14,14 @@ test("Books Review handled actions reserve enough width and keep labels on one l
   assert.match(source, /postingActionLabel/);
 });
 
-test("Handled posting timestamps reserve width and never truncate AM or PM", () => {
+test("Handled posting status stays within its column without truncating timestamps or reasons", () => {
   assert.match(source, /QBO_COL_WIDTH = 152/);
   assert.match(source, /QBO_MIN_COL_WIDTH = 152/);
   assert.match(source, /title=\{\[qboSchedule\.label, qboSchedule\.detail\]/);
-  assert.match(source, /<span className="whitespace-nowrap">\{qboSchedule\.label\}<\/span>/);
+  assert.match(source, /min-w-0 max-w-full[^`]*whitespace-normal/);
+  assert.match(source, /overflow-hidden px-3 py-1 text-center/);
+  assert.match(source, /minWidth: totalGridWidth \+ FEED_ROW_PADDING/);
+  assert.match(source, /break-words \[overflow-wrap:anywhere\]/);
   assert.doesNotMatch(source, /<span className="truncate">\{qboSchedule\.label\}<\/span>/);
 });
 

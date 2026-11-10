@@ -22,8 +22,9 @@ const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
 const BASE_COL_WIDTHS = [36, 90, 220, 160, 245, 105, 180];
 const BASE_MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 180];
-// Keep a complete localized timestamp (including AM/PM) visible. The table can
-// scroll horizontally on narrow viewports instead of clipping posting time.
+// Status text wraps inside its own column; full timestamps and reasons remain visible.
+// Include the grid rows’ horizontal padding in the scrollable width.
+const FEED_ROW_PADDING = 24;
 const QBO_COL_WIDTH = 152;
 const QBO_MIN_COL_WIDTH = 152;
 
@@ -1343,7 +1344,7 @@ export default function BookkeepingFeed({
           if (hasHorizontalOverflow) pulseHorizontalScrollbar();
         }}
       >
-        <div style={{ minWidth: totalGridWidth }}>
+        <div style={{ minWidth: totalGridWidth + FEED_ROW_PADDING }}>
           <div
             className="grid text-[11px] uppercase tracking-wide text-slate-400 border-b px-3 py-2.5 divide-x divide-[rgba(255,255,255,0.06)]"
             style={{ background: panelBg, borderColor: panelBorder, columnGap: 0, rowGap: 0, gridTemplateColumns: gridTemplate }}
@@ -1374,7 +1375,7 @@ export default function BookkeepingFeed({
               const onClick =
                 key === "date" ? () => cycleSort("date") : key === "description" ? () => cycleSort("description") : undefined;
               return (
-                <div key={key} className={`relative flex items-center ${align} w-full`}>
+                <div key={key} className={`relative flex min-w-0 items-center ${align} w-full ${key === "total" ? "pr-4" : key === "posts" ? "px-3" : ""}`}>
                   <button
                     type={onClick ? "button" : "button"}
                     onClick={onClick}
@@ -1766,13 +1767,13 @@ export default function BookkeepingFeed({
                 })()}
               </div>
               {activeFeed === "handled" && showQboSchedule && qboSchedule ? (
-                <div className="flex min-w-0 items-center justify-center px-2 text-center" title={[qboSchedule.label, qboSchedule.detail].filter(Boolean).join(" — ")}>
+                <div className="flex min-w-0 items-center justify-center overflow-hidden px-3 py-1 text-center" title={[qboSchedule.label, qboSchedule.detail].filter(Boolean).join(" — ")}>
                   <span
-                    className={`inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-full border px-2 py-[3px] text-[10px] font-semibold leading-tight ${
+                    className={`inline-flex min-w-0 max-w-full items-center justify-center whitespace-normal rounded-xl border px-2 py-1 text-[10px] font-semibold leading-snug ${
                       QBO_SCHEDULE_TONE_CLASSES[qboSchedule.tone] || QBO_SCHEDULE_TONE_CLASSES.neutral
                     }`}
                   >
-                    <span className="whitespace-nowrap">{qboSchedule.label}</span>
+                    <span className="min-w-0 break-words [overflow-wrap:anywhere]">{qboSchedule.label}</span>
                   </span>
                 </div>
               ) : null}
