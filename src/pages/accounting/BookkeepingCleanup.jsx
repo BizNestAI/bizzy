@@ -1,3 +1,6 @@
+import useProcessingRunProgress from '../../hooks/useProcessingRunProgress.js';
+import ProcessingProgressNotice from '../../components/Accounting/ProcessingProgressNotice.jsx';
+import { refreshProcessingFeed } from '../../utils/processingProgressView.js';
 import { plaidStatusView, postingLabel } from '../../utils/plaidStatusView.js';
 import { moduleSessionIdentity, moduleCacheVersion, readModuleSnapshot, writeModuleSnapshot } from '../../services/modules/moduleSessionCache.js';
 import { resolveModuleDataState, unsafeModuleError } from '../../services/modules/moduleDataState.js';
@@ -33,7 +36,6 @@ import {
   updateHandledTransaction,
   excludeTransaction,
   restoreExcludedTransaction,
-  getBookkeepingProcessingStatus,
   getMappingStatus,
   getAccountMappings,
   getClarificationRequests,
@@ -904,6 +906,8 @@ function BookkeepingCleanup() {
   const [accountFilter, setAccountFilter] = useState(() => { const cached = readAccountCardCache(businessId); const account = cached.find(item => item.connection_state === "connected") || cached[0]; return usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : savedView?.accountFilter || (account ? getAcctKey(account) : null); });
   const [rowsPerPage, setRowsPerPage] = useState(() => savedView?.rowsPerPage || 25);
   const [page, setPage] = useState(() => savedView?.page || 1);
+  const booksProgressScopeRef = useRef({ businessId, accountFilter });
+  booksProgressScopeRef.current = { businessId, accountFilter };
   const initialPage = usingDemo ? null : readTransactionPageCache(buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage }));
   const [transactionDataKey, setTransactionDataKey] = useState([businessId || "", accountFilter || "", activeTab, dateRange, page, rowsPerPage].join("|"));
   const [transactions, setTransactions] = useState(() => initialPage?.rows || []);
@@ -914,13 +918,9 @@ function BookkeepingCleanup() {
   const [backgroundRefreshingTxns, setBackgroundRefreshingTxns] = useState(false);
   const [transactionLoadError, setTransactionLoadError] = useState(null);
   const [categorizationStatus, setCategorizationStatus] = useState(null);
-  const [processingStatus, setProcessingStatus] = useState(null);
-  const [completedProcessingMessage, setCompletedProcessingMessage] = useState(null);
   const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   const lastSuccessfulTransactionPagesRef = useRef(new Map());
-  const lastProcessingRunRef = useRef(null);
-  const processingCompleteTimerRef = useRef(null);
   const approvalMutationLedgerRef = useRef(new Map());
   const transactionReloadSeqRef = useRef(0);
   const transactionViewKeyRef = useRef("");
@@ -1260,16 +1260,6 @@ function BookkeepingCleanup() {
     }
   }, [businessId, usingDemo]);
 
-  const loadProcessingStatus = useCallback(async () => {
-    if (!businessId || usingDemo) return;
-    try {
-      const res = await getBookkeepingProcessingStatus(businessId);
-      setProcessingStatus(res || null);
-    } catch (e) {
-      console.warn("[bookkeeping] processing status fetch failed", e?.message || e);
-    }
-  }, [businessId, usingDemo]);
-
   const loadAutoPostStatus = useCallback(async () => {
     if (!businessId || usingDemo) return;
     setLoadingAutoPost(true);
@@ -1413,10 +1403,14 @@ function BookkeepingCleanup() {
         range_start: dateFilter.rangeStart,
         range_end: dateFilter.rangeEnd,
       });
+      if (booksProgressScopeRef.current.businessId !== businessId || booksProgressScopeRef.current.accountFilter !== accountFilter) return false;
       setTabCounts(overlayPendingApprovalCounts(counts));
+      return true;
     } catch (e) {
+      if (booksProgressScopeRef.current.businessId !== businessId || booksProgressScopeRef.current.accountFilter !== accountFilter) return false;
       console.warn("[bookkeeping] transaction counts fetch failed", e?.message || e);
       setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
+      return false;
     }
   }, [accountFilter, businessId, dateFilter, usingDemo, overlayPendingApprovalCounts]);
 
@@ -1443,44 +1437,7 @@ function BookkeepingCleanup() {
     loadClarifications();
   }, [loadClarifications]);
 
-  useEffect(() => {
-    if (usingDemo || !businessId) return undefined;
-    loadProcessingStatus();
-    if (Number(processingStatus?.active_count || 0) <= 0) return undefined;
-    const timer = window.setInterval(() => {
-      loadProcessingStatus();
-    }, 15000);
-    return () => window.clearInterval(timer);
-  }, [businessId, loadProcessingStatus, processingStatus?.active_count, usingDemo]);
-
-  useEffect(() => {
-    if (usingDemo) return;
-    const activeCount = Number(processingStatus?.active_count || 0);
-    if (activeCount > 0) {
-      lastProcessingRunRef.current = processingStatus?.current_run || { expected_count: activeCount };
-      setCompletedProcessingMessage(null);
-      if (processingCompleteTimerRef.current) {
-        window.clearTimeout(processingCompleteTimerRef.current);
-        processingCompleteTimerRef.current = null;
-      }
-      return;
-    }
-    const lastRun = lastProcessingRunRef.current;
-    if (!lastRun) return;
-    const count = Math.max(0, Number(lastRun.expected_count || lastRun.processed_count || 0));
-    lastProcessingRunRef.current = null;
-    if (count > 0) {
-      setCompletedProcessingMessage(`${count} ${count === 1 ? "transaction" : "transactions"} categorized`);
-      processingCompleteTimerRef.current = window.setTimeout(() => {
-        setCompletedProcessingMessage(null);
-        processingCompleteTimerRef.current = null;
-      }, window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? 1200 : 3600);
-    }
-  }, [processingStatus?.active_count, processingStatus?.current_run, usingDemo]);
-
-  useEffect(() => () => {
-    if (processingCompleteTimerRef.current) window.clearTimeout(processingCompleteTimerRef.current);
-  }, []);
+  const runProgress = useProcessingRunProgress(businessId, accountFilter, !usingDemo);
 
   const accountCards = useMemo(() => {
     let cards;
@@ -1743,9 +1700,6 @@ function BookkeepingCleanup() {
   const isHandledTab = activeTab === "handled";
   const isMatchedTab = activeTab === "matched";
   const isExcludedTab = activeTab === "excluded";
-  const hasVisibleRows = feedRows.length > 0;
-  const serverProcessingCount = Number(processingStatus?.active_count || 0);
-  const hasRelevantProcessing = serverProcessingCount > 0;
   const isPreparingCategories = Boolean(categorizationStatus);
   const isEmpty = !loadingTxns && !isPreparingCategories && feedRows.length === 0;
   const moduleState = resolveModuleDataState({
@@ -1768,18 +1722,6 @@ function BookkeepingCleanup() {
     }
     return null;
   }, [categorizationStatus]);
-  const processingMessage = useMemo(() => {
-    if (!hasRelevantProcessing) return null;
-    const run = processingStatus?.current_run || null;
-    if (Number(run?.expected_count || 0) > 0) {
-      const processed = Math.max(0, Number(run.processed_count || 0));
-      const expected = Math.max(processed, Number(run.expected_count || 0));
-      return `Categorized ${processed} of ${expected} transactions.`;
-    }
-    return serverProcessingCount === 1
-      ? "Categorizing 1 new transaction."
-      : `Categorizing ${serverProcessingCount} new transactions.`;
-  }, [hasRelevantProcessing, processingStatus?.current_run, serverProcessingCount]);
   const manualPostSummary = manualPostTxn ? getManualPostSummary(manualPostTxn) : null;
   const bulkPostSummary = bulkPostDialog?.type === "confirm"
     ? summarizeBulkPost(bulkPostDialog.transactions, new Map(chartAccounts.map((account) => [String(account.id), account.name])))
@@ -3085,9 +3027,8 @@ function BookkeepingCleanup() {
     setTotalCount(null);
     if (!usingDemo && businessId) {
       loadMappingStatus();
-      loadProcessingStatus();
     }
-  }, [accountFilter, activeTab, dateRange, showCategorized, loadMappingStatus, loadProcessingStatus, usingDemo, businessId]);
+  }, [accountFilter, activeTab, dateRange, showCategorized, loadMappingStatus, usingDemo, businessId]);
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -3188,19 +3129,23 @@ function BookkeepingCleanup() {
     try {
       const res = await fetchAccounts(businessId);
       const loadedAccounts = res?.accounts || [];
+      if (booksProgressScopeRef.current.businessId !== businessId) return false;
       setAccounts(loadedAccounts);
       writeAccountCardCache(businessId, loadedAccounts);
       setLastSyncAt(res?.meta?.last_sync_at || null);
-      if (!accountFilter && loadedAccounts.length) {
+      if (!accountFilter && !booksProgressScopeRef.current.accountFilter && loadedAccounts.length) {
         const defaultAccount = loadedAccounts.find((account) => account.connection_state === "connected") || loadedAccounts[0];
         const key = getAcctKey(defaultAccount);
         if (key) setAccountFilter(key);
       }
+      return true;
     } catch (e) {
+      if (booksProgressScopeRef.current.businessId !== businessId) return false;
       if (unsafeModuleError(e)) { setAccounts([]); window.sessionStorage?.removeItem(buildAccountCacheKey(businessId)); }
       console.warn("[bookkeeping] accounts load failed", e?.message || e);
+      return false;
     } finally {
-      setLoadingAccounts(false);
+      if (booksProgressScopeRef.current.businessId === businessId) setLoadingAccounts(false);
     }
   }, [accountFilter, businessId, usingDemo]);
 
@@ -3260,7 +3205,7 @@ function BookkeepingCleanup() {
     loadQboAccountTypes();
   }, [loadQboAccountTypes]);
 
-  const reloadTransactions = useCallback(async ({ showBackgroundRefresh = true, refreshProcessingStatus = true, refreshCounts = true } = {}) => {
+  const reloadTransactions = useCallback(async ({ showBackgroundRefresh = true, refreshCounts = true } = {}) => {
     if (usingDemo || !businessId) return;
     const requestSeq = transactionReloadSeqRef.current + 1;
     transactionReloadSeqRef.current = requestSeq;
@@ -3487,9 +3432,7 @@ function BookkeepingCleanup() {
       }
 
       await loadMappingStatus();
-      if (refreshProcessingStatus === true) {
-        await loadProcessingStatus();
-      }
+      return true;
     } catch (e) {
       if (!isLatestRequest()) return;
       if (unsafeModuleError(e)) {
@@ -3538,7 +3481,7 @@ function BookkeepingCleanup() {
         }
       }
     }
-  }, [activeTab, accountFilter, businessId, dateFilter, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus, loadProcessingStatus, reconcileApprovalLedgerAfterRows, suppressLedgerRowsFromNeedsReview]);
+  }, [activeTab, accountFilter, businessId, dateFilter, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus, reconcileApprovalLedgerAfterRows, suppressLedgerRowsFromNeedsReview]);
 
   reloadTransactionsRef.current = reloadTransactions;
 
@@ -3904,31 +3847,12 @@ function BookkeepingCleanup() {
         </div>
       )}
 
-      {!usingDemo && hasVisibleRows && (categorizationMessage || processingMessage || completedProcessingMessage) ? (
-        <div
-          className="mb-2 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs text-slate-300"
-          style={{
-            background: "rgba(16,185,129,0.07)",
-            borderColor: "rgba(16,185,129,0.22)",
-          }}
-        >
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-300">
-            <div className="flex gap-[4px]">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce" style={{ animationDelay: "0ms" }} />
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce" style={{ animationDelay: "120ms" }} />
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce" style={{ animationDelay: "240ms" }} />
-            </div>
-          </div>
-          <div>
-            <p className="font-semibold text-slate-100">
-              {categorizationMessage ? "Updating transactions" : processingMessage ? "Categorizing new transactions" : completedProcessingMessage ? "Transactions categorized" : "Refreshing transactions"}
-            </p>
-            <p className="text-slate-400">
-              {categorizationMessage || processingMessage || completedProcessingMessage || "Updating this feed in the background without hiding your current rows."}
-            </p>
-          </div>
-        </div>
-      ) : null}
+      {!usingDemo ? <ProcessingProgressNotice key={`${businessId}:${accountFilter}`} run={runProgress.run} error={runProgress.error}
+        onRefresh={async () => {
+          await refreshProcessingFeed({ reloadAccounts, reloadCounts: loadTabCounts, reloadTransactions });
+          setLastSyncAt(new Date().toISOString());
+        }} /> : null}
+      {!runProgress.run && categorizationMessage ? <p role="status" className="mb-2 text-xs text-slate-400">{categorizationMessage}</p> : null}
 
       <div className="flex items-center gap-2 text-xs text-white/45">
         {lastSyncAt ? <span>Updated {new Date(lastSyncAt).toLocaleString()}</span> : null}

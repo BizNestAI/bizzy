@@ -1,3 +1,4 @@
+import { createProcessingProgressHandler } from '../processingProgress.controller.js';
 import { Router } from "express";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "../../../services/bookkeeping/backgroundBookkeepingProcessingService.js";
 
 const router = Router();
+router.get("/processing/progress", createProcessingProgressHandler());
 
 function setNoStoreHeaders(res) {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");

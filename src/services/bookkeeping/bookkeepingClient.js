@@ -1139,3 +1139,11 @@ export default {
   useExistingCanonicalQboVendor,
   createBizziCanonicalQboVendor,
 };
+
+export async function getBookkeepingRunProgress(businessId, accountId, { runId, signal } = {}) {
+  const query = new URLSearchParams({ account_id: accountId });
+  if (runId) query.set('run_id', runId);
+  return safeFetch(apiUrl(`/api/bookkeeping/processing/progress?${query}`), {
+    signal, cache: 'no-store', headers: withBizHeaders(businessId),
+  });
+}

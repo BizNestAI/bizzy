@@ -14,14 +14,11 @@ const approvalServiceSource = readFileSync(join(root, "src/services/bookkeeping/
 const postingWorkerSource = readFileSync(join(root, "src/jobs/interactivePostingCommands.worker.js"), "utf8");
 
 test("Books Review keeps loaded rows visible while categorization continues", () => {
-  assert.match(source, /const hasVisibleRows = feedRows\.length > 0/);
   assert.match(source, /resolveModuleDataState\([\s\S]*?hasData:[\s\S]*?typeof totalCount === 'number'/);
-  assert.match(source, /const processingMessage = useMemo/);
-  assert.match(source, /current_run/);
-  assert.match(source, /Categorized \$\{processed\} of \$\{expected\} transactions/);
-  assert.match(source, /completedProcessingMessage/);
-  assert.match(source, /\$\{count\} \$\{count === 1 \? "transaction" : "transactions"\} categorized/);
-  assert.match(source, /Categorizing \$\{serverProcessingCount\} new transactions/);
+  assert.match(source, /useProcessingRunProgress\(businessId, accountFilter, !usingDemo\)/);
+  assert.match(source, /<ProcessingProgressNotice/);
+  assert.match(readFileSync(join(root,"src/utils/processingProgressView.js"),"utf8"), /transaction.*processed/);
+  assert.doesNotMatch(readFileSync(join(root,"src/hooks/useProcessingRunProgress.js"),"utf8"), /setTransactions|reloadAccounts|reloadTransactions|setTabCounts/);
   assert.match(source, /You can keep working while this finishes/);
 });
 
@@ -34,7 +31,7 @@ test("Books Review caches the current transaction page across quick re-entry", (
   assert.match(source, /lastSuccessfulTransactionPagesRef\.current\.set\(cacheKey/);
   assert.match(source, /showBackgroundRefresh = true/);
   assert.match(source, /setBackgroundRefreshingTxns\(shouldShowBackgroundRefresh\)/);
-  assert.match(source, /Updating this feed in the background without hiding your current rows/);
+  assert.match(source, /refreshProcessingFeed\(\{ reloadAccounts, reloadCounts: loadTabCounts, reloadTransactions \}\)/);
 });
 
 test("Books Review keeps account cards visible while transaction rows load", () => {
@@ -84,8 +81,11 @@ test("Books Review account navigation does not trigger foreground enrichment or 
 });
 
 test("Books Review processing polling is read-only and only stays active while backend work is active", () => {
-  assert.match(source, /loadProcessingStatus\(\);[\s\S]*?if \(Number\(processingStatus\?\.active_count \|\| 0\) <= 0\) return undefined;[\s\S]*?window\.setInterval/);
-  assert.match(source, /processingStatus\?\.active_count/);
+  const poller=readFileSync(join(root,"src/utils/processingProgressView.js"),"utf8");
+  assert.match(poller, /processingProgressView\(current\)\.stopped/);
+  assert.match(poller, /controller\.abort\(\)/);
+  assert.match(poller, /10000:2500/);
+  assert.match(poller, /await fetchStatus/);
   assert.doesNotMatch(source, /retryBookkeepingProcessing\(businessId/);
   assert.doesNotMatch(source, /reconsiderSuggestions\(businessId/);
 });
@@ -145,7 +145,7 @@ test("Books Review feed loading is independent of interactive posting workers an
 
   assert.match(reloadBody, /fetchTransactions\(businessId/);
   assert.doesNotMatch(reloadBody, /claimInteractivePosting|runInteractivePosting|posting\/backlog|post-ready|plaid\/sync|retryBookkeepingProcessing/);
-  assert.match(source, /hasVisibleRows && \(categorizationMessage \|\| processingMessage \|\| completedProcessingMessage\)/);
+  assert.match(source, /<ProcessingProgressNotice key=\{`\$\{businessId\}:\$\{accountFilter\}`\} run=\{runProgress.run\}/);
   assert.match(postingWorkerSource, /isMissingInteractivePostingCommandRpcError/);
   assert.match(postingWorkerSource, /nextInteractivePostingPollDelayMs/);
 });

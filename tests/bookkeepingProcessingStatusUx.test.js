@@ -26,7 +26,10 @@ test("Books Review feed reads processing status without creating processing requ
   const processingRoute = read("src/api/bookkeeping/routes/bookkeeping.processing.routes.js");
   const txRoute = read("src/api/bookkeeping/routes/bookkeeping.transactions.routes.js");
 
-  assert.match(page, /getBookkeepingProcessingStatus\(businessId\)/);
+  assert.match(page, /useProcessingRunProgress\(businessId, accountFilter, !usingDemo\)/);
+  assert.match(read("src/hooks/useProcessingRunProgress.js"), /getBookkeepingRunProgress\(businessId,accountId,options\)/);
+  assert.match(processingRoute, /router\.get\("\/processing\/progress", createProcessingProgressHandler\(\)/);
+  assert.doesNotMatch(read("src/services/bookkeeping/processingRunProgress.js"), /\.insert\(|\.update\(|\.upsert\(|\.delete\(|\.rpc\(/);
   assert.match(client, /safeFetch\(apiUrl\("\/api\/bookkeeping\/processing\/status"\)/);
   assert.match(client, /cache:\s*"no-store"/);
   assert.match(processingRoute, /router\.get\("\/processing\/status"/);

@@ -74,6 +74,7 @@ function schema() {
   out+=pairEvents.slice(pairEvents.indexOf("create table"),pairEvents.indexOf("create index"));
   out+=read("supabase/migrations/20261109210000_plaid_residual_reconciliation.sql");
   out+=read("supabase/migrations/20261109230000_plaid_reconnect_shared_recovery.sql");
+  out+=read("supabase/migrations/20261110190000_plaid_processing_cohort_observability.sql");
   // Do not blanket-grant functions: that would expose the private hold helper.
   out += "alter table public.transaction_categorizations enable row level security; grant all on all tables in schema public to service_role;";
   return out;
@@ -190,6 +191,28 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
     // business_profiles uses real snapshot requirements/defaults.
     await ok(db.from("business_profiles").insert([business, otherBusiness].map(id => ({ id, business_name: "Synthetic", industry: "Synthetic", team_size: 1, state: "NC", services_offered: "Synthetic" }))));
 
+    await t.test("processing cohort persists atomically, reports exact run outcomes and is immutable", async () => {
+      const f=await fixture();
+      const events=Array.from({length:20},(_,i)=>({transaction_id:`progress-${f.key}-${i}`,account_id:f.key,date:"2026-11-01",name:"Synthetic",amount:10,pending:false}));
+      await sync(f,{added:events});
+      const {getProcessingRunProgress}=await import("../../src/services/bookkeeping/processingRunProgress.js");
+      let status=await getProcessingRunProgress({db,businessId:business,accountId:f.key});
+      assert.equal(status.run.total_count,20);assert.equal(status.run.processed_count,0);
+      const [run]=await ok(get("bank_sync_runs").eq("id",status.run.run_id));
+      const ids=run.meta.processing_cohort.map(m=>m.transaction_id);
+      assert.equal(ids.length,20);assert.equal(new Set(ids).size,20);
+      await finishSyntheticCategorization(ids.slice(0,17));
+      await ok(db.from("bookkeeping_processing_requests").update({status:"completed",processed_at:new Date().toISOString()}).eq("business_id",business).in("transaction_id",ids.slice(17)));
+      status=await getProcessingRunProgress({db,businessId:business,accountId:f.key,runId:run.id});
+      assert.equal(status.run.state,"completed");assert.equal(status.run.automatically_categorized_count,17);assert.equal(status.run.needs_review_count,3);
+      await ok(db.from("transaction_categorizations").update({status:"approved",decided_by:"user"}).eq("business_id",business).eq("transaction_id",ids[0]));
+      status=await getProcessingRunProgress({db,businessId:business,accountId:f.key,runId:run.id});
+      assert.equal(status.run.automatically_categorized_count,17);
+      const rejected=await db.from("bank_sync_runs").update({meta:{...run.meta,processing_cohort:[]}}).eq("business_id",business).eq("id",run.id);
+      assert.equal(rejected.error.code,"23514");
+      await assert.rejects(getProcessingRunProgress({db,businessId:otherBusiness,accountId:f.key}),error=>error.status===404);
+      assert.equal((await ok(get("bank_sync_runs").eq("id",run.id)))[0].meta.processing_cohort.length,20);
+    });
     await t.test("same-Item zero-new-account reconnect uses retained cursor, checkpoint and no replacement batch; Chase evidence preserved", async () => {
       const { completePlaidReconnect } = await import("../../src/services/plaid/plaidReconnectService.js");
       const f=await fixture(), actor=randomUUID();
