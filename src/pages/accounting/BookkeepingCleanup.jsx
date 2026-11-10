@@ -1,3 +1,4 @@
+import { plaidStatusView, postingLabel } from '../../utils/plaidStatusView.js';
 import { moduleSessionIdentity, moduleCacheVersion, readModuleSnapshot, writeModuleSnapshot } from '../../services/modules/moduleSessionCache.js';
 import { resolveModuleDataState, unsafeModuleError } from '../../services/modules/moduleDataState.js';
 import ModuleDataStatus from '../../components/UI/ModuleDataStatus.jsx';
@@ -733,30 +734,19 @@ function AccountCard({
 }) {
   const firstImported = formatShortDate(account.firstImportedTransactionDate);
   const latestImported = formatShortDate(account.latestImportedTransactionDate);
-  const activeStart = formatShortDate(account.bookkeepingStartDate || account.bookkeeping_start_date);
   const importRange =
     firstImported && latestImported
       ? firstImported === latestImported
         ? `Imported range: ${firstImported}`
         : `Imported range: ${firstImported} to ${latestImported}`
       : null;
-  const activeRange =
-    autoPostStatus?.scope_copy?.headline ||
-    (activeStart ? `Active books start: ${activeStart}` : "Active books start not set");
+  const activeRange = postingLabel(account, autoPostStatus);
   const connectionState = account.connection_state || "connected";
   const disconnected = connectionState === "disconnected";
   const attentionRequired = connectionState === "attention_required";
   const syncTemporarilyUnavailable = account.sync_availability === "temporarily_unavailable";
   const closedHistorical = connectionState === "closed_historical";
-  const connectionLabel = attentionRequired
-    ? "Reconnect required"
-    : syncTemporarilyUnavailable
-      ? "Sync temporarily unavailable — retrying automatically"
-    : disconnected
-      ? "Disconnected"
-      : closedHistorical
-        ? "Closed · Historical"
-        : "Sync active";
+  const connectionLabel = plaidStatusView(account).label;
 
   return (
     <div
@@ -794,7 +784,7 @@ function AccountCard({
           <GripVertical size={14} className="text-slate-500" aria-hidden="true" />
         </span>
       </div>
-      <div className="text-base font-semibold text-slate-50">{account.name}</div>
+      <div className="break-words text-base font-semibold text-slate-50">{account.name}</div>
       <div className={`text-[11px] font-semibold ${attentionRequired || syncTemporarilyUnavailable ? "text-amber-300" : disconnected || closedHistorical ? "text-slate-400" : "text-emerald-300"}`}>
         {connectionLabel}
       </div>
@@ -804,7 +794,7 @@ function AccountCard({
         : importRange ? <div className="text-[11px] text-slate-400">{importRange}</div> : null}
       {attentionRequired ? <div className="text-[11px] text-slate-400">Plaid requires this institution to be reconnected before new transactions can sync.</div> : null}
       {disconnected ? <div className="text-[11px] text-slate-400">Historical transactions remain available.</div> : null}
-      {!disconnected && !closedHistorical && !attentionRequired ? <div className="text-[11px] text-slate-500">{activeRange}</div> : null}
+      {!disconnected && !closedHistorical ? <div className="text-[11px] text-slate-500">{activeRange}</div> : null}
       </button>
       {(disconnected || attentionRequired) ? (
         <button type="button" onClick={onConnectionAction}
@@ -1084,7 +1074,7 @@ function BookkeepingCleanup() {
   const [loadingCcPaymentAccounts, setLoadingCcPaymentAccounts] = useState(false);
   const [ccPaymentAccountsError, setCcPaymentAccountsError] = useState("");
   const ccPaymentAccountsRequestRef = useRef(0);
-  const [autoPostStatus, setAutoPostStatus] = useState({ auto_post_to_quickbooks: false, handled_backlog_count: 0 });
+  const [autoPostStatus, setAutoPostStatus] = useState(null);
   const [loadingAutoPost, setLoadingAutoPost] = useState(false);
   const [savingAutoPost, setSavingAutoPost] = useState(false);
   const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
@@ -1285,7 +1275,7 @@ function BookkeepingCleanup() {
     setLoadingAutoPost(true);
     try {
       const res = await getAutoPostStatus(businessId);
-      setAutoPostStatus(res || { auto_post_to_quickbooks: false, handled_backlog_count: 0 });
+      setAutoPostStatus(res || null);
     } catch (e) {
       console.warn("[bookkeeping] auto-post status fetch failed", e?.message || e);
       window.dispatchEvent(new CustomEvent("bizzy:toast", {

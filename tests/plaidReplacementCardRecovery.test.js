@@ -345,8 +345,9 @@ test("recovery admission schema is held, cutoff-bounded, tenant-scoped, and curs
 test("completed recovery history is durable, collapsed by default, and exposes only sanitized cursor state", () => {
   const settings = read("src/pages/Settings/SettingsHome.jsx");
   const recovery = read("src/services/plaid/plaidReplacementRecoveryService.js");
-  assert.match(settings, /Replacement-card recovery completed/);
-  assert.match(settings, /View details/);
+  assert.match(read("src/components/Plaid/RecoveryHistoryRow.jsx"), /Recovery completed/);
+  assert.match(settings, /<RecoveryHistoryRow count=\{importedCount\}/);
+  assert.match(read("src/components/Plaid/RecoveryHistoryRow.jsx"), /View details/);
   assert.match(settings, /expandedRecoveryHistory\[inst\.plaid_item_id\] === true/);
   assert.match(settings, /Recovery cursor committed/);
   assert.match(settings, /Batch ID:/);
@@ -397,8 +398,9 @@ test("successful sync metadata is sourced from completed runs and recovery histo
   const settings = read("src/pages/Settings/SettingsHome.jsx");
   assert.match(integration, /lastSuccessfulByItem/);
   assert.match(integration, /\["completed", "success"\]\.includes\(run\.status\)/);
-  assert.match(settings, /onClick=\{\(\) => setExpandedRecoveryHistory\(\(current\) => \(\{ \.\.\.current, \[inst\.plaid_item_id\]: true \}\)\)\}/);
-  assert.match(settings, /Posting hold is separate from transaction synchronization/);
+  assert.match(settings, /onDetails=\{\(\) => setExpandedRecoveryHistory\(\(current\) => \(\{ \.\.\.current, \[inst\.plaid_item_id\]: true \}\)\)\}/);
+  assert.match(read("src/components/Plaid/PlaidStatusSummary.jsx"), /hold \? <div/);
+  assert.match(read("src/utils/plaidStatusView.js"), /held from QuickBooks posting pending review/);
 });
 
 test("settings status payload includes recovery history immediately and cold loading reserves its layout", () => {

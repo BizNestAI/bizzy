@@ -1,3 +1,7 @@
+import DisconnectConfirmation from '../../components/Plaid/DisconnectConfirmation.jsx';
+import RecoveryHistoryRow from '../../components/Plaid/RecoveryHistoryRow.jsx';
+import PlaidStatusSummary from '../../components/Plaid/PlaidStatusSummary.jsx';
+import { integrationSummary, institutionView, accountConnectionLabel } from '../../utils/plaidStatusView.js';
 // src/components/Settings/SettingsHome.jsx
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
@@ -1042,26 +1046,7 @@ function formatLocalTimestamp(value) {
   return Number.isNaN(parsed.getTime()) ? "Not recorded" : parsed.toLocaleString();
 }
 
-function SyncHealthSummary({ health }) {
-  if (!health) return null;
-  const active = health.status === "active";
-  const updating = health.status === "updating";
-  const disconnected = health.status === "disconnected";
-  const reauthenticationRequired = health.status === "reauthentication_required";
-  const label = active ? "Transaction sync: Active" : updating ? "Transaction sync: Updating" : disconnected ? "Disconnected" : reauthenticationRequired ? "Reconnect required" : "Sync temporarily unavailable — retrying automatically";
-  return (
-    <div className="mt-3 rounded-lg border border-white/8 bg-black/10 p-2 text-[11px]" data-transaction-sync-health>
-      <div className={active ? "font-semibold text-emerald-200" : "font-semibold text-amber-200"}>
-        {label}
-      </div>
-      {!active && health.reason ? <div className="mt-1 text-white/60">{health.reason}</div> : null}
-      {health.automatic_retry_scheduled ? <div className="mt-1 text-white/55">Automatic retry is scheduled.</div> : null}
-      <div className="mt-1 text-white/55">Last successful sync: {formatLocalTimestamp(health.last_successful_sync_at)}</div>
-      <div className="mt-1 text-white/55">Transactions imported through: {health.transactions_imported_through || "Not available"}</div>
-      <div className="mt-1 text-amber-200/80">Posting hold is separate from transaction synchronization.</div>
-    </div>
-  );
-}
+const SyncHealthSummary = PlaidStatusSummary;
 
 function RecoverySummarySkeleton() {
   return <div className="mt-3 h-[148px] animate-pulse rounded-xl border border-white/8 bg-white/[0.025]" aria-label="Loading recovery history" />;
@@ -1122,11 +1107,9 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const [mappingSaving, setMappingSaving] = useState({});
   const [mappingOverrides, setMappingOverrides] = useState({});
   const [mappingMessages, setMappingMessages] = useState({});
-  const syncingAccountsCount = useMemo(() => institutions.reduce((count, institution) =>
-    count + (institution.accounts || []).filter((account) => account.connection_state === "connected").length, 0), [institutions]);
-  const isConnected = syncingAccountsCount > 0;
-  const isDisconnected = !isConnected && (counts.accounts > 0 || hasDisconnected);
-  const isEmpty = !isConnected && !hasDisconnected;
+  const isConnected = institutions.some(inst => inst.status !== "disconnected");
+  const isDisconnected = institutions.length === 0 && hasDisconnected;
+  const isEmpty = institutions.length === 0 && !hasDisconnected;
 
   useEffect(() => {
     if (!institutions.length || typeof window === "undefined") return;
@@ -1435,6 +1418,11 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
   }, [businessId, fetchStatus, readOnly, refreshMappings]);
 
   const toggleDisconnectConfirm = useCallback((acctId) => {
+    if (typeof document !== "undefined") window.requestAnimationFrame(() => {
+      const row = Array.from(document.querySelectorAll("[data-plaid-account-id]"))
+        .find(element => element.dataset.plaidAccountId === acctId);
+      row?.focus();
+    });
     setConfirmDisconnectByAccount((prev) => ({
       ...prev,
       [acctId]: !prev[acctId],
@@ -1450,6 +1438,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
       const action = nextState === "connected" ? reconnectPlaidAccount : disconnectPlaidAccount;
       await action(businessId, plaidAccountId, Number(account.connection_state_version || 0));
       setConfirmDisconnectByAccount((current) => ({ ...current, [plaidAccountId]: false }));
+      window.requestAnimationFrame(() => Array.from(document.querySelectorAll("[data-plaid-account-id]"))
+        .find(element => element.dataset.plaidAccountId === plaidAccountId)?.focus());
       clearPlaidStatusCache(businessId);
       await fetchStatus({ showLoading: false });
       window.dispatchEvent(new CustomEvent("bizzy:plaid-account-state-updated", {
@@ -1623,15 +1613,12 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
           <div className="flex flex-wrap items-center gap-2">
             <LinkIcon className="h-4 w-4" style={{ color: "var(--accent)" }} />
             <span className="text-sm font-semibold">Plaid (Bank Sync)</span>
-            <StatusPill state={isConnected ? "connected" : "disconnected"} />
           </div>
           <p className="text-xs" style={{ color: TEXT_MUTED }}>
             Sync bank transactions and account balances.
           </p>
           <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
-            {isDisconnected
-              ? "Status: Disconnected"
-              : `Connected: ${counts.institutions} institution${counts.institutions === 1 ? "" : "s"} · ${counts.accounts} account${counts.accounts === 1 ? "" : "s"}`}
+            {integrationSummary(institutions, { loading, error: Boolean(statusError), recoveryByItem, totals: counts })}
           </p>
           {latestSyncAt ? (
             <p className="text-[11px] text-white/50">Last sync {formatRelative(latestSyncAt.getTime())}</p>
@@ -1643,28 +1630,17 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
             {linking ? "Opening…" : "Add another bank"}
           </GhostButton>
           {confirmDisconnectAll ? (
-            <>
-              <GhostButton
-                onClick={handleDisconnectAll}
-                disabled={readOnly || disconnectingAll}
-                className={`${INTEGRATION_ACTION_BUTTON_CLASS} text-rose-200 border-rose-400/40 hover:border-rose-300/60`}
-              >
-                {disconnectingAll ? "Disconnecting…" : "Confirm disconnect"}
-              </GhostButton>
-              <GhostButton
-                onClick={() => setConfirmDisconnectAll(false)}
-                className={INTEGRATION_ACTION_BUTTON_CLASS}
-              >
-                Cancel
-              </GhostButton>
-            </>
+            <DisconnectConfirmation name="all listed banks" busy={disconnectingAll}
+              onConfirm={handleDisconnectAll}
+              onCancel={() => { setConfirmDisconnectAll(false); window.requestAnimationFrame(() => document.getElementById("plaid-disconnect-all")?.focus()); }} />
           ) : (
             <GhostButton
               onClick={() => {
                 if (!readOnly) setConfirmDisconnectAll(true);
               }}
+              id="plaid-disconnect-all"
               disabled={readOnly}
-              className={`${INTEGRATION_ACTION_BUTTON_CLASS} text-rose-200 border-rose-400/40 hover:border-rose-300/60`}
+              className="self-end px-2 py-1 text-[11px] text-rose-200/70 hover:text-rose-100"
             >
               Disconnect Plaid
             </GhostButton>
@@ -1718,22 +1694,14 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
               className="border-t px-0 py-3 first:border-t-0"
               style={{ borderColor: SOFT_BORDER }}
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-white/90">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="break-words text-sm font-semibold text-white/90">
                     {inst.institution_name || "Institution"}
                   </span>
                   <StatusBadge
-                    tone={inst.status === "connected" ? "ok" : "warning"}
-                    label={inst.status === "connected"
-                      ? `Connected · ${inst.syncing_accounts_count || 0} of ${inst.accounts_count || 0} syncing`
-                      : inst.status === "partially_connected"
-                        ? `Partially connected · ${inst.syncing_accounts_count || 0} of ${inst.accounts_count || 0} syncing`
-                        : inst.status === "attention_required"
-                          ? "Attention required"
-                          : inst.status === "disconnected"
-                            ? "Disconnected"
-                            : "Unknown"}
+                    tone={institutionView(inst, recoveryByItem[inst.plaid_item_id]).compact ? "ok" : "warning"}
+                    label={institutionView(inst, recoveryByItem[inst.plaid_item_id]).label}
                   />
                 </div>
                 {inst.last_sync_at ? (
@@ -1742,17 +1710,14 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                   </span>
                 ) : null}
               </div>
-              <div className="mt-1 text-[11px] text-white/50">
-                Disconnect stops new transactions from syncing. Your historical transactions and categorizations stay saved.
-              </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {["reauthentication_required", "reconnect_in_progress"].includes(inst.sync_health?.status) ? <GhostButton
+                {["reauthentication_required", "reconnect_in_progress"].includes(inst.sync_health?.status) ? <AccentButton
                   onClick={() => repairPlaidItem(inst.plaid_item_id, inst.institution_name, inst.sync_health?.status === "reconnect_in_progress")}
                   disabled={readOnly || repairingItem === inst.plaid_item_id}
                   className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-semibold"
                 >
                   {repairingItem === inst.plaid_item_id ? "Verifying connection…" : inst.sync_health?.status === "reconnect_in_progress" ? "Resume reconnect" : `Reconnect ${inst.institution_name || "connection"}`}
-                </GhostButton> : null}
+                </AccentButton> : null}
                 {repairResult?.[inst.plaid_item_id]?.status === "identity_review_required" || repairResult?.[inst.plaid_item_id]?.status === "new_item_identity_required" ? (
                   <span className="text-[11px] text-amber-200">New account identity found. Ingestion is paused pending authorized lineage confirmation.</span>
                 ) : repairResult?.[inst.plaid_item_id]?.status === "completed" ? (
@@ -1773,7 +1738,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                   </GhostButton>
                 ) : null}
               </div>
-              {!recoveryByItem[inst.plaid_item_id]?.batch ? <SyncHealthSummary health={inst.sync_health} /> : null}
+              {institutionView(inst, recoveryByItem[inst.plaid_item_id]).nextAction ? <p className="mt-1 text-[11px] text-white/65">{institutionView(inst, recoveryByItem[inst.plaid_item_id]).nextAction}</p> : null}
+              <SyncHealthSummary health={inst.sync_health} entity={inst} recovery={recoveryByItem[inst.plaid_item_id]} />
               {(() => {
                 const recovery = recoveryByItem[inst.plaid_item_id];
                 const orchestration = recovery?.orchestration || null;
@@ -1787,31 +1753,13 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                 const selectionKey = pendingCandidate ? `${inst.plaid_item_id}:${pendingCandidate.id}` : null;
                 const selectedPriorAccount = selectionKey ? lineageSelection[selectionKey] : null;
                 if (!recovery || (!orchestration?.status && !(recovery.candidates || []).length && !batch)) return null;
-                const completedRecovery = ["imported_held", "released"].includes(batch?.status);
+                const completedRecovery = batch?.status === "released" && batch?.posting_hold !== true;
                 const historyExpanded = expandedRecoveryHistory[inst.plaid_item_id] === true;
                 const admittedAt = batch?.admission?.admitted_at || batch?.updated_at || null;
-                const importedCount = Number(batch?.admission?.imported_count ?? summary.admitted ?? summary.selected ?? 0);
+                const importedCount = (batch?.admission?.imported_count ?? summary.admitted ?? summary.selected ?? null);
                 if (completedRecovery && !historyExpanded) {
-                  return (
-                    <div className="mt-3 rounded-xl border border-emerald-400/25 bg-emerald-500/[0.06] p-3" data-recovery-history-summary>
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-semibold text-emerald-100">Replacement-card recovery completed</div>
-                          <div className="mt-1 text-[11px] text-white/65">
-                            {importedCount} transactions imported{admittedAt ? ` · ${formatLocalTimestamp(admittedAt)}` : ""}
-                          </div>
-                          <div className={`mt-1 text-[11px] ${batch.posting_hold ? "text-amber-200" : "text-emerald-200"}`}>
-                            {batch.posting_hold ? "Posting hold remains active" : "Posting hold released"}
-                          </div>
-                        </div>
-                        <GhostButton type="button" className="h-9 px-3 text-xs"
-                          onClick={() => setExpandedRecoveryHistory((current) => ({ ...current, [inst.plaid_item_id]: true }))}>
-                          View details
-                        </GhostButton>
-                      </div>
-                      <SyncHealthSummary health={recovery.sync_health} />
-                    </div>
-                  );
+                  return <RecoveryHistoryRow count={importedCount} completedAt={admittedAt} postingHold={batch.posting_hold}
+                    onDetails={() => setExpandedRecoveryHistory((current) => ({ ...current, [inst.plaid_item_id]: true }))} />;
                 }
                 return (
                   <div className="mt-3 rounded-xl border border-amber-400/25 bg-amber-500/[0.06] p-3">
@@ -1954,7 +1902,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                             </details>
                           </div>
                         ) : null}
-                        {completedRecovery ? <SyncHealthSummary health={recovery.sync_health} /> : null}
+
                         <div className="mt-3 flex flex-wrap gap-2">
                           {batch.status === "preview_ready" ? (
                             <AccentButton type="button" disabled={readOnly || busy || summary.ambiguous > 0 || summary.probable_duplicates > 0}
@@ -2057,7 +2005,8 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                     <div
                       key={acct.plaid_account_id}
                       data-plaid-account-id={acct.plaid_account_id}
-                      className="flex items-center justify-between gap-3 border-t px-0 py-2 first:border-t-0"
+                      tabIndex={-1}
+                      className="flex flex-col items-start justify-between gap-3 border-t px-0 py-2 first:border-t-0 sm:flex-row sm:items-center"
                       style={{ borderColor: SOFT_BORDER }}
                     >
                       <div className="flex flex-col">
@@ -2071,7 +2020,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                           <span className="mt-1 text-[10px] text-white/45">Not used for posting.</span>
                         ) : null}
                       </div>
-                      <div className="flex flex-col items-end gap-2">
+                      <div className="flex w-full min-w-0 flex-col items-end gap-2 sm:w-auto">
                         <div className="flex items-center gap-2">
                           <StatusBadge
                             tone={mappedFlag ? "ok" : requiresMapping ? "warning" : "slate"}
@@ -2080,16 +2029,10 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                           {suggested && !mappedFlag && !dismissedFlag ? (
                             <StatusBadge tone="warning" label="Suggested review" />
                           ) : null}
-                          <StatusBadge
+                          {accountConnectionLabel(acct, inst) ? <StatusBadge
                             tone={connectionState === "connected" ? "ok" : "warning"}
-                            label={connectionState === "connected"
-                              ? "Connected"
-                              : connectionState === "attention_required"
-                                ? "Attention required"
-                                : connectionState === "closed_historical"
-                                  ? "Closed"
-                                  : "Disconnected"}
-                          />
+                            label={accountConnectionLabel(acct, inst)}
+                          /> : null}
                         </div>
                         {postingCategory !== "NotUsed" ? (
                           <DarkMappingDropdown
@@ -2148,26 +2091,10 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                               {changingAccountConnection === acct.plaid_account_id ? "Reconnecting…" : "Reconnect"}
                             </button>
                           ) : confirmDisconnectByAccount[acct.plaid_account_id] ? (
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => handleAccountConnectionChange(acct, "disconnected")}
-                                disabled={readOnly || changingAccountConnection === acct.plaid_account_id}
-                                className="px-2 py-1 text-[11px] rounded-md border border-rose-400/40 text-rose-200 hover:border-rose-300/70 hover:text-rose-100 transition disabled:opacity-50"
-                              >
-                                {changingAccountConnection === acct.plaid_account_id ? "Disconnecting…" : "Confirm"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!readOnly) toggleDisconnectConfirm(acct.plaid_account_id);
-                                }}
-                                disabled={readOnly}
-                                className="px-2 py-1 text-[11px] rounded-md border border-white/15 text-white/60 hover:text-white/80 transition"
-                              >
-                                Cancel
-                              </button>
-                            </div>
+                            <DisconnectConfirmation name={`${inst.institution_name || "Institution"} · ${acct.name || acct.official_name || "Account"}${acct.mask ? ` ••${acct.mask}` : ""}`}
+                              busy={changingAccountConnection === acct.plaid_account_id}
+                              onConfirm={() => handleAccountConnectionChange(acct, "disconnected")}
+                              onCancel={() => toggleDisconnectConfirm(acct.plaid_account_id)} />
                           ) : (
                             <button
                               type="button"
@@ -2177,7 +2104,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                               disabled={readOnly}
                               className="px-2 py-1 text-[11px] rounded-md border border-white/15 text-white/60 hover:text-white/80 hover:border-white/30 transition"
                             >
-                              Disconnect
+                              Disconnect account
                             </button>
                           )
                         ) : null}
