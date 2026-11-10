@@ -64,7 +64,6 @@ const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.
 const INTEGRATION_ACTION_BUTTON_CLASS =
   "inline-flex h-11 w-full items-center justify-center whitespace-nowrap rounded-xl px-4 text-sm font-semibold sm:w-[232px]";
 const PLAID_STATUS_CACHE_VERSION = 3;
-const REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27";
 
 const EMPTY_BUSINESS_FORM = {
   business_name: "",
@@ -970,7 +969,7 @@ function RecoveryTransactionReviewModal({ businessId, plaidItemId, batch, onClos
   const count = selected?.size || 0;
   const summary = result?.summary || batch.summary || {};
   const represented = (summary.exact_existing || 0) + (summary.represented || 0);
-  const cutoffDate = result?.cutoff_date || batch.cutoff_date || REPLACEMENT_CARD_CUTOFF_DATE;
+  const cutoffDate = result?.cutoff_date || batch.cutoff_date || "Not set";
   const latestExistingDate = summary.latest_existing_transaction_date || summary.latest_existing_date || null;
   const money = (value) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Math.abs(Number(value || 0)));
   const integrityOk = result?.integrity?.ok === true;
@@ -1311,11 +1310,17 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
     }
   }, [businessId, fetchStatus, refreshMappings]);
 
-  const repairPlaidItem = useCallback(async (plaidItemId, institutionName) => {
+  const repairPlaidItem = useCallback(async (plaidItemId, institutionName, resume = false) => {
     if (!businessId || !plaidItemId || readOnly) return;
     setRepairingItem(plaidItemId);
     setRepairResult((current) => ({ ...current, [plaidItemId]: null }));
     try {
+      if (resume) {
+        const result = await completePlaidRepair(businessId, plaidItemId);
+        setRepairResult((current) => ({ ...current, [plaidItemId]: result }));
+        await fetchStatus();
+        return;
+      }
       const tokenResponse = await createPlaidUpdateLinkToken(businessId, plaidItemId);
       const Plaid = await loadPlaidScript();
       await new Promise((resolve, reject) => {
@@ -1379,7 +1384,9 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
 
   const prepareRecoveryPreview = useCallback(async (plaidItemId) => {
     try {
-      const result = await preparePlaidRecoveryPreview(businessId, plaidItemId, REPLACEMENT_CARD_CUTOFF_DATE);
+      const cutoff = recoveryByItem[plaidItemId]?.orchestration?.cutoff_date || recoveryByItem[plaidItemId]?.batch?.cutoff_date;
+      if (!cutoff) throw new Error("An operator must establish the recovery boundary and evidence first.");
+      const result = await preparePlaidRecoveryPreview(businessId, plaidItemId, cutoff);
       if (result?.ok !== false) return result;
       const durable = await refreshRecoveryStatus(plaidItemId).catch(() => null);
       if (["preview_ready", "lineage_confirmation_required"].includes(durable?.batch?.status)) {
@@ -1395,7 +1402,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
       }
       throw error;
     }
-  }, [businessId, refreshRecoveryStatus]);
+  }, [businessId, recoveryByItem, refreshRecoveryStatus]);
 
   const handleDisconnectAll = useCallback(async () => {
     if (!businessId || readOnly) return;
@@ -1739,19 +1746,19 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                 Disconnect stops new transactions from syncing. Your historical transactions and categorizations stay saved.
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                {inst.sync_health?.status === "reauthentication_required" ? <GhostButton
-                  onClick={() => repairPlaidItem(inst.plaid_item_id, inst.institution_name)}
+                {["reauthentication_required", "reconnect_in_progress"].includes(inst.sync_health?.status) ? <GhostButton
+                  onClick={() => repairPlaidItem(inst.plaid_item_id, inst.institution_name, inst.sync_health?.status === "reconnect_in_progress")}
                   disabled={readOnly || repairingItem === inst.plaid_item_id}
                   className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-lg px-3 text-xs font-semibold"
                 >
-                  {repairingItem === inst.plaid_item_id ? "Opening reconnect…" : `Reconnect ${inst.institution_name || "connection"}`}
+                  {repairingItem === inst.plaid_item_id ? "Verifying connection…" : inst.sync_health?.status === "reconnect_in_progress" ? "Resume reconnect" : `Reconnect ${inst.institution_name || "connection"}`}
                 </GhostButton> : null}
-                {repairResult?.[inst.plaid_item_id]?.status === "lineage_confirmation_required" ? (
+                {repairResult?.[inst.plaid_item_id]?.status === "identity_review_required" || repairResult?.[inst.plaid_item_id]?.status === "new_item_identity_required" ? (
                   <span className="text-[11px] text-amber-200">New account identity found. Ingestion is paused pending authorized lineage confirmation.</span>
-                ) : repairResult?.[inst.plaid_item_id]?.status === "awaiting_account_selection" ? (
-                  <span className="text-[11px] text-emerald-200">Connection repaired. Select the replacement account to continue the durable recovery review.</span>
-                ) : repairResult?.[inst.plaid_item_id]?.status === "failed" ? (
-                  <span className="text-[11px] text-rose-200">Repair could not be completed. Existing history remains unchanged.</span>
+                ) : repairResult?.[inst.plaid_item_id]?.status === "completed" ? (
+                  <span className="text-[11px] text-emerald-200">Bank verified and transaction replay completed.</span>
+                ) : ["failed", "replay_failed", "waiting_for_replay"].includes(repairResult?.[inst.plaid_item_id]?.status) ? (
+                  <span className="text-[11px] text-rose-200">Reconnection needs a completed transaction replay. Existing history is retained.</span>
                 ) : null}
                 {recoveryByItem[inst.plaid_item_id]?.ok === false ? (
                   <span className="text-[11px] text-rose-200">{recoveryByItem[inst.plaid_item_id]?.message || "Durable recovery status is unavailable."}</span>

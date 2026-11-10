@@ -1,3 +1,4 @@
+import { completePlaidReconnect } from "./plaidReconnectService.js";
 import { getPlaidAccountRecoveryStatus, recoveryWorkerEligibility } from "./plaidAccountRecoveryStatus.js";
 import { businessHasPaidEntitlement } from "../billing/entitledBusinesses.js";
 /* global process */
@@ -38,7 +39,7 @@ export async function createLinkToken({ businessId, userId }) {
   return linkToken;
 }
 
-export async function createUpdateLinkToken({ businessId, userId, plaidItemId, db = supabase, plaid = getPlaidClient() }) {
+export async function createUpdateLinkToken({ businessId, userId, plaidItemId, db = supabase, plaid = getPlaidClient(), resolveToken = resolveStoredPlaidAccessToken }) {
   if (!userId) throw new Error("plaid_link_token_user_required");
   if (!plaid) throw new Error("plaid_not_configured");
   const { data: item, error } = await db.from("plaid_items")
@@ -46,7 +47,7 @@ export async function createUpdateLinkToken({ businessId, userId, plaidItemId, d
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId).maybeSingle();
   if (error) throw error;
   if (!item?.id || item.is_active === false) throw new Error("plaid_item_not_found");
-  const accessToken = await resolveStoredPlaidAccessToken({ storedToken: item.plaid_access_token });
+  const accessToken = await resolveToken({ storedToken: item.plaid_access_token });
   const response = await plaid.linkTokenCreate({
     user: { client_user_id: plaidClientUserId({ businessId, userId }) },
     client_name: "Bizzi",
@@ -59,62 +60,8 @@ export async function createUpdateLinkToken({ businessId, userId, plaidItemId, d
   return { link_token: response.data.link_token, plaid_item_id: item.plaid_item_id, mode: "update" };
 }
 
-export async function inspectUpdatedItemAccounts({ businessId, plaidItemId, db = supabase, plaid = getPlaidClient() }) {
-  if (!plaid) throw new Error("plaid_not_configured");
-  const { data: item, error } = await db.from("plaid_items")
-    .select("id,plaid_item_id,plaid_access_token,is_active").eq("business_id", businessId)
-    .eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId).maybeSingle();
-  if (error) throw error;
-  if (!item?.id || item.is_active === false) throw new Error("plaid_item_not_found");
-  const accessToken = await resolveStoredPlaidAccessToken({ storedToken: item.plaid_access_token });
-  const response = await plaid.accountsGet({ access_token: accessToken });
-  const providerAccounts = response?.data?.accounts || [];
-  const { data: stored, error: storedError } = await db.from("plaid_accounts")
-    .select("plaid_account_id").eq("business_id", businessId).eq("plaid_item_id", plaidItemId);
-  if (storedError) throw storedError;
-  const known = new Set((stored || []).map((account) => account.plaid_account_id));
-  const newAccounts = providerAccounts.filter((account) => !known.has(account.account_id)).map((account) => ({
-    plaid_account_id: account.account_id,
-    name: account.name || account.official_name || "Account",
-    official_name: account.official_name || null,
-    mask: account.mask || null,
-    type: account.type || null,
-    subtype: account.subtype || null,
-  }));
-  if (newAccounts.length) {
-    const { error: candidateError } = await db.from("plaid_replacement_account_candidates").upsert(newAccounts.map((account) => ({
-      business_id: businessId,
-      plaid_env: plaidEnvName,
-      plaid_item_id: plaidItemId,
-      plaid_account_id: account.plaid_account_id,
-      account_snapshot: account,
-      status: "pending",
-      decided_at: null,
-      decided_by: null,
-    })), { onConflict: "business_id,plaid_env,plaid_item_id,plaid_account_id" });
-    if (candidateError) throw candidateError;
-  }
-  const recoveryStatus = newAccounts.length === 1 ? "lineage_confirmation_required" : "awaiting_account_selection";
-  const { data: durableItem, error: durableError } = await db.from("plaid_items").update({
-    replacement_recovery_status: recoveryStatus,
-    replacement_recovery_account_id: newAccounts.length === 1 ? newAccounts[0].plaid_account_id : null,
-    replacement_recovery_cutoff_date: "2026-08-27",
-    replacement_repair_completed_at: new Date().toISOString(),
-  }).eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId)
-    .select("plaid_item_id,replacement_recovery_status,replacement_recovery_account_id,replacement_recovery_cutoff_date").maybeSingle();
-  if (durableError || !durableItem?.plaid_item_id) {
-    const failure = new Error("plaid_recovery_state_persistence_failed");
-    failure.code = "plaid_recovery_state_persistence_failed";
-    failure.cause = durableError || null;
-    throw failure;
-  }
-  return {
-    plaid_item_id: plaidItemId,
-    status: durableItem.replacement_recovery_status,
-    recovery_state: durableItem,
-    new_accounts: newAccounts,
-    ingestion_started: false,
-  };
+export async function inspectUpdatedItemAccounts({ businessId, plaidItemId, actorUserId, db = supabase, plaid = getPlaidClient(), ...options }) {
+  return completePlaidReconnect({ businessId, plaidItemId, actorUserId, db, plaid, ...options });
 }
 
 async function hydrateConnectedAt(businessId, accounts) {
@@ -467,7 +414,8 @@ export async function getPlaidStatus({ businessId }) {
       ...a,
       connection_state: a.connection_state === "closed_historical" ? "closed_historical"
         : recoveryAccountById.get(a.plaid_account_id)?.recovery_status.bank_connection.state === "institution_unavailable" ? "connected"
-          : recoveryAccountById.get(a.plaid_account_id)?.recovery_status.bank_connection.state || projectPlaidAccountConnectionState({ account: a, item: it }),
+          : ["reconnect_in_progress"].includes(recoveryAccountById.get(a.plaid_account_id)?.recovery_status.bank_connection.state) ? "attention_required"
+            : recoveryAccountById.get(a.plaid_account_id)?.recovery_status.bank_connection.state || projectPlaidAccountConnectionState({ account: a, item: it }),
       mapped_to_qbo: recoveryAccountById.get(a.plaid_account_id)?.mapped_to_qbo ?? mappedSet.has(a.plaid_account_id),
     }));
     const institutionConnection = summarizePlaidInstitutionConnection(projectedAccounts);
@@ -486,7 +434,9 @@ export async function getPlaidStatus({ businessId }) {
       ...historicalSyncHealth,
       status: currentImport.reason_code === "internal_transaction_persistence_failure" ? "internal_failure"
         : statuses[0].bank_connection.reason_code === "plaid_reauthentication_required" ? "reauthentication_required"
-          : currentImport.state === "current" ? "active" : currentImport.state,
+          : statuses[0].bank_connection.state === "reconnect_in_progress" ? "reconnect_in_progress"
+            : currentImport.state === "current" ? "active" : currentImport.state,
+      recommended_action: statuses[0].bank_connection.recommended_action,
       reason: currentImport.customer_copy,
       automatic_retry_scheduled: false,
       last_successful_sync_at: currentImport.last_completed_checkpoint_at,

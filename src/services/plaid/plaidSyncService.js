@@ -31,7 +31,8 @@ function nowIso() {
 }
 
 export function isPlaidItemEligibleForScheduledSync(item = {}) {
-  return item.is_active !== false && ["connected", "active"].includes(item.status);
+  return item.is_active !== false && !["identity_review_required", "new_item_identity_required"].includes(item.reconnect_state?.state)
+    && (["connected", "active"].includes(item.status) || item.reconnect_state?.state === "waiting_for_replay");
 }
 
 function cursorDigest(value) {
@@ -969,7 +970,7 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
 
   const { data: items, error: itemsErr } = await supabase
     .from("plaid_items")
-    .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active,sync_lease_owner,sync_lease_expires_at")
+    .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active,sync_lease_owner,sync_lease_expires_at,reconnect_state")
     .eq("business_id", businessId)
     .eq("plaid_env", plaidEnvName)
     .eq("is_active", true);
@@ -1032,7 +1033,7 @@ export async function runPlaidSyncForItemForBusiness(businessId, plaidItemId, { 
   if (!plaid) throw new Error("plaid_not_configured");
   const { data: item, error } = await supabase
     .from("plaid_items")
-    .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active,sync_lease_owner,sync_lease_expires_at")
+    .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active,sync_lease_owner,sync_lease_expires_at,reconnect_state")
     .eq("business_id", businessId)
     .eq("plaid_item_id", plaidItemId)
     .eq("plaid_env", plaidEnvName)

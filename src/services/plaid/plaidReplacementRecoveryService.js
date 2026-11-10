@@ -40,6 +40,7 @@ export function validateRecoveryReviewPopulation({ summary = {}, rows = [], repl
 function normalizedIncoming(tx = {}) {
   const raw = Number(tx.amount || 0);
   return {
+    physical_account_id: tx.physical_account_id || null,
     plaid_transaction_id: tx.transaction_id || null,
     pending_transaction_id: tx.pending_transaction_id || null,
     plaid_account_id: tx.account_id || null,
@@ -155,10 +156,10 @@ export async function collectCompletePlaidSyncPreview({ plaid, accessToken, orig
   }
 }
 
-export function classifyRecoveryTransaction({ transaction, changeType = "added", existingRows = [], cutoffDate, confirmedAccountIds = [] }) {
+export function classifyRecoveryTransaction({ transaction, changeType = "added", existingRows = [], cutoffDate, confirmedAccountIds = [], representedTransactionIds = [] }) {
   const row = normalizedIncoming(transaction);
   const exact = existingRows.find((candidate) => candidate.plaid_transaction_id === row.plaid_transaction_id);
-  if (exact) return { disposition: changeType === "removed" ? "removed_existing" : "exact_existing", existing_id: exact.id };
+  if (exact) return { disposition: changeType === "removed" ? "removed_existing" : representedTransactionIds.includes(exact.id) ? "represented" : "exact_existing", existing_id: exact.id };
 
   const pending = row.pending_transaction_id
     ? existingRows.find((candidate) => candidate.plaid_transaction_id === row.pending_transaction_id || candidate.pending_transaction_id === row.pending_transaction_id)
@@ -174,6 +175,7 @@ export function classifyRecoveryTransaction({ transaction, changeType = "added",
   if (!confirmedAccountIds.includes(row.plaid_account_id)) {
     return { disposition: "ambiguous", reason: "replacement_lineage_confirmation_required" };
   }
+  if (row.pending) return { disposition: "ambiguous", reason: "pending_requires_normal_sync" };
   const probable = findProbableRelinkDuplicateCandidates(row, existingRows);
   if (probable.length) {
     return { disposition: "probable_duplicate", candidate_transaction_ids: probable.map((candidate) => candidate.id).filter(Boolean) };
@@ -221,7 +223,7 @@ export function validateRecoveryPopulation({ summary = {}, rows = [], replacemen
 
 async function scopedItem({ db, businessId, plaidItemId }) {
   const { data, error } = await db.from("plaid_items")
-    .select("id,business_id,plaid_item_id,plaid_env,plaid_access_token,cursor,institution_name,status,is_active,last_sync_at,last_success_at,sync_in_progress,sync_lease_owner,sync_lease_acquired_at,sync_lease_expires_at,replacement_recovery_status,replacement_recovery_account_id,replacement_recovery_cutoff_date,replacement_repair_completed_at")
+    .select("id,business_id,plaid_item_id,plaid_env,plaid_access_token,cursor,institution_name,status,is_active,last_sync_at,last_success_at,sync_in_progress,sync_lease_owner,sync_lease_acquired_at,sync_lease_expires_at,replacement_recovery_status,replacement_recovery_account_id,replacement_recovery_cutoff_date,replacement_repair_completed_at,reconnect_state")
     .eq("business_id", businessId).eq("plaid_env", plaidEnvName).eq("plaid_item_id", plaidItemId).maybeSingle();
   if (error) {
     if (error.code === "42703" || /replacement_recovery_/i.test(error.message || "")) {
@@ -248,6 +250,12 @@ function safeCandidate(row = {}) {
     qbo_account_name: snapshot.qbo_account_name || null,
     qbo_account_type: snapshot.qbo_account_type || null,
   };
+}
+
+function customerRecoverySummary(summary = {}) {
+  const safe = { ...summary };
+  for (const key of ["residual_reconciliations", "context", "context_hash", "evidence_fingerprint"]) delete safe[key];
+  return safe;
 }
 
 export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db = supabase }) {
@@ -305,7 +313,7 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
     orchestration: {
       status: item.replacement_recovery_status || null,
       selected_plaid_account_id: item.replacement_recovery_account_id || null,
-      cutoff_date: item.replacement_recovery_cutoff_date || "2026-08-27",
+      cutoff_date: item.replacement_recovery_cutoff_date || batch?.cutoff_date || null,
       repair_completed_at: item.replacement_repair_completed_at || null,
     },
     sync_health: deriveRecoverySyncHealth({
@@ -327,7 +335,7 @@ export async function getReplacementRecoveryStatus({ businessId, plaidItemId, db
       status: batch.status,
       cutoff_date: batch.cutoff_date,
       posting_hold: batch.posting_hold,
-      summary: batch.summary || {},
+      summary: customerRecoverySummary(batch.summary),
       admission: {
         imported_count: admittedCount,
         omitted_count: Math.max(0, eligibleCount - admittedCount),
@@ -409,7 +417,7 @@ export async function listReplacementRecoveryRows({ businessId, plaidItemId, bat
     .eq("disposition", "new_after_cutoff");
   if (error) throw error;
   const integrity = validateRecoveryReviewPopulation({
-    summary: batch.summary || {}, rows: data || [], replacementAccountId: item.replacement_recovery_account_id,
+    summary: customerRecoverySummary(batch.summary), rows: data || [], replacementAccountId: item.replacement_recovery_account_id,
   });
   const sanitized = integrity.rows.map((row) => {
     const transaction = row.payload?.transaction || {};
@@ -430,7 +438,7 @@ export async function listReplacementRecoveryRows({ businessId, plaidItemId, bat
   const safePage = Math.max(1, Number(page) || 1);
   const start = (safePage - 1) * safePageSize;
   return { batch_id: batch.id, plaid_item_id: plaidItemId, status: batch.status, cutoff_date: batch.cutoff_date, posting_hold: batch.posting_hold,
-    summary: batch.summary || {}, integrity: { ok: true, expected_count: integrity.expected_count, staged_count: integrity.staged_count },
+    summary: customerRecoverySummary(batch.summary), integrity: { ok: true, expected_count: integrity.expected_count, staged_count: integrity.staged_count },
     page: safePage, page_size: safePageSize, total: filtered.length, rows: filtered.slice(start, start + safePageSize),
     eligible_row_ids: sanitized.filter((row) => !row.admitted).map((row) => row.id) };
 }
@@ -442,7 +450,7 @@ export async function admitReplacementRecoveryBatch({ businessId, plaidItemId, b
   const { data: batch, error: batchError } = await db.from("plaid_recovery_batches").select("id,status,summary")
     .eq("id", batchId).eq("business_id", businessId).eq("plaid_env", item.plaid_env).eq("plaid_item_id", plaidItemId).maybeSingle();
   if (batchError) throw batchError;
-  if (!batch || batch.summary?.workflow_kind === "residual_orphan" || batch.status !== "preview_ready") throw recoveryError("recovery_batch_not_admissible", "Only the active valid recovery preview can be admitted.", 409);
+  if (!batch || batch.summary?.workflow_kind === "residual_orphan" || !["preview_ready", "imported_held"].includes(batch.status)) throw recoveryError("recovery_batch_not_admissible", "Only the active valid recovery preview can be admitted.", 409);
   const { data, error } = await db.rpc("admit_plaid_recovery_batch", {
     p_business_id: businessId,
     p_batch_id: batchId,
@@ -472,7 +480,9 @@ export async function admitReplacementRecoveryBatch({ businessId, plaidItemId, b
   return data || { batch_id: batchId, status: "imported_held", posting_hold: true };
 }
 
-export async function createReplacementRecoveryPreview({ businessId, plaidItemId, cutoffDate, actorUserId, db = supabase, plaid = getPlaidClient() }) {
+export async function createReplacementRecoveryPreview({ businessId, plaidItemId, cutoffDate, actorUserId, db = supabase, plaid = getPlaidClient(), recoveryContext = null, resolveToken = resolveStoredPlaidAccessToken }) {
+  if (recoveryContext) return createBoundedRecoveryPreview({ businessId, plaidItemId, actorUserId, db, plaid, recoveryContext, resolveToken });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffDate || "")) throw recoveryError("recovery_boundary_required", "An explicit recovery boundary is required.", 400);
   if (!plaid) throw recoveryError("plaid_not_configured", "Plaid is unavailable.", 503);
   const item = await scopedItem({ db, businessId, plaidItemId });
   const { data: activeBatches, error: activeBatchError } = await db.from("plaid_recovery_batches")
@@ -493,54 +503,7 @@ export async function createReplacementRecoveryPreview({ businessId, plaidItemId
     }
     return { batch_id: active.id, plaid_item_id: plaidItemId, status: active.status, cutoff_date: active.cutoff_date, posting_hold: active.posting_hold, summary: active.summary || {}, reused: true };
   }
-  if (!item.replacement_recovery_account_id) throw recoveryError("replacement_account_required", "Confirm the replacement account before preparing a preview.");
-  const accessToken = await resolveStoredPlaidAccessToken({ storedToken: item.plaid_access_token });
-  const collected = await collectCompletePlaidSyncPreview({ plaid, accessToken, originalCursor: item.cursor || null });
-  const accountIds = [...new Set([...collected.added, ...collected.modified].map((tx) => tx.account_id).filter(Boolean))];
-  const { data: accounts, error: accountError } = await db.from("plaid_accounts")
-    .select("plaid_account_id,physical_account_id").eq("business_id", businessId).eq("plaid_item_id", plaidItemId);
-  if (accountError) throw accountError;
-  const knownAccounts = new Set((accounts || []).map((row) => row.plaid_account_id));
-  const unknownAccounts = accountIds.filter((id) => !knownAccounts.has(id));
-  const { data: existing, error: existingError } = await db.from("bank_transactions")
-    .select("id,plaid_transaction_id,pending_transaction_id,plaid_account_id,physical_account_id,date,authorized_date,amount,signed_amount,name,merchant_name,pending,is_archived")
-    .eq("business_id", businessId);
-  if (existingError) throw existingError;
-
-  const recoveryAccountId = item.replacement_recovery_account_id;
-  const makeRows = (transactions, changeType) => transactions.filter((transaction) => transaction.account_id === recoveryAccountId).map((transaction) => {
-    const classification = classifyRecoveryTransaction({ transaction, changeType, existingRows: existing || [], cutoffDate, confirmedAccountIds: [recoveryAccountId] });
-    return toRecoveryBatchRow({ transaction, changeType, classification, businessId });
-  });
-  const rows = [
-    ...makeRows(collected.added, "added"),
-    ...makeRows(collected.modified, "modified"),
-    ...(collected.removed || []).filter((transaction) => (existing || []).some((row) => row.plaid_transaction_id === transaction.transaction_id && row.plaid_account_id === recoveryAccountId)).map((transaction) => ({
-      business_id: businessId, change_type: "removed", disposition: (existing || []).some((row) => row.plaid_transaction_id === transaction.transaction_id) ? "removed_existing" : "ambiguous",
-      plaid_transaction_id: transaction.transaction_id || null, payload: { transaction },
-    })),
-  ];
-  const summary = { ...summarizeRecoveryRows(rows), pages: collected.pages.length, mutation_restarts: collected.mutation_restarts, unknown_account_ids: unknownAccounts };
-  const batchId = crypto.randomUUID();
-  const status = unknownAccounts.includes(recoveryAccountId) ? "lineage_confirmation_required" : "preview_ready";
-  const { error: batchError } = await db.from("plaid_recovery_batches").insert({
-    id: batchId, business_id: businessId, plaid_env: item.plaid_env, plaid_item_id: plaidItemId,
-    original_cursor: item.cursor || null, staged_next_cursor: collected.staged_next_cursor, cutoff_date: cutoffDate,
-    status: "staging", posting_hold: true, summary, created_by: actorUserId || null,
-  });
-  if (batchError) throw batchError;
-  if (rows.length) {
-    const { error: rowError } = await db.from("plaid_recovery_batch_rows").insert(rows.map((row) => ({ ...row, batch_id: batchId })));
-    if (rowError) {
-      await db.from("plaid_recovery_batches").update({ status: "failed", failure_code: "recovery_row_staging_failed", failure_detail: rowError.message || null })
-        .eq("business_id", businessId).eq("id", batchId);
-      throw recoveryError("recovery_row_staging_failed", "Recovery transactions could not be staged. Nothing was imported.", 503);
-    }
-  }
-  validateRecoveryReviewPopulation({ summary, rows, replacementAccountId: recoveryAccountId });
-  const { error: readyError } = await db.from("plaid_recovery_batches").update({ status }).eq("business_id", businessId).eq("id", batchId).eq("status", "staging");
-  if (readyError) throw recoveryError("recovery_preview_finalize_failed", "The recovery preview could not be finalized. Nothing was imported.", 503);
-  return { batch_id: batchId, plaid_item_id: plaidItemId, status, cutoff_date: cutoffDate, posting_hold: true, summary };
+  throw recoveryError("recovery_context_required", "New previews require an explicit bounded range and authoritative evidence.");
 }
 
 async function claimRecoveryLease({ db, item, businessId, owner }) {
@@ -559,6 +522,8 @@ async function releaseRecoveryLease({ db, item, businessId, owner }) {
 export async function rebuildReplacementRecoveryPreview({ businessId, plaidItemId, batchId, actorUserId, idempotencyKey, db = supabase, plaid = getPlaidClient() }) {
   if (!plaid) throw recoveryError("plaid_not_configured", "Plaid is unavailable.", 503);
   const item = await scopedItem({ db, businessId, plaidItemId });
+  const { data: source, error: sourceError } = await db.from("plaid_recovery_batches").select("summary").eq("business_id",businessId).eq("plaid_env",item.plaid_env).eq("id",batchId).maybeSingle();
+  if (sourceError || source?.summary?.workflow_kind === "reviewed_recovery") throw recoveryError("recovery_bounded_refresh_required", "Refresh this preview with its exact range and evidence.");
   if (!item.replacement_recovery_account_id) throw recoveryError("replacement_account_required", "Confirmed replacement-card lineage is required.");
   const { data: handoff, error: handoffError } = await db.rpc("begin_plaid_recovery_preview_rebuild", {
     p_business_id: businessId, p_plaid_env: item.plaid_env, p_plaid_item_id: plaidItemId, p_batch_id: batchId,
@@ -624,7 +589,7 @@ export async function releaseReplacementRecoveryHold({ businessId, batchId, acto
     .eq("id", batchId).eq("business_id", businessId).maybeSingle();
   if (error) throw error;
   if (!batch?.id) throw recoveryError("recovery_batch_not_found", "Recovery batch not found.", 404);
-  if (batch.summary?.workflow_kind === "residual_orphan") throw recoveryError("residual_hold_requires_reconciliation", "Residual recovery holds require their own reconciliation workflow.");
+  if (["residual_orphan", "reviewed_recovery"].includes(batch.summary?.workflow_kind)) throw recoveryError("residual_hold_requires_reconciliation", "Residual recovery holds require their own reconciliation workflow.");
   if (batch.status !== "imported_held") throw recoveryError("recovery_batch_not_reviewed", "Import and review the recovery batch before releasing its posting hold.");
   const heldRows = await db.from("transaction_categorizations").select("transaction_id")
     .eq("business_id", businessId).eq("posting_hold_batch_id", batchId).limit(100);
@@ -657,4 +622,67 @@ export async function releaseReplacementRecoveryHold({ businessId, batchId, acto
     }
   }
   return { batch_id: batchId, status: "released", posting_hold: false, eligibility_recheck };
+}
+
+
+// Shared bounded collection/classification/staging, used for proven reconnect
+// gaps and operator-confirmed replacement identities. No cursor-null replay.
+export async function collectBoundedPlaidHistory({ plaid, accessToken, accountId, startDate, endDate }) {
+  const date = value => /^\d{4}-\d{2}-\d{2}$/.test(value || "") && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value;
+  if (!date(startDate) || !date(endDate) || startDate > endDate || Date.parse(endDate)-Date.parse(startDate)>366*86400000
+    || endDate>new Date().toISOString().slice(0,10)) throw recoveryError("recovery_exact_range_required", "Provide an exact range of at most 366 days.", 400);
+  let total = null; const transactions = []; const ids = new Set(); let pages = 0;
+  do {
+    const response = await plaid.transactionsGet({ access_token: accessToken, start_date: startDate, end_date: endDate,
+      options: { account_ids: [accountId], count: 500, offset: transactions.length } });
+    const data = response?.data; pages += 1;
+    if (!Number.isInteger(data?.total_transactions) || data.total_transactions<0 || data.total_transactions>20000
+      || (total !== null && total !== data.total_transactions) || !Array.isArray(data.transactions)) throw recoveryError("recovery_provider_population_changed", "Refresh the bounded preview.");
+    total = data.total_transactions;
+    for (const row of data.transactions) {
+      if (row.account_id !== accountId || !row.transaction_id || ids.has(row.transaction_id) || row.date<startDate || row.date>endDate) throw recoveryError("recovery_provider_population_changed", "Provider population requires review.");
+      ids.add(row.transaction_id); transactions.push(row);
+    }
+    if (transactions.length>total || (!data.transactions.length && transactions.length<total)) throw recoveryError("recovery_provider_population_changed", "Provider population requires review.");
+  } while (transactions.length<total);
+  return { transactions, pages };
+}
+
+async function completeRows(query) {
+  const rows = [];
+  for (let offset=0;;offset+=500) {
+    const { data, error } = await query().order("id").range(offset,offset+499);
+    if (error) throw recoveryError("recovery_evidence_unavailable", "Current recovery evidence could not be loaded.", 503);
+    rows.push(...data); if (data.length<500) return rows;
+  }
+}
+
+async function createBoundedRecoveryPreview({ businessId, plaidItemId, actorUserId, db, plaid, recoveryContext: context, resolveToken }) {
+  if (!["replacement_card", "institution_migration", "reconnect_gap"].includes(context.reason)) throw recoveryError("recovery_reason_required", "Select the recovery reason.", 400);
+  // Database preflight verifies operator, exact ledger identity, checkpoint,
+  // independent gap evidence and policy BEFORE any provider request.
+  const args = { p_business_id: businessId, p_plaid_env: plaidEnvName, p_plaid_item_id: plaidItemId,
+    p_actor_id: actorUserId, p_context: context };
+  const { data: before, error } = await db.rpc("validate_plaid_bounded_recovery", args);
+  if (error) throw recoveryError(error.message?.startsWith("plaid_recovery_") ? error.message : "recovery_preflight_failed", "Recovery evidence or operator authority needs review.", error.code === "42501" ? 403 : 409);
+  const item = await scopedItem({ db, businessId, plaidItemId });
+  const collected = await collectBoundedPlaidHistory({ plaid, accessToken: await resolveToken({ storedToken: item.plaid_access_token }),
+    accountId: context.account_id, startDate: context.start_date, endDate: context.end_date });
+  const [existing, receipts] = await Promise.all([
+    completeRows(() => db.from("bank_transactions").select("id,plaid_transaction_id,pending_transaction_id,plaid_account_id,physical_account_id,date,authorized_date,amount,signed_amount,name,merchant_name,pending,is_archived").eq("business_id",businessId)),
+    completeRows(() => db.from("qbo_posted_transactions").select("id,transaction_id,status").eq("business_id",businessId)),
+  ]);
+  const represented = receipts.filter(r=>r.status === "posted").map(r=>r.transaction_id);
+  const cutoffDate = new Date(Date.parse(context.start_date)-86400000).toISOString().slice(0,10);
+  const rows = collected.transactions.map(transaction => {
+    const withIdentity = { ...transaction, physical_account_id: before.physical_account_id };
+    return toRecoveryBatchRow({ transaction: withIdentity, changeType: "added", businessId,
+      classification: classifyRecoveryTransaction({ transaction: withIdentity, existingRows: existing,
+        cutoffDate, confirmedAccountIds: [context.account_id], representedTransactionIds: represented }) });
+  });
+  const summary = { ...summarizeRecoveryRows(rows), pages: collected.pages };
+  const { data: staged, error: stageError } = await db.rpc("stage_plaid_bounded_recovery", { ...args,
+    p_fingerprint: before.evidence_fingerprint, p_rows: rows, p_summary: summary });
+  if (stageError) throw recoveryError("recovery_preview_evidence_changed", "Refresh the preview; current evidence changed.");
+  return staged;
 }

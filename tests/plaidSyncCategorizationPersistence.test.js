@@ -90,7 +90,7 @@ test("cron synchronizes one selected Item instead of amplifying each Item into a
 test("customer surfaces reserve reconnect actions for actual reauthentication", () => {
   const settings = read("src/pages/Settings/SettingsHome.jsx");
   const books = read("src/pages/accounting/BookkeepingCleanup.jsx");
-  assert.match(settings, /inst\.sync_health\?\.status === "reauthentication_required"/);
+  assert.match(settings, /\["reauthentication_required", "reconnect_in_progress"\]\.includes\(inst\.sync_health\?\.status\)/);
   assert.match(settings, /Sync temporarily unavailable — retrying automatically/);
   assert.match(books, /sync_availability === "temporarily_unavailable"/);
   assert.match(books, /Reconnect in Settings/);

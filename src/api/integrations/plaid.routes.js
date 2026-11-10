@@ -32,6 +32,7 @@ import { businessHasPaidEntitlement } from "../../services/billing/entitledBusin
 
 const router = Router();
 const primaryOwner = requireBusinessRole(["owner"]);
+const recoveryOperator = requireInternalRole(INTERNAL_STAFF_ROLES);
 const integrationAdmin = requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.INTEGRATION_ADMIN);
 const providerSync = requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PROVIDER_SYNC);
 const providerDisconnect = requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PROVIDER_DISCONNECT);
@@ -104,7 +105,7 @@ router.post("/accounts/:plaidAccountId/residual-recovery", requireAuth, plaidMut
 });
 
 // Operator-only tenant-authenticated reconciliation; never a customer Books action.
-router.post("/accounts/:plaidAccountId/residual-recovery/:batchId/reconciliation", requireAuth,
+router.post(["/accounts/:plaidAccountId/recovery-batches/:batchId/reconciliation", "/accounts/:plaidAccountId/residual-recovery/:batchId/reconciliation"], requireAuth,
   plaidMutationRateLimit, requireInternalRole(INTERNAL_STAFF_ROLES),
   residualReconciliationHandler({ db: supabase, plaidEnv: plaidEnvName }));
 
@@ -139,22 +140,20 @@ router.post("/items/:plaidItemId/update-link-token", requireAuth, plaidMutationR
   }
 });
 
-router.post("/items/:plaidItemId/repair-complete", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+router.post("/items/:plaidItemId/repair-complete", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, providerSync, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
-    const result = await inspectUpdatedItemAccounts({ businessId, plaidItemId: req.params.plaidItemId });
+    const result = await inspectUpdatedItemAccounts({ businessId, plaidItemId: req.params.plaidItemId, actorUserId: req.auth?.userId });
     return res.json({ ok: true, ...result });
   } catch (error) {
-    const code = error?.code || error?.message || "plaid_repair_inspection_failed";
-    return res.status(code === "plaid_item_not_found" ? 404 : 500).json({ ok: false, error: code,
-      message: code === "plaid_recovery_state_persistence_failed"
-        ? "The connection was repaired, but durable replacement recovery could not be saved. Verify the recovery migration before continuing."
-        : "The repaired connection could not be inspected safely." });
+    const code = /^plaid_[a-z_]+$/.test(error?.code || "") ? error.code : "plaid_repair_inspection_failed";
+    return res.status(error.status || 409).json({ ok: false, error: code,
+      message: "The connection could not be verified. Existing history and mappings are retained." });
   }
 });
 
-router.post("/items/:plaidItemId/recovery-bootstrap", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+router.post("/items/:plaidItemId/recovery-bootstrap", requireAuth, plaidMutationRateLimit, recoveryOperator, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
@@ -166,7 +165,7 @@ router.post("/items/:plaidItemId/recovery-bootstrap", requireAuth, plaidMutation
   }
 });
 
-router.post("/items/:plaidItemId/recovery-account", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+router.post("/items/:plaidItemId/recovery-account", requireAuth, plaidMutationRateLimit, recoveryOperator, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
@@ -178,14 +177,14 @@ router.post("/items/:plaidItemId/recovery-account", requireAuth, plaidMutationRa
   }
 });
 
-router.post("/items/:plaidItemId/recovery-preview", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, providerSync, async (req, res) => {
+router.post("/items/:plaidItemId/recovery-preview", requireAuth, plaidMutationRateLimit, recoveryOperator, providerSync, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const cutoffDate = String(req.body?.cutoff_date || "");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffDate)) return res.status(400).json({ ok: false, error: "invalid_recovery_cutoff_date" });
+  if (!req.body?.recovery_context && !/^\d{4}-\d{2}-\d{2}$/.test(cutoffDate)) return res.status(400).json({ ok: false, error: "invalid_recovery_cutoff_date" });
   try {
     const result = await createReplacementRecoveryPreview({
-      businessId, plaidItemId: req.params.plaidItemId, cutoffDate,
+      businessId, plaidItemId: req.params.plaidItemId, cutoffDate, recoveryContext: req.body?.recovery_context || null,
       actorUserId: req.auth?.userId || req.user?.id || null,
     });
     return res.json({ ok: true, ...result });
@@ -204,7 +203,7 @@ router.get("/items/:plaidItemId/recovery-status", requireAuth, primaryOwner, int
   }
 });
 
-router.post("/items/:plaidItemId/confirm-lineage", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+router.post("/items/:plaidItemId/confirm-lineage", requireAuth, plaidMutationRateLimit, recoveryOperator, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
@@ -235,7 +234,7 @@ router.get("/items/:plaidItemId/recovery-batches/:batchId/rows", requireAuth, pr
   }
 });
 
-router.post("/items/:plaidItemId/recovery-batches/:batchId/rebuild", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, providerSync, async (req, res) => {
+router.post("/items/:plaidItemId/recovery-batches/:batchId/rebuild", requireAuth, plaidMutationRateLimit, recoveryOperator, providerSync, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const requestId = String(req.get("x-request-id") || crypto.randomUUID());
@@ -264,7 +263,7 @@ router.post("/items/:plaidItemId/recovery-batches/:batchId/rebuild", requireAuth
   }
 });
 
-router.post("/items/:plaidItemId/recovery-batches/:batchId/admit", requireAuth, plaidMutationRateLimit, primaryOwner, integrationAdmin, async (req, res) => {
+router.post("/items/:plaidItemId/recovery-batches/:batchId/admit", requireAuth, plaidMutationRateLimit, recoveryOperator, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const requestId = String(req.get("x-request-id") || crypto.randomUUID());
@@ -299,7 +298,7 @@ router.post("/items/:plaidItemId/recover-expired-lease", requireAuth, plaidMutat
   }
 });
 
-router.post("/recovery-batches/:batchId/release-posting-hold", requireAuth, primaryOwner, integrationAdmin, async (req, res) => {
+router.post("/recovery-batches/:batchId/release-posting-hold", requireAuth, recoveryOperator, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   if (req.body?.confirm_release !== true) {

@@ -43,14 +43,14 @@ function schema() {
     out += `${m[0]}\n`;
   }
   for (const m of snapshot.matchAll(/CREATE (?:UNIQUE )?INDEX [^;]+;/g)) {
-    if (["bank_transactions", "transaction_categorizations"].some(t => m[0].includes(`ON "public"."${t}"`))) out += `${m[0]}\n`;
+    if (["bank_transactions", "transaction_categorizations", "plaid_accounts", "plaid_qbo_account_mappings"].some(t => m[0].includes(`ON "public"."${t}"`))) out += `${m[0]}\n`;
   }
   for (const f of ["set_updated_at", "tc_sync_txn_fields_from_bank_transactions"]) {
     const m = snapshot.match(new RegExp(`CREATE OR REPLACE FUNCTION "public"\\."${f}"\\([\\s\\S]*?\n\\$\\$;`));
     assert.ok(m, f); out += `${m[0]}\n`;
   }
   for (const m of snapshot.matchAll(/CREATE OR REPLACE TRIGGER [^;]+;/g)) {
-    if (["bank_transactions", "transaction_categorizations"].some(t => m[0].includes(`ON "public"."${t}"`))) out += `${m[0]}\n`;
+    if (["bank_transactions", "transaction_categorizations", "plaid_accounts", "plaid_qbo_account_mappings"].some(t => m[0].includes(`ON "public"."${t}"`))) out += `${m[0]}\n`;
   }
   // The installed posting-job trigger is included; it only records database
   // state. No posting worker is started.
@@ -61,7 +61,7 @@ function schema() {
     "20260826_qbo_posting_idempotency_phase2.sql", "20260830_background_bookkeeping_processing.sql", "20261006_plaid_replacement_card_recovery.sql",
     "20261010_bookkeeping_review_posting_state_separation.sql", "20261013090000_pending_transaction_resolution.sql",
     "20261021_transaction_exclusions.sql", "20261023_exclusion_status_constraint.sql",
-    "20261101101000_plaid_replacement_recovery_durable_state.sql", "20261027_handled_posting_jobs_hardening.sql", "20261101111000_plaid_account_connection_state_contract.sql", "20261109173000_plaid_durable_sync_admission.sql", "20261109190000_plaid_account_recovery_observability.sql",
+    "20261101095000_plaid_replacement_recovery_orchestration.sql", "20261101101000_plaid_replacement_recovery_durable_state.sql", "20261101104000_plaid_recovery_preview_rebuild.sql", "20261027_handled_posting_jobs_hardening.sql", "20261101111000_plaid_account_connection_state_contract.sql", "20261109173000_plaid_durable_sync_admission.sql", "20261109190000_plaid_account_recovery_observability.sql",
   ]) out += `\n${read(`supabase/migrations/${f}`)}\n`;
   // Matching evidence uses the exact table DDL; unrelated job-revenue indexes
   // and RPCs from that migration are outside this disposable fixture.
@@ -73,6 +73,7 @@ function schema() {
   const pairEvents=read("supabase/migrations/20260922_atomic_credit_card_payment_pair_lifecycle.sql");
   out+=pairEvents.slice(pairEvents.indexOf("create table"),pairEvents.indexOf("create index"));
   out+=read("supabase/migrations/20261109210000_plaid_residual_reconciliation.sql");
+  out+=read("supabase/migrations/20261109230000_plaid_reconnect_shared_recovery.sql");
   // Do not blanket-grant functions: that would expose the private hold helper.
   out += "alter table public.transaction_categorizations enable row level security; grant all on all tables in schema public to service_role;";
   return out;
@@ -188,6 +189,171 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
     ({ reconcileResidualPlaidBatch: reconcileResidual } = await import("../../src/services/plaid/plaidResidualReconciliationService.js"));
     // business_profiles uses real snapshot requirements/defaults.
     await ok(db.from("business_profiles").insert([business, otherBusiness].map(id => ({ id, business_name: "Synthetic", industry: "Synthetic", team_size: 1, state: "NC", services_offered: "Synthetic" }))));
+
+    await t.test("same-Item zero-new-account reconnect uses retained cursor, checkpoint and no replacement batch; Chase evidence preserved", async () => {
+      const { completePlaidReconnect } = await import("../../src/services/plaid/plaidReconnectService.js");
+      const f=await fixture(), actor=randomUUID();
+      const [historic]=await ok(db.from("plaid_recovery_batches").insert({business_id:business,plaid_env:"production",plaid_item_id:f.key,
+        cutoff_date:"2026-08-27",status:"released",posting_hold:false,summary:{admitted:114,legacy_evidence:"keep"}}).select());
+      await ok(db.from("plaid_items").update({status:"reauth_required",error_code:"ITEM_LOGIN_REQUIRED",replacement_recovery_status:"released",replacement_recovery_cutoff_date:"2026-08-27"}).eq("id",f.item.id));
+      await ok(db.from("plaid_accounts").update({connection_state:"attention_required"}).eq("business_id",business).eq("plaid_account_id",f.key));
+      let cursorSeen;
+      const plaid={accountsGet:async()=>({data:{item:{item_id:f.key,error:null},accounts:[{account_id:f.key,name:"Discover"}]}}),
+        transactionsSync:async({cursor})=>{cursorSeen=cursor; return {data:{added:[event(f,`reconnect-${f.key}`)],modified:[],removed:[],has_more:false,next_cursor:"verified-next"}};}};
+      const result=await completePlaidReconnect({businessId:business,plaidItemId:f.key,actorUserId:actor,db,plaid,resolveToken:async()=>"synthetic"});
+      assert.equal(result.status,"completed"); assert.equal(cursorSeen,"synthetic-old");
+      const [item]=await ok(get("plaid_items").eq("id",f.item.id));
+      assert.equal(item.reconnect_state.prior_error_code,"ITEM_LOGIN_REQUIRED"); assert.equal(item.error_code,null);
+      assert.equal(item.replacement_recovery_status,"released"); assert.equal(item.replacement_recovery_cutoff_date,"2026-08-27");
+      assert.deepEqual(await ok(get("plaid_recovery_batches").eq("plaid_item_id",f.key)),[historic]);
+      const status=(await getRecoveryStatus({db,businessId:business,plaidEnv:"production"})).accounts.find(a=>a.id===f.key).recovery_status;
+      assert.equal(status.bank_connection.state,"connected"); assert.equal(status.transaction_import.state,"current");
+      const tx=await ok(get("bank_transactions").eq("plaid_item_id",f.key));
+      assert.equal((await ok(get("bookkeeping_processing_requests").eq("transaction_id",tx[0].id))).length,1);
+      assert.equal((await ok(get("qbo_posted_transactions").eq("transaction_id",tx[0].id))).length,0);
+      assert.equal((await ok(get("transaction_categorizations").eq("transaction_id",tx[0].id)))[0].post_after,null);
+      assert.doesNotMatch(JSON.stringify(status),/prior_error_code|actor_id|cursor_input_sha256/);
+    });
+
+    await t.test("Update Mode token/cancel/provider failure have no durable mutation; failed replay stays unhealthy and resume completes", async()=>{
+      const { completePlaidReconnect }=await import("../../src/services/plaid/plaidReconnectService.js");
+      const { createUpdateLinkToken }=await import("../../src/services/plaid/plaidIntegrationService.js");
+      const f=await fixture(),actor=randomUUID();
+      await ok(db.from("plaid_items").update({status:"reauth_required",error_code:"ITEM_LOGIN_REQUIRED"}).eq("id",f.item.id));
+      const [before]=await ok(get("plaid_items").eq("id",f.item.id));
+      const token=await createUpdateLinkToken({businessId:business,userId:actor,plaidItemId:f.key,db,resolveToken:async()=>"synthetic",plaid:{linkTokenCreate:async args=>{
+        assert.equal(args.access_token,"synthetic"); assert.equal(args.products,undefined);return {data:{link_token:"fake-update-token"}};}}});
+      assert.equal(token.mode,"update"); // Cancellation invokes no completion request.
+      const args={businessId:business,plaidItemId:f.key,actorUserId:actor,db,resolveToken:async()=>"synthetic"};
+      await assert.rejects(completePlaidReconnect({...args,plaid:{accountsGet:async()=>{throw new Error("expired");}}}),/provider_verification_failed/);
+      assert.deepEqual((await ok(get("plaid_items").eq("id",f.item.id)))[0],before);
+      const plaid={accountsGet:async()=>({data:{item:{item_id:f.key},accounts:[{account_id:f.key}]}}),
+        transactionsSync:async()=>({data:{added:[event(f,`failed-reconnect-${f.key}`)],modified:[],removed:[],next_cursor:"repaired",has_more:false}})};
+      const failed=await completePlaidReconnect({...args,db:failRpc(db,"complete_plaid_sync_admission"),plaid});
+      assert.equal(failed.status,"replay_failed");
+      const [unhealthy]=await ok(get("plaid_items").eq("id",f.item.id));assert.equal(unhealthy.cursor,"synthetic-old"); assert.equal(unhealthy.reconnect_state.state,"waiting_for_replay");
+      const status=(await getRecoveryStatus({db,businessId:business,plaidEnv:"production"})).accounts.find(a=>a.id===f.key).recovery_status;
+      assert.equal(status.bank_connection.state,"reconnect_in_progress");assert.equal(status.bank_connection.recommended_action,"resume_reconnect");
+      assert.equal((await ok(get("plaid_recovery_batches").eq("plaid_item_id",f.key))).length,0);
+      assert.equal((await completePlaidReconnect({...args,plaid})).status,"completed");
+      assert.equal((await ok(get("bank_sync_runs").eq("plaid_item_id",f.key).eq("status","failed"))).length,1);
+    });
+
+    await t.test("changed account stops ingestion until operator lineage review; ambiguous/new Item stop without remapping",async()=>{
+      const { completePlaidReconnect }=await import("../../src/services/plaid/plaidReconnectService.js");
+      const { confirmReplacementAccountLineage }=await import("../../src/services/plaid/plaidReplacementRecoveryService.js");
+      const f=await fixture(),actor=randomUUID(),newId=randomUUID();
+      const [physical]=await ok(db.from("plaid_physical_accounts").insert({business_id:business,plaid_env:"production",confidence:"manual"}).select());
+      await ok(db.from("plaid_accounts").update({physical_account_id:physical.id}).eq("business_id",business).eq("plaid_account_id",f.key));
+      await ok(db.from("plaid_qbo_account_mappings").insert({business_id:business,plaid_account_id:f.key,qbo_account_id:"same-ledger",qbo_account_name:"Synthetic card",qbo_account_type:"CreditCard",source:"manual"}));
+      const beforeMapping=await ok(get("plaid_qbo_account_mappings").eq("plaid_account_id",f.key));
+      const args={businessId:business,plaidItemId:f.key,actorUserId:actor,db,resolveToken:async()=>"synthetic",replay:()=>{throw new Error("Replay must not run");}};
+      const changed=await completePlaidReconnect({...args,plaid:{accountsGet:async()=>({data:{item:{item_id:f.key},accounts:[{account_id:newId,mask:"9734",name:"Discover"}]}})}});
+      assert.equal(changed.status,"identity_review_required");
+      assert.deepEqual(await ok(get("plaid_qbo_account_mappings").eq("plaid_account_id",f.key)),beforeMapping);
+      assert.equal((await ok(get("plaid_items").eq("id",f.item.id)))[0].cursor,"synthetic-old");
+      const lease=await db.rpc("claim_plaid_sync_lease",{p_business_id:business,p_item_id:f.item.id,p_owner:"unconfirmed",p_ttl_seconds:300});assert.equal(lease.data,false);
+      const [candidate]=await ok(get("plaid_replacement_account_candidates").eq("plaid_item_id",f.key));
+      const repeat=await completePlaidReconnect({...args,plaid:{accountsGet:async()=>({data:{item:{item_id:f.key},accounts:[{account_id:newId,name:"Discover",mask:"9734"}]}})}});
+      assert.equal(repeat.status,"identity_review_required");
+      assert.deepEqual((await ok(get("plaid_replacement_account_candidates").eq("id",candidate.id)))[0],candidate);
+      await assert.rejects(confirmReplacementAccountLineage({businessId:business,plaidItemId:f.key,candidateId:candidate.id,priorPlaidAccountId:f.key,actorUserId:actor,db}));
+      sql(`insert into auth.users(id) values ('${actor}');`);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
+      await confirmReplacementAccountLineage({businessId:business,plaidItemId:f.key,candidateId:candidate.id,priorPlaidAccountId:f.key,actorUserId:actor,db});
+      const [account]=await ok(get("plaid_accounts").eq("plaid_account_id",newId));assert.equal(account.physical_account_id,physical.id);
+      assert.equal((await ok(get("plaid_qbo_account_mappings").eq("plaid_account_id",newId)))[0].qbo_account_id,"same-ledger");
+      const verifiedAgain=await completePlaidReconnect({...args,replay:runSync,plaid:{
+        accountsGet:async()=>({data:{item:{item_id:f.key},accounts:[{account_id:newId}]}}),
+        transactionsSync:async()=>({data:{added:[],modified:[],removed:[],next_cursor:"lineage-replayed",has_more:false}})}});
+      assert.equal(verifiedAgain.status,"completed");
+      const bothRetainedIds=await completePlaidReconnect({...args,plaid:{accountsGet:async()=>({data:{item:{item_id:f.key},accounts:[{account_id:f.key},{account_id:newId}]}})}});
+      assert.equal(bothRetainedIds.status,"completed");
+      assert.deepEqual((await ok(get("plaid_replacement_account_candidates").eq("id",candidate.id)))[0].status,"confirmed");
+      const [snapshot]=await ok(get("plaid_items").eq("id",f.item.id));
+      const newItem=await completePlaidReconnect({...args,plaid:{accountsGet:async()=>{throw Object.assign(new Error("missing"),{error_code:"ITEM_NOT_FOUND"});}}});
+      assert.equal(newItem.status,"new_item_identity_required");
+      const ambiguous=await completePlaidReconnect({...args,plaid:{accountsGet:async()=>({data:{item:{item_id:"different-item"},accounts:[{account_id:newId}]}})}});
+      assert.equal(ambiguous.status,"identity_review_required");assert.deepEqual((await ok(get("plaid_items").eq("id",f.item.id)))[0],snapshot);
+      assert.equal((await ok(get("plaid_recovery_batches").eq("plaid_item_id",f.key))).length,0);
+    });
+
+    await t.test("proven gap shares bounded preview, classifier, atomic admission and exact reviewed release; no cursor/posting side effects",async()=>{
+      const { completePlaidReconnect }=await import("../../src/services/plaid/plaidReconnectService.js");
+      const { createReplacementRecoveryPreview,admitReplacementRecoveryBatch,releaseReplacementRecoveryHold }=await import("../../src/services/plaid/plaidReplacementRecoveryService.js");
+      const f=await fixture(),actor=randomUUID();sql(`insert into auth.users(id) values ('${actor}');`);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
+      const [physical]=await ok(db.from("plaid_physical_accounts").insert({business_id:business,plaid_env:"production",confidence:"manual"}).select());
+      await ok(db.from("plaid_accounts").update({physical_account_id:physical.id}).eq("business_id",business).eq("plaid_account_id",f.key));
+      await ok(db.from("plaid_qbo_account_mappings").insert({business_id:business,plaid_account_id:f.key,qbo_account_id:"gap-ledger",qbo_account_name:"Synthetic card",qbo_account_type:"CreditCard",source:"manual"}));
+      const args={businessId:business,plaidItemId:f.key,actorUserId:actor,db,resolveToken:async()=>"synthetic"};
+      const reconnected=await completePlaidReconnect({...args,plaid:{accountsGet:async()=>({data:{item:{item_id:f.key},accounts:[{account_id:f.key}]}}),
+        transactionsSync:async()=>({data:{added:[],modified:[],removed:[],next_cursor:"gap-retained",has_more:false}})}});
+      assert.equal(reconnected.status,"completed");assert.equal((await ok(get("plaid_recovery_batches").eq("plaid_item_id",f.key))).length,0);
+      const context={reason:"reconnect_gap",account_id:f.key,start_date:"2026-10-15",end_date:"2026-10-20",checkpoint_run_id:reconnected.checkpoint_run_id,
+        gap_evidence:{kind:"statement",reference_sha256:"a".repeat(64)}};
+      let historyCalls=0;const plaid={transactionsGet:async request=>{historyCalls++;assert.equal(request.start_date,context.start_date);assert.deepEqual(request.options.account_ids,[f.key]);return {data:{total_transactions:1,transactions:[event(f,`gap-${f.key}`,{date:"2026-10-17"})]}};}};
+      await assert.rejects(createReplacementRecoveryPreview({...args,plaid,recoveryContext:{...context,gap_evidence:null}}));assert.equal(historyCalls,0);
+      const denied=await db.rpc("validate_plaid_bounded_recovery",{p_business_id:business,p_plaid_env:"production",p_plaid_item_id:f.key,p_actor_id:randomUUID(),p_context:context});
+      assert.equal(denied.error.code,"42501");assert.equal(historyCalls,0);
+      const crossTenant=await db.rpc("validate_plaid_bounded_recovery",{p_business_id:otherBusiness,p_plaid_env:"production",p_plaid_item_id:f.key,p_actor_id:actor,p_context:context});assert.ok(crossTenant.error);
+      assert.equal(sql("select has_function_privilege('authenticated','public.stage_plaid_bounded_recovery(uuid,text,text,uuid,jsonb,text,jsonb,jsonb)','EXECUTE'),has_function_privilege('anon','public.record_plaid_reconnect_verification(uuid,text,text,uuid,text,jsonb)','EXECUTE')"),"f|f");
+      await ok(db.rpc("validate_plaid_bounded_recovery",{p_business_id:business,p_plaid_env:"production",p_plaid_item_id:f.key,p_actor_id:actor,p_context:context}));
+      const preview=await createReplacementRecoveryPreview({...args,plaid,recoveryContext:context});assert.equal(preview.summary.new_after_cutoff,1);
+      assert.equal((await createReplacementRecoveryPreview({...args,plaid,recoveryContext:context})).batch_id,preview.batch_id);
+      const [row]=await ok(get("plaid_recovery_batch_rows").eq("batch_id",preview.batch_id));
+      sql("alter table public.bookkeeping_processing_requests add constraint test_reviewed_queue_failure check (metadata->>'source' is distinct from 'plaid_reviewed_recovery') not valid;");
+      try {
+        const rejected=await db.rpc("admit_plaid_recovery_batch",{p_business_id:business,p_batch_id:preview.batch_id,p_plaid_item_id:f.key,p_selected_row_ids:[row.id],p_actor_user_id:actor});
+        assert.equal(rejected.error.code,"23514");
+        assert.equal((await ok(get("bank_transactions").eq("plaid_recovery_batch_id",preview.batch_id))).length,0);
+        assert.equal((await ok(get("plaid_items").eq("id",f.item.id)))[0].cursor,"gap-retained");
+      } finally {sql("alter table public.bookkeeping_processing_requests drop constraint test_reviewed_queue_failure;");}
+      const admitted=await ok(db.rpc("admit_plaid_recovery_batch",{p_business_id:business,p_batch_id:preview.batch_id,p_plaid_item_id:f.key,p_selected_row_ids:[row.id],p_actor_user_id:actor}));assert.equal(admitted.admitted,1);
+      assert.equal((await admitReplacementRecoveryBatch({...args,batchId:preview.batch_id,selectedRowIds:[row.id]})).reused,true);
+      const [tx]=await ok(get("bank_transactions").eq("plaid_recovery_batch_id",preview.batch_id));
+      assert.equal((await ok(get("plaid_items").eq("id",f.item.id)))[0].cursor,"gap-retained");
+      assert.equal((await ok(get("bookkeeping_processing_requests").eq("transaction_id",tx.id))).length,1);
+      const reconciliationArgs={db,businessId:business,plaidEnv:"production",plaidAccountId:f.key,batchId:preview.batch_id,actorUserId:actor};
+      assert.equal((await reconcileResidual(reconciliationArgs)).before.held_count,1);
+      await finishSyntheticCategorization([tx.id]);
+      await assert.rejects(releaseReplacementRecoveryHold({...args,batchId:preview.batch_id}),/reconciliation/);
+      const forbidden=await db.from("transaction_categorizations").update({posting_hold_batch_id:null}).eq("business_id",business).eq("transaction_id",tx.id);assert.ok(forbidden.error);
+      const reviewed=await reconcileResidual(reconciliationArgs);
+      const released=await reconcileResidual({...reconciliationArgs,execute:true,manifestId:reviewed.manifest_id,reviewedTransactionIds:[tx.id],liveQboAttestation:attestation()});
+      assert.equal(released.newly_released_count,1);
+      const { getReplacementRecoveryStatus, listReplacementRecoveryRows } = await import("../../src/services/plaid/plaidReplacementRecoveryService.js");
+      const customerStatus=await getReplacementRecoveryStatus({...args});
+      const customerRows=await listReplacementRecoveryRows({...args,batchId:preview.batch_id});
+      assert.doesNotMatch(JSON.stringify([customerStatus,customerRows]),/live_qbo_attestation|no_unrepresented_duplicate|residual_reconciliations|reference_sha256/);
+      assert.equal((await ok(get("transaction_categorizations").eq("transaction_id",tx.id)))[0].post_after,null);
+      assert.equal((await ok(get("qbo_posted_transactions").eq("transaction_id",tx.id))).length,0);
+      assert.equal((await ok(db.from("business_profiles").select("auto_post_to_quickbooks").eq("id",business)))[0].auto_post_to_quickbooks,false);
+    });
+
+    await t.test("shared historical preview protects CSV/manual overlap, pending lifecycle and represented QBO rows",async()=>{
+      const { completePlaidReconnect }=await import("../../src/services/plaid/plaidReconnectService.js");
+      const { createReplacementRecoveryPreview,admitReplacementRecoveryBatch }=await import("../../src/services/plaid/plaidReplacementRecoveryService.js");
+      const f=await fixture(),actor=randomUUID();sql(`insert into auth.users(id) values ('${actor}');`);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
+      const [physical]=await ok(db.from("plaid_physical_accounts").insert({business_id:business,plaid_env:"production",confidence:"manual"}).select());
+      await ok(db.from("plaid_accounts").update({physical_account_id:physical.id}).eq("business_id",business).eq("plaid_account_id",f.key));
+      await ok(db.from("plaid_qbo_account_mappings").insert({business_id:business,plaid_account_id:f.key,qbo_account_id:"overlap-ledger",qbo_account_name:"Synthetic",qbo_account_type:"CreditCard",source:"manual"}));
+      const csvId=`csv-${f.key}`,pendingId=`pending-${f.key}`,postedId=`posted-${f.key}`;
+      await sync(f,{added:[event(f,csvId,{date:"2026-10-17",name:"CSV overlap"}),event(f,pendingId,{date:"2026-10-17",name:"Pending merchant",pending:true}),event(f,postedId,{date:"2026-10-17",name:"Represented merchant"})]});
+      await ok(db.from("bank_transactions").update({canonical_source:"csv"}).eq("business_id",business).eq("plaid_transaction_id",csvId));
+      const [posted]=await ok(get("bank_transactions").eq("plaid_transaction_id",postedId));
+      await ok(db.from("qbo_posted_transactions").insert({business_id:business,transaction_id:posted.id,qbo_txn_type:"Purchase",status:"posted",qbo_txn_id:"represented-existing"}));
+      const args={businessId:business,plaidItemId:f.key,actorUserId:actor,db,resolveToken:async()=>"synthetic"};
+      const checkpoint=await completePlaidReconnect({...args,plaid:{accountsGet:async()=>({data:{item:{item_id:f.key},accounts:[{account_id:f.key}]}}),transactionsSync:async()=>({data:{added:[],modified:[],removed:[],has_more:false,next_cursor:"overlap-checkpoint"}})}});
+      const context={reason:"reconnect_gap",account_id:f.key,start_date:"2026-10-15",end_date:"2026-10-20",checkpoint_run_id:checkpoint.checkpoint_run_id,gap_evidence:{kind:"provider_history",reference_sha256:"b".repeat(64)}};
+      const transactions=[event(f,`unseen-csv-${f.key}`,{date:"2026-10-17",name:"CSV overlap"}),event(f,`settled-${f.key}`,{date:"2026-10-18",name:"Pending merchant",pending_transaction_id:pendingId}),event(f,postedId,{date:"2026-10-17",name:"Represented merchant"}),event(f,`pending-new-${f.key}`,{date:"2026-10-18",pending:true}),event(f,`eligible-${f.key}`,{date:"2026-10-19",name:"Unseen unique merchant"})];
+      const preview=await createReplacementRecoveryPreview({...args,recoveryContext:context,plaid:{transactionsGet:async()=>({data:{transactions,total_transactions:transactions.length}})}});
+      assert.equal(preview.summary.probable_duplicates,1);assert.equal(preview.summary.pending_replacements,1);assert.equal(preview.summary.represented,1);assert.equal(preview.summary.ambiguous,1);assert.equal(preview.summary.new_after_cutoff,1);
+      const [eligible]=await ok(get("plaid_recovery_batch_rows").eq("batch_id",preview.batch_id).eq("disposition","new_after_cutoff"));
+      const before=await ok(get("bank_transactions").eq("plaid_item_id",f.key).order("id"));
+      await assert.rejects(admitReplacementRecoveryBatch({...args,batchId:preview.batch_id,selectedRowIds:[eligible.id]}));
+      assert.deepEqual(await ok(get("bank_transactions").eq("plaid_item_id",f.key).order("id")),before);
+      assert.equal((await ok(get("plaid_items").eq("id",f.item.id)))[0].cursor,"overlap-checkpoint");
+      assert.equal((await ok(get("qbo_posted_transactions").eq("transaction_id",posted.id))).length,1);
+    });
 
     await t.test("original posted review upsert reproduces exact 23502; scoped UPDATE succeeds and cannot cross tenants", async () => {
       const f = await fixture(); const [row] = await ok(db.from("bank_transactions").insert(bank(f, "original-posted")).select());

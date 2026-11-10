@@ -65,6 +65,27 @@ export function projectPlaidAccountRecoveryStatus(facts, { observedAt = new Date
     imported.recommended_action = bank.recommended_action;
   }
 
+  // Reauthentication is not healthy until the verified retained-cursor run
+  // commits its categorization/admission checkpoint. Other dimensions stay independent.
+  const reconnect = i.reconnect_state || {};
+  if (bank.state !== "disconnected" && reconnect.state === "identity_review_required") {
+    bank = dimension("attention_required", "account_identity_review_required", "review_account_identity", "Account identity needs review", bankTimes);
+    imported.state = "gap_review_required"; imported.reason_code = "identity_review_required";
+    imported.recommended_action = "review_account_identity"; imported.customer_copy = "Import paused for account identity review";
+  } else if (bank.state !== "disconnected" && reconnect.state === "waiting_for_replay") {
+    bank = dimension("reconnect_in_progress", "reconnect_checkpoint_required", failed ? "resume_reconnect" : "wait_for_replay", "Reconnection is being verified", bankTimes);
+    imported.state = failed ? "failed" : run?.status === "running" ? "replaying" : "waiting_for_replay";
+    imported.reason_code = "reconnect_checkpoint_required"; imported.recommended_action = failed ? "resume_reconnect" : "wait_for_replay";
+    imported.customer_copy = failed ? "Reconnection replay needs attention" : "Waiting for verified transaction replay";
+    imported.replay = { required: true, reason_code: "reconnect_checkpoint_required", recommended_action: imported.recommended_action };
+  } else if (bank.reason_code === "plaid_reauthentication_required") {
+    bank.recommended_action = "reconnect_securely"; imported.recommended_action = "reconnect_securely";
+  }
+  if (bank.state !== "disconnected" && reconnect.state === "completed" && m.recovery_gap_review_count > 0) {
+    imported.state="gap_review_required"; imported.reason_code="authoritative_gap_review_required";
+    imported.recommended_action="review_possible_gap"; imported.customer_copy="Historical coverage needs review";
+  }
+
   const blockedByAdmission = failed && run.reason === "plaid_processing_request_requires_replay";
   const automationTimes = { attempt: m.automation_last_attempt_at, success: m.automation_last_success_at,
     error: m.automation_error_at || (blockedByAdmission ? run.finished_at : null) };

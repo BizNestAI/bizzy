@@ -173,10 +173,10 @@ test("replacement repair remains update-mode, staged, held, and explicitly relea
 
   assert.match(integration, /access_token: accessToken/);
   assert.match(integration, /mode:\s*"update"/);
-  assert.match(integration, /plaid_replacement_account_candidates/);
+  assert.match(integration, /completePlaidReconnect/);
   assert.match(routes, /items\/:plaidItemId\/update-link-token/);
   assert.match(routes, /items\/:plaidItemId\/repair-complete/);
-  assert.match(settings, /inst\.sync_health\?\.status === "reauthentication_required"/);
+  assert.match(settings, /\["reauthentication_required", "reconnect_in_progress"\]\.includes\(inst\.sync_health\?\.status\)/);
   assert.match(settings, /`Reconnect \$\{inst\.institution_name \|\| "connection"\}`/);
   assert.match(recovery, /collectCompletePlaidSyncPreview/);
   assert.match(recovery, /staged_next_cursor/);
@@ -206,7 +206,7 @@ test("settings reconstructs and orchestrates the bounded replacement recovery wo
   assert.match(settings, /Review \$\{summary\.new_after_cutoff \|\| 0\} new transactions/);
   assert.match(settings, /Allow recovered transactions to post/);
   assert.match(settings, /Staged cursor is not committed until controlled admission/);
-  assert.match(settings, /REPLACEMENT_CARD_CUTOFF_DATE = "2026-08-27"/);
+  assert.doesNotMatch(settings, /2026-08-27|REPLACEMENT_CARD_CUTOFF_DATE/);
   assert.match(client, /recovery-status/);
   assert.match(client, /confirm-lineage/);
   assert.match(client, /recovery-batches\/\$\{encodeURIComponent\(batchId\)\}\/admit/);
@@ -241,7 +241,7 @@ test("replacement recovery review is transaction-level, scoped, selective, and h
   assert.match(recovery, /\.eq\("plaid_account_id", item\.replacement_recovery_account_id\)/);
   assert.match(recovery, /\.eq\("disposition", "new_after_cutoff"\)/);
   assert.match(recovery, /recovery_preview_row_count_mismatch/);
-  assert.match(recovery, /status: "staging"/);
+  assert.match(recovery, /stage_plaid_bounded_recovery/);
   assert.match(migration, /id = any\(p_selected_row_ids\)/);
   assert.match(migration, /recovery_selection_no_longer_eligible/);
   assert.match(migration, /recovery_admission_count_mismatch/);
@@ -472,7 +472,7 @@ test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempot
   assert.doesNotMatch(recovery, /QuickBooks|qbo.*create|create.*qbo/i);
 
   assert.match(routes, /recovery-batches\/:batchId\/rebuild/);
-  assert.match(routes, /primaryOwner, integrationAdmin, providerSync/);
+  assert.match(routes, /recoveryOperator, providerSync/);
   assert.match(routes, /idempotencyKey: String\(req\.body\?\.idempotency_key/);
   assert.match(client, /recovery-batches\/\$\{encodeURIComponent\(batchId\)\}\/rebuild/);
   assert.match(settings, /Rebuild recovery preview/);
@@ -492,15 +492,10 @@ test("orphaned Chase preview rebuild is exact, audited, cursor-safe, and idempot
   assert.match(settings, /createPortal\(modal, document\.body\)/);
 });
 
-test("retained-identity repair cannot report success without durable recovery persistence", () => {
+test("retained-identity repair delegates to verified durable checkpoint instead of inventing replacement state", () => {
   const integration = read("src/services/plaid/plaidIntegrationService.js");
-  const routes = read("src/api/integrations/plaid.routes.js");
-
-  assert.match(integration, /replacement_recovery_status:\s*recoveryStatus/);
-  assert.match(integration, /replacement_recovery_cutoff_date:\s*"2026-08-27"/);
-  assert.match(integration, /plaid_recovery_state_persistence_failed/);
-  assert.doesNotMatch(integration, /status:\s*newAccounts\.length\s*\?\s*"lineage_confirmation_required"\s*:\s*"updated_existing_item"/);
-  assert.match(routes, /plaid_recovery_state_persistence_failed/);
+  assert.match(integration, /return completePlaidReconnect/);
+  assert.doesNotMatch(integration, /replacement_recovery_cutoff_date:\s*"2026-08-27"/);
 });
 
 test("durable recovery status hydrates and missing retained state has an idempotent bootstrap", () => {
