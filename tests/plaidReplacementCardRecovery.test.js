@@ -349,7 +349,10 @@ test("completed recovery history is durable, collapsed by default, and exposes o
   assert.match(settings, /<RecoveryHistoryRow count=\{importedCount\}/);
   assert.match(read("src/components/Plaid/RecoveryHistoryRow.jsx"), /View details/);
   assert.match(settings, /expandedRecoveryHistory\[inst\.plaid_item_id\] === true/);
-  assert.match(settings, /Recovery cursor committed/);
+  assert.match(settings, /Historical recovery cursor matches the current sync cursor/);
+  assert.match(settings, /Historical recovery cursor differs from the current sync cursor/);
+  assert.match(settings, /Historical pending replacements/);
+  assert.doesNotMatch(settings, /recovery cursor was not committed|Pending held:/);
   assert.match(settings, /Batch ID:/);
   assert.match(settings, /Request ID:/);
   assert.match(recovery, /staged_cursor_present: Boolean\(batch\.staged_next_cursor\)/);

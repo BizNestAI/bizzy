@@ -84,7 +84,8 @@ test("Books Review processing polling is read-only and only stays active while b
   const poller=readFileSync(join(root,"src/utils/processingProgressView.js"),"utf8");
   assert.match(poller, /processingProgressView\(current\)\.stopped/);
   assert.match(poller, /controller\.abort\(\)/);
-  assert.match(poller, /10000:2500/);
+  assert.match(poller, /Math\.min\(30000,delay\*2\)/);
+  assert.match(poller, /nextSignature!==previousSignature \? 2500/);
   assert.match(poller, /await fetchStatus/);
   assert.doesNotMatch(source, /retryBookkeepingProcessing\(businessId/);
   assert.doesNotMatch(source, /reconsiderSuggestions\(businessId/);

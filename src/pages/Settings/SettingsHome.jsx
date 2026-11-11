@@ -1864,7 +1864,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                           {[
                             ["Added", summary.total_added], ["Modified", summary.total_modified], ["Removed", summary.total_removed],
                             ["Already represented", (summary.exact_existing || 0) + (summary.represented || 0)],
-                            ["Pending replacements", summary.pending_replacements], ["Historical discrepancies", summary.historical_discrepancies],
+                            ["Historical pending replacements", summary.pending_replacements], ["Historical discrepancies", summary.historical_discrepancies],
                             ["New after cutoff", summary.new_after_cutoff], ["Probable duplicates", summary.probable_duplicates],
                             ["Ambiguous", summary.ambiguous], ["Unknown accounts", summary.unknown_account_ids?.length || 0],
                           ].map(([label, value]) => (
@@ -1876,8 +1876,10 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                         <div className="mt-2 text-[11px] text-white/55">
                           Source cutoff {batch.cutoff_date}. {completedRecovery
                             ? batch.cursor_commit?.committed
-                              ? `Recovery cursor committed ${formatLocalTimestamp(batch.cursor_commit.committed_at)}.`
-                              : "Attention required: recovery cursor was not committed."
+                              ? "Historical recovery cursor matches the current sync cursor."
+                              : batch.cursor_commit?.staged_cursor_present
+                                ? "Historical recovery cursor differs from the current sync cursor."
+                                : "Historical recovery cursor comparison is unavailable."
                             : "Staged cursor is not committed until controlled admission."}
                         </div>
                         {completedRecovery ? (
@@ -1885,7 +1887,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
                             <div className="grid gap-1 sm:grid-cols-2">
                               <span>Imported: {batch.admission?.imported_count || 0}</span>
                               <span>Omitted: {batch.admission?.omitted_count || 0}</span>
-                              <span>Pending held: {batch.admission?.pending_held_count || 0}</span>
+                              <span>Historical pending replacements: {batch.admission?.pending_held_count || 0}</span>
                               <span>Operator: {batch.admission?.operator || "Not recorded"}</span>
                               <span>Created: {formatLocalTimestamp(batch.created_at)}</span>
                               <span>Admitted: {formatLocalTimestamp(admittedAt)}</span>
