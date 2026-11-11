@@ -375,8 +375,8 @@ export async function listUnresolvedFallbackClassifications({
   };
 }
 
-export async function getClassificationCoverage({ supabase, businessId, taxYear, eligiblePostedCount = 0 } = {}) {
-  const listed = await listTaxClassifications({ supabase, businessId, taxYear, limit: 10000, offset: 0 });
+export async function getClassificationCoverage({ supabase, businessId, taxYear, eligiblePostedCount = 0, classificationRows = null } = {}) {
+  const listed = classificationRows ? { rows: classificationRows } : await listTaxClassifications({ supabase, businessId, taxYear, limit: 10000, offset: 0 });
   const evaluatedRows = listed.rows.filter(hasCompletedClassificationEvaluation);
   const rows = evaluatedRows.filter(hasMeaningfulClassificationOutcome);
   const confirmedCount = rows.filter(isConfirmed).length;

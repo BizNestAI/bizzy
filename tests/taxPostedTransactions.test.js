@@ -394,6 +394,10 @@ class Query {
     this.rows = this.rows.filter((row) => row[field] === value);
     return this;
   }
+  gt(field, value) {
+    this.rows = this.rows.filter((row) => String(row[field] || "") > String(value));
+    return this;
+  }
   gte(field, value) {
     this.rows = this.rows.filter((row) => String(row[field] || "") >= String(value));
     return this;
@@ -422,6 +426,7 @@ class Query {
     next.rangeEnd = end;
     return next;
   }
+  limit(count) { this.rows = this.rows.slice(0, count); return this; }
   maybeSingle() {
     return Promise.resolve({ data: this.error ? null : this.rows[0] || null, error: this.error });
   }
@@ -430,3 +435,124 @@ class Query {
     return Promise.resolve({ data: this.error ? null : rows, error: this.error }).then(resolve);
   }
 }
+
+test("recovery eligibility reads scale by bounded chunks and reuse scope within a sweep", async () => {
+  const { getPostedTransactionsForTaxByIds } = await import("../src/services/tax/taxPostedTransaction.repository.js");
+  const { withTaxSourceReadScope } = await import("../src/services/tax/taxSourceReadScope.js");
+  const ids = Array.from({ length: 205 }, (_, i) => `txn-${i}`);
+  const calls = [], reads = [];
+  const db = makeSupabase({ business_profiles: [{ id: BUSINESS_ID }], bank_transactions: ids.map((id) => bankTxn({ id })), transaction_categorizations: ids.map((id) => cat({ transaction_id: id, status: "posted", qbo_txn_id: id })) }, calls);
+  const from = db.from.bind(db);
+  db.from = (table) => { reads.push(table); return from(table); };
+  await withTaxSourceReadScope(async () => {
+    const result = await getPostedTransactionsForTaxByIds({ supabase: db, businessId: BUSINESS_ID, transactionIds: ids });
+    assert.equal(result.size, 205);
+    assert.ok([...result.values()].every((row) => row.isEligible));
+    await getPostedTransactionsForTaxByIds({ supabase: db, businessId: BUSINESS_ID, transactionIds: [] });
+  });
+  assert.equal(reads.filter((table) => table === "business_profiles").length, 1);
+  assert.equal(reads.length, 16); // one scope read + three reads per 50-ID batch
+  assert.ok(calls.every((call) => call.count <= 50));
+  assert.ok(calls.every((call) => encodeURIComponent(call.values.join(",")).length < 2500));
+});
+
+test("bulk source IDs respect an encoded URL budget and skip heavy payload projections", async () => {
+  const { getPostedTransactionsForTaxByIds } = await import("../src/services/tax/taxPostedTransaction.repository.js");
+  const calls = [], projections = [];
+  const db = makeSupabase({ business_profiles: [{ id: BUSINESS_ID }] }, calls);
+  const from = db.from.bind(db);
+  db.from = (table) => {
+    const query = from(table), select = query.select;
+    query.select = function (columns) { projections.push({ table, columns }); return select.call(this, columns); };
+    return query;
+  };
+  await getPostedTransactionsForTaxByIds({ supabase: db, businessId: BUSINESS_ID, transactionIds: Array.from({ length: 60 }, (_, i) => `${i}-${"long id ".repeat(12)}`) });
+  assert.ok(calls.length > 6, "encoded bytes split batches before the 50-ID count cap");
+  assert.ok(calls.every((call) => new URLSearchParams({ transaction_id: `in.(${call.values.join(",")})` }).toString().length <= 2500));
+  for (const { columns } of projections) assert.doesNotMatch(columns, /(?:^|,)(?:raw|location|counterparties|payload|response)(?:,|$)/);
+});
+
+test("small projected receipt account references preserve account fallback", async () => {
+  const db = makeSupabase({ business_profiles: [{ id: BUSINESS_ID }], bank_transactions: [bankTxn({ id: "projected" })], transaction_categorizations: [], qbo_posted_transactions: [qbo({ transaction_id: "projected", payload: undefined, response: undefined, payload_account_ref: { value: "account-1", name: "Software", type: "Expense" } })] });
+  const result = await getPostedTransactionForTax({ supabase: db, businessId: BUSINESS_ID, transactionId: "projected" });
+  assert.equal(result.qboAccountId, "account-1");
+  assert.equal(result.qboAccountName, "Software");
+});
+
+test("pagination hydrates detailed categorization metadata only for the selected page", async () => {
+  const ids = Array.from({ length: 205 }, (_, i) => `paged-${i}`);
+  const db = makeSupabase({ business_profiles: [{ id: BUSINESS_ID }], bank_transactions: ids.map((id) => bankTxn({ id })), transaction_categorizations: ids.map((id) => cat({ transaction_id: id, status: "posted", qbo_txn_id: id })) });
+  const fullHydrationIds = [];
+  const from = db.from.bind(db);
+  db.from = (table) => {
+    const query = from(table), select = query.select, inFilter = query.in;
+    let detailed = false;
+    query.select = function (columns) { detailed = table === "transaction_categorizations" && columns.split(",").includes("meta"); return select.call(this, columns); };
+    query.in = function (field, values) { if (detailed) fullHydrationIds.push(...values); return inFilter.call(this, field, values); };
+    return query;
+  };
+  const result = await listPostedTransactionsForTax({ supabase: db, businessId: BUSINESS_ID, taxYear: 2026, limit: 10, offset: 100 });
+  assert.equal(result.rows.length, 10);
+  assert.equal(result.counts.eligiblePosted, 205);
+  assert.equal(fullHydrationIds.length, 10);
+});
+
+test("actual SDK requests obey ID-filter and complete-URL budgets for UUIDs and reserved identifiers", async () => {
+  const { createClient } = await import("@supabase/supabase-js");
+  const { getPostedTransactionsForTaxByIds } = await import("../src/services/tax/taxPostedTransaction.repository.js");
+  const { TAX_ID_FILTER_BYTES, TAX_URL_BYTES } = await import("../src/services/tax/boundedPostgrestIds.js");
+  let maximum = 0, maximumFilter = 0;
+  let activeIds = [];
+  const client = createClient("http://127.0.0.1:54321", "fixture", { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: async (input) => {
+    const url = new URL(String(input));
+    maximum = Math.max(maximum, url.href.length);
+    assert.ok(url.href.length <= TAX_URL_BYTES);
+    for (const [key, value] of url.searchParams) if (value.startsWith("in.(")) {
+      const length = new URLSearchParams({ [key]: value }).toString().length;
+      maximumFilter = Math.max(maximumFilter, length);
+      assert.ok(length <= TAX_ID_FILTER_BYTES);
+    }
+    const table = url.pathname.split("/").at(-1);
+    const filter = url.searchParams.get("id") || url.searchParams.get("transaction_id");
+    const selectedIds = activeIds.filter((id) => !filter || filter.includes(/[,()]/.test(id) ? JSON.stringify(id) : id));
+    const data = table === "business_profiles" ? { bookkeeping_start_date: null }
+      : table === "bank_transactions" ? selectedIds.map((id) => bankTxn({ id }))
+      : table === "transaction_categorizations" ? selectedIds.map((id) => cat({ transaction_id: id, status: "posted", qbo_txn_id: id })) : [];
+    return new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+  } } });
+  for (const ids of [Array.from({ length: 205 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`), Array.from({ length: 100 }, (_, i) => `${i}-${"'(), ".repeat(20)}`)]) {
+    activeIds = ids;
+    await getPostedTransactionsForTaxByIds({ supabase: client, businessId: BUSINESS_ID, transactionIds: ids });
+    const { getTaxClassificationSourceSnapshot } = await import("../src/services/tax/taxPostedTransaction.repository.js");
+    const snapshot = await getTaxClassificationSourceSnapshot({ supabase: client, businessId: BUSINESS_ID, taxYear: 2026 });
+    assert.equal(snapshot.candidateCount, ids.length);
+  }
+  console.info(`Actual URL maximum: ${maximum} bytes; ID filter maximum: ${maximumFilter} bytes`);
+});
+
+test("account cache identity includes environment and realm for duplicate account IDs", async () => {
+  const db = makeSupabase({ business_profiles: [{ id: BUSINESS_ID }], bank_transactions: [bankTxn({ id: "realm-specific" })], transaction_categorizations: [cat({ transaction_id: "realm-specific", final_qbo_account_id: "same", final_qbo_account_name: null, suggested_qbo_account_name: null })], qbo_posted_transactions: [qbo({ transaction_id: "realm-specific", realm_id: "correct", qbo_env: "production" })], qbo_accounts_cache: [
+    { business_id: BUSINESS_ID, realm_id: "correct", qbo_env: "production", qbo_account_id: "same", name: "Correct account", account_type: "Expense" },
+    { business_id: BUSINESS_ID, realm_id: "other", qbo_env: "production", qbo_account_id: "same", name: "Wrong realm" },
+    { business_id: BUSINESS_ID, realm_id: "correct", qbo_env: "sandbox", qbo_account_id: "same", name: "Wrong environment" },
+  ] });
+  const result = await getPostedTransactionForTax({ supabase: db, businessId: BUSINESS_ID, transactionId: "realm-specific" });
+  assert.equal(result.qboAccountName, "Correct account");
+});
+
+test("narrow classification aliases preserve freshness, holding and unresolved metadata", async () => {
+  const { listTaxClassificationFreshnessIndex } = await import("../src/services/tax/taxPostedTransaction.repository.js");
+  const db = makeSupabase({ transaction_tax_classifications: [{
+    transaction_id: "index-row", business_id: BUSINESS_ID, tax_year: 2026,
+    source_qbo_account_name: "Durable name", meta_source_qbo_account_name: "Metadata fallback",
+    meta_tax_classification_stale: true, meta_transaction_source_fingerprint: "original fingerprint",
+    meta_tax_review_holding: true, tax_treatment_kind: "unclassified",
+  }] });
+  const [row] = await listTaxClassificationFreshnessIndex({ supabase: db, businessId: BUSINESS_ID, taxYear: 2026 });
+  assert.equal(row.source_qbo_account_name, "Durable name");
+  assert.equal(row.metadata.source_qbo_account_name, "Metadata fallback");
+  assert.equal(row.metadata.tax_classification_stale, true);
+  assert.equal(row.metadata.transaction_source_fingerprint, "original fingerprint");
+  assert.equal(row.metadata.tax_review_holding, true);
+  assert.equal(row.tax_treatment.type, "unclassified");
+});

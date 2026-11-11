@@ -407,7 +407,7 @@ export async function evaluateReconciliationStatus(businessId, opts = {}) {
       linked_qbo_account_id: qboAccountId,
       linked_qbo_account_name: qboAccountName,
       linked_qbo_account_type: qboAccountType,
-      bank_balance,
+      bank_balance: bankBalance,
       book_balance: bookBalance,
       balance_source: bookBalanceSource === "qbo_balance" ? "qbo_balance" : bookBalanceSource === "bizzi_proxy" ? "bizzi_proxy" : "missing",
       comparison_mode: comparisonMode,

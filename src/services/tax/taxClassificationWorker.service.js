@@ -1,4 +1,5 @@
 /* global process */
+import { withTaxSourceReadScope } from "./taxSourceReadScope.js";
 import {
   TAX_CLASSIFICATION_RUN_STATUSES,
   TAX_CLASSIFICATION_SOURCES,
@@ -134,7 +135,10 @@ export function requestTaxClassificationWorkerKick({
     });
 }
 
-export async function enqueueRecoveryTaxClassificationRuns({ supabase, taxYear = null, limit = 50 } = {}) {
+export function enqueueRecoveryTaxClassificationRuns(options = {}) {
+  return withTaxSourceReadScope(() => enqueueRecoveryRuns(options));
+}
+async function enqueueRecoveryRuns({ supabase, taxYear = null, limit = 50 } = {}) {
   const page = await getBusinessesEligibleForTaxClassification({ supabase, taxYear, pageSize: limit });
   const results = [];
   for (const business of page?.businesses || []) {
@@ -145,7 +149,7 @@ export async function enqueueRecoveryTaxClassificationRuns({ supabase, taxYear =
     try {
       if (!(await businessHasPaidEntitlement(businessId, { db: supabase }))) continue;
       const lifecycle = business.lifecycle || await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear: year });
-      if (lifecycle.classificationStatus !== "ready_to_classify") continue;
+      if (lifecycle.classificationStatus !== "ready_to_classify" || lifecycle.candidateCount === 0) continue;
       const queued = await enqueueTaxClassificationRun({
         supabase,
         businessId,

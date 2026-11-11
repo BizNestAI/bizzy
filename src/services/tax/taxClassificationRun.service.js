@@ -1,3 +1,4 @@
+import { withTaxSourceReadScope } from "./taxSourceReadScope.js";
 import { createHash } from "node:crypto";
 import {
   TAX_CLASSIFICATION_RUN_STATUSES,
@@ -6,10 +7,10 @@ import {
 } from "./taxDomain.js";
 import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { getClassificationCoverage } from "./taxClassification.repository.js";
-import { listUnresolvedFallbackClassifications } from "./taxClassification.repository.js";
+import { isUnresolvedFallbackClassification } from "./taxClassification.repository.js";
 import { evaluateDeductionRules, listDeductionRules } from "./taxDeductionRule.repository.js";
 import {
-  getTaxClassificationSourceSnapshot,
+  getTaxClassificationSourceSnapshot, listTaxClassificationFreshnessIndex,
 } from "./taxPostedTransaction.repository.js";
 import { validationError } from "./taxErrors.js";
 
@@ -365,7 +366,10 @@ export async function getSuppressedMatchingTaxClassificationRun({
   return run;
 }
 
-export async function getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear } = {}) {
+export function getTaxClassificationLifecycleStatus(options = {}) {
+  return withTaxSourceReadScope(() => readTaxClassificationLifecycleStatus(options));
+}
+async function readTaxClassificationLifecycleStatus({ supabase, businessId, taxYear } = {}) {
   const year = requireTaxYear(taxYear);
   const [sourceSnapshot, latestRun, activeRun] = await Promise.all([
     getTaxClassificationSourceSnapshot({ supabase, businessId, taxYear: year }),
@@ -373,7 +377,8 @@ export async function getTaxClassificationLifecycleStatus({ supabase, businessId
     getActiveTaxClassificationRun({ supabase, businessId, taxYear: year }),
   ]);
   const eligiblePostedCount = Number(sourceSnapshot.eligiblePostedCount || 0);
-  const coverage = await getClassificationCoverage({ supabase, businessId, taxYear: year, eligiblePostedCount });
+  const coverage = await getClassificationCoverage({ supabase, businessId, taxYear: year, eligiblePostedCount,
+    classificationRows: await listTaxClassificationFreshnessIndex({ supabase, businessId, taxYear: year }) });
   const staleAwareCoverage = {
     ...coverage,
     classifiedCount: sourceSnapshot.classifiedCount,
@@ -401,6 +406,7 @@ export async function getTaxClassificationLifecycleStatus({ supabase, businessId
   const normalizedCoverage = {
     ...staleAwareCoverage,
     eligiblePostedCount,
+    candidateCount: sourceSnapshot.candidateCount,
     processingCount,
     remainingCount: activeRun ? job.remaining : sourceSnapshot.candidateCount,
     failedCount,
@@ -417,7 +423,10 @@ export async function getTaxClassificationLifecycleStatus({ supabase, businessId
   return normalizedCoverage;
 }
 
-export async function getTaxClassificationJobStatus({ supabase, businessId, taxYear } = {}) {
+export function getTaxClassificationJobStatus(options = {}) {
+  return withTaxSourceReadScope(() => readTaxClassificationJobStatus(options));
+}
+async function readTaxClassificationJobStatus({ supabase, businessId, taxYear } = {}) {
   const year = requireTaxYear(taxYear);
   const [activeRun, latestRun] = await Promise.all([
     getActiveTaxClassificationRun({ supabase, businessId, taxYear: year }),
@@ -430,6 +439,7 @@ export async function getTaxClassificationJobStatus({ supabase, businessId, taxY
       businessId,
       taxYear: year,
       eligiblePostedCount: Number(sourceSnapshot.eligiblePostedCount || 0),
+      classificationRows: await listTaxClassificationFreshnessIndex({ supabase, businessId, taxYear: year }),
     });
     const reconciledCoverage = {
       ...coverage,
@@ -523,7 +533,7 @@ async function getClassificationRuleReadiness({ supabase, businessId, taxYear, s
   try {
     const [rules, unresolved] = await Promise.all([
       listDeductionRules({ supabase, businessId, taxYear, includeInactive: false }),
-      listUnresolvedFallbackClassifications({ supabase, businessId, taxYear, limit: 1000, offset: 0 }),
+      listTaxClassificationFreshnessIndex({ supabase, businessId, taxYear }).then((rows) => ({ rows: rows.filter(isUnresolvedFallbackClassification) })),
     ]);
     const contexts = [
       ...(sourceSnapshot.rows || []).map((row) => ({

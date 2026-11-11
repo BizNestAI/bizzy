@@ -3,7 +3,7 @@ import fetch from "node-fetch";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { getLatestQuickBooksTokenRow, withQuickBooksAuth } from "../quickbooksTokenService.js";
 import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
-import { runQboJobCostingSync } from "./qboJobCostingSyncService.js";
+import { runQboJobCostingSync, finishQboSyncRun } from "./qboJobCostingSyncService.js";
 import { generateJobCandidatesForBusiness } from "./jobIdentityResolver.js";
 import { runQboProjectsSync } from "./qboProjectsService.js";
 import { businessHasPaidEntitlement } from "../billing/entitledBusinesses.js";
@@ -441,7 +441,7 @@ export async function processQboWebhookEvent({
       result = { ok: true, skipped: true, reason: "entity_observed_only", entityType: event.entity_type };
     }
 
-    if (businessId) {
+    if (businessId && !result.jobCandidates) {
       try {
         result.jobCandidates = await generateJobCandidatesForBusiness({ businessId, db, now });
       } catch (error) {
@@ -649,6 +649,9 @@ export async function runQboCdcForBusiness({
   const entityList = Array.from(entities);
   const entityResults = {};
   const failures = [];
+  let candidatesChanged = false;
+  const completions = [];
+  const candidatePending = "candidate_generation_pending";
 
   for (const entityType of entityList) {
     const existingCursor = await loadCdcCursor({ db, businessId, realmId, entityType });
@@ -656,6 +659,8 @@ export async function runQboCdcForBusiness({
     const successfulCursor = existingCursor?.last_successful_cursor || existingCursor?.last_successful_changed_since || null;
     const changedSince = subtractOverlap(successfulCursor, entityOverlap, now);
     const retryCount = Number(existingCursor?.retry_count ?? existingCursor?.retries ?? 0);
+    const needsCandidateRecovery = existingCursor?.last_error === candidatePending;
+    candidatesChanged ||= needsCandidateRecovery;
 
     try {
       await upsertCdcCursor({
@@ -667,6 +672,7 @@ export async function runQboCdcForBusiness({
         successfulCursor,
         processed: Number(existingCursor?.processed_count ?? existingCursor?.items_processed ?? 0),
         status: "running",
+        failure: needsCandidateRecovery ? new Error(candidatePending) : null,
         retryCount,
         overlapMinutes: entityOverlap,
         now,
@@ -678,9 +684,16 @@ export async function runQboCdcForBusiness({
           fetchCdc({ realmId, accessToken, entities: [entityType], changedSince, fetchImpl })
         );
       const rows = rowsByEntity?.[entityType] || [];
+      if (rows.length || needsCandidateRecovery) {
+        candidatesChanged = true;
+        await upsertCdcCursor({ db, businessId, realmId, entityType, requestedChangedSince: changedSince,
+          successfulCursor, status: "running", failure: new Error(candidatePending), retryCount,
+          overlapMinutes: entityOverlap, now });
+      }
       const sync = await runQboJobCostingSync({
         businessId,
         mode: "cdc",
+        deferCandidateGeneration: true,
         since: changedSince,
         db,
         now,
@@ -689,6 +702,7 @@ export async function runQboCdcForBusiness({
           fetchAll: ({ entity }) => (entity === entityType ? rows : []),
         },
       });
+      candidatesChanged ||= Object.values(sync.entityCounts || {}).some((counts) => counts.created > 0 || counts.updated > 0 || counts.deleted > 0);
       const entityFailures = (sync.reconciliationFailures || []).filter((item) => item.entity === entityType).length;
       if (entityFailures > 0) {
         const error = new Error(`${entityType} CDC had ${entityFailures} failed records.`);
@@ -702,31 +716,19 @@ export async function runQboCdcForBusiness({
           processed: rows.length,
           failures: entityFailures,
           status: "failed",
-          failure: error,
+          failure: candidatesChanged ? new Error(candidatePending) : error,
           retryCount: retryCount + 1,
           overlapMinutes: entityOverlap,
           now,
         });
+        await finishQboSyncRun({ db, runId: sync.syncRunId, status: "failed", result: sync, error });
         failures.push({ entity: entityType, error: error.message });
         entityResults[entityType] = { ok: false, changedSince, processed: rows.length, failures: entityFailures, sync };
         continue;
       }
 
-      await upsertCdcCursor({
-        db,
-        businessId,
-        realmId,
-        entityType,
-        requestedChangedSince: changedSince,
-        successfulCursor: now.toISOString(),
-        processed: rows.length,
-        failures: 0,
-        status: "succeeded",
-        retryCount: 0,
-        overlapMinutes: entityOverlap,
-        now,
-      });
-      entityResults[entityType] = { ok: true, changedSince, successfulCursor: now.toISOString(), processed: rows.length, sync };
+      completions.push({ entityType, changedSince, successfulCursor, rows, sync, retryCount, entityOverlap });
+      entityResults[entityType] = { ok: true, changedSince, processed: rows.length, sync };
     } catch (error) {
       await upsertCdcCursor({
         db,
@@ -738,7 +740,7 @@ export async function runQboCdcForBusiness({
         processed: 0,
         failures: 1,
         status: "failed",
-        failure: error,
+        failure: needsCandidateRecovery || candidatesChanged ? new Error(candidatePending) : error,
         retryCount: retryCount + 1,
         overlapMinutes: entityOverlap,
         now,
@@ -748,7 +750,29 @@ export async function runQboCdcForBusiness({
     }
   }
 
-  return { ok: failures.length === 0, businessId, realmId, entities: entityResults, failures };
+  let jobCandidates = { skipped: true, createdOrUpdated: 0, candidates: [] };
+  if (candidatesChanged) {
+    try {
+      jobCandidates = await generateJobCandidatesForBusiness({ businessId, realmId, db, now });
+    } catch (error) {
+      jobCandidates = { ok: false, error: error.message };
+      failures.push({ entity: "JobCandidate", error: error.message });
+    }
+  }
+  for (const item of completions) {
+    const incomplete = jobCandidates.ok === false;
+    item.sync.jobCandidates = jobCandidates;
+    await finishQboSyncRun({ db, runId: item.sync.syncRunId, status: incomplete ? "failed" : "succeeded", result: item.sync,
+      error: incomplete ? new Error(jobCandidates.error) : null });
+    await upsertCdcCursor({ db, businessId, realmId, entityType: item.entityType,
+      requestedChangedSince: item.changedSince, successfulCursor: incomplete ? item.successfulCursor : now.toISOString(),
+      processed: item.rows.length, failures: incomplete ? 1 : 0,
+      status: incomplete ? "failed" : "succeeded", failure: incomplete ? new Error(candidatePending) : null,
+      retryCount: incomplete ? item.retryCount + 1 : 0, overlapMinutes: item.entityOverlap, runId: item.sync.syncRunId, now });
+    entityResults[item.entityType].ok = !incomplete;
+    if (!incomplete) entityResults[item.entityType].successfulCursor = now.toISOString();
+  }
+  return { ok: failures.length === 0, businessId, realmId, entities: entityResults, failures, jobCandidates };
 }
 
 async function upsertDailyState({ db, businessId, realmId, status, runId = null, error = null, now }) {

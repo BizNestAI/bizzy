@@ -1,3 +1,4 @@
+import { syncDiagnosticHash } from "./qboSyncRunSnapshot.js";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { toDateOnly, toNumber } from "./qboJobCostingParsers.js";
 
@@ -420,24 +421,69 @@ function qboCustomerById(rows = []) {
   return map;
 }
 
-async function upsertCandidate({ db, payload }) {
-  const { data, error } = await db
-    .from("job_candidates")
-    .upsert(payload, { onConflict: "business_id,realm_id,source_system,source_entity_type,source_entity_id" })
-    .select("*")
-    .maybeSingle();
+// The existing BEFORE UPDATE trigger advances updated_at for every row mutation.
+// A stale read may never reset a newer human decision, even within one replica.
+async function writeAutomatedCandidate({ db, payload, existing }) {
+  const materialHash = syncDiagnosticHash(candidateMaterialValue(payload));
+  const automatedPayload = { ...payload, source_snapshot: { ...payload.source_snapshot,
+    automated_candidate: { schema_version: 1, material_hash: materialHash } } };
+  if (!existing) {
+    const { data, error } = await db.from("job_candidates").insert(automatedPayload).select("*").maybeSingle();
+    if (String(error?.code) === "23505") return null; // concurrent insert owns the row
+    if (error) throw error;
+    return data;
+  }
+  if (!existing.updated_at || existing.candidate_status !== "pending" || existing.confirmed_job_id || existing.dismissal_reason) return null;
+  const baseline = existing.source_snapshot?.automated_candidate;
+  const existingMaterial = Object.fromEntries(Object.keys(payload).map((key) => [key, existing[key]]));
+  // Legacy/unmarked rows and manual edits fail closed. Their provenance cannot
+  // be inferred safely from pending status alone.
+  if (baseline?.schema_version !== 1 || baseline.material_hash !== syncDiagnosticHash(candidateMaterialValue(existingMaterial))) return null;
+  let query = db.from("job_candidates").update(automatedPayload)
+    .eq("business_id", payload.business_id).eq("id", existing.id)
+    .eq("candidate_status", "pending").eq("updated_at", existing.updated_at)
+    .is("confirmed_job_id", null).is("dismissal_reason", null);
+  if (existing.realm_id != null) query = query.eq("realm_id", existing.realm_id);
+  const { data, error } = await query.select("*").maybeSingle();
   if (error) throw error;
   return data;
+}
+
+async function listExistingCandidates({ db, businessId, realmId }) {
+  const rows = [];
+  let after = null;
+  for (;;) {
+    let query = db.from("job_candidates").select("*").eq("business_id", businessId).order("id", { ascending: true }).limit(500);
+    if (realmId) query = query.eq("realm_id", realmId);
+    if (after) query = query.gt("id", after);
+    const { data, error } = await query;
+    if (error) throw error;
+    const page = data || [];
+    rows.push(...page);
+    if (!page.length) break;
+    const next = page.at(-1).id;
+    if (!next || next === after) throw new Error("candidate_lookup_cursor_did_not_advance");
+    after = next;
+  }
+  return rows;
 }
 
 function realmFilter(realmId) {
   return realmId ? [{ op: "eq", column: "realm_id", value: realmId }] : [];
 }
 
+function candidateMaterialValue(value) {
+  if (Array.isArray(value)) return value.map(candidateMaterialValue);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !["updated_at", "last_synced_at", "source_snapshot_at", "automated_candidate"].includes(key))
+    .map(([key, item]) => [key, candidateMaterialValue(item)]));
+  return value;
+}
+
 export async function generateJobCandidatesForBusiness({ businessId, realmId = null, db = defaultSupabase, now = new Date() } = {}) {
   if (!businessId) throw new Error("businessId is required");
 
-  const [documents, qboCustomers, jobs, externalLinks, learnedMappings, linkedDocuments] = await Promise.all([
+  const [documents, qboCustomers, jobs, externalLinks, learnedMappings, linkedDocuments, existingCandidates] = await Promise.all([
     safeSelect({
       db,
       table: "job_revenue_documents",
@@ -453,6 +499,7 @@ export async function generateJobCandidatesForBusiness({ businessId, realmId = n
     safeSelect({ db, table: "job_external_links", businessId, filters: [{ op: "eq", column: "source_system", value: "quickbooks" }, ...realmFilter(realmId)] }),
     safeSelect({ db, table: "job_identity_mappings", businessId, filters: [{ op: "eq", column: "active", value: true }, ...realmFilter(realmId)] }),
     safeSelect({ db, table: "job_revenue_documents", businessId, filters: [{ op: "eq", column: "source_system", value: "quickbooks" }, ...realmFilter(realmId)] }),
+    listExistingCandidates({ db, businessId, realmId }),
   ]);
 
   const customerMap = qboCustomerById(qboCustomers);
@@ -472,6 +519,7 @@ export async function generateJobCandidatesForBusiness({ businessId, realmId = n
     });
 
     if (resolution.decision === "existing_job" && resolution.jobId) {
+      if (document.job_id === resolution.jobId) { result.linkedExisting += 1; continue; }
       let query = db
         .from("job_revenue_documents")
         .update({ job_id: resolution.jobId, updated_at: now.toISOString() })
@@ -496,15 +544,24 @@ export async function generateJobCandidatesForBusiness({ businessId, realmId = n
       continue;
     }
 
-    const candidate = await upsertCandidate({
+    const proposed = resolution.candidatePayload;
+    const existing = existingCandidates.find((row) => row.realm_id === proposed.realm_id && row.source_system === proposed.source_system && row.source_entity_type === proposed.source_entity_type && row.source_entity_id === proposed.source_entity_id);
+    // Reviewed/manual decisions are never reset by background regeneration.
+    if (existing && existing.candidate_status !== "pending") { result.ignored += 1; continue; }
+    if (existing && syncDiagnosticHash(candidateMaterialValue(Object.fromEntries(Object.keys(proposed).map((key) => [key, existing[key]])))) === syncDiagnosticHash(candidateMaterialValue(proposed))) {
+      result.ignored += 1;
+      continue;
+    }
+    const candidate = await writeAutomatedCandidate({
       db,
+      existing,
       payload: {
         ...resolution.candidatePayload,
         updated_at: now.toISOString(),
       },
     });
-    if (candidate) result.candidates.push(candidate);
-    result.createdOrUpdated += 1;
+    if (candidate) { result.candidates.push(candidate); result.createdOrUpdated += 1; }
+    else result.ignored += 1;
   }
 
   return result;

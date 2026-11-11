@@ -1,3 +1,4 @@
+import { buildQboSyncRunSnapshot, boundedSyncDiagnostics } from "./qboSyncRunSnapshot.js";
 import fetch from "node-fetch";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { withQuickBooksAuth } from "../quickbooksTokenService.js";
@@ -128,6 +129,7 @@ async function maybeCreateSyncRun({ db, businessId, realmId, mode, since }) {
       trigger_source: mode,
       since,
       status: "running",
+      source_snapshot: buildQboSyncRunSnapshot({ businessId, realmId, mode, since }),
     })
     .select("id")
     .maybeSingle();
@@ -136,7 +138,7 @@ async function maybeCreateSyncRun({ db, businessId, realmId, mode, since }) {
   return data?.id || null;
 }
 
-async function maybeFinishSyncRun({ db, runId, status, result, error = null }) {
+export async function finishQboSyncRun({ db, runId, status, result, error = null }) {
   if (!runId) return;
   const counts = Object.values(result?.entityCounts || {}).reduce((acc, entityCounts) => {
     acc.fetched += toNumber(entityCounts.fetched, 0);
@@ -152,19 +154,19 @@ async function maybeFinishSyncRun({ db, runId, status, result, error = null }) {
     status,
     finished_at: new Date().toISOString(),
     entity_counts: result?.entityCounts || {},
-    missing_refs: result?.missingRefs || [],
-    orphan_allocations: result?.orphanAllocations || [],
-    duplicate_external_ids: result?.duplicateExternalIds || [],
-    reconciliation_failures: result?.reconciliationFailures || [],
-    last_error: error ? String(error.message || error) : null,
-    source_snapshot: result || {},
+    missing_refs: boundedSyncDiagnostics(result?.missingRefs),
+    orphan_allocations: boundedSyncDiagnostics(result?.orphanAllocations),
+    duplicate_external_ids: boundedSyncDiagnostics(result?.duplicateExternalIds),
+    reconciliation_failures: boundedSyncDiagnostics(result?.reconciliationFailures),
+    last_error: error ? String(error.message || error).slice(0, 500) : null,
+    source_snapshot: buildQboSyncRunSnapshot(result),
     fetched_count: counts.fetched,
     created_count: counts.created,
     updated_count: counts.updated,
     unchanged_count: counts.unchanged,
     deleted_count: counts.deleted,
     linked_count: counts.linked,
-    errors_count: counts.errors + (result?.reconciliationFailures?.length || 0),
+    errors_count: Math.max(error ? 1 : 0, counts.errors + (result?.reconciliationFailures?.length || 0)),
     candidates_created_count: Number(result?.jobCandidates?.created || result?.jobCandidates?.createdCount || 0),
     cursor: { since: result?.since || null, mode: result?.mode || null },
   };
@@ -561,6 +563,7 @@ export async function runQboJobCostingSync({
   fetchImpl = fetch,
   qboTransport = null,
   now = new Date(),
+  deferCandidateGeneration = false,
 } = {}) {
   if (!businessId) throw new Error("businessId is required");
 
@@ -584,6 +587,7 @@ export async function runQboJobCostingSync({
     if (!realmId) throw new Error("quickbooks_realm_id_missing");
     result.realmId = realmId;
     const runId = await maybeCreateSyncRun({ db, businessId, realmId, mode, since });
+    result.syncRunId = runId;
 
     try {
       const entityRows = {};
@@ -666,7 +670,10 @@ export async function runQboJobCostingSync({
       }
 
       try {
-        result.jobCandidates = await generateJobCandidatesForBusiness({ businessId, realmId, db, now });
+        const changed = Object.values(result.entityCounts).some((counts) => counts.created > 0 || counts.updated > 0 || counts.deleted > 0);
+        result.jobCandidates = deferCandidateGeneration || (["cdc", "webhook"].includes(mode) && !changed)
+          ? { skipped: true, createdOrUpdated: 0, candidates: [] }
+          : await generateJobCandidatesForBusiness({ businessId, realmId, db, now });
       } catch (error) {
         diagnostics.reconciliationFailures.push({ entity: "JobCandidate", error: error.message });
         result.jobCandidates = { ok: false, error: error.message };
@@ -676,12 +683,16 @@ export async function runQboJobCostingSync({
       result.orphanAllocations = diagnostics.orphanAllocations;
       result.duplicateExternalIds = diagnostics.duplicateExternalIds;
       result.reconciliationFailures = diagnostics.reconciliationFailures;
-      await maybeFinishSyncRun({ db, runId, status: "succeeded", result });
+      if (!deferCandidateGeneration) {
+        const failed = diagnostics.reconciliationFailures.length > 0;
+        result.ok = !failed;
+        await finishQboSyncRun({ db, runId, status: failed ? "failed" : "succeeded", result });
+      }
       return result;
     } catch (error) {
       result.ok = false;
       result.error = error.message;
-      await maybeFinishSyncRun({ db, runId, status: "failed", result, error });
+      await finishQboSyncRun({ db, runId, status: "failed", result, error });
       throw error;
     }
   };

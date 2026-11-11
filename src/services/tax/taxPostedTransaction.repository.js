@@ -1,3 +1,5 @@
+import { boundedIdChunks, boundedTaxQuery } from "./boundedPostgrestIds.js";
+import { taxSourceRead } from "./taxSourceReadScope.js";
 // /src/services/tax/taxPostedTransaction.repository.js
 import { normalizeTaxYear } from "./taxDomain.js";
 import { dataUnavailableError, notFoundError, validationError } from "./taxErrors.js";
@@ -44,12 +46,77 @@ const QBO_ACCOUNT_CACHE_SELECT = [
   "business_id", "qbo_env", "realm_id", "qbo_account_id", "name", "account_type", "account_subtype", "active",
 ].join(",");
 
+const BANK_INDEX_SELECT = "id,business_id,date,amount,signed_amount,direction,merchant_entity_id,pending,is_archived,archived_at,duplicate_fingerprint,created_at";
+const CLASSIFICATION_META_KEYS = ["tax_classification_stale", "classification_engine_version", "transaction_source_fingerprint", "neutralized_at", "superseded_at", "fallback", "tax_treatment_type", "is_holding", "tax_review_holding", "source_qbo_account_name", "source_qbo_account_id", "source_qbo_account_type", "source_qbo_account_subtype", "bookkeeping_category", "normalized_qbo_account_name", "normalized_qbo_account_type", "normalized_qbo_account_subtype", "taxonomy_type", "source_qbo_txn_type"];
+const CLASSIFICATION_INDEX_SELECT = ["transaction_id", "business_id", "tax_year", "classification_status", "tax_category", "deductibility_status", "deductible_percent", "book_amount", "deductible_amount", "nondeductible_amount", "capitalizable_amount", "source", "rule_id", "rule_code", "transaction_date", "source_qbo_account_id", "source_qbo_account_name", "source_qbo_txn_type", "created_at", "updated_at", "tax_treatment_kind:tax_treatment->>type",
+  ...CLASSIFICATION_META_KEYS.map((key) => `meta_${key}:metadata->${key}`)].join(",");
+
+export function listTaxClassificationFreshnessIndex({ supabase, businessId, taxYear }) {
+  return taxSourceRead(supabase, `classification-index:${businessId}:${taxYear}`, async () => {
+    const rows = [];
+    let after = null;
+    for (;;) {
+      let query = supabase.from("transaction_tax_classifications").select(CLASSIFICATION_INDEX_SELECT)
+        .eq("business_id", businessId).eq("tax_year", taxYear).order("transaction_id", { ascending: true });
+      if (after) query = query.gt("transaction_id", after);
+      query = query.limit(500);
+      const { data, error } = await boundedTaxQuery(query);
+      if (error) throw error;
+      const page = data || [];
+      assertRowsBelongToBusiness(page, businessId, "transaction_tax_classifications");
+      rows.push(...page.map((row) => ({ ...row, tax_treatment: row.tax_treatment || { type: row.tax_treatment_kind }, metadata: row.metadata || Object.fromEntries(CLASSIFICATION_META_KEYS.map((key) => [key, row[`meta_${key}`]])) })));
+      if (!page.length) break;
+      const next = String(page.at(-1).transaction_id);
+      if (next === after) throw new Error("classification_index_cursor_did_not_advance");
+      after = next;
+    }
+    return rows;
+  });
+}
+
+const BANK_SCAN_SELECT = BANK_SELECT.split(",").filter((key) => !["raw", "location", "counterparties"].includes(key)).join(",");
+const QBO_SCAN_SELECT = QBO_SELECT.split(",").filter((key) => !["payload", "response"].includes(key)).concat([
+  "payload_account_ref:payload->AccountRef", "payload_purchase_account_ref:payload->Purchase->AccountRef",
+  "response_account_ref:response->AccountRef", "response_purchase_account_ref:response->Purchase->AccountRef",
+]).join(",");
+
+export async function getPostedTransactionsForTaxByIds({ supabase, businessId, transactionIds }) {
+  if (!businessId) throw validationError("missing_business_id", "businessId is required.");
+  const ids = [...new Set(transactionIds.map(String))];
+  const start = await taxSourceRead(supabase, `scope:${businessId}`, () => getBookkeepingStartDate(supabase, businessId));
+  const bankRows = [];
+  for (const chunk of chunks(ids, CHUNK_SIZE)) {
+    const { data, error } = await boundedTaxQuery(supabase.from("bank_transactions").select(BANK_INDEX_SELECT).eq("business_id", businessId).in("id", chunk));
+    if (error) throw error;
+    assertRowsBelongToBusiness(data || [], businessId, "bank_transactions");
+    bankRows.push(...(data || []));
+  }
+  const catRows = [], qboRows = [];
+  for (const chunk of chunks(ids, CHUNK_SIZE)) {
+    const [cat, receipt] = await Promise.all([
+      boundedTaxQuery(supabase.from("transaction_categorizations").select("transaction_id,business_id,status,qbo_txn_id,post_error,posted_at,decided_at").eq("business_id", businessId).in("transaction_id", chunk)),
+      boundedTaxQuery(supabase.from("qbo_posted_transactions").select("transaction_id,business_id,status,qbo_txn_id,posted_at").eq("business_id", businessId).in("transaction_id", chunk)),
+    ]);
+    if (cat.error) throw cat.error;
+    if (receipt.error) throw receipt.error;
+    assertRowsBelongToBusiness(cat.data || [], businessId, "transaction_categorizations");
+    assertRowsBelongToBusiness(receipt.data || [], businessId, "qbo_posted_transactions");
+    catRows.push(...(cat.data || [])); qboRows.push(...(receipt.data || []));
+  }
+  const cats = latestByTransaction(catRows), receipts = latestByTransaction(qboRows);
+  return new Map(bankRows.map((bank) => {
+    const reason = getTaxEligibilityReason({ bankTransaction: bank, categorization: cats.get(String(bank.id)), qboPostedTransaction: receipts.get(String(bank.id)), businessId });
+    const inScope = isTransactionInActiveBookkeepingScope(bank, start);
+    return [String(bank.id), { isEligible: reason === "eligible_posted" && inScope, eligibilityReason: inScope ? reason : "transaction_before_bookkeeping_start_date" }];
+  }));
+}
+
 export async function getPostedTransactionForTax({ supabase, businessId, transactionId } = {}) {
   if (!supabase) throw new Error("Supabase client required");
   if (!businessId) throw validationError("missing_business_id", "businessId is required.");
   if (!transactionId) throw validationError("missing_transaction_id", "transactionId is required.");
 
-  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const bookkeepingStartDate = await taxSourceRead(supabase, `scope:${businessId}`, () => getBookkeepingStartDate(supabase, businessId));
   const { data: bankTransaction, error } = await supabase
     .from("bank_transactions")
     .select(BANK_SELECT)
@@ -100,15 +167,16 @@ export async function listPostedTransactionsForTax({
   const range = resolveDateRange({ taxYear, dateFrom, dateTo });
   const page = normalizePagination({ limit, offset });
   const bankRows = await fetchBankRows({ supabase, businessId, range, accountId, direction });
-  const hydrated = await hydrateRows({ supabase, businessId, bankRows });
-  let rows = hydrated.filter((row) => row.isEligible).filter((row) => matchesTaxSearch(row, search)).sort(compareTaxRows);
+  const population = await scanTaxListPopulation({ supabase, businessId, bankRows });
+  let rows = population.filter((row) => row.isEligible).filter((row) => matchesTaxSearch(row, search)).sort(compareTaxRows);
   if (qboAccountId) rows = rows.filter((row) => row.qboAccountId === qboAccountId);
   if (!includeSourceWarnings) rows = rows.map((row) => ({ ...row, sourceWarnings: [] }));
 
   const count = rows.length;
-  const paged = rows.slice(page.offset, page.offset + page.limit);
+  const pageIds = new Set(rows.slice(page.offset, page.offset + page.limit).map((row) => String(row.transactionId)));
+  const paged = (await hydrateRows({ supabase, businessId, bankRows: bankRows.filter((row) => pageIds.has(String(row.id))) })).sort(compareTaxRows);
   return {
-    rows: paged,
+    rows: includeSourceWarnings ? paged : paged.map((row) => ({ ...row, sourceWarnings: [] })),
     pagination: {
       limit: page.limit,
       offset: page.offset,
@@ -152,18 +220,18 @@ export async function listTaxPostingSourceRowsByIds({ supabase, businessId, taxY
   if (!ids.length || uniqueIds.length !== ids.length) {
     throw dataUnavailableError("The Tax question transaction population is unavailable.", { reason: "invalid_question_membership" });
   }
-  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const bookkeepingStartDate = await taxSourceRead(supabase, `scope:${businessId}`, () => getBookkeepingStartDate(supabase, businessId));
   const bankRows = [];
   for (const chunk of chunks(uniqueIds, CHUNK_SIZE)) {
-    let query = supabase.from("bank_transactions").select(BANK_SELECT)
+    let query = boundedTaxQuery(supabase.from("bank_transactions").select(BANK_SELECT)
       .eq("business_id", businessId)
       .gte("date", range.dateFrom)
       .lte("date", range.dateTo)
       .eq("is_archived", false)
       .eq("pending", false)
-      .in("id", chunk);
+      .in("id", chunk));
     query = applyActiveBookkeepingScope(query, bookkeepingStartDate);
-    const { data, error } = await query;
+    const { data, error } = await boundedTaxQuery(query);
     if (error) throw error;
     bankRows.push(...(data || []));
   }
@@ -193,18 +261,18 @@ export async function listTaxQuestionBankRowsByIds({ supabase, businessId, taxYe
   if (!ids.length || uniqueIds.length !== ids.length) {
     throw dataUnavailableError("The Tax question transaction population is unavailable.", { reason: "invalid_question_membership" });
   }
-  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const bookkeepingStartDate = await taxSourceRead(supabase, `scope:${businessId}`, () => getBookkeepingStartDate(supabase, businessId));
   const rows = [];
   for (const chunk of chunks(uniqueIds, CHUNK_SIZE)) {
-    let query = supabase.from("bank_transactions").select(BANK_SELECT)
+    let query = boundedTaxQuery(supabase.from("bank_transactions").select(BANK_SELECT)
       .eq("business_id", businessId)
       .gte("date", range.dateFrom)
       .lte("date", range.dateTo)
       .eq("is_archived", false)
       .eq("pending", false)
-      .in("id", chunk);
+      .in("id", chunk));
     query = applyActiveBookkeepingScope(query, bookkeepingStartDate);
-    const { data, error } = await query;
+    const { data, error } = await boundedTaxQuery(query);
     if (error) throw error;
     rows.push(...(data || []));
   }
@@ -241,24 +309,23 @@ export async function listUnclassifiedPostedTransactions({ supabase, businessId,
 }
 
 async function listAllEligiblePostedRows({ supabase, businessId, taxYear }) {
-  const rows = [];
-  for (let offset = 0; ; offset += MAX_LIMIT) {
-    const page = await listPostedTransactionsForTax({ supabase, businessId, taxYear, limit: MAX_LIMIT, offset });
-    rows.push(...page.rows);
-    if (!page.pagination.hasMore) break;
-  }
-  return rows.sort(compareTaxRows);
+  const bankRows = await fetchBankRows({ supabase, businessId, range: resolveDateRange({ taxYear }) });
+  return (await hydrateRows({ supabase, businessId, bankRows })).filter((row) => row.isEligible).sort(compareTaxRows);
 }
 
-export async function getTaxClassificationSourceSnapshot({ supabase, businessId, taxYear } = {}) {
+export function getTaxClassificationSourceSnapshot(options = {}) {
+  return taxSourceRead(options.supabase, `snapshot:${options.businessId}:${options.taxYear}`, () => readTaxClassificationSourceSnapshot(options));
+}
+async function readTaxClassificationSourceSnapshot({ supabase, businessId, taxYear } = {}) {
   const year = requireTaxYear(taxYear);
-  const postedRows = await listAllEligiblePostedRows({ supabase, businessId, taxYear: year });
+  const classifications = await listTaxClassificationFreshnessIndex({ supabase, businessId, taxYear: year });
+  const indexBankRows = await fetchBankRows({ supabase, businessId, range: resolveDateRange({ taxYear: year }), indexOnly: true });
+  const postedRows = (await scanTaxListPopulation({ supabase, businessId, bankRows: indexBankRows, indexOnly: true })).filter((row) => row.isEligible).sort(compareTaxRows);
   const fingerprintedRows = postedRows.map((row) => ({
     ...row,
     sourceFingerprint: computeTaxTransactionFingerprint(row),
   }));
-  const ids = fingerprintedRows.map((row) => row.transactionId).filter(Boolean);
-  const classificationMap = await fetchClassificationMap({ supabase, businessId, taxYear: year, transactionIds: ids });
+  const classificationMap = new Map(classifications.map((row) => [String(row.transaction_id), row]));
   const unclassified = fingerprintedRows.filter((row) => {
     const classification = classificationMap.get(String(row.transactionId));
     return !classification || isMachineClassificationStaleForSource(classification, row);
@@ -268,8 +335,17 @@ export async function getTaxClassificationSourceSnapshot({ supabase, businessId,
     .filter((row) => row && hasCompletedClassificationEvaluation(row));
   const meaningfulClassifications = currentClassifications.filter(hasMeaningfulClassificationOutcome);
   const unresolvedFallbackCount = currentClassifications.filter(isUnresolvedFallbackClassification).length;
+  const dueIds = unclassified.map((row) => String(row.transactionId));
+  const dueBankRows = [];
+  for (const ids of chunks(dueIds, CHUNK_SIZE)) {
+    const { data, error } = await boundedTaxQuery(supabase.from("bank_transactions").select(BANK_SCAN_SELECT).eq("business_id", businessId).in("id", ids));
+    if (error) throw error;
+    assertRowsBelongToBusiness(data || [], businessId, "bank_transactions");
+    dueBankRows.push(...(data || []));
+  }
+  const detailedRows = await hydrateRows({ supabase, businessId, bankRows: dueBankRows });
   return {
-    rows: unclassified,
+    rows: detailedRows.filter((row) => row.isEligible).sort(compareTaxRows).map((row) => ({ ...row, sourceFingerprint: computeTaxTransactionFingerprint(row) })),
     transactionIds: unclassified.map((row) => String(row.transactionId)).filter(Boolean),
     eligiblePostedCount: fingerprintedRows.length,
     classifiedCount: meaningfulClassifications.length,
@@ -298,13 +374,13 @@ export async function countReviewRequiredTaxClassifications({ supabase, business
   const transactionIds = postedRows.map((row) => row.transactionId).filter(Boolean);
   const reviewRequiredIds = new Set();
   for (const chunk of chunks([...new Set(transactionIds.map(String))], CHUNK_SIZE)) {
-    const { data, error } = await supabase
+    const { data, error } = await boundedTaxQuery(supabase
       .from("transaction_tax_classifications")
       .select("transaction_id")
       .eq("business_id", businessId)
       .eq("tax_year", year)
       .eq("requires_review", true)
-      .in("transaction_id", chunk);
+      .in("transaction_id", chunk));
     if (error) throw error;
     for (const row of data || []) reviewRequiredIds.add(String(row.transaction_id));
   }
@@ -336,11 +412,15 @@ export async function getPostedTransactionSourceHealth({ supabase, businessId, t
   };
 }
 
-async function fetchBankRows({ supabase, businessId, range, accountId, direction, includeArchivedPending = false }) {
-  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+function fetchBankRows(options) {
+  const { supabase, ...key } = options;
+  return taxSourceRead(supabase, `bank:${JSON.stringify(key)}`, () => fetchBankRowsUncached(options));
+}
+async function fetchBankRowsUncached({ supabase, businessId, range, accountId, direction, includeArchivedPending = false, indexOnly = false }) {
+  const bookkeepingStartDate = await taxSourceRead(supabase, `scope:${businessId}`, () => getBookkeepingStartDate(supabase, businessId));
   let query = supabase
     .from("bank_transactions")
-    .select(BANK_SELECT)
+    .select(indexOnly ? BANK_INDEX_SELECT : BANK_SCAN_SELECT)
     .eq("business_id", businessId)
     .gte("date", range.dateFrom)
     .lte("date", range.dateTo)
@@ -358,12 +438,39 @@ async function fetchBankRows({ supabase, businessId, range, accountId, direction
   const rows = [];
   for (let start = 0; ; start += BANK_PAGE_SIZE) {
     const pageQuery = typeof query.range === "function" ? query.range(start, start + BANK_PAGE_SIZE - 1) : query;
-    const { data, error } = await pageQuery;
+    const { data, error } = await boundedTaxQuery(pageQuery);
     if (error) throw error;
+    assertRowsBelongToBusiness(data || [], businessId, "bank_transactions");
     rows.push(...(data || []));
     if (!data || data.length < BANK_PAGE_SIZE || typeof query.range !== "function") break;
   }
   return rows;
+}
+
+async function scanTaxListPopulation({ supabase, businessId, bankRows, indexOnly = false }) {
+  const cats = [], receipts = [];
+  const projection = "transaction_id,business_id,status,qbo_txn_id,qbo_txn_type,post_error,posted_at,decided_at,txn_name,final_qbo_account_id,final_qbo_account_name,suggested_qbo_account_id,suggested_qbo_account_name,taxonomy_type:meta->>taxonomy_type";
+  for (const ids of chunks(bankRows.map((row) => row.id), CHUNK_SIZE)) {
+    const [cat, qbo] = await Promise.all([
+      boundedTaxQuery(supabase.from("transaction_categorizations").select(projection).eq("business_id", businessId).in("transaction_id", ids)),
+      boundedTaxQuery(supabase.from("qbo_posted_transactions").select(QBO_SCAN_SELECT).eq("business_id", businessId).in("transaction_id", ids)),
+    ]);
+    if (cat.error) throw cat.error;
+    if (qbo.error) throw qbo.error;
+    assertRowsBelongToBusiness(cat.data || [], businessId, "transaction_categorizations");
+    assertRowsBelongToBusiness(qbo.data || [], businessId, "qbo_posted_transactions");
+    cats.push(...(cat.data || []).map((row) => ({ ...row, meta: row.meta || { taxonomy_type: row.taxonomy_type } }))); receipts.push(...(qbo.data || []).map(receiptAccountRefs));
+  }
+  const catMap = latestByTransaction(cats), qboMap = latestByTransaction(receipts);
+  const accounts = await fetchQboAccountMap({ supabase, businessId, catRows: cats, qboRows: receipts, indexOnly });
+  return bankRows.map((bank) => buildTaxRow({ bankTransaction: bank, categorization: catMap.get(String(bank.id)), qboPostedTransaction: qboMap.get(String(bank.id)), qboAccount: accounts.get(String(bank.id)), businessId }));
+}
+
+function receiptAccountRefs(row) {
+  return { ...row,
+    payload: row.payload || { AccountRef: row.payload_account_ref, Purchase: { AccountRef: row.payload_purchase_account_ref } },
+    response: row.response || { AccountRef: row.response_account_ref, Purchase: { AccountRef: row.response_purchase_account_ref } },
+  };
 }
 
 async function hydrateRows({ supabase, businessId, bankRows }) {
@@ -378,7 +485,11 @@ async function hydrateRows({ supabase, businessId, bankRows }) {
   }));
 }
 
-async function fetchRelatedRows({ supabase, businessId, transactionIds }) {
+function fetchRelatedRows(options) {
+  const { supabase, businessId, transactionIds } = options;
+  return taxSourceRead(supabase, `related:${businessId}:${JSON.stringify([...transactionIds].sort())}`, () => fetchRelatedRowsUncached(options));
+}
+async function fetchRelatedRowsUncached({ supabase, businessId, transactionIds }) {
   const catRows = [];
   const qboRows = [];
   const idChunks = chunks([...new Set((transactionIds || []).filter(Boolean).map(String))], CHUNK_SIZE);
@@ -395,7 +506,10 @@ async function fetchRelatedRows({ supabase, businessId, transactionIds }) {
   };
 }
 
-async function fetchRelatedChunkWithRetry({ supabase, businessId, chunk, chunkIndex }) {
+function fetchRelatedChunkWithRetry(options) {
+  return taxSourceRead(options.supabase, `related-chunk:${options.businessId}:${JSON.stringify(options.chunk)}`, () => readRelatedChunkWithRetry(options));
+}
+async function readRelatedChunkWithRetry({ supabase, businessId, chunk, chunkIndex }) {
   let lastError = null;
   for (let attempt = 0; attempt <= RELATED_ROW_RETRY_ATTEMPTS; attempt += 1) {
     try {
@@ -417,19 +531,19 @@ async function fetchRelatedChunkWithRetry({ supabase, businessId, chunk, chunkIn
 
 async function fetchRelatedChunk({ supabase, businessId, chunk }) {
   const [catRes, qboRes] = await Promise.all([
-    supabase.from("transaction_categorizations").select(CAT_SELECT).eq("business_id", businessId).in("transaction_id", chunk),
-    supabase.from("qbo_posted_transactions").select(QBO_SELECT).eq("business_id", businessId).in("transaction_id", chunk),
+    boundedTaxQuery(supabase.from("transaction_categorizations").select(CAT_SELECT).eq("business_id", businessId).in("transaction_id", chunk)),
+    boundedTaxQuery(supabase.from("qbo_posted_transactions").select(QBO_SCAN_SELECT).eq("business_id", businessId).in("transaction_id", chunk)),
   ]);
   if (catRes.error) throw catRes.error;
   if (qboRes.error) throw qboRes.error;
   const catRows = catRes.data || [];
-  const qboRows = qboRes.data || [];
+  const qboRows = (qboRes.data || []).map(receiptAccountRefs);
   assertRowsBelongToBusiness(catRows, businessId, "transaction_categorizations");
   assertRowsBelongToBusiness(qboRows, businessId, "qbo_posted_transactions");
   return { catRows, qboRows };
 }
 
-async function fetchQboAccountMap({ supabase, businessId, catRows = [], qboRows = [] }) {
+async function fetchQboAccountMap({ supabase, businessId, catRows = [], qboRows = [], indexOnly = false }) {
   const accountIds = [...new Set(catRows
     .map((row) => row.final_qbo_account_id || row.suggested_qbo_account_id)
     .filter(Boolean)
@@ -437,11 +551,8 @@ async function fetchQboAccountMap({ supabase, businessId, catRows = [], qboRows 
   if (!accountIds.length) return new Map();
   const rows = [];
   for (const chunk of chunks(accountIds, CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from("qbo_accounts_cache")
-      .select(QBO_ACCOUNT_CACHE_SELECT)
-      .eq("business_id", businessId)
-      .in("qbo_account_id", chunk);
+    const { data, error } = await taxSourceRead(supabase, `accounts:${businessId}:${indexOnly}:${JSON.stringify([...chunk].sort())}`, () => boundedTaxQuery(supabase
+      .from("qbo_accounts_cache").select(indexOnly ? "business_id,qbo_env,realm_id,qbo_account_id,name" : QBO_ACCOUNT_CACHE_SELECT).eq("business_id", businessId).in("qbo_account_id", chunk)));
     if (error) {
       // A missing optional cache is compatible with older isolated test
       // fixtures. A missing *column* is not: treating it as an empty cache
@@ -452,14 +563,22 @@ async function fetchQboAccountMap({ supabase, businessId, catRows = [], qboRows 
     }
     rows.push(...(data || []));
   }
-  const byAccountId = new Map(rows.map((row) => [String(row.qbo_account_id), row]));
+  assertRowsBelongToBusiness(rows, businessId, "qbo_accounts_cache");
+  const accountKey = (row) => JSON.stringify([row.business_id, row.qbo_env || null, row.realm_id || null, String(row.qbo_account_id)]);
+  const byIdentity = new Map(rows.map((row) => [accountKey(row), row]));
   const qboByTxn = latestByTransaction(qboRows);
   const out = new Map();
   for (const cat of catRows) {
     const accountId = cat.final_qbo_account_id || cat.suggested_qbo_account_id;
-    const account = byAccountId.get(String(accountId));
-    if (!account) continue;
     const qbo = qboByTxn.get(String(cat.transaction_id));
+    let account = byIdentity.get(accountKey({ business_id: businessId, qbo_env: qbo?.qbo_env, realm_id: qbo?.realm_id, qbo_account_id: accountId }));
+    if (!account) {
+      const compatible = rows.filter((row) => String(row.qbo_account_id) === String(accountId) &&
+        (!qbo?.realm_id || !row.realm_id || String(qbo.realm_id) === String(row.realm_id)) &&
+        (!qbo?.qbo_env || !row.qbo_env || String(qbo.qbo_env) === String(row.qbo_env)));
+      if (compatible.length === 1) account = compatible[0];
+    }
+    if (!account) continue;
     if (qbo?.realm_id && account.realm_id && String(qbo.realm_id) !== String(account.realm_id)) continue;
     if (qbo?.qbo_env && account.qbo_env && String(qbo.qbo_env) !== String(account.qbo_env)) continue;
     out.set(String(cat.transaction_id), account);
@@ -467,20 +586,6 @@ async function fetchQboAccountMap({ supabase, businessId, catRows = [], qboRows 
   return out;
 }
 
-async function fetchClassificationMap({ supabase, businessId, taxYear, transactionIds }) {
-  const out = new Map();
-  for (const chunk of chunks([...new Set((transactionIds || []).filter(Boolean).map(String))], CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from("transaction_tax_classifications")
-      .select("transaction_id,classification_status,tax_category,deductibility_status,deductible_percent,book_amount,deductible_amount,nondeductible_amount,capitalizable_amount,source,metadata")
-      .eq("business_id", businessId)
-      .eq("tax_year", taxYear)
-      .in("transaction_id", chunk);
-    if (error) throw error;
-    for (const row of data || []) out.set(String(row.transaction_id), row);
-  }
-  return out;
-}
 
 function isMachineClassificationStaleForSource(classification, transaction) {
   if (!hasCompletedClassificationEvaluation(classification)) return true;
@@ -594,11 +699,7 @@ function normalizePagination({ limit, offset }) {
   return { limit: l, offset: o };
 }
 
-function chunks(values, size) {
-  const out = [];
-  for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
-  return out;
-}
+function chunks(values, size) { return boundedIdChunks(values, size); }
 
 function matchesTaxSearch(row, search) {
   if (!search) return true;

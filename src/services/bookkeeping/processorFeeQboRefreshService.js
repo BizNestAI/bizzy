@@ -1,3 +1,4 @@
+import { buildQboSyncRunSnapshot } from "../jobCosting/qboSyncRunSnapshot.js";
 import fetch from "node-fetch";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { withQuickBooksAuth } from "../quickbooksTokenService.js";
@@ -74,10 +75,13 @@ export async function refreshProcessorFeeQboEvidence({ businessId, bankTransacti
     return await authRunner(businessId, async (accessToken, context) => {
     const realmId = context?.realmId;
     if (!realmId) throw new ProcessorFeeRefreshError("qbo_cache_wrong_realm");
+    const summary = { businessId, realmId, mode: "targeted_processor_fee", since: dateFrom,
+      entityCounts: { Purchase: { fetched: 0 } } };
     const { data: run, error: runError } = await db.from("qbo_entity_sync_runs").insert({
       business_id: businessId, realm_id: realmId, qbo_env: qboEnvName, mode: "targeted_processor_fee",
       trigger_source: "user_retry", status: "running", started_at: now.toISOString(),
       entity_counts: { Purchase: { fetched: 0, matched_amount: 0, pages: 0, complete: false } },
+      source_snapshot: buildQboSyncRunSnapshot(summary),
     }).select("id").maybeSingle();
     if (runError) throw new ProcessorFeeRefreshError("qbo_expense_cache_migration_missing", { code: runError.code || null });
 
@@ -90,11 +94,13 @@ export async function refreshProcessorFeeQboEvidence({ businessId, bankTransacti
       }
       const matchedAmount = rows.filter((row) => Number(row.amount_minor) === amountMinor).length;
       const counts = { Purchase: { fetched: rows.length, matched_amount: matchedAmount, pages, complete: true } };
-      const finish = await db.from("qbo_entity_sync_runs").update({ status: "succeeded", finished_at: new Date().toISOString(), entity_counts: counts, fetched_count: rows.length, errors_count: 0 }).eq("id", run.id);
+      summary.entityCounts = counts;
+      const finish = await db.from("qbo_entity_sync_runs").update({ source_snapshot: buildQboSyncRunSnapshot(summary), status: "succeeded", finished_at: new Date().toISOString(), entity_counts: counts, fetched_count: rows.length, errors_count: 0 }).eq("id", run.id);
       if (finish.error) throw new ProcessorFeeRefreshError("qbo_expense_cache_write_failed", { code: finish.error.code || null });
       return { ok: true, status: "refresh_complete", business_id: businessId, realm_id: realmId, date_from: dateFrom, date_to: dateTo, amount_minor: amountMinor, entity_counts: counts };
     } catch (error) {
-      await db.from("qbo_entity_sync_runs").update({ status: "failed", finished_at: new Date().toISOString(), last_error: error.code || "qbo_purchase_query_failed", errors_count: 1 }).eq("id", run.id);
+      await db.from("qbo_entity_sync_runs").update({ source_snapshot: buildQboSyncRunSnapshot({ ...summary,
+        reconciliationFailures: [{ entity: "Purchase", error: error.code || "qbo_purchase_query_failed" }] }), status: "failed", finished_at: new Date().toISOString(), last_error: error.code || "qbo_purchase_query_failed", errors_count: 1 }).eq("id", run.id);
       throw error;
     }
     });

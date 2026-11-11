@@ -1,6 +1,7 @@
+import { withTaxSourceReadScope } from "./taxSourceReadScope.js";
 import { getTaxClassificationLifecycleStatus } from "./taxClassificationRun.service.js";
-import { listTaxClassifications, neutralizeTaxClassificationForTransaction } from "./taxClassification.repository.js";
-import { getPostedTransactionForTax } from "./taxPostedTransaction.repository.js";
+import { neutralizeTaxClassificationForTransaction } from "./taxClassification.repository.js";
+import { getPostedTransactionsForTaxByIds, listTaxClassificationFreshnessIndex } from "./taxPostedTransaction.repository.js";
 import { getTaxProfile } from "./taxProfile.service.js";
 import { normalizeTaxYear } from "./taxDomain.js";
 
@@ -40,7 +41,10 @@ export async function getBusinessesEligibleForTaxClassification({
   };
 }
 
-export async function evaluateBusinessTaxClassificationEligibility({ supabase, businessId, taxYear } = {}) {
+export function evaluateBusinessTaxClassificationEligibility(options = {}) {
+  return withTaxSourceReadScope(() => evaluateEligibility(options));
+}
+async function evaluateEligibility({ supabase, businessId, taxYear } = {}) {
   const year = normalizeTaxYear(taxYear);
   if (!businessId) return result({ eligible: false, businessId: null, taxYear: year, reason: "missing_business_id" });
   if (!year) return result({ eligible: false, businessId, taxYear: null, reason: "missing_tax_year" });
@@ -145,25 +149,19 @@ async function collectCandidatePairs({ supabase, ids, table, yearColumn, dateCol
 }
 
 async function neutralizeNoLongerEligibleClassifications({ supabase, businessId, taxYear }) {
-  const listed = await listTaxClassifications({ supabase, businessId, taxYear, limit: 100, offset: 0 });
+  const rows = await listTaxClassificationFreshnessIndex({ supabase, businessId, taxYear });
+  const candidates = rows.filter((row) => !row.metadata?.neutralized_at);
+  const sources = await getPostedTransactionsForTaxByIds({ supabase, businessId, transactionIds: candidates.map((row) => row.transaction_id) });
   let changed = 0;
-  for (const row of listed.rows || []) {
-    if (row.metadata?.neutralized_at) continue;
-    try {
-      await getPostedTransactionForTax({ supabase, businessId, transactionId: row.transaction_id });
-    } catch (error) {
-      if (error?.code !== "posted_tax_transaction_not_found" && error?.code !== "transaction_not_found") continue;
-      const reason = error?.details?.reason || "posted_transaction_no_longer_eligible";
-      await neutralizeTaxClassificationForTransaction({
-        supabase,
-        businessId,
-        taxYear,
-        transactionId: row.transaction_id,
-        reason,
-        metadata: { source: "classification_recovery_sweep" },
-      });
-      changed += 1;
-    }
+  for (const row of candidates) {
+    const source = sources.get(String(row.transaction_id));
+    if (source?.isEligible) continue;
+    const reason = source?.eligibilityReason || "posted_transaction_no_longer_eligible";
+    const neutralized = await neutralizeTaxClassificationForTransaction({ supabase, businessId, taxYear, transactionId: row.transaction_id,
+      reason, metadata: { source: "classification_recovery_sweep" } });
+    // Keep the shared narrow index consistent with this sweep's own mutation.
+    if (neutralized.classification) Object.assign(row, neutralized.classification);
+    if (neutralized.changed) changed += 1;
   }
   return changed;
 }

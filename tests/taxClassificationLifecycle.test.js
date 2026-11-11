@@ -1380,6 +1380,10 @@ class Query {
     this.rows = this.rows.filter((row) => String(row[field]) === String(value));
     return this;
   }
+  gt(field, value) {
+    this.rows = this.rows.filter((row) => String(row[field] || "") > String(value));
+    return this;
+  }
   gte(field, value) {
     this.rows = this.rows.filter((row) => String(row[field] || "") >= String(value));
     return this;
@@ -1409,8 +1413,10 @@ class Query {
     return this;
   }
   range(start, end) {
-    this.rows = this.rows.slice(start, end + 1);
-    return this;
+    const page = new Query(this.table, this.store);
+    page.rows = this.rows.slice(start, end + 1);
+    page.patch = this.patch;
+    return page;
   }
   limit(n) {
     this.rows = this.rows.slice(0, n);
@@ -1458,3 +1464,89 @@ class Query {
     this.patch = null;
   }
 }
+
+test("unchanged recovery sweep uses bulk reads and does not mutate completed classifications", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 100 }));
+  await enqueueTaxClassificationRun({ supabase, businessId: BUSINESS_ID, taxYear: 2026, triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.MANUAL_REBUILD });
+  await processPendingTaxClassificationRuns({ supabase, workerId: "fixture", transactionBatchSize: 100 });
+  assert.equal(supabase.store.transaction_tax_classifications.length, 100);
+  const before = JSON.stringify(supabase.store.transaction_tax_classifications);
+  const reads = [], writes = [], perRow = [];
+  const from = supabase.from.bind(supabase);
+  supabase.from = (table) => {
+    reads.push(table);
+    const query = from(table);
+    const eq = query.eq;
+    query.eq = function (field, value) { if (table === "bank_transactions" && field === "id") perRow.push(value); return eq.call(this, field, value); };
+    for (const method of ["insert", "upsert", "update"]) {
+      const original = query[method];
+      query[method] = function (...args) { writes.push({ table, method }); return original.apply(this, args); };
+    }
+    return query;
+  };
+  const recovery = await enqueueRecoveryTaxClassificationRuns({ supabase, taxYear: 2026 });
+  assert.equal(recovery.length, 0);
+  assert.equal(JSON.stringify(supabase.store.transaction_tax_classifications), before);
+  assert.equal(writes.filter(({ table }) => ["transaction_tax_classifications", "tax_classification_runs"].includes(table)).length, 0);
+  assert.equal(perRow.length, 0);
+  assert.ok(reads.length < 40, `bounded recovery reads: ${reads.length}`);
+  assert.equal(reads.filter((table) => table === "business_profiles").length, 1);
+});
+
+test("stale-first recovery covers 1205 classifications with no unchanged detail hydration", async () => {
+  const { getTaxClassificationSourceSnapshot } = await import("../src/services/tax/taxPostedTransaction.repository.js");
+  const { TAX_CLASSIFICATION_ENGINE_VERSION } = await import("../src/services/tax/taxEngineVersions.js");
+  const supabase = makeSupabase(baseStore({ transactionCount: 1205 }));
+  const initial = await getTaxClassificationSourceSnapshot({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  assert.equal(initial.rows.length, 1205);
+  supabase.store.transaction_tax_classifications = initial.rows.map((row) => ({
+    business_id: BUSINESS_ID, tax_year: 2026, transaction_id: row.transactionId,
+    classification_status: "auto_classified", tax_category: "software", deductibility_status: "fully_deductible",
+    deductible_percent: 100, book_amount: 10, deductible_amount: 10, nondeductible_amount: 0, capitalizable_amount: 0,
+    source: "rule_engine", rule_code: "fixture", metadata: { classification_engine_version: TAX_CLASSIFICATION_ENGINE_VERSION, transaction_source_fingerprint: row.sourceFingerprint },
+  }));
+  const check = await getTaxClassificationSourceSnapshot({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  assert.equal(check.candidateCount, 0, JSON.stringify({ due: check.rows[0]?.sourceFingerprint, prior: supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === check.rows[0]?.transactionId)?.metadata }));
+  const from = supabase.from.bind(supabase);
+  let reads = 0;
+  let detailed = [];
+  supabase.from = (table) => {
+    reads += 1;
+    const query = from(table), select = query.select, inFilter = query.in;
+    let detail = false;
+    query.select = function (columns) {
+      detail = (table === "transaction_categorizations" && columns.split(",").includes("meta")) || (table === "bank_transactions" && columns.split(",").includes("merchant_name"));
+      return select.call(this, columns);
+    };
+    query.in = function (field, ids) { if (detail) detailed.push({ table, ids }); assert.ok(ids.length <= 50); return inFilter.call(this, field, ids); };
+    return query;
+  };
+  const unchanged = await enqueueRecoveryTaxClassificationRuns({ supabase, taxYear: 2026 });
+  assert.equal(unchanged.length, 0);
+  assert.equal(detailed.length, 0);
+  const unchangedReads = reads;
+  assert.ok(reads < 160, `bulk reads: ${reads}`);
+
+  // A late keyset member, well beyond the old fixed first-100 window.
+  const late = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-1205");
+  late.metadata.tax_classification_stale = true;
+  reads = 0; detailed = [];
+  const stale = await getTaxClassificationSourceSnapshot({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  assert.equal(stale.candidateCount, 1);
+  assert.deepEqual(stale.transactionIds, ["txn-1205"]);
+  assert.ok(detailed.length > 0);
+  assert.ok(detailed.every(({ ids }) => ids.length === 1 && ids[0] === "txn-1205"));
+  const staleSnapshotReads = reads;
+  reads = 0; detailed = [];
+  const queuedStale = await enqueueRecoveryTaxClassificationRuns({ supabase, taxYear: 2026 });
+  assert.equal(queuedStale.length, 1);
+  assert.ok(detailed.every(({ ids }) => ids.length === 1 && ids[0] === "txn-1205"));
+  const staleReads = reads;
+
+  // Neutralization must also reach the last classification, without starvation.
+  supabase.store.bank_transactions.find((row) => row.id === "txn-1205").is_archived = true;
+  const neutralizedPage = await getBusinessesEligibleForTaxClassification({ supabase, taxYear: 2026 });
+  assert.ok(late.metadata.neutralized_at);
+  assert.equal(neutralizedPage.businesses[0].lifecycle.excludedCount, 1);
+  console.info(`1205-row recovery reads: unchanged=${unchangedReads}, stale recovery=${staleReads}, stale snapshot=${staleSnapshotReads}; unchanged detailed batches=0, stale detailed rows=1`);
+});

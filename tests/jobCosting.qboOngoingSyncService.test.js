@@ -140,7 +140,10 @@ function createFakeDb(seed = {}) {
           return resolve(state.countOnly ? { data: null, count: rows.length, error: null } : { data: rows, error: null });
         },
         insert(payload) {
-          const row = { id: payload.id || `${table}-${tables[table].length + 1}`, ...payload };
+          if (table === "job_candidates" && tables[table].some((row) => ["business_id", "realm_id", "source_system", "source_entity_type", "source_entity_id"].every((key) => row[key] === payload[key]))) {
+            return { select: () => ({ maybeSingle: async () => ({ data: null, error: { code: "23505" } }) }) };
+          }
+          const row = { confirmed_job_id: null, dismissal_reason: null, id: payload.id || `${table}-${tables[table].length + 1}`, ...structuredClone(payload) };
           tables[table].push(row);
           return { select: () => ({ maybeSingle: () => Promise.resolve({ data: row, error: null }) }) };
         },
@@ -163,7 +166,15 @@ function createFakeDb(seed = {}) {
           };
         },
         update(payload) {
+          const execute = () => {
+            const rows = applyFilters();
+            rows.forEach((row) => Object.assign(row, structuredClone(payload)));
+            return rows;
+          };
           const query = {
+            is(key, value) { state.filters.push([key, value]); return query; },
+            select() { return query; },
+            maybeSingle() { return Promise.resolve({ data: execute()[0] || null, error: null }); },
             eq(key, value) {
               state.filters.push([key, value]);
               return query;
@@ -711,4 +722,225 @@ describe("QBO ongoing job costing sync", () => {
     assert.equal(db.tables.job_revenue_documents.find((row) => row.external_document_id === "inv-realm-1").realm_id, "realm-1");
     assert.equal(db.tables.job_revenue_documents.find((row) => row.external_document_id === "inv-realm-2").realm_id, "realm-2");
   });
+});
+
+test("empty CDC records compact successful runs and advances checkpoints without candidate or relink writes", async () => {
+  const historical = { id: "historical", source_snapshot: { jobCandidates: { candidates: [{ id: "old" }] } } };
+  const db = createFakeDb({ qbo_entity_sync_runs: [historical] });
+  const writes = [];
+  const from = db.from.bind(db);
+  db.from = (table) => {
+    const query = from(table);
+    for (const method of ["insert", "upsert", "update"]) {
+      const original = query[method];
+      if (original) query[method] = function (...args) { writes.push({ table, method }); return original.apply(this, args); };
+    }
+    return query;
+  };
+  const now = new Date("2026-11-11T16:29:00Z");
+  const result = await runQboCdcForBusiness({ businessId: "business-1", db, entities: ["Invoice", "Payment"], qboTransport: { realmId: "realm-1", tokenRow: { realm_id: "realm-1" }, fetchCdc: async () => ({ Invoice: [], Payment: [] }) }, now });
+  assert.equal(result.ok, true);
+  assert.equal(result.jobCandidates.skipped, true);
+  assert.equal(writes.filter(({ table }) => ["job_candidates", "job_revenue_documents"].includes(table)).length, 0);
+  assert.equal(db.tables.qbo_cdc_cursors.length, 2);
+  assert.ok(db.tables.qbo_cdc_cursors.every((row) => row.last_successful_cursor === now.toISOString()));
+  assert.equal(db.tables.qbo_entity_sync_runs.length, 3);
+  assert.deepEqual(db.tables.qbo_entity_sync_runs.find((row) => row.id === "historical"), historical);
+  for (const run of db.tables.qbo_entity_sync_runs.filter((row) => row.id !== "historical")) {
+    assert.equal(run.status, "succeeded");
+    assert.equal(run.source_snapshot.schema_version, 1);
+    assert.ok(JSON.stringify(run.source_snapshot).length < 16384);
+  }
+});
+
+test("changed multi-entity CDC generates candidates once and explicit rebuild preserves reviewed state", async () => {
+  const { generateJobCandidatesForBusiness } = await import("../src/services/jobCosting/jobIdentityResolver.js");
+  const db = createFakeDb();
+  const from = db.from.bind(db);
+  let candidateReads = 0, candidateWrites = 0;
+  db.from = (table) => {
+    const query = from(table);
+    if (table === "job_candidates") {
+      const select = query.select, upsert = query.upsert;
+      query.select = function (...args) { candidateReads += 1; return select.apply(this, args); };
+      query.upsert = function (...args) { candidateWrites += 1; return upsert.apply(this, args); };
+    }
+    return query;
+  };
+  await runQboCdcForBusiness({ businessId: "business-1", db, entities: ["Invoice", "Payment"], qboTransport: { realmId: "realm-1", tokenRow: { realm_id: "realm-1" }, fetchCdc: async () => ({ Invoice: [qboInvoice()], Payment: [qboPayment()] }) }, now: new Date("2026-11-11T16:29:00Z") });
+  // The one bulk candidate scan belongs to the batch, not each entity import.
+  assert.equal(candidateReads, 1);
+  assert.ok(db.tables.job_candidates.length > 0);
+  candidateWrites = 0;
+  await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db, now: new Date("2026-11-11T17:29:00Z") });
+  assert.equal(candidateWrites, 0, "unchanged explicit rebuild does not upsert");
+  db.tables.job_candidates[0].candidate_status = "dismissed";
+  const reviewed = JSON.stringify(db.tables.job_candidates[0]);
+  await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db });
+  assert.equal(JSON.stringify(db.tables.job_candidates[0]), reviewed);
+  assert.equal(candidateWrites, 0);
+});
+
+async function seededCandidateDb() {
+  const db = createFakeDb();
+  await runQboCdcForBusiness({ businessId: "business-1", db, entities: ["Invoice"], qboTransport: { realmId: "realm-1", tokenRow: { realm_id: "realm-1" }, fetchCdc: async () => ({ Invoice: [qboInvoice()] }) }, now: new Date("2026-11-11T16:29:00Z") });
+  return db;
+}
+
+test("candidate CAS preserves concurrent dismissals, reviews and pending manual edits", async () => {
+  const { generateJobCandidatesForBusiness } = await import("../src/services/jobCosting/jobIdentityResolver.js");
+  for (const status of ["dismissed", "approved_new", "pending"]) {
+    const db = await seededCandidateDb();
+    db.tables.job_revenue_documents[0].total_amount = 999;
+    const from = db.from.bind(db);
+    let attempted = false;
+    db.from = (table) => {
+      const query = from(table);
+      if (table === "job_candidates") {
+        const update = query.update;
+        query.update = function (...args) {
+          const conditional = update.apply(this, args), single = conditional.maybeSingle;
+          conditional.maybeSingle = function () {
+            attempted = true;
+            Object.assign(db.tables.job_candidates[0], { candidate_status: status, suggested_job_name: "Human edit", updated_at: "2026-11-11T17:00:00Z" });
+            return single.call(this);
+          };
+          return conditional;
+        };
+      }
+      return query;
+    };
+    const result = await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db });
+    assert.equal(attempted, true);
+    assert.equal(result.createdOrUpdated, 0);
+    assert.equal(db.tables.job_candidates[0].candidate_status, status);
+    assert.equal(db.tables.job_candidates[0].suggested_job_name, "Human edit");
+  }
+});
+
+test("candidate lookup covers more than the server return limit and inserts never overwrite concurrent rows", async () => {
+  const { generateJobCandidatesForBusiness } = await import("../src/services/jobCosting/jobIdentityResolver.js");
+  const db = await seededCandidateDb();
+  const target = db.tables.job_candidates[0];
+  target.id = "z-target";
+  target.candidate_status = "dismissed";
+  db.tables.job_candidates.unshift(...Array.from({ length: 1200 }, (_, i) => ({ ...target, id: `a-${String(i).padStart(5, "0")}`, source_entity_id: `other-${i}` })));
+  const protectedValue = JSON.stringify(target);
+  const result = await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db });
+  assert.equal(result.createdOrUpdated, 0);
+  assert.equal(JSON.stringify(target), protectedValue);
+  target.candidate_status = "pending";
+  db.tables.job_revenue_documents[0].total_amount = 999;
+  const beyondLimit = await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db });
+  assert.equal(beyondLimit.createdOrUpdated, 1);
+  assert.equal(target.invoice_estimate_amount, 999);
+
+  db.tables.job_candidates = [];
+  const from = db.from.bind(db);
+  db.from = (table) => {
+    const query = from(table);
+    if (table === "job_candidates") {
+      const insert = query.insert;
+      query.insert = function (payload) {
+        db.tables.job_candidates.push({ ...payload, id: "concurrent", candidate_status: "dismissed" });
+        return insert.call(this, payload);
+      };
+    }
+    return query;
+  };
+  const raced = await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db });
+  assert.equal(raced.createdOrUpdated, 0);
+  assert.equal(db.tables.job_candidates.length, 1);
+  assert.equal(db.tables.job_candidates[0].candidate_status, "dismissed");
+});
+
+test("failed CDC candidate generation retains checkpoint and recovers on the next empty sweep", async () => {
+  const db = createFakeDb();
+  const from = db.from.bind(db);
+  let fail = true, candidateScans = 0;
+  db.from = (table) => {
+    if (table === "job_candidates" && fail) throw new Error("fixture candidate failure");
+    const query = from(table);
+    if (table === "job_candidates") {
+      const select = query.select;
+      query.select = function (...args) { candidateScans += 1; return select.apply(this, args); };
+    }
+    return query;
+  };
+  const transport = { realmId: "realm-1", tokenRow: { realm_id: "realm-1" }, fetchCdc: async () => ({ Invoice: [qboInvoice()] }) };
+  const first = await runQboCdcForBusiness({ businessId: "business-1", db, entities: ["Invoice"], qboTransport: transport, now: new Date("2026-11-11T16:29:00Z") });
+  assert.equal(first.ok, false);
+  assert.equal(db.tables.qbo_entity_sync_runs[0].status, "failed");
+  assert.equal(db.tables.qbo_cdc_cursors[0].last_successful_cursor, null);
+  assert.equal(db.tables.qbo_cdc_cursors[0].last_error, "candidate_generation_pending");
+  assert.equal(db.tables.qbo_entity_sync_runs[0].errors_count, 1);
+  const interrupted = await runQboCdcForBusiness({ businessId: "business-1", db, entities: ["Invoice"],
+    qboTransport: { ...transport, fetchCdc: async () => { throw new Error("fixture interrupted recovery"); } },
+    now: new Date("2026-11-11T17:00:00Z") });
+  assert.equal(interrupted.ok, false);
+  assert.equal(db.tables.qbo_cdc_cursors[0].last_error, "candidate_generation_pending");
+  assert.equal(db.tables.qbo_cdc_cursors[0].last_successful_cursor, null);
+  fail = false; candidateScans = 0;
+  transport.fetchCdc = async () => ({ Invoice: [] });
+  const second = await runQboCdcForBusiness({ businessId: "business-1", db, entities: ["Invoice"], qboTransport: transport, now: new Date("2026-11-11T17:29:00Z") });
+  assert.equal(second.ok, true);
+  assert.equal(candidateScans, 1);
+  assert.equal(db.tables.job_candidates.length, 1);
+  assert.equal(db.tables.qbo_cdc_cursors[0].last_successful_cursor, "2026-11-11T17:29:00.000Z");
+  assert.equal(db.tables.qbo_entity_sync_runs[1].status, "succeeded");
+  candidateScans = 0;
+  await runQboCdcForBusiness({ businessId: "business-1", db, entities: ["Invoice"], qboTransport: transport, now: new Date("2026-11-11T18:29:00Z") });
+  assert.equal(candidateScans, 0);
+  assert.equal(db.tables.job_candidates.length, 1);
+  assert.equal(db.tables.job_revenue_documents.length, 1);
+});
+
+test("main and targeted sync writers always insert and finalize versioned compact snapshots", async () => {
+  const { refreshProcessorFeeQboEvidence } = await import("../src/services/bookkeeping/processorFeeQboRefreshService.js");
+  const db = createFakeDb({ bank_transactions: [{ id: "bank-1", business_id: "business-1", date: "2026-11-11", amount: 10 }] });
+  const from = db.from.bind(db), snapshots = [];
+  db.from = (table) => {
+    const query = from(table);
+    if (table === "qbo_entity_sync_runs") for (const method of ["insert", "update"]) {
+      const original = query[method];
+      query[method] = function (payload) { snapshots.push(payload.source_snapshot); return original.call(this, payload); };
+    }
+    return query;
+  };
+  const options = { businessId: "business-1", bankTransactionId: "bank-1", db, authRunner: async (_id, run) => run("fixture", { realmId: "realm-1" }), fetchImpl: async () => ({ ok: true, json: async () => ({ QueryResponse: { Purchase: [] } }) }) };
+  const refreshed = await refreshProcessorFeeQboEvidence(options);
+  assert.equal(refreshed.entity_counts.Purchase.complete, true);
+  await assert.rejects(() => refreshProcessorFeeQboEvidence({ ...options, fetchImpl: async () => { throw new Error("fixture transport failure"); } }));
+  await runQboCdcForBusiness({ businessId: "business-1", db, entities: ["Invoice"], qboTransport: { realmId: "realm-1", tokenRow: { realm_id: "realm-1" }, fetchCdc: async () => ({ Invoice: [] }) }, now: new Date("2026-11-11T16:29:00Z") });
+  assert.equal(snapshots.length, 6);
+  for (const snapshot of snapshots) {
+    assert.equal(snapshot.schema_version, 1);
+    assert.ok(JSON.stringify(snapshot).length < 16384);
+    assert.equal(snapshot.jobCandidates, undefined);
+  }
+});
+
+test("pending manual edits and legacy candidates without automation provenance fail closed", async () => {
+  const { generateJobCandidatesForBusiness } = await import("../src/services/jobCosting/jobIdentityResolver.js");
+  for (const legacy of [false, true]) {
+    const db = await seededCandidateDb();
+    if (legacy) delete db.tables.job_candidates[0].source_snapshot.automated_candidate;
+    else db.tables.job_candidates[0].suggested_job_name = "Earlier human edit";
+    db.tables.job_revenue_documents[0].total_amount = 999;
+    const before = JSON.stringify(db.tables.job_candidates[0]);
+    const result = await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db });
+    assert.equal(result.createdOrUpdated, 0);
+    assert.equal(JSON.stringify(db.tables.job_candidates[0]), before);
+  }
+});
+
+test("a pending automated candidate with an intact baseline can be refreshed once by CAS", async () => {
+  const { generateJobCandidatesForBusiness } = await import("../src/services/jobCosting/jobIdentityResolver.js");
+  const db = await seededCandidateDb();
+  db.tables.job_revenue_documents[0].total_amount = 999;
+  const first = await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db });
+  assert.equal(first.createdOrUpdated, 1);
+  assert.equal(db.tables.job_candidates[0].invoice_estimate_amount, 999);
+  const second = await generateJobCandidatesForBusiness({ businessId: "business-1", realmId: "realm-1", db });
+  assert.equal(second.createdOrUpdated, 0);
 });
