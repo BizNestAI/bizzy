@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
+import { transformSync } from "esbuild";
 import { derivePostingEligibilityRecheckAvailability } from "../src/pages/Admin/postingEligibilityRecheckAvailability.js";
 import { isBulkApprovablePostingReason } from "../src/services/bookkeeping/postingEligibilityApprovalPolicy.js";
 import { resolveCompletedPostingEligibilityExecution } from "../src/services/bookkeeping/postingEligibilityExecutionState.js";
@@ -108,7 +109,7 @@ test("preview error UI shows stable diagnostics and keeps confirmation gated", (
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   assert.match(page, /Code: \{state\.errorCode\}/);
   assert.match(page, /Request: \{state\.requestId\}/);
-  assert.match(page, />Retry<\/button>/);
+  assert.match(page, /"Refresh preview" : "Retry"/);
   assert.match(page, /disabled=\{!preview \|\| state\.loading \|\| state\.executing/);
 });
 
@@ -274,4 +275,265 @@ test("automatic execution schedules only eligible preview rows and preserves exi
   for (const outcome of outcomes.slice(2)) assert.equal(stored.get(outcome).post_after, null);
   assert.equal(writes.filter((write) => write.table === "transaction_categorizations").length, 1);
   assert.ok(writes.some((write) => write.table === "bookkeeping_posting_eligibility_rechecks"));
+});
+
+
+const originalKey = "11111111-1111-1111-1111-111111111111";
+const recoveredMessage = "Recheck completed successfully. The connection ended before confirmation was received.";
+const unknownMessage = "The connection ended before the outcome could be confirmed. Refresh the preview before trying again.";
+const persistedResult = { ok: true, execution_id: "execution", request_id: "request", examined: 61, counts: { newly_scheduled: 61 }, reason_counts: { final_persisted_gl_authority: 61 }, rows: [] };
+
+function recoveryHarness(request, { refresh = async () => {}, advancePerRead = 0 } = {}) {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const action = page.slice(page.indexOf("const executePostingEligibilityRecheckAction"), page.indexOf("const patchBookkeepingFeedsAfterApproval"));
+  const recovery = page.slice(page.indexOf("async function recoverPostingEligibilityExecution"), page.indexOf("function PostingEligibilityRecheckModal"));
+  let state = { open: true, executing: false, preview: { preview_version: "preview", examined: 61, counts: {}, rows: [] } };
+  let clock = 0;
+  const transitions = [], calls = [];
+  const context = vm.createContext({
+    useCallback: (fn) => fn, detail: { run: { id: "run" } },
+    get postingEligibilityRecheck() { return state; },
+    setPostingEligibilityRecheck: (update) => { state = update(state); transitions.push(state); },
+    crypto: { randomUUID: () => originalKey },
+    safeFetch: async (url, options) => { calls.push({ url, ...options }); clock += advancePerRead; return request(url, options, calls.length); },
+    refreshAfterFeedAction: refresh,
+    AbortController, setTimeout, clearTimeout,
+  });
+  vm.runInContext(recovery, context);
+  const recover = context.recoverPostingEligibilityExecution;
+  context.recoverPostingEligibilityExecution = (url) => recover(url, context.safeFetch, () => clock, async (ms) => { clock += ms; });
+  const submit = vm.runInContext(`${action}\nexecutePostingEligibilityRecheckAction`, context);
+  return { submit, calls, transitions, state: () => state, elapsed: () => clock };
+}
+
+function modalTree(state) {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const modal = page.slice(page.indexOf("function PostingEligibilityRecheckModal"), page.indexOf("function SummaryMetric"));
+  const compiled = transformSync(modal, { loader: "jsx", jsxFactory: "element", jsxFragment: "Fragment" }).code;
+  const render = vm.runInNewContext(`${compiled}\nPostingEligibilityRecheckModal`, {
+    useState: () => [true, () => {}], useEffect: () => {}, Fragment: "fragment",
+    element: (type, props, ...children) => ({ type: typeof type === "string" ? type : "component", props: props || {}, children }),
+    formatMonth: (month) => month, SummaryMetric: () => null, Loader2: () => null, ShieldCheck: () => null,
+  });
+  return render({ state, businessName: "Business", month: "2026-10" });
+}
+
+const networkFailure = () => { throw Object.assign(new TypeError("Failed to fetch"), { code: "NETWORK_ERROR" }); };
+
+test("ordinary success uses the original response without a recovery GET or notice", async () => {
+  let refreshed = 0;
+  const h = recoveryHarness(async () => persistedResult, { refresh: async () => { refreshed += 1; } });
+  await h.submit();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].method, "POST");
+  assert.equal(h.state().result, persistedResult);
+  assert.equal(h.state().notice, "");
+  assert.equal(refreshed, 1);
+});
+
+test("disconnected POST recovers original-key persisted counts using only GETs", async () => {
+  const h = recoveryHarness(async (_url, options, call) => {
+    if (options.method === "POST") return networkFailure();
+    return call === 2 ? { status: "in_progress" } : { status: "completed", result: persistedResult };
+  });
+  await h.submit();
+  assert.equal(h.calls.filter((call) => call.method === "POST").length, 1);
+  assert.equal(h.calls[0].headers["Idempotency-Key"], originalKey);
+  assert.equal(h.calls[0].body.idempotency_key, originalKey);
+  assert.equal(h.calls.length, 3);
+  for (const call of h.calls.slice(1)) {
+    assert.equal(call.method, "GET");
+    assert.ok(call.url.endsWith(`/${originalKey}`));
+    assert.equal(call.body, undefined);
+    assert.equal(call.cache, "no-store");
+  }
+  assert.ok(h.transitions.some((state) => state.recovering && state.executing && !state.error));
+  assert.equal(h.state().notice, recoveredMessage);
+  assert.equal(h.state().error, "");
+  assert.equal(h.state().result.counts.newly_scheduled, 61);
+  const rendered = JSON.stringify(modalTree(h.state()));
+  assert.ok(rendered.includes(recoveredMessage));
+  assert.ok(!rendered.includes("Failed to fetch"));
+  assert.match(rendered, /Persisted result/);
+});
+
+for (const status of ["in_progress", "unknown", "not_found"]) {
+  test(`${status} recovery is bounded, does not resubmit, and requires a fresh preview`, async () => {
+    const h = recoveryHarness(async (_url, options) => {
+      if (options.method === "POST") return networkFailure();
+      if (status === "not_found") throw Object.assign(new Error("not found"), { status: 404 });
+      return { status };
+    });
+    await h.submit();
+    assert.equal(h.calls.filter((call) => call.method === "POST").length, 1);
+    assert.equal(h.calls.filter((call) => call.method === "GET").length, 9);
+    assert.equal(h.elapsed(), 9000);
+    assert.equal(h.state().notice, unknownMessage);
+    assert.equal(h.state().error, "");
+    assert.equal(h.state().outcomeUnconfirmed, true);
+    const requestsBeforeRetry = h.calls.length;
+    await h.submit();
+    assert.equal(h.calls.length, requestsBeforeRetry);
+    const tree = modalTree(h.state());
+    assert.ok(JSON.stringify(tree).includes(unknownMessage));
+    assert.ok(JSON.stringify(tree).includes("Refresh preview"));
+    const findConfirm = (node) => node && typeof node === "object" && (node.type === "button" && JSON.stringify(node.children).includes("Confirm recheck") ? node : (node.children || []).flat(Infinity).map(findConfirm).find(Boolean));
+    assert.equal(findConfirm(tree).props.disabled, true);
+  });
+}
+
+test("slow recovery GETs respect the shared deadline", async () => {
+  const h = recoveryHarness(async (_url, options) => options.method === "POST" ? networkFailure() : { status: "in_progress" }, { advancePerRead: 2000 });
+  await h.submit();
+  assert.ok(h.calls.length <= 5);
+  assert.ok(h.calls.slice(1).every((call) => call.timeoutMs <= 2000));
+  assert.equal(h.state().notice, unknownMessage);
+});
+
+test("explicit persisted failure stops recovery and retains sanitized failure treatment", async () => {
+  const failed = { ...persistedResult, counts: { failed: 1 }, rows: [{ transaction_id: "txn", outcome: "failed", reason: "posting_eligibility_row_execution_failed" }] };
+  const h = recoveryHarness(async (_url, options) => options.method === "POST" ? networkFailure() : { status: "failed", result: failed });
+  await h.submit();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.state().result, failed);
+  assert.equal(h.state().notice, "");
+  assert.equal(h.state().error, "Could not safely recheck posting eligibility. No provider calls were made.");
+  assert.ok(!JSON.stringify(modalTree(h.state())).includes(recoveredMessage));
+});
+
+test("HTTP errors are not treated as ambiguous network failures", async () => {
+  const h = recoveryHarness(async () => { throw Object.assign(new Error("Forbidden"), { status: 403 }); });
+  await h.submit();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.state().error, "Forbidden");
+});
+
+test("feed refresh error cannot start outcome recovery after confirmed success", async () => {
+  const h = recoveryHarness(async () => persistedResult, { refresh: async () => networkFailure() });
+  await h.submit();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.state().result, persistedResult);
+  assert.equal(h.state().error, "");
+});
+
+function lookupHarness({ execution = null, runError = null, staff = { user_id: "staff", role: "operator", active: true } } = {}) {
+  const source = read("src/api/admin/monthlyReview.routes.js");
+  const route = source.slice(source.indexOf('router.get("/runs/:runId/bookkeeping/posting-eligibility-executions/'), source.indexOf('router.post("/runs/:runId/bookkeeping/posting-eligibility-executions"'));
+  const filters = {};
+  let handler, queries = 0;
+  const db = { from(table) {
+    queries += 1;
+    assert.equal(table, "bookkeeping_posting_eligibility_rechecks");
+    const query = {
+      select: (fields) => { assert.equal(fields, "id,status,result"); return query; },
+      eq: (key, value) => { filters[key] = value; return query; },
+      maybeSingle: async () => ({ data: execution && execution.business_id === filters.business_id && execution.review_month === filters.review_month && execution.idempotency_key === filters.idempotency_key ? execution : null }),
+    };
+    return query;
+  } };
+  const context = vm.createContext({
+    router: { get: (_path, fn) => { handler = fn; } },
+    setMonthlyReviewNoStore: (res) => { res.noStore = true; },
+    UUID_RE: /^[0-9a-f-]{36}$/i,
+    fetchRun: async () => { if (runError) throw runError; return { business_id: "business", review_month: "2026-10-01" }; },
+    supabase: db,
+  });
+  vm.runInContext(route, context);
+  // Exercise the actual staff authorization middleware without importing clients.
+  const auth = read("src/api/_shared/internalStaffAuth.js").replace(/^import .*;$/gm, "").replace(/export /g, "");
+  const requireRole = vm.runInNewContext(`${auth}\nrequireInternalRole`, {
+    getAuthenticatedUserId: (req) => req.user?.id,
+    defaultSupabase: { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: staff }) }) }) }) },
+  });
+  const authorize = requireRole(["owner_admin", "accountant", "operator"]);
+  return { filters, queryCount: () => queries, async get({ user = { id: "staff" }, key = originalKey } = {}) {
+    const req = { user, params: { runId: "22222222-2222-2222-2222-222222222222", idempotencyKey: key } };
+    const res = { code: 200, status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
+    await authorize(req, res, () => handler(req, res));
+    return res;
+  } };
+}
+
+const executionRecord = { id: "execution", business_id: "business", review_month: "2026-10-01", idempotency_key: originalKey, status: "completed", result: { ...persistedResult, secret: "do not expose", rows: [{ transaction_id: "txn", outcome: "newly_scheduled", reason: "final_persisted_gl_authority", current_meta: { secret: true } }] } };
+
+test("lookup reads only the run-scoped sanitized persisted result", async () => {
+  const h = lookupHarness({ execution: executionRecord });
+  const response = await h.get();
+  assert.equal(response.code, 200);
+  assert.equal(response.noStore, true);
+  assert.equal(response.body.status, "completed");
+  assert.equal(response.body.result.counts.newly_scheduled, 61);
+  assert.deepEqual(h.filters, { business_id: "business", review_month: "2026-10-01", idempotency_key: originalKey });
+  assert.equal(h.queryCount(), 1);
+  assert.doesNotMatch(JSON.stringify(response.body), /secret|current_meta|idempotency_key|business_id/);
+});
+
+test("lookup distinguishes running, failed, partial, stale and missing executions", async () => {
+  for (const [stored, expected] of [["running", "in_progress"], ["failed", "failed"], ["partial", "failed"], ["stale", "unknown"]]) {
+    const h = lookupHarness({ execution: { ...executionRecord, status: stored } });
+    assert.equal((await h.get()).body.status, expected);
+  }
+  const missing = await lookupHarness().get();
+  assert.equal(missing.code, 404);
+  assert.equal(missing.body.status, "unknown");
+});
+
+test("lookup rejects unauthenticated/nonstaff users and inaccessible runs before querying executions", async () => {
+  const source = read("src/api/admin/monthlyReview.routes.js");
+  const routeIndex = source.indexOf('router.get("/runs/:runId/bookkeeping/posting-eligibility-executions/');
+  assert.ok(source.indexOf("router.use(requireAuth)") < routeIndex);
+  assert.ok(source.indexOf("router.use(requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES))") < routeIndex);
+  const anonymous = lookupHarness();
+  assert.equal((await anonymous.get({ user: null })).code, 401);
+  assert.equal(anonymous.queryCount(), 0);
+  const nonstaff = lookupHarness({ staff: null });
+  assert.equal((await nonstaff.get()).code, 403);
+  assert.equal(nonstaff.queryCount(), 0);
+  const forbiddenRun = lookupHarness({ runError: Object.assign(new Error("denied"), { status: 403 }) });
+  assert.equal((await forbiddenRun.get()).code, 403);
+  assert.equal(forbiddenRun.queryCount(), 0);
+});
+
+test("lookup does not disclose another business, month or idempotency key", async () => {
+  for (const override of [{ business_id: "other" }, { review_month: "2026-11-01" }, { idempotency_key: "other" }]) {
+    const response = await lookupHarness({ execution: { ...executionRecord, ...override } }).get();
+    assert.equal(response.code, 404);
+    assert.equal(response.body.status, "unknown");
+    assert.equal(response.body.result, undefined);
+  }
+  const h = lookupHarness();
+  assert.equal((await h.get({ key: "invalid" })).code, 400);
+  assert.equal(h.queryCount(), 0);
+});
+
+
+test("overall recovery deadline aborts a hung lookup and returns unknown", async () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const source = page.slice(page.indexOf("async function recoverPostingEligibilityExecution"), page.indexOf("function PostingEligibilityRecheckModal"));
+  let expire, signal, calls = 0, cleared = false;
+  const recover = vm.runInNewContext(`${source}\nrecoverPostingEligibilityExecution`, {
+    AbortController,
+    setTimeout: (callback, ms) => { assert.equal(ms, 9000); expire = callback; return "timer"; },
+    clearTimeout: (timer) => { assert.equal(timer, "timer"); cleared = true; },
+  });
+  const pending = recover("/lookup", async (_url, options) => {
+    calls += 1;
+    signal = options.signal;
+    return new Promise(() => {});
+  }, () => 0);
+  expire();
+  assert.equal((await pending).status, "unknown");
+  assert.equal(signal.aborted, true);
+  assert.equal(calls, 1);
+  assert.equal(cleared, true);
+});
+
+test("recovery stops on authorization rejection and does not retry the POST", async () => {
+  const h = recoveryHarness(async (_url, options) => {
+    if (options.method === "POST") return networkFailure();
+    throw Object.assign(new Error("Forbidden"), { status: 403 });
+  });
+  await h.submit();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.state().notice, unknownMessage);
 });

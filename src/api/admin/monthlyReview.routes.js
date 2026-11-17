@@ -2645,6 +2645,45 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-preview", async (req, 
   }
 });
 
+// Recovery reads only the durable execution; never re-evaluate or resubmit work.
+router.get("/runs/:runId/bookkeeping/posting-eligibility-executions/:idempotencyKey", async (req, res) => {
+  setMonthlyReviewNoStore(res);
+  const { runId, idempotencyKey } = req.params;
+  if (!UUID_RE.test(String(runId)) || !UUID_RE.test(String(idempotencyKey))) {
+    return res.status(400).json({ ok: false, error: "invalid_posting_eligibility_lookup" });
+  }
+  try {
+    const run = await fetchRun(runId);
+    const { data: execution, error } = await supabase.from("bookkeeping_posting_eligibility_rechecks")
+      .select("id,status,result")
+      .eq("business_id", run.business_id)
+      .eq("review_month", `${String(run.review_month).slice(0, 7)}-01`)
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle();
+    if (error) throw error;
+    if (!execution) return res.status(404).json({ ok: false, status: "unknown" });
+    if (execution.status === "running") return res.json({ status: "in_progress" });
+    if (!["completed", "partial", "failed"].includes(execution.status)) return res.json({ status: "unknown" });
+    // Match the existing persisted audit-result shape; never expose the record,
+    // idempotency key, categorization metadata, or unsanitized errors.
+    const stored = execution.result || {};
+    const result = {
+      ok: stored.ok,
+      request_id: stored.request_id,
+      execution_id: execution.id,
+      executed_at: stored.executed_at,
+      operator: stored.operator,
+      examined: stored.examined,
+      counts: stored.counts || {},
+      reason_counts: stored.reason_counts || {},
+      rows: (stored.rows || []).map(({ transaction_id, outcome, reason }) => ({ transaction_id, outcome, reason })),
+    };
+    return res.json({ status: execution.status === "completed" ? "completed" : "failed", result });
+  } catch (error) {
+    return res.status(error?.status || 500).json({ ok: false, status: "unknown", message: "Could not confirm the posting eligibility outcome." });
+  }
+});
+
 router.post("/runs/:runId/bookkeeping/posting-eligibility-executions", async (req, res) => {
   const requestId = crypto.randomUUID();
   try {

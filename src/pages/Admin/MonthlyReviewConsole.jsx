@@ -1334,22 +1334,42 @@ export default function MonthlyReviewConsole() {
 
   const executePostingEligibilityRecheckAction = useCallback(async ({ scheduleAutomaticallyEligible = true } = {}) => {
     const preview = postingEligibilityRecheck.preview;
-    if (!detail?.run?.id || !preview?.preview_version || postingEligibilityRecheck.executing) return;
+    if (!detail?.run?.id || !preview?.preview_version || postingEligibilityRecheck.executing || postingEligibilityRecheck.outcomeUnconfirmed) return;
     const idempotencyKey = globalThis.crypto?.randomUUID?.();
     if (!idempotencyKey) return setPostingEligibilityRecheck((current) => ({ ...current, error: "A secure request identifier could not be created." }));
-    setPostingEligibilityRecheck((current) => ({ ...current, executing: true, error: "" }));
+    const executionUrl = `/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/bookkeeping/posting-eligibility-executions`;
+    setPostingEligibilityRecheck((current) => ({ ...current, executing: true, error: "", notice: "", recovering: false }));
+    let result;
     try {
-      const result = await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/bookkeeping/posting-eligibility-executions`, {
+      result = await safeFetch(executionUrl, {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
         body: { preview_version: preview.preview_version, idempotency_key: idempotencyKey, schedule_automatically_eligible: scheduleAutomaticallyEligible },
       });
-      setPostingEligibilityRecheck((current) => ({ ...current, executing: false, result, error: "" }));
-      await refreshAfterFeedAction();
     } catch (error) {
-      setPostingEligibilityRecheck((current) => ({ ...current, executing: false, preview: error?.body?.preview || preview, error: error?.body?.message || error?.message || "Could not recheck posting eligibility." }));
+      const ambiguous = !error?.status && (["NETWORK_ERROR", "REQUEST_TIMEOUT"].includes(error?.code) || ["TypeError", "AbortError", "TimeoutError"].includes(error?.name));
+      if (!ambiguous) {
+        setPostingEligibilityRecheck((current) => ({ ...current, executing: false, preview: error?.body?.preview || preview, error: error?.body?.message || error?.message || "Could not recheck posting eligibility." }));
+        return;
+      }
+      setPostingEligibilityRecheck((current) => ({ ...current, recovering: true, error: "" }));
+      const recovered = await recoverPostingEligibilityExecution(`${executionUrl}/${encodeURIComponent(idempotencyKey)}`);
+      if (recovered.status !== "completed") {
+        setPostingEligibilityRecheck((current) => ({
+          ...current, executing: false, recovering: false, outcomeUnconfirmed: true,
+          result: recovered.status === "failed" ? recovered.result : null,
+          error: recovered.status === "failed" ? "Could not safely recheck posting eligibility. No provider calls were made." : "",
+          notice: recovered.status === "failed" ? "" : "The connection ended before the outcome could be confirmed. Refresh the preview before trying again.",
+        }));
+        return;
+      }
+      result = recovered.result;
+      setPostingEligibilityRecheck((current) => ({ ...current, notice: "Recheck completed successfully. The connection ended before confirmation was received." }));
     }
-  }, [detail?.run?.id, postingEligibilityRecheck.executing, postingEligibilityRecheck.preview, refreshAfterFeedAction]);
+    setPostingEligibilityRecheck((current) => ({ ...current, executing: false, recovering: false, result, error: "" }));
+    // Feed refresh failures must not turn a confirmed mutation into a network failure.
+    await refreshAfterFeedAction().catch(() => null);
+  }, [detail?.run?.id, postingEligibilityRecheck.executing, postingEligibilityRecheck.outcomeUnconfirmed, postingEligibilityRecheck.preview, refreshAfterFeedAction]);
 
   const patchBookkeepingFeedsAfterApproval = useCallback((row, accountId, result = {}) => {
     const transactionId = row?.id;
@@ -3020,6 +3040,35 @@ function TaxClassificationReviewWorkspace({ businessId, taxYear }) {
   </section>;
 }
 
+// Bounded recovery for this operation only. Retry reads, never the mutation.
+async function recoverPostingEligibilityExecution(url, request = safeFetch, now = Date.now, pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+  const deadline = now() + 9000;
+  const controller = new AbortController();
+  let timer;
+  const expired = new Promise((resolve) => {
+    timer = setTimeout(() => { controller.abort(); resolve({ status: "unknown" }); }, 9000);
+  });
+  const check = async () => {
+    for (let attempt = 0; attempt < 10 && now() < deadline && !controller.signal.aborted; attempt += 1) {
+      try {
+        const response = await request(url, { method: "GET", cache: "no-store", signal: controller.signal, timeoutMs: Math.min(2000, deadline - now()) });
+        if (["completed", "failed"].includes(response?.status)) return response;
+      } catch (error) {
+        if ([401, 403].includes(error?.status)) break;
+        // A missing execution can still be in the server's preview phase.
+      }
+      if (attempt < 9 && now() < deadline && !controller.signal.aborted) await pause(Math.min(1000, deadline - now()));
+    }
+    return { status: "unknown" };
+  };
+  try {
+    return await Promise.race([check(), expired]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
 function PostingEligibilityRecheckModal({ state, businessName, month, onClose, onConfirm, onRetry }) {
   const [scheduleAutomatic, setScheduleAutomatic] = useState(true);
   useEffect(() => {
@@ -3076,6 +3125,8 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
           {state.loading ? <div className="flex items-center gap-2 text-sm text-white/70"><Loader2 className="h-4 w-4 animate-spin" /> Building a read-only preview…</div> : null}
+          {state.recovering ? <div role="status" className="text-sm text-white/70">Checking whether the recheck completed…</div> : null}
+          {state.notice ? <div role="status" className={`rounded-xl border p-3 text-sm ${state.outcomeUnconfirmed ? "border-amber-300/25 bg-amber-950/20 text-amber-100" : "border-emerald-300/20 bg-emerald-950/25 text-emerald-100"}`}>{state.notice}</div> : null}
           {state.error ? <div className="rounded-xl border border-rose-300/25 bg-rose-950/30 p-3 text-sm text-rose-100"><div>{state.error}</div>{state.errorCode ? <div className="mt-2 font-mono text-xs text-rose-200/75">Code: {state.errorCode}</div> : null}{state.requestId ? <div className="mt-1 font-mono text-xs text-rose-200/75">Request: {state.requestId}</div> : null}</div> : null}
           {preview ? (
             <>
@@ -3111,8 +3162,8 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
         <footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-white/10 px-5 py-4">
           {!result && preview ? <div className="mr-auto space-y-2 text-xs text-white/75"><label className="flex items-center gap-2"><input type="checkbox" checked={scheduleAutomatic} onChange={(event) => setScheduleAutomatic(event.target.checked)} /> Schedule automatically eligible transactions</label><p className="max-w-2xl text-white/50">Eligible Handled transactions will receive the normal future posting timestamp. Existing schedules and selected categories will remain unchanged.</p></div> : null}
           <button type="button" onClick={onClose} disabled={state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">Close</button>
-          {state.error && !preview ? <button type="button" onClick={onRetry} disabled={state.loading || state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">Retry</button> : null}
-          {!result ? <button type="button" onClick={submitRecheck} disabled={!preview || state.loading || state.executing || Number(preview?.examined || 0) === 0 || !scheduleAutomatic} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/30 bg-sky-950/40 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{state.executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Confirm recheck</button> : null}
+          {(state.error && !preview) || state.outcomeUnconfirmed ? <button type="button" onClick={onRetry} disabled={state.loading || state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">{state.outcomeUnconfirmed ? "Refresh preview" : "Retry"}</button> : null}
+          {!result ? <button type="button" onClick={submitRecheck} disabled={!preview || state.loading || state.executing || state.outcomeUnconfirmed || Number(preview?.examined || 0) === 0 || !scheduleAutomatic} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/30 bg-sky-950/40 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{state.executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Confirm recheck</button> : null}
         </footer>
       </div>
     </div>
