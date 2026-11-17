@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import vm from "node:vm";
 import { derivePostingEligibilityRecheckAvailability } from "../src/pages/Admin/postingEligibilityRecheckAvailability.js";
 import { isBulkApprovablePostingReason } from "../src/services/bookkeeping/postingEligibilityApprovalPolicy.js";
 import { resolveCompletedPostingEligibilityExecution } from "../src/services/bookkeeping/postingEligibilityExecutionState.js";
@@ -180,16 +181,17 @@ test("first submission does not dereference a missing prior execution and retrie
   });
 });
 
-test("modal has explicit automatic and manual choices with selection controls", () => {
+test("modal only offers automatic scheduling and never submits category approval", () => {
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
-  assert.match(page, /categorized transactions require approval/);
-  assert.match(page, /Select all/);
-  assert.match(page, /Clear all/);
-  assert.match(page, /Schedule automatically eligible transactions/);
-  assert.match(page, /Approve selected categories and schedule them/);
-  assert.match(page, /Apply this category to future transactions from this merchant/);
-  assert.match(page, /It does not immediately contact QuickBooks/);
-  assert.match(page, /Hard-blocked · operator approval cannot override/);
+  const modal = page.slice(page.indexOf("function PostingEligibilityRecheckModal"), page.indexOf("function SummaryMetric"));
+  assert.match(modal, /useState\(true\)/);
+  assert.match(modal, /setScheduleAutomatic\(true\)/);
+  assert.match(modal, /Schedule automatically eligible transactions/);
+  assert.match(modal, /Eligible Handled transactions will receive the normal future posting timestamp\. Existing schedules and selected categories will remain unchanged\./);
+  assert.doesNotMatch(modal, /approveSelected|manualApprovals|learnReusableRule|selectedManualIds|Select all|records your approval|Approve selected categories/);
+  const action = page.slice(page.indexOf("const executePostingEligibilityRecheckAction"), page.indexOf("const executePostingEligibilityRecheckAction") + 2300);
+  assert.doesNotMatch(action, /manual_approvals|manualApprovals|learn_reusable_rule/);
+  assert.match(action, /schedule_automatically_eligible: scheduleAutomaticallyEligible/);
 });
 
 test("scheduling uses a new grace timestamp and auto-post off remains Ready", () => {
@@ -221,4 +223,55 @@ test("forward migration persists service-only idempotency and sanitized audit hi
   assert.match(migration, /enable row level security/);
   assert.match(migration, /revoke all.*anon, authenticated/i);
   assert.match(migration, /grant all.*service_role/i);
+});
+
+// Exercise the production execution function with a server-preview boundary and
+// an in-memory persistence adapter; no application/provider clients are loaded.
+test("automatic execution schedules only eligible preview rows and preserves existing schedules", async () => {
+  const nowMs = Date.parse("2026-11-17T12:00:00Z");
+  const existingTimestamp = "2026-11-20T08:00:00Z";
+  const outcomes = ["eligible_to_schedule", "already_scheduled", "blocked", "categorized_requires_approval", "returned_to_review", "processing", "reconciling"];
+  const rows = outcomes.map((outcome) => ({ transaction_id: outcome, outcome, reason: outcome, categorization_updated_at: "version", current_meta: {} }));
+  const stored = new Map(rows.map((row) => [row.transaction_id, { post_after: row.outcome === "already_scheduled" ? existingTimestamp : null }]));
+  const writes = [];
+  const db = { from(table) {
+    assert.ok(["bookkeeping_posting_eligibility_rechecks", "transaction_categorizations"].includes(table));
+    let patch; const filters = {};
+    const query = {
+      select() { return query; },
+      eq(key, value) { filters[key] = value; return query; },
+      in() { return query; },
+      update(value) { patch = value; return query; },
+      maybeSingle: async () => ({ data: null }),
+      then(resolve, reject) {
+        return Promise.resolve().then(() => {
+          if (patch) {
+            writes.push({ table, patch, filters });
+            if (table === "transaction_categorizations") Object.assign(stored.get(filters.transaction_id), patch);
+          }
+          return { data: [{ id: "execution" }] };
+        }).then(resolve, reject);
+      },
+    };
+    return query;
+  } };
+  const service = read("src/services/bookkeeping/postingEligibilityRecheckService.js");
+  const execution = service.slice(service.indexOf("export async function executePostingEligibilityRecheck"), service.indexOf("export default"));
+  const control = read("src/services/bookkeeping/autoPostControl.js");
+  const grace = control.slice(control.indexOf("export function computePostAfterForAutoPost"), control.indexOf("function chunk", control.indexOf("export function computePostAfterForAutoPost")));
+  const forbidden = () => { assert.fail("category approval, provider call or immediate posting attempted"); };
+  const execute = vm.runInNewContext(`${grace.replace("export ", "")}\n${execution.replace("export ", "")}\nexecutePostingEligibilityRecheck`, {
+    previewPostingEligibilityRecheck: async () => ({ rows: structuredClone(rows), auto_post_enabled: true, examined: rows.length, preview_version: "preview" }),
+    persistExecution: async () => ({ created: true, row: { id: "execution" } }),
+    resolveCompletedPostingEligibilityExecution: () => null,
+    recoveryCounts: () => ({}), HANDLED: ["handled"],
+    approveBookkeepingTransactions: forbidden, fetch: forbidden, getQBOClient: forbidden, plaidClient: forbidden,
+  });
+  const result = await execute({ db, businessId: "business", month: "2026-11", previewVersion: "preview", idempotencyKey: "11111111-1111-1111-1111-111111111111", requestId: "request", nowMs });
+  assert.equal(result.counts.newly_scheduled, 1);
+  assert.equal(stored.get("eligible_to_schedule").post_after, "2026-11-18T12:00:00.000Z");
+  assert.equal(stored.get("already_scheduled").post_after, existingTimestamp);
+  for (const outcome of outcomes.slice(2)) assert.equal(stored.get(outcome).post_after, null);
+  assert.equal(writes.filter((write) => write.table === "transaction_categorizations").length, 1);
+  assert.ok(writes.some((write) => write.table === "bookkeeping_posting_eligibility_rechecks"));
 });
