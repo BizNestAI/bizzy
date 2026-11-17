@@ -12,6 +12,7 @@ import { intentToModule } from '../utils/intentToModule.js';
 import { generateThreadTitle } from '../../chats/title.util.js';
 import { webLookup } from '../webLookup.js';
 import { getBookkeepingHealth } from '../../accounting/bookkeepingHealth.js';
+import { acquireBookkeepingStatus, appendBookkeepingStatus, withoutCanonicalEvidence, BOOKKEEPING_STATUS_INSTRUCTION, BOOKKEEPING_STATUS_INTENTS } from '../../../services/evidence/bookkeepingStatusDisclosure.js';
 import { formatBizzyMarkdown } from './formatBizzyMarkdown.js';
 import { parseStructuredResponse } from './structuredResponse.js';
 import {
@@ -345,6 +346,7 @@ export async function generateBizzyResponse({
   business_id: businessIdFromHandler = null,
   dataMode = 'auto',
   requestId: stableRequestId = null,
+  bookkeepingStatusContext = null,
 }) {
   const started = Date.now();
   const requestedDataMode = normalizeDataMode(dataMode);
@@ -723,6 +725,7 @@ export async function generateBizzyResponse({
       ...(onboardingToneBlock ? [{ role: 'system', content: onboardingToneBlock }] : []),
       ...(onboardingGuide ? [{ role: 'system', content: onboardingGuide }] : []),
       ...personaAndStyle,
+      ...(BOOKKEEPING_STATUS_INTENTS.has(intent) ? [{ role: 'system', content: BOOKKEEPING_STATUS_INSTRUCTION }] : []),
       ...(bundle.canonicalEvidence ? [{ role: 'system', content: buildCanonicalEvidenceInstruction(bundle.canonicalEvidence) }] : []),
       ...(chatHistoryFormatted.length ? [{
         role: 'system',
@@ -806,6 +809,15 @@ export async function generateBizzyResponse({
     const structured = parseStructuredResponse(bizzyReply, { allowNavigation: allowNavigationActions });
     const rawBizzyReply = structured.content || bizzyReply;
     bizzyReply = formatBizzyMarkdown(rawBizzyReply);
+    if (!operationalError && !effectiveDemoMode) {
+      const bookkeepingStatus = await acquireBookkeepingStatus({
+        db: supabase, businessId, intent,
+        canonicalPrompt: bookkeepingStatusContext?.canonicalPrompt,
+        period: bundle.chatContext?.period,
+        configuration: bookkeepingStatusContext?.configuration,
+      });
+      bizzyReply = appendBookkeepingStatus(bizzyReply, bookkeepingStatus);
+    }
     responseArtifacts = structured.artifacts || [];
     responseActions = structured.actions || [];
     responseDocSuggestion = structured.doc_suggestion || null;
@@ -976,7 +988,7 @@ export async function generateBizzyResponseHandler(req, res) {
 
     const bundle    = req.bizzy?.contextBundle || {};
     const clientCtx = req.body?.context || req.body?.parsedInput || {};
-    let parsedInput = { ...bundle, ...clientCtx };
+    let parsedInput = withoutCanonicalEvidence({ ...bundle, ...clientCtx });
 
     const incomingThreadId = req.body?.thread_id || null;
     const business_id = req.business?.id || req.auth?.businessId || null;
@@ -1204,6 +1216,10 @@ export async function generateBizzyResponseHandler(req, res) {
       business_id,
       dataMode,
       requestId: stableRequestId,
+      bookkeepingStatusContext: canonicalQuickPrompt ? {
+        canonicalPrompt: canonicalQuickPrompt,
+        configuration: canonicalEvidence.reportingConfiguration,
+      } : null,
     });
     const { internalTelemetry, ...publicResult } = result || {};
 

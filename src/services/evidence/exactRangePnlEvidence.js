@@ -126,9 +126,10 @@ export async function findUsableExactRangePnlEvidence({ db, businessId, period, 
   return data;
 }
 
-export async function buildFinancialEvidencePackage({ db, businessId, intent, now = new Date(), evidenceLoader = acquireExactRangePnlEvidence, persist = persistEvidencePackage }) {
+export async function buildFinancialEvidencePackage({ db, businessId, intent, now = new Date(), evidenceLoader = acquireExactRangePnlEvidence, persist = persistEvidencePackage, onReportingConfiguration = () => {} }) {
   if (!CANONICAL_EVIDENCE_INTENTS.has(intent)) throw new EvidenceUnavailableError("unsupported_evidence_intent");
   const configuration = await loadReportingConfiguration({ db, businessId });
+  onReportingConfiguration(configuration);
   const periods = resolveCanonicalEvidencePeriods({ timezone: configuration.reporting_timezone, now, intent });
   const current = await evidenceLoader({ db, businessId, period: periods.period, configuration });
   assertUsableEvidence(current);

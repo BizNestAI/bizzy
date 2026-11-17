@@ -281,6 +281,7 @@ function applyPipelineFilters(rows = [], opts = {}) {
 }
 
 export async function loadMonthlyReconciliationPipeline(businessId, opts = {}) {
+  if (opts.evidenceOnly) return loadMonthlyWorkflowEvidence(businessId, opts);
   const month = normalizeMonthKey(opts.month || (opts.date_from ? String(opts.date_from).slice(0, 7) : new Date().toISOString().slice(0, 7)));
   if (!month) throw new Error("invalid_month");
   const [start, end] = opts.date_from && opts.date_to
@@ -425,3 +426,83 @@ export default {
   removeSupersededPendingPlaidRows,
   buildMonthlyPipelineRow,
 };
+
+// Chat-only bounded read. The existing UI path above deliberately stays unchanged.
+export const MONTHLY_WORKFLOW_ROW_BUDGET = 200;
+async function requiredEvidenceRows(query) {
+  const { data, error, count } = await query.limit(MONTHLY_WORKFLOW_ROW_BUDGET + 1);
+  if (error) throw error;
+  if (!Array.isArray(data) || !Number.isSafeInteger(count) || count !== data.length || count > MONTHLY_WORKFLOW_ROW_BUDGET) {
+    throw new Error("monthly_workflow_evidence_truncated");
+  }
+  return data;
+}
+async function loadMonthlyWorkflowEvidence(businessId, opts) {
+  const { db = supabase, date_from: start, date_to: end, plaidEnv, qboEnv, realmId } = opts;
+  if (!businessId || !start || !end || !plaidEnv || !qboEnv || !realmId) throw new Error("monthly_workflow_scope_required");
+  const startedAt = new Date().toISOString();
+  const banks = await requiredEvidenceRows(db.from("bank_transactions")
+    .select("id,plaid_account_id,plaid_transaction_id,pending_transaction_id,date,pending,is_archived,archived_reason,accounting_review_required,accounting_review_reason,pending_resolution_state", { count: "exact" })
+    .eq("business_id", businessId).eq("plaid_env", plaidEnv).eq("is_archived", false)
+    .not("plaid_transaction_id", "is", null).not("plaid_account_id", "is", null)
+    .gte("date", start).lt("date", end));
+  if (banks.some(row => row.archived_reason || row.accounting_review_required || row.pending_resolution_state === "promoted_to_settled" || typeof row.pending !== "boolean")) {
+    throw new Error("monthly_workflow_population_unverified");
+  }
+  const ids = banks.map(row => row.id);
+  let cats = [], receipts = [];
+  if (ids.length) {
+    cats = await requiredEvidenceRows(db.from("transaction_categorizations")
+      .select("transaction_id,status,review_status,posting_status,qbo_txn_id,posted_at,post_after,post_error,last_post_attempt_at,excluded_at,accounting_review_required,meta", { count: "exact" })
+      .eq("business_id", businessId).in("transaction_id", ids));
+    receipts = await requiredEvidenceRows(db.from("qbo_posted_transactions")
+      .select("id,transaction_id,status,qbo_txn_id,posted_at,updated_at,qbo_env,realm_id", { count: "exact" })
+      .eq("business_id", businessId).eq("qbo_env", qboEnv).eq("realm_id", realmId).in("transaction_id", ids));
+  }
+  let reconciliationItems = [];
+  if (ids.length) {
+    const { data: runs, error } = await db.from("reconciliation_runs")
+      .select("id").eq("business_id", businessId).eq("period_start", `${start.slice(0, 7)}-01`)
+      .order("last_checked_at", { ascending: false }).limit(1);
+    if (error) throw error;
+    if (!Array.isArray(runs)) throw new Error("monthly_workflow_runs_unavailable");
+    if (runs[0]) reconciliationItems = await requiredEvidenceRows(db.from("reconciliation_items")
+      .select("bank_transaction_id,status,note,details,reconciled_at", { count: "exact" })
+      .eq("business_id", businessId).eq("run_id", runs[0].id).in("bank_transaction_id", ids));
+  }
+  const reconciliationById = new Map(reconciliationItems.map(row => [row.bank_transaction_id, row]));
+  if (reconciliationById.size !== reconciliationItems.length) throw new Error("monthly_workflow_duplicate_reconciliation");
+  const pendingIds = banks.filter(row => row.pending).map(row => row.plaid_transaction_id);
+  let replacements = [];
+  if (pendingIds.length) {
+    // No date filter: a settled replacement can belong to the next month.
+    replacements = await requiredEvidenceRows(db.from("bank_transactions")
+      .select("pending_transaction_id", { count: "exact" }).eq("business_id", businessId)
+      .eq("plaid_env", plaidEnv).eq("is_archived", false).eq("pending", false).in("pending_transaction_id", pendingIds));
+  }
+  const replaced = new Set(replacements.map(row => row.pending_transaction_id));
+  const catById = new Map(cats.map(row => [row.transaction_id, row]));
+  const receiptById = new Map(receipts.map(row => [row.transaction_id, row]));
+  if (catById.size !== cats.length || receiptById.size !== receipts.length || new Set(ids).size !== ids.length) throw new Error("monthly_workflow_duplicate_evidence");
+  const rows = banks.filter(row => !row.pending || !replaced.has(row.plaid_transaction_id)).map(bank => {
+    const cat = catById.get(bank.id) || {};
+    const receipt = receiptById.get(bank.id);
+    if (cat.accounting_review_required || cat.meta?.possible_qbo_duplicate || cat.meta?.duplicate_risk ||
+        (!bank.pending && cat.meta?.pending) || ((cat.excluded_at || cat.status === "excluded" || cat.status === "ignored" || cat.meta?.excluded_at || cat.meta?.excluded) && receipt?.status === "posted")) {
+      throw new Error("monthly_workflow_conflicting_evidence");
+    }
+    let lifecycle = deriveMonthlyReconciliationLifecycle({ bank, cat, qboPostingReceipt: receipt,
+      // Provisional activity stays separate even when an old run noted an exception.
+      reconciliationItem: bank.pending ? null : reconciliationById.get(bank.id) });
+    // A workflow match is not a posting receipt. Keep uncertainty in the existing
+    // ambiguous bucket. Existing-QBO matches retain their workflow meaning;
+    // this disclosure makes no representation certification.
+    if (lifecycle.key === "matched_transfer_or_card_payment" ||
+        (!bank.pending && receipt && ["pending", "processing", "unknown"].includes(receipt.status))) {
+      lifecycle = { key: "ambiguous" };
+    }
+    return { monthly_lifecycle: lifecycle };
+  });
+  const totals = summarizeMonthlyReconciliationLifecycle(rows);
+  return { totals, started_at: startedAt, observed_at: new Date().toISOString() };
+}

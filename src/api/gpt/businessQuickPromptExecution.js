@@ -28,7 +28,8 @@ export async function buildBusinessQuickPromptEvidence({ db, businessId, intent,
   const taxReview = builders.taxReview || buildTaxTransactionsNeedingReviewPackage;
   const taxReadiness = builders.taxReadiness || buildTaxProfessionalReadinessPackage;
   let packageRow;
-  if (FINANCIAL_QUICK_PROMPT_INTENTS.has(intent)) packageRow = await financial({ db, businessId, intent, now });
+  let reportingConfiguration = null;
+  if (FINANCIAL_QUICK_PROMPT_INTENTS.has(intent)) packageRow = await financial({ db, businessId, intent, now, onReportingConfiguration: (configuration) => { reportingConfiguration = configuration; } });
   else if (intent === "tax_transactions_needing_review") packageRow = await taxReview({ db, businessId, taxYear: yearInUtc(now) });
   else if (intent === "tax_professional_readiness") packageRow = await taxReadiness({ db, businessId, taxYear: yearInUtc(now) });
   else throw new BusinessQuickPromptError("unsupported_business_quick_prompt", 400);
@@ -36,6 +37,7 @@ export async function buildBusinessQuickPromptEvidence({ db, businessId, intent,
   const unavailable = packageRow.completeness === "unavailable";
   return {
     packageRow,
+    reportingConfiguration,
     unavailable,
     reasonCode: unavailable ? packageRow.metrics?.unavailable_reason || "evidence_temporarily_unavailable" : null,
     projection: unavailable ? null : projectEvidence(packageRow),
