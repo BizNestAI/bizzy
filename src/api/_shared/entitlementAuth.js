@@ -143,5 +143,5 @@ export function requireBusinessRole(roles = ["owner"]) {
 export function requirePaidMutation(options = {}) {
   const readMethods = new Set(options.readMethods || ["GET", "HEAD", "OPTIONS"]);
   const paid = requireEntitlementCapability(options.capability || ENTITLEMENT_CAPABILITIES.FINANCIAL_WRITE, options);
-  return (req, res, next) => readMethods.has(String(req.method).toUpperCase()) ? next() : paid(req, res, next);
+  return (req, res, next) => readMethods.has(String(req.method).toUpperCase()) || req.adminBookkeepingAccess?.readOnly === true ? next() : paid(req, res, next);
 }

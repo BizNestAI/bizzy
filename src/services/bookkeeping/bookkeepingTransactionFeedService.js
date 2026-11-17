@@ -492,6 +492,13 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   if (job.state === "retry_scheduled" && job.next_attempt_at) {
     return { key: "retry_scheduled", label: `Retry scheduled for ${new Date(job.next_attempt_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`, tone: "warning", detail: "A controlled retry is scheduled.", technical: { job_id: job.id, attempt_count: job.attempt_count, last_error_code: job.last_error_code } };
   }
+  const admission=meta.auto_post_admission;
+  if(!row.post_after && admission?.version===2 && admission.state==="blocked")return {key:"configuration_blocked",label:`Blocked · ${String(admission.reason||"technical review required").replaceAll("_"," ")}`,tone:"warning",detail:"Resolve the current technical condition before scheduling."};
+  if(!row.post_after && (job.blocking_code==="missing_posting_schedule" || ["pending","retry"].includes(admission?.state))){
+    if(policy.enabled!==true)return {key:"auto_post_paused",label:"Paused · Auto-post off",tone:"neutral",detail:"No posting deadline is active."};
+    const retry=admission?.state!=="pending";
+    return {key:retry?"scheduling_retry":"scheduling_pending",label:retry?"Scheduling needs retry":"Scheduling pending",tone:retry?"warning":"neutral",detail:admission?.version===2?"Scheduling rechecks current technical state.":"Existing unscheduled activity requires a separately reviewed scheduling repair."};
+  }
   if (job.state === "blocked") {
     if (meta.safe_to_auto_post === true && policy.enabled !== true && job.blocking_code === "missing_posting_schedule") {
       return { key: "ready_auto_post_off", label: "Ready · Auto-post off", tone: "neutral", detail: "Posting eligibility is confirmed. Enable Auto-post to assign a future review-window timestamp." };
@@ -588,14 +595,6 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
       label: "Blocked · unsupported transaction type",
       tone: "danger",
       detail: "Credit-card payment rows need a verified source and destination account before posting.",
-    };
-  }
-  if (meta.safe_to_auto_post !== true && meta.auto_approve_reason !== "manual_user") {
-    return {
-      key: "blocked_unsafe_auto_post",
-      label: "Blocked · not safe for auto-post",
-      tone: "warning",
-      detail: "Bizzi needs a safer posting match before auto-posting this row.",
     };
   }
   const postAfterMs = row.post_after ? Date.parse(row.post_after) : null;

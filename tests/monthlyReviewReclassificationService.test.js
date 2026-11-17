@@ -27,7 +27,7 @@ function makeDb(initial = {}) {
   return {
     tables,
     async rpc(name, args) {
-      assert.equal(name, "approve_bookkeeping_transactions_atomic");
+      assert.equal(name, "approve_bookkeeping_with_admission");
       const saved = (args.p_approvals || []).map((payload) => {
         const row = tables.transaction_categorizations.find((candidate) =>
           String(candidate.business_id) === String(args.p_business_id) &&

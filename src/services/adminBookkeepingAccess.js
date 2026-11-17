@@ -1,6 +1,8 @@
 export const ADMIN_BOOKKEEPING_WRITE_CAPABILITY = "admin_bookkeeping_write";
 
 const WRITE_RULES = Object.freeze([
+  ["POST", /^\/api\/bookkeeping\/posting\/auto-post\/admission-preview$/, "preview_auto_post_admission"],
+  ["POST", /^\/api\/bookkeeping\/posting\/auto-post\/admission-repair$/, "repair_auto_post_admission"],
   ["PUT", /^\/api\/bookkeeping\/transactions\/([^/]+)\/resolution$/, "save_resolution"],
   ["PUT", /^\/api\/bookkeeping\/transactions\/([^/]+)\/credit-card-inflow-resolution$/, "save_credit_card_resolution"],
   ["POST", /^\/api\/bookkeeping\/approve$/, "approve_categorization"],
@@ -36,7 +38,7 @@ export function matchAdminBookkeepingWrite(req = {}) {
     if (method !== allowedMethod) continue;
     const match = path.match(pattern);
     if (!match) continue;
-    return { action, method, path, transactionId: match[1] || req.body?.transaction_id || req.body?.txnId || null };
+    return { action, method, path, readOnly: action === "preview_auto_post_admission", transactionId: match[1] || req.body?.transaction_id || req.body?.txnId || null };
   }
   return null;
 }

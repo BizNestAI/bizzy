@@ -224,8 +224,9 @@ export async function undoIncomingDepositMatch(businessId, transactionId, matchI
   return res;
 }
 
-export async function getAutoPostStatus(businessId) {
-  return safeFetch(apiUrl("/api/bookkeeping/posting/auto-post"), {
+export async function getAutoPostStatus(businessId, { handledAdmissionVersion = null } = {}) {
+  const url=apiUrl("/api/bookkeeping/posting/auto-post");
+  return safeFetch(handledAdmissionVersion===2?`${url}?handled_admission_version=2`:url, {
     method: "GET",
     cache: "no-store",
     headers: withBizHeaders(businessId),
@@ -234,7 +235,7 @@ export async function getAutoPostStatus(businessId) {
 
 export async function updateAutoPostStatus(
   businessId,
-  { enabled, confirmBacklog = false, scopeMode = null, effectiveDate = null, previewAcknowledged = false, previewFingerprint = null } = {}
+  { enabled, confirmBacklog = false, scopeMode = null, effectiveDate = null, previewAcknowledged = false, previewFingerprint = null, handledAdmissionVersion = null, admissionPreview = null } = {}
 ) {
   let res;
   try {
@@ -249,10 +250,13 @@ export async function updateAutoPostStatus(
         effective_date: effectiveDate,
         preview_acknowledged: previewAcknowledged === true,
         preview_fingerprint: previewFingerprint,
+        ...(handledAdmissionVersion === 2 ? { handled_admission_version: 2 } : {}),
+        ...(handledAdmissionVersion === 2 && admissionPreview ? { admission_preview: admissionPreview } : {}),
       }),
     });
   } catch (err) {
     const body = err?.body || {};
+    if (handledAdmissionVersion === 2 && Object.prototype.hasOwnProperty.call(body,"auto_post_to_quickbooks")) return body;
     if (err?.status === 409 && body?.requires_confirmation) {
       const wrapped = new Error(body.message || body.error || "auto_post_backlog_confirmation_required");
       wrapped.code = body.error || "auto_post_backlog_confirmation_required";
@@ -262,6 +266,8 @@ export async function updateAutoPostStatus(
     }
     throw err;
   }
+  // A v2 response describes the persisted policy even when admission failed.
+  if (handledAdmissionVersion === 2 && res && Object.prototype.hasOwnProperty.call(res,"auto_post_to_quickbooks")) return res;
   if (res && res.ok === false) {
     const err = new Error(res.message || res.error || "auto_post_update_failed");
     err.code = res.error || null;
@@ -270,6 +276,13 @@ export async function updateAutoPostStatus(
     throw err;
   }
   return res;
+}
+
+export async function previewAutoPostAdmissionScope(businessId, { effectiveDate } = {}) {
+  const query = new URLSearchParams({ effective_date: effectiveDate || "" });
+  return safeFetch(apiUrl(`/api/bookkeeping/posting/auto-post/scope-preview?${query}`), {
+    method: "GET", cache: "no-store", headers: withBizHeaders(businessId),
+  });
 }
 
 export async function previewAutoPostBacklogScope(businessId, { effectiveDate = null, rangeStart = null, rangeEnd = null } = {}) {

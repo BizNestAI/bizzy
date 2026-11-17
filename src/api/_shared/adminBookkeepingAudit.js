@@ -10,6 +10,7 @@ function transactionIds(req) {
     body.transactionId,
     body.txnId,
     body.id,
+    ...(Array.isArray(body.transaction_ids) ? body.transaction_ids.slice(0,200) : []),
     ...(Array.isArray(body.items)
       ? body.items.map((item) => item?.transaction_id || item?.transactionId || item?.txnId || item?.id)
       : []),
@@ -30,7 +31,7 @@ async function snapshot(db, businessId, ids) {
 
 export function auditAdminBookkeepingMutation({ db = defaultSupabase } = {}) {
   return async function adminBookkeepingAuditMiddleware(req, res, next) {
-    if (!req.adminBookkeepingAccess) return next();
+    if (!req.adminBookkeepingAccess || req.adminBookkeepingAccess.readOnly === true) return next();
 
     const access = req.adminBookkeepingAccess;
     const ids = transactionIds(req);

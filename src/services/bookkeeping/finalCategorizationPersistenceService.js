@@ -1,3 +1,4 @@
+import { prepareHandledAdmissionRow, admitNewHandledRows } from "./autoPostAdmission.js";
 import crypto from "node:crypto";
 
 export const FINAL_CATEGORIZATION_SOURCES = Object.freeze({
@@ -67,7 +68,7 @@ export async function persistAuthoritativeFinalCategorizations({
 } = {}) {
   if (!db || !Array.isArray(rows) || !rows.length) throw new Error("final_categorization_rows_required");
   const nowIso = new Date().toISOString();
-  const approvals = rows.map((row) => buildAuthoritativeFinalCategorization({
+  const approvals = rows.map((row) => prepareHandledAdmissionRow(buildAuthoritativeFinalCategorization({
     businessId,
     row,
     approvalSource,
@@ -75,16 +76,24 @@ export async function persistAuthoritativeFinalCategorizations({
     ruleSourceId: ruleSourceIdForRow(row),
     provenance: provenanceForRow(row),
     nowIso,
-  }));
-  const { data, error } = await db.rpc("approve_bookkeeping_transactions_atomic", {
-    p_business_id: businessId,
-    p_actor_id: actorId,
-    p_actor_type: actorType,
-    p_approvals: approvals,
-    p_require_needs_review: requireNeedsReview === true,
-  });
+  })));
+  let data, error;
+  // Only known-aborted database transactions may replay this narrow adapter.
+  // Transport failures and all other writers retain their existing behavior.
+  for(let attempt=0;attempt<3;attempt++) {
+    ({data,error}=await db.rpc("approve_bookkeeping_with_admission", {
+      p_business_id: businessId,
+      p_actor_id: actorId,
+      p_actor_type: actorType,
+      p_approvals: approvals,
+      p_require_needs_review: requireNeedsReview === true,
+    }));
+    if(!error || !["40001","40P01"].includes(error.code))break;
+  }
   if (error) throw error;
-  return Array.isArray(data) ? data : data?.rows || [];
+  const persisted = Array.isArray(data) ? data : data?.rows || [];
+  await admitNewHandledRows({db,businessId,rows:approvals});
+  return persisted;
 }
 
 export default { buildAuthoritativeFinalCategorization, persistAuthoritativeFinalCategorizations };

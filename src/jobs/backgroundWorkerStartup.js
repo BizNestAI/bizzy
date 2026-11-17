@@ -17,3 +17,8 @@ export function startBackgroundWorkers({ workers, env = process.env, logger = co
   if (decision.enabled) for (const start of workers) start();
   return decision;
 }
+
+export function booksPostingStartupDecision(env=process.env) {
+  const decision=backgroundWorkerStartupDecision(env);
+  return String(env.DISABLE_BOOKS_POST_CRON||"").toLowerCase()==="true"?{enabled:false,reason:"DISABLE_BOOKS_POST_CRON"}:decision;
+}

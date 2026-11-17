@@ -126,8 +126,9 @@ test("QBO posting schedule renders backlog and blocker lifecycle states without 
     post_after: "2026-08-31T15:00:00.000Z",
     meta: { safe_to_auto_post: false },
   }, { nowMs });
-  assert.equal(unsafe.key, "blocked_unsafe_auto_post");
-  assert.equal(unsafe.label, "Blocked · not safe for auto-post");
+  // Handled is accounting authorization; confidence alone is no longer a gate.
+  assert.equal(unsafe.key, "not_scheduled");
+  assert.equal(unsafe.label, "Not scheduled");
 
   const missing = formatQboPostingSchedule({
     status: "auto_approved",
@@ -145,7 +146,7 @@ test("Books Review feed attaches server-side posting lifecycle from auto-post po
   assert.match(feedService, /classifyAutoPostOperationalScope/);
   assert.match(feedService, /buildPostingLifecycleForFeed/);
   assert.match(feedService, /held_historical_backlog/);
-  assert.match(feedService, /blocked_unsafe_auto_post/);
+  assert.match(feedService, /scheduling_retry/);
   assert.match(feedService, /blocked_missing_final_account/);
   assert.match(feedService, /qbo_posting_lifecycle/);
 });

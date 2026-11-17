@@ -1,3 +1,4 @@
+import { registerSettledHandledAdmissions } from "../bookkeeping/autoPostAdmission.js";
 /* global process */
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
@@ -435,6 +436,7 @@ export async function runSyncForItem(plaid, businessId, item, options = {}) {
       });
 
     let resolvedTxnIds = [];
+    const settledAdmissionIds = [];
 
     failureStage = "transaction_persistence";
     if (rows.length || removed.length) {
@@ -584,6 +586,7 @@ export async function runSyncForItem(plaid, businessId, item, options = {}) {
 
         if (existing && !claimedExistingIds.has(existing.id)) {
           claimedExistingIds.add(existing.id);
+          if (!row.pending && (existing.pending || (row.pending_transaction_id && existing.pending_source_transaction_id===existing.id))) settledAdmissionIds.push(existing.id);
           if (existing.plaid_transaction_id) protectedRemovedIds.add(existing.plaid_transaction_id);
           if (existing.pending_transaction_id) protectedRemovedIds.add(existing.pending_transaction_id);
           rowsForIdUpsert.push({
@@ -903,6 +906,7 @@ export async function runSyncForItem(plaid, businessId, item, options = {}) {
     // Admission and checkpoint are one database transaction. No inline QBO or
     // bookkeeping worker is invoked; the ordinary worker consumes durable work.
     failureStage = "downstream_admission";
+    await registerSettledHandledAdmissions({db:supabase,businessId,transactionIds:settledAdmissionIds});
     const admitted = await completePlaidSyncAdmission({
       db: supabase, businessId, item, runId, workerId,
       transactionIds: resolvedTxnIds, cursor, now,

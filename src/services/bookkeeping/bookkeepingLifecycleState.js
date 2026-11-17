@@ -1,3 +1,4 @@
+import { prepareHandledAdmissionRow, admitNewHandledRows } from "./autoPostAdmission.js";
 export const REVIEW_HANDLED_STATUSES = new Set([
   "approved",
   "auto_approved",
@@ -39,7 +40,8 @@ function withoutIdentity(row = {}) {
 export async function persistUnresolvedCategorizationRows({ db, businessId, rows = [], knownExistingIds = [] } = {}) {
   const existing = new Set((knownExistingIds || []).map(String));
   const persisted = [];
-  for (const row of rows || []) {
+  const admissionRows = rows.map(row => prepareHandledAdmissionRow(row));
+  for (const row of admissionRows) {
     if (!row?.transaction_id) continue;
     if (!existing.has(String(row.transaction_id))) {
       const { data, error } = await db
@@ -61,6 +63,7 @@ export async function persistUnresolvedCategorizationRows({ db, businessId, rows
     if (error) throw error;
     persisted.push(...(data || []));
   }
+  await admitNewHandledRows({db,businessId,rows:admissionRows.filter(row=>persisted.some(saved=>saved.transaction_id===row.transaction_id))});
   return persisted;
 }
 

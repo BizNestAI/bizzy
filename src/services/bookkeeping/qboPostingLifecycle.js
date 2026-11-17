@@ -213,15 +213,6 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
       detail: "Confirm principal, interest, and fee lines before posting this loan payment.",
     };
   }
-  if (meta.safe_to_auto_post === false && meta.auto_approve_reason !== "manual_user" && (status === "approved" || status === "auto_approved")) {
-    return {
-      key: "blocked_unsafe_auto_post",
-      label: "Blocked · not safe for auto-post",
-      tone: "warning",
-      detail: "Bizzi needs a safer posting match before auto-posting this row.",
-    };
-  }
-
   const postAfterMs = toTime(row.post_after);
   const durableScheduleAt = toTime(postingJob.next_attempt_at || postingJob.scheduled_at);
   const durableScheduledWork = ["scheduled", "retry_scheduled"].includes(String(postingJob.state || "")) &&
@@ -265,6 +256,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
 
 export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) {
   const lifecycle = deriveQboPostingLifecycle(row, { nowMs });
+  if (["scheduling_pending","scheduling_retry","auto_post_paused"].includes(lifecycle.key)) return lifecycle;
   if (lifecycle.key === "posted") {
     return {
       key: "posted",

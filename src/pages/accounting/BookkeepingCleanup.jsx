@@ -1,3 +1,4 @@
+import { admissionNotice, shouldRefreshAdmission, admissionRefreshDelay, ADMISSION_REFRESH_LIMIT } from "../../utils/autoPostAdmissionView.js";
 import useProcessingRunProgress from '../../hooks/useProcessingRunProgress.js';
 import ProcessingProgressNotice from '../../components/Accounting/ProcessingProgressNotice.jsx';
 import { refreshProcessingFeed } from '../../utils/processingProgressView.js';
@@ -51,6 +52,7 @@ import {
   saveCreditCardInflowResolution,
   getAutoPostStatus,
   updateAutoPostStatus,
+  previewAutoPostAdmissionScope,
 } from "../../services/bookkeeping/bookkeepingClient.js";
 import { buildPaymentAccountDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
 import { hasStrongCreditCardPaymentMemo, isCreditCardPaymentWorkflow } from "../../services/bookkeeping/creditCardPaymentStatus.js";
@@ -1078,6 +1080,10 @@ function BookkeepingCleanup() {
   const [loadingAutoPost, setLoadingAutoPost] = useState(false);
   const [savingAutoPost, setSavingAutoPost] = useState(false);
   const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
+  const [autoPostScopeDate, setAutoPostScopeDate] = useState("");
+  const [autoPostAdmissionPreview, setAutoPostAdmissionPreview] = useState(null);
+  const [loadingAdmissionPreview, setLoadingAdmissionPreview] = useState(false);
+  const [admissionPreviewError, setAdmissionPreviewError] = useState("");
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [undoingTransactionIds, setUndoingTransactionIds] = useState(() => new Set());
   const [excludingTransactionIds, setExcludingTransactionIds] = useState(() => new Set());
@@ -1264,7 +1270,7 @@ function BookkeepingCleanup() {
     if (!businessId || usingDemo) return;
     setLoadingAutoPost(true);
     try {
-      const res = await getAutoPostStatus(businessId);
+      const res = await getAutoPostStatus(businessId,{handledAdmissionVersion:2});
       setAutoPostStatus(res || null);
     } catch (e) {
       console.warn("[bookkeeping] auto-post status fetch failed", e?.message || e);
@@ -1286,6 +1292,7 @@ function BookkeepingCleanup() {
     scopeMode = "new_activity_only",
     effectiveDate = null,
     previewAcknowledged = false,
+    admissionPreview = null,
   }) => {
     if (!businessId || usingDemo || savingAutoPost) return;
     setSavingAutoPost(true);
@@ -1299,6 +1306,8 @@ function BookkeepingCleanup() {
           effectiveDate,
           previewAcknowledged,
           previewFingerprint: null,
+          handledAdmissionVersion: 2,
+          admissionPreview,
         });
       } catch (err) {
         if (enabled && err?.requiresConfirmation) {
@@ -1312,9 +1321,14 @@ function BookkeepingCleanup() {
           throw err;
         }
       }
-      setAutoPostStatus(res || { auto_post_to_quickbooks: enabled, handled_backlog_count: 0 });
-      setAutoPostConfirmOpen(false);
+      setAutoPostStatus(res || { auto_post_to_quickbooks: null, state: "retry" });
+      if(res?.state==="terminal" && res?.error==="stale_or_changed_admission_preview") {
+        setAutoPostAdmissionPreview(null);
+        setAdmissionPreviewError("This preview changed or expired. Preview again before confirming.");
+      } else setAutoPostConfirmOpen(false);
       setCountsRefreshKey((v) => v + 1);
+      window.dispatchEvent(new CustomEvent("bizzy:plaid-account-state-updated", { detail:{businessId} }));
+      await reloadCurrentBookkeepingView(reloadTransactionsRef,{showBackgroundRefresh:false,refreshProcessingStatus:false,refreshCounts:true});
     } catch (e) {
       console.warn("[bookkeeping] auto-post update failed", e?.message || e);
       window.dispatchEvent(new CustomEvent("bizzy:toast", {
@@ -1336,6 +1350,7 @@ function BookkeepingCleanup() {
     if (!businessId || usingDemo || savingAutoPost) return;
     const nextEnabled = autoPostStatus?.auto_post_to_quickbooks !== true;
     if (nextEnabled) {
+      setAutoPostScopeDate("");setAutoPostAdmissionPreview(null);setAdmissionPreviewError("");
       setAutoPostConfirmOpen(true);
       return;
     }
@@ -1352,11 +1367,22 @@ function BookkeepingCleanup() {
     await updateAutoPost({
       enabled: true,
       confirmBacklog: true,
-      scopeMode: "new_activity_only",
-      effectiveDate: null,
-      previewAcknowledged: false,
+      scopeMode: autoPostScopeDate ? "effective_date" : "new_activity_only",
+      effectiveDate: autoPostScopeDate || null,
+      previewAcknowledged: Boolean(autoPostAdmissionPreview),
+      admissionPreview: autoPostAdmissionPreview ? {preview_hash:autoPostAdmissionPreview.preview_hash,preview_at:autoPostAdmissionPreview.preview_at,transaction_ids:null} : null,
     });
-  }, [updateAutoPost]);
+  }, [updateAutoPost,autoPostScopeDate,autoPostAdmissionPreview]);
+
+  const previewAdmissionScope=async()=>{
+    setLoadingAdmissionPreview(true);setAdmissionPreviewError("");
+    try {
+      const preview=await previewAutoPostAdmissionScope(businessId,{effectiveDate:autoPostScopeDate});
+      if(!preview?.ok || preview.state!=="preview")throw new Error("Scheduling preview is unavailable. Please try again.");
+      setAutoPostAdmissionPreview(preview);
+    }catch(error){setAutoPostAdmissionPreview(null);setAdmissionPreviewError(error.message||"Scheduling preview is unavailable.");}
+    finally{setLoadingAdmissionPreview(false);}
+  };
 
   useEffect(() => {
     const modalOpen = autoPostConfirmOpen || Boolean(manualPostTxn) || Boolean(manualPostResult) || Boolean(incomingDepositUndoTxn);
@@ -3149,6 +3175,31 @@ function BookkeepingCleanup() {
     }
   }, [accountFilter, businessId, usingDemo]);
 
+  const admissionRefreshNeeded=shouldRefreshAdmission(autoPostStatus);
+  const admissionHasNotice=Boolean(admissionNotice(autoPostStatus));
+  const admissionAttemptsRef=useRef({businessId:null,count:0});
+  useEffect(()=>{
+    if(admissionAttemptsRef.current.businessId!==businessId)admissionAttemptsRef.current={businessId,count:0};
+    if(!admissionRefreshNeeded||usingDemo){if(!admissionHasNotice)admissionAttemptsRef.current.count=0;return undefined;}
+    let cancelled=false;let timer;
+    const schedule=()=>{
+      if(cancelled||document.visibilityState==="hidden"||admissionAttemptsRef.current.count>=ADMISSION_REFRESH_LIMIT)return;
+      timer=setTimeout(async()=>{
+        admissionAttemptsRef.current.count+=1;
+        try {
+          await loadAutoPostStatus();if(cancelled)return;
+          await reloadAccounts();if(cancelled)return;
+          setCountsRefreshKey(value=>value+1);
+          await reloadCurrentBookkeepingView(reloadTransactionsRef,{showBackgroundRefresh:false,refreshProcessingStatus:false});
+        } catch { /* existing loaders report failures; the refresh budget still applies */ }
+        finally {schedule();}
+      },admissionRefreshDelay(admissionAttemptsRef.current.count));
+    };
+    const visibility=()=>{clearTimeout(timer);schedule();};
+    document.addEventListener("visibilitychange",visibility);schedule();
+    return()=>{cancelled=true;clearTimeout(timer);document.removeEventListener("visibilitychange",visibility);};
+  },[admissionRefreshNeeded,admissionHasNotice,businessId,usingDemo,loadAutoPostStatus,reloadAccounts]);
+
   useEffect(() => {
     const handlePlaidAccountStateUpdate = (event) => {
       if (event?.detail?.businessId && String(event.detail.businessId) !== String(businessId)) return;
@@ -3664,7 +3715,8 @@ function BookkeepingCleanup() {
       {activeTab === "handled" ? (
         <div className="mt-2 text-xs text-slate-400">
           <span>
-            Bizzi automatically posts handled transactions to QuickBooks. You can edit here during the grace window if needed.
+            {autoPostStatus?.auto_post_to_quickbooks === true ? "Handled transactions post after their scheduled review window. Technical blockers stay visible." : "Auto-post is off. Handled transactions remain in Bizzi."}
+            {admissionNotice(autoPostStatus) ? <span role="status" className="ml-2 text-amber-200">{admissionNotice(autoPostStatus)}</span> : null}
           </span>
         </div>
       ) : null}
@@ -3739,7 +3791,7 @@ function BookkeepingCleanup() {
               </button>
               <button
                 type="button"
-                disabled={adminView.active || savingAutoPost || loadingAutoPost}
+                disabled={adminView.active || savingAutoPost || loadingAutoPost || typeof autoPostStatus?.auto_post_to_quickbooks !== "boolean"}
                 onClick={handleToggleAutoPost}
                 role="switch"
                 aria-checked={autoPostStatus?.auto_post_to_quickbooks === true}
@@ -4520,14 +4572,28 @@ function BookkeepingCleanup() {
                           Turn on automatic QuickBooks posting?
                         </h2>
                         <p className="mt-2 text-sm leading-6 text-slate-300">
-                          Future eligible transactions will post automatically after Bizzi categorizes them and checks QuickBooks.
+                          Handled transactions authorize posting. Eligible existing Handled transactions will receive a future posting schedule.
                         </p>
                       </div>
                     </div>
 
                     <div className="mt-4 rounded-xl border border-emerald-300/24 bg-emerald-300/[0.08] px-3 py-2.5 text-sm leading-5 text-emerald-50/88">
-                      Existing handled transactions stay with Bizzi’s operator review flow. Your Books page will continue to show completed activity and any questions that need your business context.
+                      The review window is {autoPostStatus?.posting_grace_hours || 24} hours. Existing valid schedules stay unchanged; technical blockers remain protected. Nothing posts in this request.
                     </div>
+
+                    <label className="mt-4 block text-sm text-slate-300">
+                      Optional starting date
+                      <input type="date" value={autoPostScopeDate} disabled={loadingAdmissionPreview||savingAutoPost}
+                        onChange={event=>{setAutoPostScopeDate(event.target.value);setAutoPostAdmissionPreview(null);setAdmissionPreviewError("");}}
+                        className="ml-3 rounded border border-white/15 bg-black/30 px-2 py-1" />
+                    </label>
+                    {autoPostScopeDate ? <div className="mt-3 text-sm text-slate-300">
+                      <button type="button" disabled={loadingAdmissionPreview||savingAutoPost} onClick={previewAdmissionScope} className="rounded border border-white/15 px-3 py-1">
+                        {loadingAdmissionPreview?"Checking…":"Preview scheduling"}
+                      </button>
+                      {autoPostAdmissionPreview ? <p className="mt-2">{autoPostAdmissionPreview.eligible} eligible; {autoPostAdmissionPreview.technically_blocked} blocked. Confirming saves this date and scheduling together.</p> : null}
+                    </div> : null}
+                    {admissionPreviewError ? <p role="status" className="mt-2 text-sm text-amber-200">{admissionPreviewError}</p> : null}
 
                     <div className="mt-5 flex items-center justify-end gap-2">
                       <button
@@ -4540,7 +4606,7 @@ function BookkeepingCleanup() {
                       </button>
                       <button
                         type="button"
-                        disabled={savingAutoPost}
+                        disabled={savingAutoPost||loadingAdmissionPreview||Boolean(autoPostScopeDate&&!autoPostAdmissionPreview)}
                         onClick={confirmEnableAutoPost}
                         className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
                       >

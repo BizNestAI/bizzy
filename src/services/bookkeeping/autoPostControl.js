@@ -1,3 +1,4 @@
+import { admitHandledAutoPost } from "./autoPostAdmission.js";
 /* global process */
 import { createHash } from "node:crypto";
 import { getVendorRuleForTransaction } from "./vendorRuleMatcher.js";
@@ -471,6 +472,8 @@ export async function setAutoPostEnabled({
   requestedBy = null,
   graceHours = DEFAULT_GRACE_HOURS,
   nowMs = Date.now(),
+  handledAdmission = false,
+  admissionPreview = null,
 } = {}) {
   if (!db || !businessId) {
     const err = new Error("businessId is required.");
@@ -481,11 +484,29 @@ export async function setAutoPostEnabled({
 
   const nextEnabled = enabled === true;
   const currentEnabled = await getAutoPostToQuickBooks(db, businessId);
-  const backlogIds = await getHandledBacklogTransactionIds(db, businessId);
   const normalizedGraceHours = normalizeGraceHours(graceHours);
   const nowIso = new Date(nowMs).toISOString();
   const normalizedScopeMode = validateScopeModeForWrite(scopeMode);
   const normalizedEffectiveDate = normalizeDateString(effectiveDate);
+
+  if (handledAdmission) {
+    if(nextEnabled && normalizedScopeMode===AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE && (!normalizedEffectiveDate || previewAcknowledged!==true || !admissionPreview?.preview_hash || !admissionPreview?.preview_at)) {
+      const error=new Error("Review a fresh scheduling preview before confirming this effective date.");
+      error.status=409;error.code="admission_preview_required";throw error;
+    }
+    if (nextEnabled && !currentEnabled && confirmBacklog !== true) {
+      const {count,error:countError}=await db.from("transaction_categorizations").select("transaction_id",{count:"exact",head:true})
+        .eq("business_id",businessId).in("status",["approved","auto_approved","handled"]).is("qbo_txn_id",null).is("posted_at",null);
+      if(countError)throw wrapAutoPostDbError("auto_post_admission_count_failed",countError);
+      const error = new Error("Confirm scheduling eligible Handled transactions after the review window.");
+      error.status=409;error.code="auto_post_confirmation_required";error.requires_confirmation=true;error.handled_backlog_count=count??0;throw error;
+    }
+    return admitHandledAutoPost({db,businessId,enabled:nextEnabled,graceHours:normalizedGraceHours,
+      actorId:requestedBy,effectiveDate:normalizedScopeMode===AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE?normalizedEffectiveDate:null,
+      previewHash:admissionPreview?.preview_hash,previewAt:admissionPreview?.preview_at,transactionIds:admissionPreview?.transaction_ids});
+  }
+
+  const backlogIds = await getHandledBacklogTransactionIds(db, businessId);
 
   if (
     nextEnabled &&

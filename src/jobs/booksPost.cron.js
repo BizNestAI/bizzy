@@ -1,3 +1,6 @@
+import { continueAutoPostAdmissions } from "../services/bookkeeping/autoPostAdmission.js";
+import { booksPostingStartupDecision } from "./backgroundWorkerStartup.js";
+import { guardQboWrites, assertPostingExecutionIntegrity, postingLockContext, postingAttemptEvidence } from "../services/bookkeeping/postingExecutionIntegrity.js";
 /* global process */
 import crypto from "crypto";
 import { createAdaptivePollLoop } from "./adaptiveWorkerPolling.js";
@@ -391,7 +394,8 @@ async function createQboPurchase(qbo, payload) {
         stage: "qbo_create",
         entityType,
         referenceId: payload?.requestId || null,
-        qboWriteStarted: true,
+        qboWriteStarted: err?.qbo_write_may_have_occurred !== false,
+        internalCode: err?.qbo_write_may_have_occurred === false ? err.code : undefined,
       }));
       return resolve({ id: resp?.Id || null, type: resp?.TxnType || entityType, syncToken: resp?.SyncToken || null, raw: resp || null });
     });
@@ -410,7 +414,8 @@ async function createQboDeposit(qbo, payload) {
         stage: "qbo_create",
         entityType: "Deposit",
         referenceId: payload?.requestId || null,
-        qboWriteStarted: true,
+        qboWriteStarted: err?.qbo_write_may_have_occurred !== false,
+        internalCode: err?.qbo_write_may_have_occurred === false ? err.code : undefined,
       }));
       return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Deposit", syncToken: resp?.SyncToken || null, raw: resp || null });
     });
@@ -429,7 +434,8 @@ async function createQboTransfer(qbo, payload) {
         stage: "qbo_create",
         entityType: "Transfer",
         referenceId: payload?.requestId || null,
-        qboWriteStarted: true,
+        qboWriteStarted: err?.qbo_write_may_have_occurred !== false,
+        internalCode: err?.qbo_write_may_have_occurred === false ? err.code : undefined,
       }));
       return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Transfer", syncToken: resp?.SyncToken || null, raw: resp || null });
     });
@@ -1478,6 +1484,7 @@ async function recordQboPostingUnknown({ businessId, transactionId, requestId, e
       lease_expires_at: null,
       last_error: errorPayload,
       error: errorPayload.message || "qbo_post_outcome_unknown",
+      response_summary: { qbo_write_may_have_occurred: true },
       updated_at: getNowIso(),
     })
     .eq("business_id", businessId)
@@ -1489,8 +1496,9 @@ async function recordQboPostingUnknown({ businessId, transactionId, requestId, e
   if (!data?.id) throw new Error("qbo_posting_receipt_update_failed");
 }
 
-async function recordQboPostingRejected({ businessId, transactionId, requestId, err }) {
+async function recordQboPostingRejected({ businessId, transactionId, requestId, err, executionContext }) {
   const errorPayload = summarizePostingError(err);
+  const rejected=postingAttemptEvidence(executionContext);
   const { data, error } = await supabase
     .from("qbo_posted_transactions")
     .update({
@@ -1500,6 +1508,8 @@ async function recordQboPostingRejected({ businessId, transactionId, requestId, 
       last_error: errorPayload,
       error: errorPayload.code || "qbo_transaction_rejected",
       response_summary: {
+        ...rejected.payloadSummary,
+        rejected_at: rejected.attemptedAt,
         failure_stage: errorPayload.workflow_stage,
         failure_code: errorPayload.code,
         provider_error_code: errorPayload.provider_error_code,
@@ -1905,9 +1915,44 @@ async function handleCreditCardPaymentPairItem({ item, bank, mapping, timing, ma
   }
   if (!claim.claimed) return;
   const claimedPair = claim.pair || { ...pair, request_id: requestId };
+  const pairOwner=crypto.randomUUID();
+  const pairLegIds=[claimedPair.checking_transaction_id,claimedPair.credit_card_transaction_id];
+  const {data:pairLegs,error:pairLegError}=await supabase.from("bank_transactions").select("id,plaid_account_id,date,amount").eq("business_id",businessId).in("id",pairLegIds);
+  if(pairLegError||pairLegs?.length!==2)throw new Error("pair_execution_identity_unavailable");
+  for(const id of [...pairLegIds].sort()) {
+    const {data:current,error:readError}=await supabase.from("transaction_categorizations").select("meta,updated_at,post_error").eq("business_id",businessId).eq("transaction_id",id).single();
+    if(readError)throw readError;
+    // Pair dispatch precedes ordinary lock acquisition. Claim both legs through
+    // the existing narrow lock; never overwrite a concurrent posting owner.
+    {
+      const {data:locked,error:lockError}=await supabase.rpc("acquire_posting_lock",{p_business_id:businessId,p_transaction_id:id,p_now_iso:getNowIso(),p_lock_stale_seconds:600,p_idempotency_key:claimedPair.idempotency_key});
+      if(lockError||locked!==true)throw new Error("pair_posting_lock_unavailable");
+      const refreshed=await supabase.from("transaction_categorizations").select("meta,updated_at,post_error").eq("business_id",businessId).eq("transaction_id",id).single();
+      if(refreshed.error)throw refreshed.error;
+      Object.assign(current,refreshed.data);
+    }
+    if(id===txnId && current.meta?.posting_generation!==item.meta?.posting_generation)throw new Error("pair_posting_generation_changed");
+    Object.assign(pairLegs.find(leg=>leg.id===id),postingLockContext(current.meta),{post_error:current.post_error ?? null});
+    const {error:stampError}=await supabase.from("transaction_categorizations").update({meta:{...current.meta,posting_execution_owner:pairOwner,posting_execution_request_id:requestId}})
+      .eq("business_id",businessId).eq("transaction_id",id).eq("updated_at",current.updated_at);
+    if(stampError)throw stampError;
+  }
+  const pairContext={pair_id:claimedPair.id,owner:pairOwner,request_id:requestId,idempotency_key:claimedPair.idempotency_key,
+    business_id:businessId,transaction_id:txnId,
+    claimed_at:claimedPair.posting_started_at,lease_expires_at:claimedPair.lease_expires_at,realm_id:timing.context.realm_id,
+    from_account_id:claimedPair.checking_qbo_account_id,to_account_id:claimedPair.credit_card_qbo_account_id,
+    pair_amount:claimedPair.amount,pair_date:claimedPair.payment_date,legs:pairLegs,manual,env:qboEnvName};
+  // Connection identity is captured before authentication and checked afresh at
+  // each mutator, including the specialized two-leg transfer path.
+  const {data:pairToken,error:pairTokenError}=await supabase.from("quickbooks_tokens").select("realm_id").eq("business_id",businessId).eq("qbo_env",qboEnvName).eq("status","active").eq("is_active",true).order("created_at",{ascending:false}).limit(1).maybeSingle();
+  if(pairTokenError||!pairToken?.realm_id)throw new Error("qbo_connection_inactive");
+  pairContext.realm_id=pairToken.realm_id;
+  const checkPair=()=>assertPostingExecutionIntegrity({db:supabase,businessId,transactionId:txnId,env:qboEnvName,context:pairContext});
+  await checkPair();
   let qbo = null;
   try {
     qbo = await timePostingStage(timing, "qbo_auth_ms", () => getQBOClient(businessId));
+    qbo=guardQboWrites(qbo,checkPair);
     timing.context.oauth_refresh_observed = consumeQuickBooksRefreshMarker(businessId);
     if (!qbo) throw new Error("qbo_client_unavailable:no_active_token_row");
 
@@ -2799,9 +2844,27 @@ export async function handleItem(item, options = {}) {
     return;
   }
 
+  const executionOwner=crypto.randomUUID();
+  const executionContext={owner:executionOwner,request_id:requestId,idempotency_key:intentIdempotencyKey,
+    business_id:businessId,transaction_id:txnId,env:qboEnvName,...postingLockContext(item.meta),
+    claimed_at:claim.intent?.processing_started_at,lease_expires_at:claim.intent?.lease_expires_at,realm_id:realmId,
+    final_account_id:item.final_qbo_account_id,source_account_id:mapping.qbo_account_id,plaid_account_id:bank.plaid_account_id,
+    date:bank.date,amount:bank.amount,manual,post_error:item.post_error ?? null};
+  const {data:executionRow,error:executionReadError}=await supabase.from("transaction_categorizations").select("meta,updated_at").eq("business_id",businessId).eq("transaction_id",txnId).single();
+  if(executionReadError)throw executionReadError;
+  const executionMeta={...executionRow.meta,posting_execution_owner:executionOwner,posting_execution_request_id:requestId};
+  const {error:ownerError}=await supabase.from("transaction_categorizations").update({meta:executionMeta})
+    .eq("business_id",businessId).eq("transaction_id",txnId).eq("updated_at",executionRow.updated_at).eq("meta->>post_idempotency_key",idempotencyKey);
+  if(ownerError)throw ownerError;
+  item.meta=executionMeta;
+  const checkExecution=()=>assertPostingExecutionIntegrity({db:supabase,businessId,transactionId:txnId,env:qboEnvName,context:executionContext});
+  // Check before authentication/provider workflows, then before EVERY financial
+  // mutator (including vendor creation) using the same current-state guard.
+  await checkExecution();
   let qbo = null;
   try {
     qbo = await timePostingStage(timing, "qbo_auth_ms", () => getQBOClient(businessId));
+    qbo=guardQboWrites(qbo,checkExecution);
     timing.context.oauth_refresh_observed = consumeQuickBooksRefreshMarker(businessId);
   } catch (err) {
     const underlyingMessage = err?.message || "qbo_client_unavailable";
@@ -3052,14 +3115,15 @@ export async function handleItem(item, options = {}) {
     return;
   }
 
+  const currentAttempt=postingAttemptEvidence(executionContext);
   await insertPostAttempt({
     businessId,
     transactionId: txnId,
     status: "attempted",
     retryCount: Number(item?.meta?.post_retry_count || 0) || null,
     postAfter: item?.post_after || null,
-    payloadSummary,
-    attemptedAt: nowIso,
+    payloadSummary:{...payloadSummary,...currentAttempt.payloadSummary},
+    attemptedAt: currentAttempt.attemptedAt,
   });
 
   const { data: authorizedRow, error: authorizationError } = await supabase
@@ -3103,7 +3167,7 @@ export async function handleItem(item, options = {}) {
     });
     timing.context.failure_code = normalized.code;
     if (normalized.qbo_write_may_have_occurred === false) {
-      await recordQboPostingRejected({ businessId, transactionId: txnId, requestId, err });
+      await recordQboPostingRejected({ businessId, transactionId: txnId, requestId, err, executionContext });
     } else {
       await recordQboPostingUnknown({ businessId, transactionId: txnId, requestId, err });
     }
@@ -3921,7 +3985,7 @@ async function runOnce(options = {}) {
 }
 
 export function startBooksPostingCron() {
-  if (process.env.DISABLE_BOOKS_POST_CRON === "true") {
+  if (!booksPostingStartupDecision().enabled) {
     log.info("[books-post] worker configuration", {
       enabled: false,
       disabled_reason: "DISABLE_BOOKS_POST_CRON",
@@ -3994,6 +4058,15 @@ export function startBooksPostingCron() {
   }, Math.max(queueIntervalMs, 30_000));
 }
 
+export function signalBooksPostingWakeup() {
+  if (!booksPostingStartupDecision().enabled || booksPostSweepRunning) return false;
+  booksPostSweepRunning=true;
+  setTimeout(()=>Promise.resolve().then(()=>booksPostingStartupDecision().enabled ? runSweepWithDiagnostics("admission_committed") : undefined)
+    .catch(error=>log.error("[books-post] wakeup failed",{code:sanitizedErrorClass(error)}))
+    .finally(()=>{booksPostSweepRunning=false;}),0);
+  return true;
+}
+
 function sanitizedErrorClass(error) {
   return String(error?.code || error?.name || "books_post_sweep_failed").replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 96);
 }
@@ -4007,6 +4080,10 @@ async function runSweepWithDiagnostics(trigger) {
   });
   try {
     const summary = await runOnce();
+    // Due financial work has priority. The fallback only examines v2 markers
+    // in the existing transaction/job population, never the legacy cohort.
+    const admissions=await continueAutoPostAdmissions(supabase);
+    if(admissions.some(result=>result.ok===false)){summary.ok=false;summary.error="auto_post_admission_needs_retry";}
     log.info("[books-post] sweep completed", {
       trigger,
       started_at: startedAt,

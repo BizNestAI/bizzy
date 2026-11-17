@@ -371,9 +371,8 @@ export function rejectAdminViewWrites(options = {}) {
   const allowed = new Set((options.allowMethods || ["GET", "HEAD", "OPTIONS"]).map((method) => String(method).toUpperCase()));
   return function rejectAdminViewWritesMiddleware(req, res, next) {
     if (req.tenantContext?.mode === "admin_view" && !allowed.has(String(req.method || "").toUpperCase())) {
-      const authorizedWrite = hasAdminBookkeepingWriteCapability(req.tenantContext)
-        ? matchAdminBookkeepingWrite(req)
-        : null;
+      const rule = matchAdminBookkeepingWrite(req);
+      const authorizedWrite = rule?.readOnly === true || hasAdminBookkeepingWriteCapability(req.tenantContext) ? rule : null;
       if (authorizedWrite) {
         req.adminBookkeepingAccess = {
           ...authorizedWrite,

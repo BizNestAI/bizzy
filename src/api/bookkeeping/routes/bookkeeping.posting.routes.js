@@ -1,9 +1,11 @@
+import { booksPostingStartupDecision } from "../../../jobs/backgroundWorkerStartup.js";
+import { admitHandledAutoPost, getAutoPostAdmissionState } from "../../../services/bookkeeping/autoPostAdmission.js";
 /* global process */
 import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId, readBusinessId } from "./_bookkeepingRouteUtils.js";
-import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
+import { runBooksPostOnce, signalBooksPostingWakeup } from "../../../jobs/booksPost.cron.js";
 import { signalInteractivePostingCommandWakeup } from "../../../jobs/interactivePostingCommands.worker.js";
 import {
   getAutoPostSettings,
@@ -127,11 +129,52 @@ router.get("/posting/auto-post", requireAuth, async (req, res) => {
       includeBacklogSummary: false,
       includeBacklogPreview: false,
     });
+    if(req.query?.handled_admission_version === "2") {
+      settings.admission=await getAutoPostAdmissionState(supabase,businessId);
+      settings.worker={...settings.worker,...booksPostingStartupDecision()};
+    }
     return res.json({ ok: true, ...settings });
   } catch (err) {
     console.error("[bookkeeping][auto-post-status] failed", err?.message || err);
     return res.status(err?.status || 500).json({ ok: false, error: err?.code || "auto_post_status_failed", message: err?.message || "failed" });
   }
+});
+
+// Customer scope preview is read-only; policy and admission still commit only
+// in the versioned PATCH. It previews the full bounded scope, not a hidden page.
+router.get("/posting/auto-post/scope-preview", requireAuth, async (req,res) => {
+  const businessId=ensureBusinessId(req,res);if(!businessId)return;
+  try {
+    await assertTaxBusinessAccess({req,businessId,supabase});setNoStoreHeaders(res);
+    const effectiveDate=req.query?.effective_date;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate||"") || !Number.isFinite(Date.parse(effectiveDate)))return res.status(400).json({ok:false,error:"invalid_effective_date"});
+    return res.json(await admitHandledAutoPost({db:supabase,businessId,preview:true,source:"enable",effectiveDate,
+      actorId:req.user?.id || req.user?.sub || null,graceHours:POSTING_GRACE_HOURS}));
+  }catch(e){return res.status(e.status||400).json({ok:false,error:e.code||"admission_preview_failed"});}
+});
+
+// Read-only preview and separately approved repair; the mounted Admin View
+// allowlist marks preview readOnly so entitlement/audit do not turn it into a write.
+router.post("/posting/auto-post/admission-preview", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req,res) => {
+  const businessId=ensureBusinessId(req,res);if(!businessId)return;
+  try {
+    await assertTaxBusinessAccess({req,businessId,supabase});
+    setNoStoreHeaders(res);
+    const ids=req.body?.transaction_ids;
+    if(!Array.isArray(ids)||!ids.length||ids.length>200)return res.status(400).json({ok:false,error:"bounded_ids_required"});
+    return res.json(await admitHandledAutoPost({db:supabase,businessId,preview:true,limit:200,source:req.body?.mode==="enable"?"enable":"repair",
+      transactionIds:ids,repairAnchor:req.body?.repair_anchor,actorId:req.internalStaff.userId,effectiveDate:req.body?.effective_date,graceHours:POSTING_GRACE_HOURS}));
+  } catch(e){return res.status(e.status||400).json({ok:false,error:e.code||"admission_preview_failed"});}
+});
+router.post("/posting/auto-post/admission-repair", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async(req,res)=>{
+  const businessId=ensureBusinessId(req,res);if(!businessId)return;
+  try {
+    await assertTaxBusinessAccess({req,businessId,supabase});setNoStoreHeaders(res);
+    const ids=req.body?.transaction_ids;
+    if(req.body?.approved!==true||!Array.isArray(ids)||!ids.length||ids.length>200||!req.body?.preview_hash||!req.body?.preview_at||!req.body?.repair_anchor)return res.status(400).json({ok:false,error:"exact_repair_approval_required"});
+    return res.json(await admitHandledAutoPost({db:supabase,businessId,limit:200,source:"repair",transactionIds:ids,previewHash:req.body.preview_hash,
+      previewAt:req.body.preview_at,repairAnchor:req.body.repair_anchor,actorId:req.internalStaff.userId,graceHours:POSTING_GRACE_HOURS}));
+  }catch(e){return res.status(e.status||400).json({ok:false,error:e.code||"admission_repair_failed"});}
 });
 
 router.patch("/posting/auto-post", requireAuth, async (req, res) => {
@@ -153,7 +196,13 @@ router.patch("/posting/auto-post", requireAuth, async (req, res) => {
       previewFingerprint: req.body?.preview_fingerprint || null,
       requestedBy: req.user?.id || req.user?.sub || null,
       graceHours: POSTING_GRACE_HOURS,
+      handledAdmission: req.body?.handled_admission_version === 2,
+      admissionPreview: req.body?.admission_preview || null,
     });
+    if (req.body?.handled_admission_version === 2) {
+      settings.worker=booksPostingStartupDecision();
+      settings.worker_wakeup={queued:settings.ok && settings.scheduled>0 ? signalBooksPostingWakeup() : false};
+    }
     return res.json(settings);
   } catch (err) {
     if (err?.status === 409 && err?.requires_confirmation === true) {
@@ -755,14 +804,14 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
     console.info("[bookkeeping][manual-post] auth resolved", { operationId, childOperationId, transactionId, elapsedMs: Date.now() - authStartedAt });
     const userId = req.user?.id || req.user?.sub || null;
     const overrideToken = req.body?.duplicate_check_override_token || null;
-    const manualDuplicateOverride = overrideToken
+    const _manualDuplicateOverride = overrideToken
       ? verifyManualPostOverrideToken(overrideToken, { businessId, transactionId, userId })
       : null;
-    const confirmPostAnyway =
+    const _confirmPostAnyway =
       req.body?.confirm_post_anyway === true ||
       req.body?.post_anyway === true ||
       req.body?.confirmPostAnyway === true;
-    const duplicateChallengeId = req.body?.duplicate_challenge_id || req.body?.duplicateChallengeId || null;
+    const _duplicateChallengeId = req.body?.duplicate_challenge_id || req.body?.duplicateChallengeId || null;
     const result = await requestInteractiveTransactionPosting({
       db: supabase,
       businessId,
