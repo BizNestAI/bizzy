@@ -65,13 +65,19 @@ export async function acquireBookkeepingStatus({ db, businessId, intent, canonic
 }
 export function renderBookkeepingStatus(evidence) {
   if (!evidence?.available) return BOOKKEEPING_STATUS_FALLBACK;
-  const { open_workflow_count: open, pending_count: pending, period, observed_at: observed } = evidence;
-  const date = value => new Date(`${value}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "long", day: "numeric", year: "numeric" });
-  const range = `${date(period.start)}–${date(period.end)}`;
-  const asOf = new Date(observed).toLocaleString("en-US", { timeZone: period.timezone, dateStyle: "medium", timeStyle: "short" });
-  const first = open ? `${open} transaction${open === 1 ? "" : "s"} from ${range} still require review or posting completion.` : `No finalized transactions from ${range} currently require review or posting completion.`;
-  const provisional = pending ? ` ${pending} provisional bank transaction${pending === 1 ? " remains" : "s remain"} pending.` : "";
-  return `Bookkeeping status: ${first}${provisional}${open || pending ? " Your current QuickBooks results may change as these items are completed." : ""} As of ${asOf} (${period.timezone}); based on imported bank activity.`;
+  const { open_workflow_count: open, pending_count: pending } = evidence;
+  const openItems = `${open} imported transaction${open === 1 ? " is" : "s are"} still being reviewed or posted`;
+  const pendingItems = `${pending} bank transaction${pending === 1 ? " remains" : "s remain"} pending`;
+  if (open > 0 && pending > 0) {
+    return `Bookkeeping status: ${openItems}, and ${pendingItems}. These QuickBooks figures may change as those items are completed.`;
+  }
+  if (open > 0) {
+    return `Bookkeeping status: ${openItems}. No bank transactions remain pending. These QuickBooks figures may change as the outstanding items are completed.`;
+  }
+  if (pending > 0) {
+    return `Bookkeeping status: No imported transactions are currently awaiting review or posting, but ${pendingItems}. These QuickBooks figures may change as pending transactions settle.`;
+  }
+  return "Bookkeeping status: No imported transactions are currently awaiting review or posting, and no bank transactions remain pending.";
 }
 // Called once by the response-composition boundary before persistence/cache.
 // Prose (including quotations) is never inspected or rewritten here.

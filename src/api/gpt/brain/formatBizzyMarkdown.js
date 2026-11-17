@@ -52,14 +52,14 @@ export function formatBizzyMarkdown(raw = '') {
 
   // Pass 2: render
   inFence = false;
-  lines.forEach((line, idx) => {
+  lines.forEach((line) => {
     const trimmed = line.trim();
     if (/^```/.test(trimmed)) {
       inFence = !inFence;
       out.push(line);
       return;
     }
-    if (inFence) {
+    if (inFence || /^\s*>/.test(line)) {
       out.push(line);
       return;
     }
@@ -88,7 +88,9 @@ export function formatBizzyMarkdown(raw = '') {
     }
 
     const lv = labelMatch(line);
-    if (lv && !isListy(trimmed) && !isHeading(trimmed)) {
+    // Already-emphasized labels (including Unicode-bullet dates) must not be
+    // wrapped in another strong span: nested ** delimiters render literally.
+    if (lv && !isListy(trimmed) && !isHeading(trimmed) && !hasInlineEmphasis) {
       const rendered = `- **${lv.label}:** ${lv.value}`;
       out.push(rendered);
       return;

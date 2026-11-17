@@ -111,18 +111,18 @@ test('maximum populated-month reader path is six requests; disclosure never rere
   assert.equal(db.calls.length, 6);
   assert.ok(db.calls.every(call => !call.methods.some(([method]) => ['insert', 'update', 'rpc'].includes(method))));
 });
-test('model prose and quotations stay intact; one deterministic paragraph follows with as-of timestamp', () => {
+test('model prose and quotations stay intact; one concise deterministic paragraph follows', () => {
   const evidence = { available: true, period: supportedBookkeepingPeriod(input), open_workflow_count: 2, pending_count: 3, observed_at: now.toISOString() };
   for (const prose of ['Revenue was $675 and profit was $498.10, as recorded in your books.', 'Revenue was $675. Net margin was 73.8%, based on QuickBooks cash-basis reporting.', '> You wrote: “All bank transactions are posted.”\n\nThe report shows $675 revenue.']) {
     const output = appendBookkeepingStatus(prose, evidence);
     assert.ok(output.startsWith(`${prose}\n\nBookkeeping status:`));
     assert.equal(output.split('Bookkeeping status:').length, 2);
-    assert.match(output, /2 transactions/); assert.match(output, /3 provisional/); assert.match(output, /As of/);
+    assert.match(output, /2 imported transactions/); assert.match(output, /3 bank transactions/); assert.doesNotMatch(output, /As of|America\/New_York|November|based on imported bank activity/);
   }
 });
 test('no-open-work wording never says fully complete; ordinary chat remains unchanged', () => {
   const output = appendBookkeepingStatus('Revenue is $10.', { available: true, period: supportedBookkeepingPeriod(input), open_workflow_count: 0, pending_count: 8, observed_at: now.toISOString() });
-  assert.match(output, /No finalized transactions/); assert.match(output, /8 provisional/); assert.doesNotMatch(output, /fully complete/);
+  assert.match(output, /No imported transactions/); assert.match(output, /8 bank transactions/); assert.doesNotMatch(output, /fully complete/);
   assert.equal(appendBookkeepingStatus('hello', null), 'hello');
 });
 test('deterministic formatting precedes message persistence and handler response caching; UI branch unchanged', () => {
