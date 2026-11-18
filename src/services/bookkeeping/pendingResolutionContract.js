@@ -22,7 +22,8 @@ export function validatePendingExclusionAttestation({ actor, attested } = {}) {
   if (attested !== true) throw contractError("pending_exclusion_attestation_required", "Confirm that you verified this authorization did not settle.", 400);
 }
 
-export function buildPendingSettlementRpcInput({ businessId, transactionId, actor, statementDate, statementAmount, note, idempotencyKey }) {
+export function buildPendingSettlementRpcInput({ businessId, transactionId, actor, statementDate, statementAmount, note, attested, idempotencyKey }) {
+  if (attested !== true) throw contractError("statement_confirmation_required", "Confirm that you verified settlement against the bank/card statement.", 400);
   const validated = validateStatementConfirmation({ actor, statementDate, statementAmount });
   return {
     p_business_id: businessId,

@@ -1,3 +1,4 @@
+import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
 /* global process */
 import crypto from "node:crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
@@ -84,6 +85,10 @@ function approvalIdempotencyKey({ businessId, approval, actorType }) {
     reviewed_duplicate_candidate_id: approval.reviewed_duplicate_candidate_id || null,
     decision_version: approval.decision_version || null,
     credit_card_inflow_resolution: approval.meta?.credit_card_inflow_resolution?.resolution_type || null,
+    ...(approval.meta?.statement_pending_confirmation_request ? {
+      statement_pending_confirmation_request: approval.meta.statement_pending_confirmation_request,
+      statement_pending_review_epoch: approval.meta.statement_pending_review_epoch || 0,
+    } : {}),
     idempotency_context: approval.idempotency_context || null,
   })).digest("hex");
 }
@@ -269,7 +274,9 @@ export async function approveBookkeepingTransactions({
       duplicate_risk_acknowledged: item?.duplicate_risk_acknowledged === true,
       reviewed_duplicate_candidate_id: item?.reviewed_duplicate_candidate_id || existingMetaMap[txnIdFromItem(item)]?.qbo_duplicate_candidates?.[0]?.qbo_txn_id || null,
       decision_version: item?.duplicate_risk_acknowledged === true ? 2 : null,
-      meta: { user_selected_resolution: item?.resolution || existingMetaMap[txnIdFromItem(item)]?.user_selected_resolution || "categorize_new" },
+      meta: { user_selected_resolution: item?.resolution || existingMetaMap[txnIdFromItem(item)]?.user_selected_resolution || "categorize_new",
+        statement_pending_confirmation_request: existingMetaMap[txnIdFromItem(item)]?.statement_pending_confirmation_request,
+        statement_pending_review_epoch: existingMetaMap[txnIdFromItem(item)]?.statement_pending_review_epoch || 0 },
     },
   }));
   const { data: priorApprovalEvents, error: priorApprovalError } = await db
@@ -322,6 +329,7 @@ export async function approveBookkeepingTransactions({
     .in("id", txnIds);
   if (bankErr) throw new BookkeepingApprovalError("bank_fetch_failed", 500, { message: bankErr.message });
 
+  for (const row of bankTxns || []) Object.assign(row, statementPendingWorkflowRow(row, { forApproval: true }));
   const foundIds = new Set((bankTxns || []).map((row) => String(row.id)));
   const missingTxnIds = txnIds.filter((txnId) => !foundIds.has(String(txnId)));
   if (missingTxnIds.length) {

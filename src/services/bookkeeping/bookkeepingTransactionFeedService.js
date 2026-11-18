@@ -1,3 +1,4 @@
+import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
 import { supabase } from "../supabaseAdmin.js";
 import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
 import {
@@ -214,7 +215,8 @@ export function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = nul
     amount,
     signed_amount: amount,
     direction: dir,
-    pending: row.pending === true,
+    provider_pending: row.pending === true,
+    pending: statementPendingWorkflowRow({ ...row, meta }, { forApproval: true }).pending === true,
     category_primary: row.category_primary || null,
     category_detailed: row.category_detailed || null,
     personal_finance_category: row.personal_finance_category || null,

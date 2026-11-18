@@ -1,6 +1,6 @@
 /* global process, Buffer */
 import test from "node:test";
-import { plaidDatabaseSchema as schema } from "../helpers/plaidDatabaseSchema.js";
+import { stalePendingResolutionDatabaseSchema as schema } from "../helpers/stalePendingResolutionDatabaseSchema.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -135,6 +135,33 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
     ({ reconcileResidualPlaidBatch: reconcileResidual } = await import("../../src/services/plaid/plaidResidualReconciliationService.js"));
     // business_profiles uses real snapshot requirements/defaults.
     await ok(db.from("business_profiles").insert([business, otherBusiness].map(id => ({ id, business_name: "Synthetic", industry: "Synthetic", team_size: 1, state: "NC", services_offered: "Synthetic" }))));
+
+    await t.test("normal manual approval service releases statement evidence and retries through its durable approval event", async () => {
+      const biz=randomUUID(),physical=randomUUID(),txn=randomUUID(),key=randomUUID(),actor=randomUUID();
+      sql(`insert into auth.users(id) values('${actor}');
+       insert into public.internal_staff_users(user_id,role) values('${actor}','owner_admin');
+       insert into public.business_profiles(id,business_name,industry,team_size,state,services_offered) values('${biz}','Synthetic','Synthetic',1,'NC','Synthetic');
+       insert into public.plaid_physical_accounts(id,business_id) values('${physical}','${biz}');
+       insert into public.plaid_items(business_id,plaid_item_id,plaid_access_token,plaid_env,status) values('${biz}','${key}','synthetic','production','connected');
+       insert into public.plaid_accounts(business_id,plaid_item_id,plaid_account_id,physical_account_id,plaid_env,name) values('${biz}','${key}','${key}','${physical}','production','Synthetic');
+       insert into public.quickbooks_tokens(business_id,access_token,refresh_token,realm_id,qbo_env) values('${biz}','synthetic','synthetic','realm','production');
+       insert into public.qbo_accounts_cache(business_id,realm_id,qbo_env,qbo_account_id,name,account_type) values('${biz}','realm','production','meals','Meals','Expense');
+       insert into public.plaid_qbo_account_mappings(business_id,plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type) values('${biz}','${key}','source','Source','Bank');
+       insert into public.bank_transactions(id,business_id,plaid_item_id,plaid_account_id,physical_account_id,plaid_env,plaid_transaction_id,date,authorized_date,name,amount,direction,pending)
+       values('${txn}','${biz}','${key}','${key}','${physical}','production','${txn}',current_date-20,current_date-20,'Synthetic Merchant',-10,'OUTFLOW',true);
+       update public.statement_pending_feature set enabled=true,contained=false;
+       insert into public.statement_pending_business_allowlist values('${biz}',true,true);
+       select public.resolve_stale_pending_admin('${biz}','${txn}','${actor}','confirm-settled','${randomUUID()}',true,current_date-1,10,null,null,date_trunc('month',current_date-20)::date);`);
+      process.env.STALE_PENDING_RESOLUTION_ENABLED='true';process.env.STALE_PENDING_RESOLUTION_BUSINESS_IDS=biz;
+      try {
+       const {approveBookkeepingTransactions}=await import('../../src/services/bookkeeping/bookkeepingApprovalService.js');
+       const args={db,businessId:biz,actorId:actor,actorType:'admin',requireNeedsReview:true,
+        items:[{transaction_id:txn,newAccountId:'meals',newAccountName:'Meals',status:'approved',learn_reusable_rule:false}],validateSelectedAccountsFn:async()=>{}};
+       const result=await approveBookkeepingTransactions(args);assert.equal(result.updated,1);
+       assert.equal(sql(`select pending||'|'||pending_resolution_state from public.bank_transactions where id='${txn}'`),'true|statement_review_released');
+       assert.equal((await approveBookkeepingTransactions(args)).idempotent,true);
+      } finally {delete process.env.STALE_PENDING_RESOLUTION_ENABLED;delete process.env.STALE_PENDING_RESOLUTION_BUSINESS_IDS;sql('update public.statement_pending_feature set enabled=false');}
+    });
 
     await t.test("processing cohort persists atomically, reports exact run outcomes and is immutable", async () => {
       const f=await fixture();

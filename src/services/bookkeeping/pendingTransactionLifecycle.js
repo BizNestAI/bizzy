@@ -8,7 +8,7 @@ export function pendingAgeDays(row, now = new Date()) {
 
 export function derivePendingLifecycle(row, { replacement = null, staleDays = PENDING_STALE_DAYS_DEFAULT, now = new Date() } = {}) {
   const durable = row?.pending_resolution_state || row?.meta?.pending_resolution_state;
-  if (durable) return durable;
+  if (durable && !["recent_pending", "stale_pending_check_required"].includes(durable)) return durable;
   if (replacement) return "posted_replacement_found";
   if (row?.is_archived && row?.archived_reason === "plaid_removed") return "authorization_expired_or_removed";
   if (row?.pending !== true) return "promoted_to_settled";

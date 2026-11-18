@@ -1,3 +1,4 @@
+import { pendingResolutionRequestKey } from "../../services/bookkeeping/pendingResolutionRequest.js";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { derivePostingEligibilityRecheckAvailability } from "./postingEligibilityRecheckAvailability.js";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardCheck, ExternalLink, Loader2, Lock, RefreshCcw, RotateCcw, Search, ShieldCheck } from "lucide-react";
@@ -268,6 +269,14 @@ function showPostingReviewNotice(setNotice, timerRef, message) {
 }
 
 export default function MonthlyReviewConsole() {
+  const [pendingResolutionAdmin, setPendingResolutionAdmin] = useState(false);
+  useEffect(() => {
+    let active = true;
+    safeFetch("/api/admin/monthly-review/me").then(result => {
+      if (active) setPendingResolutionAdmin(result?.staff?.active === true && result?.staff?.role === "owner_admin");
+    }).catch(() => { if (active) setPendingResolutionAdmin(false); });
+    return () => { active = false; };
+  }, []);
   const renderCorrelationIdRef = useRef(`monthly-review-${Date.now().toString(36)}`);
   const [month, setMonth] = useState(() => initialMonthValue());
   const [businesses, setBusinesses] = useState([]);
@@ -719,6 +728,7 @@ export default function MonthlyReviewConsole() {
           next[key] = {
             ...current[key],
             totalCount: Number(counts[key] || 0),
+            resolutionEnabled: key === "pending" ? data?.pending_resolution_enabled === true : false,
             resolutionCounts: key === "pending" ? data?.pending_resolution_counts || null : current[key]?.resolutionCounts || null,
           };
         });
@@ -1552,7 +1562,7 @@ export default function MonthlyReviewConsole() {
     if (action === "load") return safeFetch(`${base}?month=${encodeURIComponent(month)}`);
     const response = await safeFetch(`${base}/${encodeURIComponent(action)}`, {
       method: "POST",
-      body: { ...payload, month, idempotency_key: globalThis.crypto?.randomUUID?.() || `pending-${row.id}-${Date.now()}` },
+      body: { ...payload, month, idempotency_key: pendingResolutionRequestKey({ businessId: selectedBusinessId, transactionId: row.id, action, payload }) },
       timeoutMs: action === "refresh-status" ? 45_000 : 20_000,
     });
     await loadBookkeepingFeedCounts();
@@ -2832,7 +2842,7 @@ export default function MonthlyReviewConsole() {
                   onConfirmIncomingDepositMatch={handleMirrorConfirmIncomingDepositMatch}
                   onRejectIncomingDepositMatch={handleMirrorRejectIncomingDepositMatch}
                   onResolutionChange={handleMirrorResolutionChange}
-                  onResolvePending={handlePendingResolution}
+                  onResolvePending={pendingResolutionAdmin && bookkeepingFeeds.pending?.resolutionEnabled ? handlePendingResolution : undefined}
                   onCreateAccount={createMonthlyReviewQboAccount}
                   onCreatedAccountSelect={injectSourceLedgerAccount}
                   accountTypes={qboAccountTypes}

@@ -1,3 +1,4 @@
+import { isStatementPendingState, statementPendingRetry } from "./statementPendingAuthority.js";
 // Wrap mutating QBO methods only. Reads retain their original binding. Callback
 // and Promise clients are both supported; a rejected guard never calls QBO.
 export function guardQboWrites(client,check) {
@@ -23,6 +24,7 @@ export function guardQboWrites(client,check) {
 
 export function postingLockContext(meta = {}) {
   return {
+    ...(isStatementPendingState(meta.pending_resolution_state) ? { statement_resolution: true } : {}),
     generation: meta.posting_generation ?? null,
     cancelled_at: meta.posting_cancelled_at ?? null,
     lock_started_at: meta.posting_started_at ?? null,
@@ -46,6 +48,17 @@ export function postingAttemptEvidence(context, nowMs = Date.now()) {
 }
 
 export async function assertPostingExecutionIntegrity({db,businessId,transactionId,env,context}) {
+  if (context?.statement_resolution) {
+    const result = await statementPendingRetry(() => db.rpc("check_statement_pending_posting", {
+      p_business_id: businessId, p_transaction_id: transactionId, p_context: context,
+    }));
+    if (result.error || result.data) {
+      const failure = new Error("Statement settlement evidence changed before posting");
+      failure.code = result.error ? "statement_pending_recheck_unavailable" : result.data;
+      failure.qbo_write_may_have_occurred = false;
+      throw failure;
+    }
+  }
   const {data,error}=await db.rpc("check_auto_post_technical_integrity",{p_business_id:businessId,p_transaction_id:transactionId,p_env:env,p_context:context});
   if(error||data){const failure=new Error("Posting technical integrity changed");failure.code=error?"technical_recheck_unavailable":data;failure.qbo_write_may_have_occurred=false;throw failure;}
 }

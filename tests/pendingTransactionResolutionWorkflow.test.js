@@ -37,7 +37,7 @@ test("settlement confirmation is audited, idempotent, and performs no QBO write"
   assert.match(migration, /'provider_write',false,'qbo_write',false/);
   assert.match(migration, /posting_status='not_scheduled'/);
   assert.match(migration, /pending_resolution_payload=jsonb_build_object[\s\S]*'original_pending',true/);
-  assert.doesNotMatch(migration, /nullif\(trim\(p_reason\),'\'\'\) is null/);
+  assert.doesNotMatch(migration, /nullif\(trim\(p_reason\),''\) is null/);
   for (const field of ["actor_user_id", "actor_email", "decision_timestamp", "statement_date", "statement_amount", "before_state", "after_state", "provider_provenance", "provider_last_update", "posted_replacement_search", "qbo_candidate_search", "business_id", "transaction_id", "request_id", "idempotency_key"]) {
     assert.match(migration, new RegExp(`'${field}'`));
   }
@@ -50,7 +50,7 @@ test("operator note is optional and persisted when supplied", () => {
 });
 
 test("confirm settled accepts no note and sends an optional note when provided", () => {
-  const base = { businessId: "business", transactionId: "transaction", actor: { id: "operator", email: "operator@example.com" }, statementDate: "2026-08-27", statementAmount: 6.99, idempotencyKey: "request" };
+  const base = { businessId: "business", transactionId: "transaction", actor: { id: "operator", email: "operator@example.com" }, statementDate: "2026-08-27", statementAmount: 6.99, attested: true, idempotencyKey: "request" };
   assert.equal(buildPendingSettlementRpcInput(base).p_reason, null);
   assert.equal(buildPendingSettlementRpcInput({ ...base, note: "Statement page 4" }).p_reason, "Statement page 4");
 });
@@ -93,7 +93,7 @@ test("late posted replacements reuse identity and reopen excluded or materially 
 test("admin-only MRP exposes one Resolve pending entry and all controlled paths", () => {
   assert.match(routes, /requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)/);
   assert.match(routes, /pending-resolution\/:action/);
-  for (const label of ["Resolve pending", "Refresh status", "Use posted replacement", "Exclude expired authorization", "Confirm settled from statement", "Keep pending"]) {
+  for (const label of ["Resolve pending", "Refresh status", "Use posted replacement", "Exclude expired authorization", "Confirm settled and move to Needs Review", "Keep pending"]) {
     assert.match(ui, new RegExp(label));
   }
 });

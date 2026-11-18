@@ -1,3 +1,4 @@
+import { statementPendingAppEnabled, statementPendingActionAllowed, missingStatementPendingSchema, statementPendingRetry } from "./statementPendingAuthority.js";
 import crypto from "crypto";
 import { supabase } from "../supabaseAdmin.js";
 import { runPlaidSyncForItemForBusiness } from "../plaid/plaidSyncService.js";
@@ -21,7 +22,7 @@ async function loadBase({ businessId, transactionId, db = supabase }) {
   const [{ data: cat, error: catError }, { data: account, error: accountError }, { data: syncRun, error: syncError }] = await Promise.all([
     db.from("transaction_categorizations").select("status,review_status,posting_status,suggested_qbo_account_id,suggested_qbo_account_name,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,posted_at,reconciled_at,meta,updated_at").eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle(),
     db.from("plaid_accounts").select("plaid_account_id,name,official_name,mask,type,subtype,plaid_item_id,last_sync_at").eq("business_id", businessId).eq("plaid_account_id", bank.plaid_account_id).maybeSingle(),
-    db.from("bank_sync_runs").select("status,started_at,finished_at,added_count,modified_count,removed_count,failure_code").eq("business_id", businessId).eq("plaid_item_id", bank.plaid_item_id).eq("status", "success").order("finished_at", { ascending: false }).limit(1).maybeSingle(),
+    db.from("bank_sync_runs").select("status,started_at,finished_at,added_count,modified_count,removed_count,failure_code").eq("business_id", businessId).eq("plaid_item_id", bank.plaid_item_id).eq("status", "completed").order("finished_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
   if (catError) throw catError;
   if (accountError) throw accountError;
@@ -30,11 +31,18 @@ async function loadBase({ businessId, transactionId, db = supabase }) {
     .select("id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,amount,name,merchant_name,updated_at")
     .eq("business_id", businessId).eq("pending_transaction_id", bank.plaid_transaction_id).eq("pending", false).eq("is_archived", false).neq("id", bank.id).limit(1).maybeSingle();
   if (replacementError) throw replacementError;
-  return { bank, cat, account, syncRun, replacement };
+  const { data: replacementCandidates, error: candidateError } = await db.rpc("pending_resolution_candidates", {
+    p_business_id: businessId, p_transaction_id: transactionId,
+  });
+  if (candidateError && !missingStatementPendingSchema(candidateError)) throw candidateError;
+  return { bank, cat, account, syncRun, replacement, replacementCandidates: replacementCandidates || [] };
 }
 
-export async function getPendingResolutionContext({ businessId, transactionId, staleDays = Number(process.env.PENDING_TRANSACTION_STALE_DAYS || PENDING_STALE_DAYS_DEFAULT), db = supabase }) {
-  const { bank, cat, account, syncRun, replacement } = await loadBase({ businessId, transactionId, db });
+export async function getPendingResolutionContext({ businessId, transactionId, staleDays = PENDING_STALE_DAYS_DEFAULT, db = supabase }) {
+  const { bank, cat, account, syncRun, replacement, replacementCandidates } = await loadBase({ businessId, transactionId, db });
+  const capability = statementPendingAppEnabled(businessId)
+    ? await db.rpc("statement_pending_capability", { p_business_id: businessId }) : { data: { enabled: false } };
+  const featureEnabled = !capability.error && capability.data?.enabled === true;
   const ageDays = pendingAgeDays(bank);
   const provenance = bank.raw?.recovery_imported === true || bank.raw?.plaid_recovery_batch_id
     ? "replacement_card_recovery" : (bank.raw?.canonical_source || "normal_sync");
@@ -55,9 +63,14 @@ export async function getPendingResolutionContext({ businessId, transactionId, s
       suggested_gl_non_final: true,
     },
     lifecycle,
+    feature_enabled: featureEnabled,
     stale_threshold_days: staleDays,
     replacement,
-    replacement_found: Boolean(replacement),
+    replacement_found: Boolean(replacement) || replacementCandidates.length > 0,
+    replacement_candidates: replacementCandidates,
+    promotion_eligible: featureEnabled && bank.pending === true && !bank.is_archived && [null, "recent_pending", "stale_pending_check_required", "posted_replacement_found", "operator_settlement_confirmation_required"].includes(bank.pending_resolution_state || null)
+      && ageDays >= PENDING_STALE_DAYS_DEFAULT && replacementCandidates.length === 0 && !replacement,
+
     qbo_candidate_found: candidates.length > 0,
     qbo_candidates: candidates.slice(0, 5),
     has_accounting_record: Boolean(cat),
@@ -87,19 +100,28 @@ export async function refreshPendingStatus({ businessId, transactionId, actor, i
   return after;
 }
 
-export async function confirmPendingSettled({ businessId, transactionId, actor, statementDate, statementAmount, reason, idempotencyKey, db = supabase }) {
-  const input = buildPendingSettlementRpcInput({ businessId, transactionId, actor, statementDate, statementAmount, note: reason, idempotencyKey });
-  const { data, error } = await db.rpc("confirm_pending_transaction_settled", input);
-  if (error) throw fail(error.message, "Could not confirm settlement; no changes were made.");
+export async function confirmPendingSettled({ businessId, transactionId, actor, statementDate, statementAmount, reason, attested, idempotencyKey, month, db = supabase }) {
+  if (!await statementPendingActionAllowed(db, businessId, idempotencyKey)) throw fail("statement_pending_feature_disabled", "Statement resolution is not enabled for this business.");
+  // The database rechecks every mutable predicate under the ingestion lock.
+  const input = buildPendingSettlementRpcInput({ businessId, transactionId, actor, statementDate, statementAmount, note: reason, attested, idempotencyKey });
+  const { data, error } = await statementPendingRetry(() => db.rpc("resolve_stale_pending_admin", {
+    p_business_id: input.p_business_id, p_transaction_id: input.p_transaction_id,
+    p_actor_user_id: input.p_actor_user_id, p_action: "confirm-settled", p_idempotency_key: idempotencyKey,
+    p_review_month: month, p_attested: attested, p_statement_date: input.p_statement_date,
+    p_statement_amount: input.p_statement_amount, p_reason: input.p_reason,
+  }));
+  if (error) throw fail(error.message, "Settlement confirmation was blocked. Reload the evidence before retrying.");
   return data;
 }
 
-export async function linkPendingReplacement({ businessId, transactionId, replacementTransactionId, actor, idempotencyKey, db = supabase }) {
-  const { data, error } = await db.rpc("link_pending_transaction_replacement", {
-    p_business_id: businessId, p_transaction_id: transactionId, p_replacement_transaction_id: replacementTransactionId,
-    p_actor_user_id: actor?.id || null, p_actor_label: actor?.email || actor?.label || null, p_idempotency_key: idempotencyKey,
-  });
-  if (error) throw fail(error.message, "Could not link the posted replacement; no changes were made.");
+export async function linkPendingReplacement({ businessId, transactionId, replacementTransactionId, actor, attested, idempotencyKey, month, db = supabase }) {
+  if (!await statementPendingActionAllowed(db, businessId, idempotencyKey)) throw fail("statement_pending_feature_disabled", "Statement resolution is not enabled for this business.");
+  const { data, error } = await statementPendingRetry(() => db.rpc("resolve_stale_pending_admin", {
+    p_business_id: businessId, p_transaction_id: transactionId, p_action: "use-posted-replacement",
+    p_replacement_transaction_id: replacementTransactionId,
+    p_review_month: month, p_actor_user_id: actor?.id || null, p_attested: attested, p_idempotency_key: idempotencyKey,
+  }));
+  if (error) throw fail(error.message, "Replacement linkage was blocked. Reload the evidence before retrying.");
   return data;
 }
 

@@ -1,3 +1,4 @@
+import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
 import { getAccountingDateFromBankTransaction } from "./accountingDatePolicy.js";
 import { isCreditCardPaymentWorkflow, normalizeQboAccountType } from "./creditCardPaymentStatus.js";
 import { resolveProtectedCreditCardInflowDecision } from "./incomingDepositResolution.js";
@@ -131,7 +132,7 @@ export function resolveCanonicalPostingRail({ bankTransaction = {}, categorizati
 }
 
 export function deriveProviderFreePostingPreflight(row = {}, { lineAccount = null } = {}) {
-  row = applySpecializedTypeAuthority(row);
+  row = statementPendingWorkflowRow(applySpecializedTypeAuthority(row));
   try {
     if (row.pending === true || row.meta?.pending === true) throw postingError("pending_transaction_not_postable", "Waiting for settlement.");
     if (row.qbo_txn_id || row.posted_at) throw postingError("transaction_already_posted", "This transaction is already posted.");
@@ -194,7 +195,7 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
       .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,posted_at,updated_at,meta")
       .eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle(),
     db.from("bank_transactions")
-      .select("id,business_id,date,amount,direction,name,merchant_name,plaid_account_id,pending,is_archived")
+      .select("id,business_id,date,amount,direction,name,merchant_name,plaid_account_id,pending,pending_resolution_state,pending_resolution_payload,is_archived")
       .eq("business_id", businessId).eq("id", transactionId).maybeSingle(),
   ]);
   if (itemError) {
@@ -219,7 +220,7 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
   }
   if (!item || !bankTransaction) throw postingError("transaction_not_found", "The transaction could not be loaded.", 404);
   if (item.qbo_txn_id || item.posted_at || String(item.status || "").toLowerCase() === "posted") throw postingError("transaction_already_posted", "This transaction is already posted.");
-  if (bankTransaction.pending === true) throw postingError("pending_transaction_not_postable", "Pending bank activity cannot be posted.");
+  if (statementPendingWorkflowRow(bankTransaction).pending === true) throw postingError("pending_transaction_not_postable", "Pending bank activity cannot be posted.");
   if (!item.final_qbo_account_id) throw postingError("missing_final_qbo_account", "Choose and save a QuickBooks GL account before posting.");
 
   const { data: qboConnection, error: connectionError } = await db.from("quickbooks_tokens")

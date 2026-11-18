@@ -79,7 +79,8 @@ export function classifyBookkeepingLifecycle(row = {}) {
 
   let bucket;
   if (excluded) bucket = "excluded";
-  else if (pending) bucket = "pending";
+  else if (pending && ["statement_review_override", "statement_review_settled", "statement_review_conflict"].includes(meta.pending_resolution_state)) bucket = "needs_review";
+  else if (pending && meta.pending_resolution_state !== "statement_review_released") bucket = "pending";
   // A card-payment workflow is Matched only when its pair reached a confirmed
   // terminal state. A legacy/raw `matched` status can survive a resolution-mode
   // flip or a partially completed old flow; it must not hide an unresolved leg

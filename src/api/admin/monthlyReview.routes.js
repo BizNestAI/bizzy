@@ -1,3 +1,4 @@
+import { pendingResolutionCapability, pendingResolutionSummary } from "../../services/bookkeeping/pendingResolutionCompatibility.js";
 /* global process */
 import { Router } from "express";
 import crypto from "crypto";
@@ -108,7 +109,6 @@ import {
   linkPendingReplacement,
   refreshPendingStatus,
 } from "../../services/bookkeeping/pendingTransactionResolutionService.js";
-import { summarizePendingLifecycles } from "../../services/bookkeeping/pendingTransactionLifecycle.js";
 import {
   applyBizziOperatorTaxDecision,
   getBizziOperatorTaxDecisionStatus,
@@ -787,21 +787,10 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
       status,
       await countBookkeepingTransactions({ businessId, statusFilter: status, accountId, rangeStart, rangeEnd }),
     ])));
-    let pendingRowsQuery = supabase.from("bank_transactions")
-      .select("id,pending,date,authorized_date,created_at,is_archived,archived_reason,pending_resolution_state,plaid_transaction_id")
-      .eq("business_id", businessId).eq("pending", true).eq("is_archived", false).gte("date", rangeStart).lt("date", rangeEnd);
-    if (accountId) pendingRowsQuery = pendingRowsQuery.eq("plaid_account_id", accountId);
-    const { data: pendingRows, error: pendingRowsError } = await pendingRowsQuery;
-    if (pendingRowsError) throw pendingRowsError;
-    const pendingIds = (pendingRows || []).map((row) => row.plaid_transaction_id).filter(Boolean);
-    let replacementRefs = new Set();
-    if (pendingIds.length) {
-      const { data: replacements, error: replacementsError } = await supabase.from("bank_transactions")
-        .select("pending_transaction_id").eq("business_id", businessId).eq("pending", false).eq("is_archived", false).in("pending_transaction_id", pendingIds);
-      if (replacementsError) throw replacementsError;
-      replacementRefs = new Set((replacements || []).map((row) => row.pending_transaction_id));
-    }
-    const pendingResolutionCounts = summarizePendingLifecycles((pendingRows || []).map((row) => ({ row, replacement: replacementRefs.has(row.plaid_transaction_id) ? { verified: true } : null })), { staleDays: Number(process.env.PENDING_TRANSACTION_STALE_DAYS || 7) });
+    const [pendingResolutionCounts, pendingCapability] = await Promise.all([
+      pendingResolutionSummary(supabase, { businessId, accountId, rangeStart, rangeEnd }),
+      pendingResolutionCapability(supabase, businessId),
+    ]);
 
     return res.json({
       ok: true,
@@ -811,6 +800,7 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
       range_end: rangeEnd,
       counts,
       pending_resolution_counts: pendingResolutionCounts,
+      pending_resolution_enabled: pendingCapability.enabled === true,
       source_contract: {
         service: "bookkeepingTransactionFeedService",
         selected_month_bounds: "server-side [range_start, range_end)",
@@ -927,12 +917,15 @@ function pendingResolutionActor(req) {
 }
 
 async function assertPendingResolutionScope(req) {
+  if (req.internalStaff?.role !== "owner_admin") throw Object.assign(new Error("Internal admin access is required."), { status: 403, code: "internal_admin_required" });
   const businessId = req.params.businessId;
   const transactionId = req.params.transactionId;
   if (!UUID_RE.test(String(businessId))) throw Object.assign(new Error("Invalid business."), { status: 400, code: "invalid_business_id" });
   if (!UUID_RE.test(String(transactionId))) throw Object.assign(new Error("Invalid transaction."), { status: 400, code: "invalid_transaction_id" });
   const month = normalizeMonth(req.query?.month || req.body?.month);
-  await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
+  // Completed requests must reach the RPC's replay branch even after archival
+  // or a provider date change. Fresh mutations validate month under its lock.
+  if (req.method === "GET" || !["confirm-settled", "use-posted-replacement"].includes(req.params.action)) await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
   return { businessId, transactionId, month };
 }
 
@@ -955,9 +948,9 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/pen
     const actor = pendingResolutionActor(req);
     let result;
     if (action === "refresh-status") result = await refreshPendingStatus({ ...scope, actor, idempotencyKey });
-    else if (action === "use-posted-replacement") result = await linkPendingReplacement({ ...scope, actor, idempotencyKey, replacementTransactionId: req.body?.replacement_transaction_id });
+    else if (action === "use-posted-replacement") result = await linkPendingReplacement({ ...scope, actor, idempotencyKey, attested: req.body?.attested === true, replacementTransactionId: req.body?.replacement_transaction_id });
     else if (action === "exclude-authorization") result = await excludePendingAuthorization({ ...scope, actor, idempotencyKey, reason: req.body?.note, attested: req.body?.attested === true });
-    else if (action === "confirm-settled") result = await confirmPendingSettled({ ...scope, actor, idempotencyKey, statementDate: req.body?.statement_date, statementAmount: req.body?.statement_amount, reason: req.body?.note });
+    else if (action === "confirm-settled") result = await confirmPendingSettled({ ...scope, actor, idempotencyKey, attested: req.body?.attested === true, statementDate: req.body?.statement_date, statementAmount: req.body?.statement_amount, reason: req.body?.note });
     else if (action === "keep-pending") result = { state: "stale_pending_check_required", mutated: false };
     else return res.status(400).json({ ok: false, error: "invalid_pending_resolution_action" });
     return res.json({ ok: true, action, result });

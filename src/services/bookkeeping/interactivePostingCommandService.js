@@ -1,3 +1,4 @@
+import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
 /* global process */
 import crypto from "crypto";
 import {
@@ -229,7 +230,7 @@ async function validateDirectTransactionPost({ db, command, transactionIds = [] 
           .eq("transaction_id", transactionId)
           .maybeSingle(),
         db.from("bank_transactions")
-          .select("id,business_id,pending,direction,signed_amount,amount")
+          .select("id,business_id,pending,pending_resolution_state,pending_resolution_payload,direction,signed_amount,amount")
           .eq("business_id", command.business_id)
           .eq("id", transactionId)
           .maybeSingle(),
@@ -244,7 +245,7 @@ async function validateDirectTransactionPost({ db, command, transactionIds = [] 
       error.code = "transaction_not_found";
       throw error;
     }
-    if (bankTransaction.pending === true || bankTransaction.is_pending === true) {
+    if (statementPendingWorkflowRow(bankTransaction).pending === true || bankTransaction.is_pending === true) {
       const error = new Error("pending_transaction_not_postable");
       error.code = "pending_transaction_not_postable";
       throw error;

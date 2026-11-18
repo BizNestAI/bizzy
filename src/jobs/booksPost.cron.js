@@ -1,3 +1,4 @@
+import { statementPendingWorkflowRow } from "../services/bookkeeping/statementPendingAuthority.js";
 import { continueAutoPostAdmissions } from "../services/bookkeeping/autoPostAdmission.js";
 import { booksPostingStartupDecision } from "./backgroundWorkerStartup.js";
 import { guardQboWrites, assertPostingExecutionIntegrity, postingLockContext, postingAttemptEvidence } from "../services/bookkeeping/postingExecutionIntegrity.js";
@@ -1674,7 +1675,7 @@ async function fetchBankTransactionsChunk(ids = [], businessId) {
   const { data, error } = await supabase
     .from("bank_transactions")
     .select(
-      "id,amount,direction,date,name,merchant_name,counterparty_name,merchant_entity_id,counterparties,canonical_vendor_id,plaid_account_id,plaid_transaction_id,transaction_type,check_number,qbo_entity_type,qbo_entity_id,signed_amount,pending,is_archived,accounting_review_required,accounting_review_reason,category_primary,personal_finance_category"
+      "id,amount,direction,date,name,merchant_name,counterparty_name,merchant_entity_id,counterparties,canonical_vendor_id,plaid_account_id,plaid_transaction_id,transaction_type,check_number,qbo_entity_type,qbo_entity_id,signed_amount,pending,pending_resolution_state,pending_resolution_payload,is_archived,accounting_review_required,accounting_review_reason,category_primary,personal_finance_category"
     )
     .eq("business_id", businessId)
     .in("id", ids);
@@ -2393,7 +2394,7 @@ export async function handleItem(item, options = {}) {
   }
 
   const bankTxns = await fetchBankTransactions([txnId], businessId);
-  const bank = bankTxns[txnId] || null;
+  const bank = bankTxns[txnId] ? statementPendingWorkflowRow(bankTxns[txnId]) : null;
   if (!bank) {
     throw new Error("missing_bank_transaction");
   }

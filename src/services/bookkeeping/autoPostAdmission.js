@@ -39,7 +39,7 @@ export async function admitHandledAutoPost({ db, businessId, enabled = null, gra
       const {data,error} = await withDeadline(db.rpc("admit_handled_auto_post",args),remaining());
       if (!error) return data;
       failure=error;
-      if (!["40001","40P01"].includes(error.code)||Date.now()>=deadline) break;
+      if (!["40001","40P01","55P03","57014"].includes(error.code)||Date.now()>=deadline) break;
     } catch { failure={code:"transport"};break; }
   }
   // Policy may already be On (new Handled activity), but failed atomic enable
