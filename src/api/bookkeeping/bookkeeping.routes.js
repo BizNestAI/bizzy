@@ -18,11 +18,13 @@ import canonicalCoaRoutes from "./routes/bookkeeping.canonicalCoa.routes.js";
 import processingRoutes from "./routes/bookkeeping.processing.routes.js";
 import incomingDepositMatchesRoutes from "./routes/bookkeeping.incomingDepositMatches.routes.js";
 import exclusionsRoutes from "./routes/bookkeeping.exclusions.routes.js";
+import pendingResolutionRoutes from "./routes/bookkeeping.pendingResolution.routes.js";
 
 const router = Router();
 
 router.use(accountsRoutes);
 router.use(transactionsRoutes);
+router.use(pendingResolutionRoutes);
 router.use(suggestRoutes);
 router.use(approvalsRoutes);
 router.use(vendorRulesRoutes);

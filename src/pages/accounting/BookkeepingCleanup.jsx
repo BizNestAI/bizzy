@@ -3,6 +3,9 @@ import useProcessingRunProgress from '../../hooks/useProcessingRunProgress.js';
 import ProcessingProgressNotice from '../../components/Accounting/ProcessingProgressNotice.jsx';
 import { refreshProcessingFeed } from '../../utils/processingProgressView.js';
 import { plaidStatusView, postingLabel } from '../../utils/plaidStatusView.js';
+import { pendingResolutionRequestKey } from "../../services/bookkeeping/pendingResolutionRequest.js";
+import { invalidatePendingResolutionCaches } from "../../services/bookkeeping/pendingResolutionFeedRefresh.js";
+import { safeFetch, apiUrl } from "../../utils/safeFetch";
 import { moduleSessionIdentity, moduleCacheVersion, readModuleSnapshot, writeModuleSnapshot } from '../../services/modules/moduleSessionCache.js';
 import { resolveModuleDataState, unsafeModuleError } from '../../services/modules/moduleDataState.js';
 import ModuleDataStatus from '../../components/UI/ModuleDataStatus.jsx';
@@ -881,7 +884,7 @@ function BookkeepingCleanup() {
   const adminView = useAdminView();
   const usingDemo = shouldUseDemoData(currentBusiness);
   const rulesButtonDisabled = false;
-  const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
+  const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem("currentBusinessId"));
   const userId = adminView.active ? "admin_view" : localStorage.getItem("user_id");
   const { status: billingStatus, loading: loadingBillingStatus } = useBillingStatus(businessId, userId);
   const billingAccess = getBillingAccess(resolveStatusValue(billingStatus));
@@ -928,6 +931,18 @@ function BookkeepingCleanup() {
   const transactionViewKeyRef = useRef("");
   const transactionRequestAbortRef = useRef(null);
   const reloadTransactionsRef = useRef(null);
+  const handlePendingResolution = useCallback(async (row, action, payload = {}) => {
+    const base = `/api/bookkeeping/transactions/${encodeURIComponent(row.id)}/pending-resolution`;
+    const headers = { "x-business-id": businessId };
+    if (action === "load") return safeFetch(apiUrl(base), { method: "GET", headers });
+    const result = await safeFetch(apiUrl(`${base}/confirm-settled`), { method: "POST", headers,
+      body: { ...payload, idempotency_key: pendingResolutionRequestKey({ businessId, transactionId: row.id, action, payload }) } });
+    // Invalidate every cached feed for this business, not just the visible tab.
+    invalidatePendingResolutionCaches(businessId, window.sessionStorage);
+    lastSuccessfulTransactionPagesRef.current.clear();
+    await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
+    return result;
+  }, [businessId]);
   const [approvalLedgerVersion, setApprovalLedgerVersion] = useState(0);
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
@@ -4056,6 +4071,7 @@ function BookkeepingCleanup() {
               showRestoreExcluded={isExcludedTab && !adminView.active}
               allowedResolutionIds={adminView.bookkeepingAccess ? ["categorize_new", "match_existing_qbo", "match_credit_card_payment", "merchant_refund", "credit_card_statement_credit", "credit_card_credit_other"] : null}
               adminBookkeepingAccess={adminView.bookkeepingAccess === true}
+              onResolvePending={adminView.active && adminView.bookkeepingAccess && adminView.staffRole === "owner_admin" ? handlePendingResolution : undefined}
             />
           )}
         </motion.div>

@@ -1,4 +1,5 @@
 import { pendingResolutionRequestKey } from "../../services/bookkeeping/pendingResolutionRequest.js";
+import { refreshPendingResolutionFeeds } from "../../services/bookkeeping/pendingResolutionFeedRefresh.js";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { derivePostingEligibilityRecheckAvailability } from "./postingEligibilityRecheckAvailability.js";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardCheck, ExternalLink, Loader2, Lock, RefreshCcw, RotateCcw, Search, ShieldCheck } from "lucide-react";
@@ -1565,14 +1566,11 @@ export default function MonthlyReviewConsole() {
       body: { ...payload, month, idempotency_key: pendingResolutionRequestKey({ businessId: selectedBusinessId, transactionId: row.id, action, payload }) },
       timeoutMs: action === "refresh-status" ? 45_000 : 20_000,
     });
-    await loadBookkeepingFeedCounts();
-    await Promise.all([
-      bookkeepingFeeds.pending?.expanded ? loadBookkeepingFeed("pending", { reset: true }) : Promise.resolve(),
-      bookkeepingFeeds.needs_review?.expanded ? loadBookkeepingFeed("needs_review", { reset: true }) : Promise.resolve(),
-      bookkeepingFeeds.handled?.expanded ? loadBookkeepingFeed("handled", { reset: true }) : Promise.resolve(),
-    ]);
+    await refreshPendingResolutionFeeds({ counts: loadBookkeepingFeedCounts,
+      pending: () => loadBookkeepingFeed("pending", { reset: true }),
+      needsReview: () => loadBookkeepingFeed("needs_review", { reset: true }) });
     return response;
-  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, month, selectedBusinessId]);
+  }, [loadBookkeepingFeed, loadBookkeepingFeedCounts, month, selectedBusinessId]);
 
   const handleMirrorMarkCreditCardPayment = useCallback(async (row) => {
     if (!selectedBusinessId || !row?.id) return;

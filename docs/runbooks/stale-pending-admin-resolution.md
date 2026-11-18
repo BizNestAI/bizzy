@@ -1,5 +1,17 @@
 # Stale Pending: confirmation, manual release and deployment
 
+## Admin action availability on both surfaces
+
+Monthly Review and Books opened through authenticated Open Bookkeeping Access use the shared `StalePendingAction` control. The action loads current server eligibility, displays `Move to Needs Review` only for eligible stale rows, and requires statement attestation/date/amount. Recent rows retain Pending with an “Available after seven days” explanation. Replacement candidates never offer manual promotion; Monthly Review can open the existing replacement review.
+
+The missing controls had two local causes: Monthly Review required both application/database business allowlists, while Books never received an action callback and always rendered passive Pending. No current deployment or production flags were inspected for this change, so a current deployment mismatch has not been verified or excluded.
+
+Books uses `/api/bookkeeping/transactions/:transactionId/pending-resolution` and its `confirm-settled` child route. Its server boundary requires a verified opaque Bookkeeping Access session and an active internal `owner_admin`, rechecked through the same internal-staff authorization as Monthly Review. The actor comes from that verified staff row, not the customer being viewed. Ordinary customer tokens, including business owners/admins, receive 403; customer roles, banners, request actors and local storage cannot authorize a resolution. Successful confirmation refreshes Monthly Review counts and both feeds; Books clears scoped feed caches and reloads its current rows/counts so Needs Review cannot retain a stale cached page.
+
+The availability-only `20261118220000_stale_pending_global_admin_availability.sql` must follow the existing lifecycle migration. It replaces only the feature predicate and grants the server the existing read-only accounting eligibility check. It retains the existing global switch values, lifecycle, guards, audit/idempotency operations and containment. This file was prepared locally and not applied. Old allowlist tables are retained for compatibility but no longer gate new actions after this migration. Every existing/future business is covered when the global gates are enabled; no business backfill or provisioning hook is needed.
+
+Validation of this UI/authorization change: 6 new behavioral/security tests and 136 focused/regression tests passed. The new tests exercise real loopback HTTP authorization with a synthetic database and the rendered shared React action, including confirmation attestation, internal actor preservation, three unrelated/new business scopes, replacement/recent/conflict holds, replay month preservation and feed/cache refresh. Build, targeted new backend/test lint and diff checks passed. Existing modified UI files have unchanged HEAD lint counts; repository-wide lint remains 1,678 errors/190 warnings. Two additional legacy Admin View source assertions fail against unchanged `ForecastEditorChart.jsx` on HEAD (`admin_view_optional` and `readOnly || !hasEdits`). No production access, Keychain access, SQL migration execution, live resolution or provider invocation was used for this change.
+
 This is an unapplied, local implementation. No production repair, provider call or rollout is part of this change.
 
 ## Release lifecycle
@@ -34,17 +46,17 @@ No transaction spans external HTTP I/O. The existing durable posting lease/idemp
 
 New actions require BOTH:
 
-- Backend `STALE_PENDING_RESOLUTION_ENABLED=true` and the exact business UUID in `STALE_PENDING_RESOLUTION_BUSINESS_IDS`.
-- Database `statement_pending_feature.enabled=true`, no containment, and a business allowlist row with `enabled=true, clients_ready=true`.
+- Backend `STALE_PENDING_RESOLUTION_ENABLED=true` (defaults off).
+- Database `statement_pending_feature.enabled=true` with no containment.
 
-Only privileged administrative/migration principals can write the database gate. The service role cannot self-enable it. `clients_ready` is an operational attestation that old frontend/backend/worker processes have retired; the database does not discover deployment versions. Disabling either new-action gate prevents fresh confirmations/releases. Completed actor/payload-bound resolution/release retries remain replayable. Existing resolved rows retain their protections, and already-released rows may continue normal guarded posting. Containment separately stops their new posting boundaries while permitting outcome recording.
+Only privileged administrative/migration principals can write the database gate. The service role cannot self-enable it. Client retirement remains an operational rollout requirement; the database does not discover deployment versions. There is no per-business enablement requirement. Disabling either new-action gate prevents fresh confirmations/releases. Completed actor/payload-bound resolution/release retries remain replayable. Existing resolved rows retain their protections, and already-released rows may continue normal guarded posting. Containment separately stops their new posting boundaries while permitting outcome recording.
 
 ## Compatibility migration and rollout sequence
 
 1. Apply `20261117230000_stale_pending_admin_resolution.sql` in its explicit transaction. It is rerunnable, captures original changed definitions/constraint for rollback, expands prior allowed values, and notifies PostgREST only at the end. There is no data backfill or legacy grant revocation.
 2. Deploy Railway backend and every ingestion/posting worker with the backend gate OFF. New application ordinary persistence and Monthly Review counts work on the old schema too: optional missing RPCs have scoped legacy fallbacks. Do not activate while any old process remains.
 3. Deploy the Vercel frontend with the same feature disabled. Smoke-test ordinary feeds, ingestion, approval and existing posting. Verify retained legacy RPC grants and new private entry-point permissions, function ownership, timeout settings, migration state, and schema-cache availability. Capture baseline queues/errors/lock waits.
-4. For an approved canary business, attest compatible clients, enable the DB allowlist/runtime gate and backend allowlist/gate. Confirm → manually categorize → Handled → scheduled → posted on an explicitly authorized canary. Check original pending truth, audit events, GL account/realm, canonical UUID, and exactly one receipt. Expand only after monitoring stays clean.
+4. After compatible clients are verified, apply the availability-only migration and enable the global database/backend gates under separate rollout authorization. Internal admins can then act across every business. Select an explicitly authorized canary transaction for Confirm → manually categorize → Handled → scheduled → posted. Check original pending truth, audit events, GL account/realm, canonical UUID, and exactly one receipt. Monitor before further operator use.
 5. After old clients/processes are confirmed retired and rollback checkpoints accepted, the separately staged `supabase/manual/stale_pending_legacy_cleanup.sql` may revoke the two legacy resolution grants. It is intentionally outside automatic migrations and requires a session retirement attestation.
 
 Existing worker disable controls can be used for a future coordinated drain; none are changed here. Before any rollout, verify actual deployed definitions, schema owners/ACLs, allowed-state counts, active provider/posting leases, and migration ledger. Local snapshots cannot certify production drift. Stop enablement for unexpected holds, RPC/permission errors, duplicate canonical paths, deadlocks, timeout increases or checkpoint failures.

@@ -1,4 +1,5 @@
 import { pendingResolutionCapability, pendingResolutionSummary } from "../../services/bookkeeping/pendingResolutionCompatibility.js";
+import { requireStatementPendingAdministrator } from "../_shared/statementPendingAdmin.js";
 /* global process */
 import { Router } from "express";
 import crypto from "crypto";
@@ -913,11 +914,11 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
 });
 
 function pendingResolutionActor(req) {
-  return { id: req.user?.id || null, email: req.user?.email || req.internalStaff?.email || "internal_admin" };
+  return { id: req.internalStaff?.userId || null, email: req.user?.email || "internal_admin" };
 }
 
 async function assertPendingResolutionScope(req) {
-  if (req.internalStaff?.role !== "owner_admin") throw Object.assign(new Error("Internal admin access is required."), { status: 403, code: "internal_admin_required" });
+  await requireStatementPendingAdministrator(req);
   const businessId = req.params.businessId;
   const transactionId = req.params.transactionId;
   if (!UUID_RE.test(String(businessId))) throw Object.assign(new Error("Invalid business."), { status: 400, code: "invalid_business_id" });

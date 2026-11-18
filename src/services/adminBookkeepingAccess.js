@@ -1,6 +1,7 @@
 export const ADMIN_BOOKKEEPING_WRITE_CAPABILITY = "admin_bookkeeping_write";
 
 const WRITE_RULES = Object.freeze([
+  ["POST", /^\/api\/bookkeeping\/transactions\/([^/]+)\/pending-resolution\/confirm-settled$/, "confirm_stale_pending_statement"],
   ["POST", /^\/api\/bookkeeping\/posting\/auto-post\/admission-preview$/, "preview_auto_post_admission"],
   ["POST", /^\/api\/bookkeeping\/posting\/auto-post\/admission-repair$/, "repair_auto_post_admission"],
   ["PUT", /^\/api\/bookkeeping\/transactions\/([^/]+)\/resolution$/, "save_resolution"],

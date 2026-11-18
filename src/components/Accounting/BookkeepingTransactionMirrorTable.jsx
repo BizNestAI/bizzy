@@ -1,4 +1,5 @@
 import React from "react";
+import StalePendingAction from "./StalePendingAction.jsx";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Loader2, X } from "lucide-react";
 import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, TransactionResolutionSelector, incomingDepositMatchState } from "./BookkeepingFeed.jsx";
@@ -464,12 +465,8 @@ function BookkeepingTransactionMirrorRow({
       </div>
 
       <div className="space-y-1.5">
-        {isPending && onResolvePending ? (
-          <button type="button" onClick={openPendingResolution} className="w-full rounded-lg border border-amber-300/25 bg-amber-300/[0.1] px-2 py-1.5 text-[11px] font-semibold text-amber-50 hover:bg-amber-300/[0.16]">
-            Resolve pending
-          </button>
-        ) : null}
-        {genericActionsBlocked ? (
+        {isPending ? <StalePendingAction row={row} onResolve={onResolvePending} onReviewReplacement={onResolvePending ? openPendingResolution : undefined} /> : null}
+        {genericActionsBlocked && !isPending ? (
           <div className="rounded-lg border border-amber-300/18 bg-amber-300/[0.08] px-2 py-1 text-[11px] text-amber-100" title={protectedReason.detail || protectedReason.label}>
             {protectedReason.label}
           </div>

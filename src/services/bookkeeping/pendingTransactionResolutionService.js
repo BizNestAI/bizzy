@@ -35,14 +35,19 @@ async function loadBase({ businessId, transactionId, db = supabase }) {
     p_business_id: businessId, p_transaction_id: transactionId,
   });
   if (candidateError && !missingStatementPendingSchema(candidateError)) throw candidateError;
-  return { bank, cat, account, syncRun, replacement, replacementCandidates: replacementCandidates || [] };
+  return { bank, cat, account, syncRun, replacement, replacementCandidates: replacementCandidates || [], replacementCheckVerified: !candidateError };
 }
 
 export async function getPendingResolutionContext({ businessId, transactionId, staleDays = PENDING_STALE_DAYS_DEFAULT, db = supabase }) {
-  const { bank, cat, account, syncRun, replacement, replacementCandidates } = await loadBase({ businessId, transactionId, db });
+  const { bank, cat, account, syncRun, replacement, replacementCandidates, replacementCheckVerified } = await loadBase({ businessId, transactionId, db });
   const capability = statementPendingAppEnabled(businessId)
     ? await db.rpc("statement_pending_capability", { p_business_id: businessId }) : { data: { enabled: false } };
   const featureEnabled = !capability.error && capability.data?.enabled === true;
+  // Read-only preview of the same accounting evidence checked atomically by
+  // resolve_stale_pending_admin. Missing/denied checks never expose an action.
+  const accounting = featureEnabled ? await db.rpc("pending_accounting_block", {
+    p_business_id: businessId, p_transaction_id: transactionId,
+  }) : { error: null, data: "statement_pending_feature_disabled" };
   const ageDays = pendingAgeDays(bank);
   const provenance = bank.raw?.recovery_imported === true || bank.raw?.plaid_recovery_batch_id
     ? "replacement_card_recovery" : (bank.raw?.canonical_source || "normal_sync");
@@ -68,8 +73,9 @@ export async function getPendingResolutionContext({ businessId, transactionId, s
     replacement,
     replacement_found: Boolean(replacement) || replacementCandidates.length > 0,
     replacement_candidates: replacementCandidates,
-    promotion_eligible: featureEnabled && bank.pending === true && !bank.is_archived && [null, "recent_pending", "stale_pending_check_required", "posted_replacement_found", "operator_settlement_confirmation_required"].includes(bank.pending_resolution_state || null)
+    promotion_eligible: featureEnabled && replacementCheckVerified && !accounting.error && !accounting.data && bank.pending === true && !bank.is_archived && !bank.archived_reason && [null, "recent_pending", "stale_pending_check_required", "operator_settlement_confirmation_required"].includes(bank.pending_resolution_state || null)
       && ageDays >= PENDING_STALE_DAYS_DEFAULT && replacementCandidates.length === 0 && !replacement,
+    promotion_disabled_reason: accounting.error ? "Pending evidence could not be verified." : accounting.data,
 
     qbo_candidate_found: candidates.length > 0,
     qbo_candidates: candidates.slice(0, 5),

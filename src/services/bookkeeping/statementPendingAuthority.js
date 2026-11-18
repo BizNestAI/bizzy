@@ -15,7 +15,7 @@ export function statementPendingWorkflowRow(row = {}, { forApproval = false } = 
     accounting_review_required: ["statement_confirmed_pending", "statement_pending_provider_settled"].includes(row.accounting_review_reason) ? false : row.accounting_review_required };
 }
 export function statementPendingAppEnabled(businessId, env = process.env) {
-  return env.STALE_PENDING_RESOLUTION_ENABLED === "true" && String(env.STALE_PENDING_RESOLUTION_BUSINESS_IDS || "").split(",").map(x => x.trim()).includes(businessId);
+  return Boolean(businessId) && env.STALE_PENDING_RESOLUTION_ENABLED === "true";
 }
 export const missingStatementPendingSchema = error => ["PGRST202", "42883"].includes(error?.code);
 export async function statementPendingRetry(operation, { sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {

@@ -33,6 +33,7 @@ import qboBackfillRouter from "./api/accounting/qbo-backfill.routes.js";
 import qboJobCostingWebhooksRouter from "./api/qbo/qboJobCostingWebhooks.routes.js";
 import arRouter from "./api/ar/ar.routes.js";
 import bookkeepingPlaidRouter from "./api/bookkeeping/bookkeeping.routes.js";
+import { rejectCustomerPendingResolutionRequest } from "./api/bookkeeping/routes/bookkeeping.pendingResolution.routes.js";
 import { startBooksPostingCron } from "./jobs/booksPost.cron.js";
 import {
   getInteractivePostingCommandWorkerHealth,
@@ -271,6 +272,7 @@ app.use("/api/accounting", ...requireCustomerOrAdminView, requireSubscribedMutat
 app.use("/api/qbo", ...requireCustomerOrAdminView, requireProviderSyncMutation, qboSyncRouter);
 app.use("/api/qbo/backfill", ...requireCustomerOrAdminView, requireProviderSyncMutation, qboBackfillRouter);
 app.use("/api/ar", ...requireCustomerOrAdminView, requireSubscribedMutation, arRouter);
+app.use("/api/bookkeeping/transactions/:transactionId/pending-resolution", requireAuthOrAdminView, rejectCustomerPendingResolutionRequest);
 app.use("/api/bookkeeping", ...requireCustomerOrAdminView, requireSubscribedMutation, validateAdminBookkeepingWrite, recordAdminBookkeepingMutation, bookkeepingPlaidRouter);
 app.post("/api/accounting/affordabilityCheck", ...requireCustomerOrAdminView, requireEntitlementCapability(ENTITLEMENT_CAPABILITIES.PAID_COMPUTE), affordabilityCheckHandler);
 

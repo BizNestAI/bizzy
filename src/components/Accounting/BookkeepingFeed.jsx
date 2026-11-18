@@ -1,4 +1,5 @@
 import React from "react";
+import StalePendingAction from "./StalePendingAction.jsx";
 import { getBookkeepingExclusionEligibility } from "../../services/bookkeeping/exclusionEligibility.js";
 import ReactDOM from "react-dom";
 import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
@@ -1044,6 +1045,7 @@ export default function BookkeepingFeed({
   showRestoreExcluded = false,
   allowedResolutionIds = null,
   adminBookkeepingAccess = false,
+  onResolvePending,
 }) {
   // Column widths (px) — draggable like QuickBooks
   const initialColWidths = React.useMemo(
@@ -1786,7 +1788,7 @@ export default function BookkeepingFeed({
                 ) : isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (
-                  <span className="text-[10px] text-amber-100/80">Pending</span>
+                  <StalePendingAction row={txn} onResolve={adminBookkeepingAccess ? onResolvePending : undefined} />
                 ) : isHandledStatus && !quickBooksPaymentsProtected ? (
                   <div className="flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap" data-customer-handled-actions="simple">
                     <button

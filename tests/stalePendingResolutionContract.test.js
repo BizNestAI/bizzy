@@ -50,10 +50,10 @@ test("statement confirmation permits category review but only audited release pe
   assert.equal(statementPendingWorkflowRow(released).provider_pending, true);
   assert.equal(hasStatementPendingAuthority({ ...released, pending_resolution_payload: {} }), false);
 });
-test("server flag defaults off and requires an exact business allowlist entry", () => {
+test("server flag defaults off and globally covers all businesses without an allowlist", () => {
   assert.equal(statementPendingAppEnabled("b", {}), false);
   const env = { STALE_PENDING_RESOLUTION_ENABLED: "true", STALE_PENDING_RESOLUTION_BUSINESS_IDS: "ab,b2" };
-  assert.equal(statementPendingAppEnabled("b", env), false);
+  assert.equal(statementPendingAppEnabled("b", env), true);
   assert.equal(statementPendingAppEnabled("b2", env), true);
 });
 test("bounded retry replays known-aborted SQL, never uncertain transport outcomes", async () => {
