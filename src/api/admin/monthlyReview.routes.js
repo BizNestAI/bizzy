@@ -1,4 +1,4 @@
-import { pendingResolutionCapability, pendingResolutionSummary } from "../../services/bookkeeping/pendingResolutionCompatibility.js";
+import { pendingResolutionSummary } from "../../services/bookkeeping/pendingResolutionCompatibility.js";
 import { requireStatementPendingAdministrator } from "../_shared/statementPendingAdmin.js";
 /* global process */
 import { Router } from "express";
@@ -788,10 +788,7 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
       status,
       await countBookkeepingTransactions({ businessId, statusFilter: status, accountId, rangeStart, rangeEnd }),
     ])));
-    const [pendingResolutionCounts, pendingCapability] = await Promise.all([
-      pendingResolutionSummary(supabase, { businessId, accountId, rangeStart, rangeEnd }),
-      pendingResolutionCapability(supabase, businessId),
-    ]);
+    const pendingResolutionCounts = await pendingResolutionSummary(supabase, { businessId, accountId, rangeStart, rangeEnd });
 
     return res.json({
       ok: true,
@@ -801,7 +798,6 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
       range_end: rangeEnd,
       counts,
       pending_resolution_counts: pendingResolutionCounts,
-      pending_resolution_enabled: pendingCapability.enabled === true,
       source_contract: {
         service: "bookkeepingTransactionFeedService",
         selected_month_bounds: "server-side [range_start, range_end)",

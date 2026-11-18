@@ -149,18 +149,13 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
        insert into public.plaid_qbo_account_mappings(business_id,plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type) values('${biz}','${key}','source','Source','Bank');
        insert into public.bank_transactions(id,business_id,plaid_item_id,plaid_account_id,physical_account_id,plaid_env,plaid_transaction_id,date,authorized_date,name,amount,direction,pending)
        values('${txn}','${biz}','${key}','${key}','${physical}','production','${txn}',current_date-20,current_date-20,'Synthetic Merchant',-10,'OUTFLOW',true);
-       update public.statement_pending_feature set enabled=true,contained=false;
-       insert into public.statement_pending_business_allowlist values('${biz}',true,true);
        select public.resolve_stale_pending_admin('${biz}','${txn}','${actor}','confirm-settled','${randomUUID()}',true,current_date-1,10,null,null,date_trunc('month',current_date-20)::date);`);
-      process.env.STALE_PENDING_RESOLUTION_ENABLED='true';process.env.STALE_PENDING_RESOLUTION_BUSINESS_IDS=biz;
-      try {
        const {approveBookkeepingTransactions}=await import('../../src/services/bookkeeping/bookkeepingApprovalService.js');
        const args={db,businessId:biz,actorId:actor,actorType:'admin',requireNeedsReview:true,
         items:[{transaction_id:txn,newAccountId:'meals',newAccountName:'Meals',status:'approved',learn_reusable_rule:false}],validateSelectedAccountsFn:async()=>{}};
        const result=await approveBookkeepingTransactions(args);assert.equal(result.updated,1);
        assert.equal(sql(`select pending||'|'||pending_resolution_state from public.bank_transactions where id='${txn}'`),'true|statement_review_released');
        assert.equal((await approveBookkeepingTransactions(args)).idempotent,true);
-      } finally {delete process.env.STALE_PENDING_RESOLUTION_ENABLED;delete process.env.STALE_PENDING_RESOLUTION_BUSINESS_IDS;sql('update public.statement_pending_feature set enabled=false');}
     });
 
     await t.test("processing cohort persists atomically, reports exact run outcomes and is immutable", async () => {
@@ -350,14 +345,21 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
       assert.equal((await ok(get("qbo_posted_transactions").eq("transaction_id",posted.id))).length,1);
     });
 
-    await t.test("original posted review upsert reproduces exact 23502; scoped UPDATE succeeds and cannot cross tenants", async () => {
+    await t.test("permanent fence rejects unscoped upsert; historical 23502 remains reproducible; scoped UPDATE cannot cross tenants", async () => {
       const f = await fixture(); const [row] = await ok(db.from("bank_transactions").insert(bank(f, "original-posted")).select());
       await ok(db.from("transaction_categorizations").insert({ business_id: business, transaction_id: row.id, status: "posted", qbo_txn_id: "synthetic-receipt" }));
       const patch = { id: row.id, accounting_review_required: true, accounting_review_reason: "plaid_modified_after_qbo_post" };
-      const failed = await db.from("bank_transactions").upsert([patch], { onConflict: "id" });
-      assert.equal(failed.error?.code, "23502");
-      assert.deepEqual({ table: diagnostics(failed.error).table, column: diagnostics(failed.error).column }, { table: "bank_transactions", column: "business_id" });
-      console.log("PROVEN REPRODUCTION: bank_transactions.business_id NOT NULL, SQLSTATE 23502");
+      const fenced = await db.from("bank_transactions").upsert([patch], { onConflict: "id" });
+      assert.equal(fenced.error?.code, "P0001");
+      assert.match(fenced.error.message, /pending_account_scope_missing/);
+      // Historical diagnostic test only, on this disposable synthetic database:
+      // inspect the old failure beneath the now-permanent account fence.
+      sql('alter table public.bank_transactions disable trigger aaa_statement_pending_fence');
+      try {
+        const failed = await db.from("bank_transactions").upsert([patch], { onConflict: "id" });
+        assert.equal(failed.error?.code, "23502");
+        assert.deepEqual({ table: diagnostics(failed.error).table, column: diagnostics(failed.error).column }, { table: "bank_transactions", column: "business_id" });
+      } finally { sql('alter table public.bank_transactions enable trigger aaa_statement_pending_fence'); }
       await updateRows({ db, businessId: business, rows: [patch], operation: "posted_review_update" });
       await assert.rejects(updateRows({ db, businessId: otherBusiness, rows: [patch], operation: "posted_review_update" }), /target_missing/);
       assert.equal((await ok(get("bank_transactions").eq("id", row.id)))[0].accounting_review_required, true);

@@ -33,8 +33,8 @@ test("ingestion patches enter the serialized RPC and retain scoped target valida
   await assert.rejects(updatePlaidBankRows({ db, businessId: "business", rows: [{ id: "transaction", business_id: "another-business" }] }), /scope_invalid/);
 });
 
-import { hasStatementPendingAuthority, statementPendingWorkflowRow, statementPendingAppEnabled, statementPendingRetry } from "../src/services/bookkeeping/statementPendingAuthority.js";
-import { pendingResolutionSummary, pendingResolutionCapability } from "../src/services/bookkeeping/pendingResolutionCompatibility.js";
+import { hasStatementPendingAuthority, statementPendingWorkflowRow, statementPendingRetry } from "../src/services/bookkeeping/statementPendingAuthority.js";
+import { pendingResolutionSummary } from "../src/services/bookkeeping/pendingResolutionCompatibility.js";
 import { guardQboWrites, assertPostingExecutionIntegrity, postingLockContext } from "../src/services/bookkeeping/postingExecutionIntegrity.js";
 
 test("statement confirmation permits category review but only audited release permits posting projection", () => {
@@ -50,12 +50,6 @@ test("statement confirmation permits category review but only audited release pe
   assert.equal(statementPendingWorkflowRow(released).provider_pending, true);
   assert.equal(hasStatementPendingAuthority({ ...released, pending_resolution_payload: {} }), false);
 });
-test("server flag defaults off and globally covers all businesses without an allowlist", () => {
-  assert.equal(statementPendingAppEnabled("b", {}), false);
-  const env = { STALE_PENDING_RESOLUTION_ENABLED: "true", STALE_PENDING_RESOLUTION_BUSINESS_IDS: "ab,b2" };
-  assert.equal(statementPendingAppEnabled("b", env), true);
-  assert.equal(statementPendingAppEnabled("b2", env), true);
-});
 test("bounded retry replays known-aborted SQL, never uncertain transport outcomes", async () => {
   let calls = 0; const delays = [];
   const result = await statementPendingRetry(async () => ++calls < 3 ? { error: { code: "40001" } } : { data: "ok" }, { sleep: async ms => delays.push(ms) });
@@ -67,14 +61,13 @@ test("bounded retry replays known-aborted SQL, never uncertain transport outcome
 test("new application old schema: ordinary persistence has no optional RPC dependency", async () => {
   let updates = 0;
   const chain = { eq() { return this; }, select() { updates++; return Promise.resolve({ data: [{ id: "t" }], error: null }); } };
-  await updatePlaidBankRows({ db: { from: () => ({ update: () => chain }) }, businessId: "ordinary", rows: [{ id: "t", name: "changed" }] });
+  await updatePlaidBankRows({ db: { rpc: async () => ({ error: { code: "PGRST202" } }), from: () => ({ update: () => chain }) }, businessId: "ordinary", rows: [{ id: "t", name: "changed" }] });
   assert.equal(updates, 1);
 });
-test("new application old schema: counts use legacy bounded membership while capability stays off", async () => {
-  const calls = []; const db = { rpc: async (name) => { calls.push(name); assert.equal(name, "get_bookkeeping_transactions_bounded"); return { data: [{ pending: true, date: "2020-01-01" }], error: null }; } };
-  const capability = await pendingResolutionCapability(db, "not-allowlisted"); assert.equal(capability.enabled, false);
+test("new application old schema: counts fall back to authoritative bounded membership", async () => {
+  const calls = []; const db = { rpc: async (name) => { calls.push(name); if(name === "monthly_pending_resolution_summary") return {error:{code:"PGRST202"}}; assert.equal(name, "get_bookkeeping_transactions_bounded"); return { data: [{ pending: true, date: "2020-01-01" }], error: null }; } };
   const counts = await pendingResolutionSummary(db, { businessId: "not-allowlisted" });
-  assert.equal(counts.stale_pending, 1); assert.deepEqual(calls, ["get_bookkeeping_transactions_bounded"]);
+  assert.equal(counts.stale_pending, 1); assert.deepEqual(calls, ["monthly_pending_resolution_summary", "get_bookkeeping_transactions_bounded"]);
 });
 test("final mutator performs statement-specific fresh guard before normal technical/provider work", async () => {
   const calls = [];

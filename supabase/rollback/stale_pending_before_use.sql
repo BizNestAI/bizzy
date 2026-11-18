@@ -1,5 +1,5 @@
 -- Forward rollback BEFORE first use. Roll back applications/worker versions
--- first (feature disabled); do not remove guards from any resolved identity.
+-- first; do not remove guards from any resolved identity.
 begin;
 set local lock_timeout='2s';
 set local statement_timeout='60s';
@@ -9,7 +9,16 @@ do $$ begin
   raise exception 'statement_pending_use_containment_after_first_use';
  end if;
 end $$;
-update public.statement_pending_feature set enabled=false,contained=true where singleton;
+do $$ begin
+ if to_regclass('public.statement_pending_posting_containment') is not null then
+  update public.statement_pending_posting_containment set contained=true where singleton;
+ end if;
+end $$;
+-- Rollback revokes RPC authority before removing guards; no runtime flag is
+-- required to prevent an incompatible application from creating unfenced rows.
+revoke execute on function public.resolve_stale_pending_admin(uuid,uuid,uuid,text,text,boolean,date,numeric,uuid,text,date) from service_role;
+revoke execute on function public.release_statement_pending_review(uuid,uuid,jsonb,text) from service_role;
+revoke execute on function public.write_plaid_bank_rows_serialized(uuid,jsonb,boolean) from service_role;
 do $$ declare t text; r record; def text; begin
  foreach t in array array['bank_transactions','transaction_categorizations','qbo_posted_transactions','bookkeeping_post_attempts','bookkeeping_posting_jobs','bank_qbo_matches'] loop
   execute format('drop trigger if exists aaa_statement_pending_fence on public.%I',t);

@@ -1,4 +1,4 @@
-import { statementPendingAppEnabled, statementPendingActionAllowed, missingStatementPendingSchema, statementPendingRetry } from "./statementPendingAuthority.js";
+import { missingStatementPendingSchema, statementPendingRetry } from "./statementPendingAuthority.js";
 import crypto from "crypto";
 import { supabase } from "../supabaseAdmin.js";
 import { runPlaidSyncForItemForBusiness } from "../plaid/plaidSyncService.js";
@@ -40,14 +40,11 @@ async function loadBase({ businessId, transactionId, db = supabase }) {
 
 export async function getPendingResolutionContext({ businessId, transactionId, staleDays = PENDING_STALE_DAYS_DEFAULT, db = supabase }) {
   const { bank, cat, account, syncRun, replacement, replacementCandidates, replacementCheckVerified } = await loadBase({ businessId, transactionId, db });
-  const capability = statementPendingAppEnabled(businessId)
-    ? await db.rpc("statement_pending_capability", { p_business_id: businessId }) : { data: { enabled: false } };
-  const featureEnabled = !capability.error && capability.data?.enabled === true;
   // Read-only preview of the same accounting evidence checked atomically by
   // resolve_stale_pending_admin. Missing/denied checks never expose an action.
-  const accounting = featureEnabled ? await db.rpc("pending_accounting_block", {
+  const accounting = await db.rpc("pending_accounting_block", {
     p_business_id: businessId, p_transaction_id: transactionId,
-  }) : { error: null, data: "statement_pending_feature_disabled" };
+  });
   const ageDays = pendingAgeDays(bank);
   const provenance = bank.raw?.recovery_imported === true || bank.raw?.plaid_recovery_batch_id
     ? "replacement_card_recovery" : (bank.raw?.canonical_source || "normal_sync");
@@ -68,12 +65,11 @@ export async function getPendingResolutionContext({ businessId, transactionId, s
       suggested_gl_non_final: true,
     },
     lifecycle,
-    feature_enabled: featureEnabled,
     stale_threshold_days: staleDays,
     replacement,
     replacement_found: Boolean(replacement) || replacementCandidates.length > 0,
     replacement_candidates: replacementCandidates,
-    promotion_eligible: featureEnabled && replacementCheckVerified && !accounting.error && !accounting.data && bank.pending === true && !bank.is_archived && !bank.archived_reason && [null, "recent_pending", "stale_pending_check_required", "operator_settlement_confirmation_required"].includes(bank.pending_resolution_state || null)
+    promotion_eligible: replacementCheckVerified && !accounting.error && !accounting.data && bank.pending === true && !bank.is_archived && !bank.archived_reason && [null, "recent_pending", "stale_pending_check_required", "operator_settlement_confirmation_required"].includes(bank.pending_resolution_state || null)
       && ageDays >= PENDING_STALE_DAYS_DEFAULT && replacementCandidates.length === 0 && !replacement,
     promotion_disabled_reason: accounting.error ? "Pending evidence could not be verified." : accounting.data,
 
@@ -107,7 +103,6 @@ export async function refreshPendingStatus({ businessId, transactionId, actor, i
 }
 
 export async function confirmPendingSettled({ businessId, transactionId, actor, statementDate, statementAmount, reason, attested, idempotencyKey, month, db = supabase }) {
-  if (!await statementPendingActionAllowed(db, businessId, idempotencyKey)) throw fail("statement_pending_feature_disabled", "Statement resolution is not enabled for this business.");
   // The database rechecks every mutable predicate under the ingestion lock.
   const input = buildPendingSettlementRpcInput({ businessId, transactionId, actor, statementDate, statementAmount, note: reason, attested, idempotencyKey });
   const { data, error } = await statementPendingRetry(() => db.rpc("resolve_stale_pending_admin", {
@@ -121,7 +116,6 @@ export async function confirmPendingSettled({ businessId, transactionId, actor, 
 }
 
 export async function linkPendingReplacement({ businessId, transactionId, replacementTransactionId, actor, attested, idempotencyKey, month, db = supabase }) {
-  if (!await statementPendingActionAllowed(db, businessId, idempotencyKey)) throw fail("statement_pending_feature_disabled", "Statement resolution is not enabled for this business.");
   const { data, error } = await statementPendingRetry(() => db.rpc("resolve_stale_pending_admin", {
     p_business_id: businessId, p_transaction_id: transactionId, p_action: "use-posted-replacement",
     p_replacement_transaction_id: replacementTransactionId,

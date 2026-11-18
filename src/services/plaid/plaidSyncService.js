@@ -1,4 +1,4 @@
-import { missingStatementPendingSchema, statementPendingAppEnabled, statementPendingRetry } from "../bookkeeping/statementPendingAuthority.js";
+import { missingStatementPendingSchema, statementPendingRetry } from "../bookkeeping/statementPendingAuthority.js";
 import { registerSettledHandledAdmissions } from "../bookkeeping/autoPostAdmission.js";
 /* global process */
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
@@ -144,7 +144,7 @@ async function upsertRowsInChunks(db, table, rows, onConflict, chunkSize = 200) 
   if (!rows.length) return;
   for (let i = 0; i < rows.length; i += chunkSize) {
     const slice = rows.slice(i, i + chunkSize);
-    let result = table === "bank_transactions" && statementPendingAppEnabled(slice[0].business_id)
+    let result = table === "bank_transactions"
       ? await statementPendingRetry(() => db.rpc("write_plaid_bank_rows_serialized", {
         p_business_id: slice[0].business_id, p_rows: slice, p_update_existing: false,
       })) : null;

@@ -9,7 +9,6 @@ import { build } from "esbuild";
 import React from "react";
 import { create, act } from "react-test-renderer";
 import express from "express";
-import { statementPendingAppEnabled } from "../src/services/bookkeeping/statementPendingAuthority.js";
 import { invalidatePendingResolutionCaches, refreshPendingResolutionFeeds } from "../src/services/bookkeeping/pendingResolutionFeedRefresh.js";
 
 process.env.SUPABASE_URL = "http://127.0.0.1:54321";
@@ -32,7 +31,7 @@ const row = { id: TX, date: "2026-01-01", pending: true, amount: -10 };
 const eligible = { promotion_eligible: true, transaction: { ...row, pending_age_days: 30 } };
 const payload = { attested: true, statement_date: row.date, statement_amount: row.amount, idempotency_key: "persistent-operation" };
 
-function fakeDb({ bank = row, category = {}, candidates = [], candidateError = null, block = null, capability = true, staffActive = true, staffRole = "owner_admin" } = {}) {
+function fakeDb({ bank = row, category = {}, candidates = [], candidateError = null, block = null, staffActive = true, staffRole = "owner_admin" } = {}) {
   const calls = [], events = new Map();
   return { calls, events,
     from(table) {
@@ -49,7 +48,6 @@ function fakeDb({ bank = row, category = {}, candidates = [], candidateError = n
     },
     async rpc(name, args) {
       calls.push({ name, args });
-      if (name === "statement_pending_capability") return { data: { enabled: capability } };
       if (name === "pending_resolution_candidates") return { data: candidates, error: candidateError };
       if (name === "pending_accounting_block") return { data: block };
       assert.equal(name, "resolve_stale_pending_admin");
@@ -69,22 +67,22 @@ function adminReq(businessId = BIZ) {
 
 test("verified internal admin covers two unrelated businesses and a future business without business enablement", async () => {
   const db = fakeDb();
-  const oldFlag = process.env.STALE_PENDING_RESOLUTION_ENABLED;
-  process.env.STALE_PENDING_RESOLUTION_ENABLED = "true";
-  try { for (const businessId of [BIZ, OTHER, NEW]) {
-    assert.equal(statementPendingAppEnabled(businessId, { STALE_PENDING_RESOLUTION_ENABLED: "true" }), true);
+  delete process.env.STALE_PENDING_RESOLUTION_ENABLED;
+  delete process.env.STALE_PENDING_RESOLUTION_BUSINESS_IDS;
+  for (const businessId of [BIZ, OTHER, NEW]) {
     const scope = await pendingBooksAdminScope(adminReq(businessId), db);
     assert.equal(scope.businessId, businessId);
     assert.equal(scope.actor.id, STAFF);
+    const evidence = await getPendingResolutionContext({ ...scope, db });
+    assert.equal(evidence.promotion_eligible, true);
+    assert.equal("feature_enabled" in evidence, false);
     const result = await confirmPendingSettled({ ...scope, db, statementDate: row.date, statementAmount: row.amount,
       attested: true, idempotencyKey: `operation-${businessId}`, month: "2026-01-01" });
     assert.equal(result.business_id, businessId); assert.equal(result.status, "needs_review");
-  } } finally { if (oldFlag === undefined) delete process.env.STALE_PENDING_RESOLUTION_ENABLED; else process.env.STALE_PENDING_RESOLUTION_ENABLED = oldFlag; }
-  assert.equal(statementPendingAppEnabled(NEW, { STALE_PENDING_RESOLUTION_ENABLED: "false" }), false);
-  const sql = fs.readFileSync("supabase/migrations/20261118220000_stale_pending_global_admin_availability.sql", "utf8");
-  assert.doesNotMatch(sql, /business_allowlist|clients_ready/);
-  assert.match(sql, /f.enabled and not f.contained/);
-  assert.doesNotMatch(sql, /update|insert|alter table/i);
+  }
+  const authority = fs.readFileSync("src/services/bookkeeping/statementPendingAuthority.js", "utf8");
+  assert.doesNotMatch(authority, /process.env|statementPendingAppEnabled|statementPendingActionAllowed/);
+
 });
 
 test("customer owner/admin roles, supplied actors and forged view flags never grant authority", async () => {
@@ -115,7 +113,6 @@ test("Books direct customer tokens return HTTP 403; verified access records the 
   app.use("/api/bookkeeping", createPendingResolutionRouter({ db }));
   const server = app.listen(0, "127.0.0.1"); await new Promise(resolve => server.once("listening", resolve));
   const base = `http://127.0.0.1:${server.address().port}/api/bookkeeping/transactions/${TX}/pending-resolution`;
-  const oldFlag = process.env.STALE_PENDING_RESOLUTION_ENABLED; process.env.STALE_PENDING_RESOLUTION_ENABLED = "true";
   try {
     for (const method of ["GET", "POST"]) {
       const result = await fetch(base + (method === "POST" ? "/confirm-settled" : ""), { method, headers: { Authorization: "Bearer ordinary-customer", "Content-Type": "application/json", "x-bizzi-admin-view": "forged", "x-business-id": BIZ }, ...(method === "POST" ? { body: JSON.stringify(payload) } : {}) });
@@ -129,12 +126,10 @@ test("Books direct customer tokens return HTTP 403; verified access records the 
     assert.equal(db.calls.filter(c => c.name === "resolve_stale_pending_admin").length, 2);
     assert.equal(db.calls.at(-1).args.p_review_month, "2026-01-01");
     assert.equal(matchAdminBookkeepingWrite({ method: "POST", originalUrl: `/api/bookkeeping/transactions/${TX}/pending-resolution/confirm-settled` }).action, "confirm_stale_pending_statement");
-  } finally { await new Promise(resolve => server.close(resolve)); __setRequireAuthTestDeps(null); if (oldFlag === undefined) delete process.env.STALE_PENDING_RESOLUTION_ENABLED; else process.env.STALE_PENDING_RESOLUTION_ENABLED = oldFlag; }
+  } finally { await new Promise(resolve => server.close(resolve)); __setRequireAuthTestDeps(null); }
 });
 
 test("eligibility hides recent, conflict, removal, replacement, accounting and unknown evidence", async () => {
-  const oldFlag = process.env.STALE_PENDING_RESOLUTION_ENABLED; process.env.STALE_PENDING_RESOLUTION_ENABLED = "true";
-  try {
     assert.equal((await getPendingResolutionContext({ businessId: BIZ, transactionId: TX, db: fakeDb() })).promotion_eligible, true);
     for (const overrides of [
       { bank: { ...row, date: new Date().toISOString().slice(0, 10) } },
@@ -143,12 +138,10 @@ test("eligibility hides recent, conflict, removal, replacement, accounting and u
       { candidates: [{ id: "probable-replacement" }] }, { candidates: [{ id: "one" }, { id: "two" }] },
       { candidateError: { code: "PGRST202" } },
       ...["matched", "excluded", "reconciled", "receipt", "intent", "attempt"].map(block => ({ block })),
-      { capability: false },
     ]) assert.equal((await getPendingResolutionContext({ businessId: BIZ, transactionId: TX, db: fakeDb(overrides) })).promotion_eligible, false);
-  } finally { if (oldFlag === undefined) delete process.env.STALE_PENDING_RESOLUTION_ENABLED; else process.env.STALE_PENDING_RESOLUTION_ENABLED = oldFlag; }
 });
 
-test("Monthly Review and Books render the shared admin action; ordinary sessions never fetch capability", async () => {
+test("Monthly Review and Books render the shared admin action; ordinary sessions never request eligibility", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "stale-pending-ui-"));
   fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(temp, "node_modules"), "dir");
   const built = await build({ entryPoints: ["src/components/Accounting/StalePendingAction.jsx"], bundle: true, format: "esm", platform: "node", packages: "external", write: false,
@@ -192,7 +185,11 @@ test("Monthly Review and Books render the shared admin action; ordinary sessions
     assert.match(books, /onResolvePending=\{adminView.active && adminView.bookkeepingAccess && adminView.staffRole === "owner_admin"/);
     assert.match(books, /invalidatePendingResolutionCaches\(businessId/);
     assert.match(books, /refreshCounts: true/);
-    assert.match(fs.readFileSync("src/pages/Admin/MonthlyReviewConsole.jsx", "utf8"), /refreshPendingResolutionFeeds\(\{ counts: loadBookkeepingFeedCounts/);
+    const monthly = fs.readFileSync("src/pages/Admin/MonthlyReviewConsole.jsx", "utf8");
+    assert.match(monthly, /refreshPendingResolutionFeeds\(\{ counts: loadBookkeepingFeedCounts/);
+    assert.match(monthly, /onResolvePending=\{pendingResolutionAdmin \? handlePendingResolution : undefined\}/);
+    assert.doesNotMatch(monthly, /resolutionEnabled|pending_resolution_enabled/);
+    assert.doesNotMatch(fs.readFileSync("src/api/admin/monthlyReview.routes.js", "utf8"), /pendingResolutionCapability|pending_resolution_enabled/);
   } finally { if (priorDocument === undefined) delete global.document; else global.document = priorDocument; }
 });
 

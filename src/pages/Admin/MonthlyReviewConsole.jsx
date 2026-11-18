@@ -729,7 +729,6 @@ export default function MonthlyReviewConsole() {
           next[key] = {
             ...current[key],
             totalCount: Number(counts[key] || 0),
-            resolutionEnabled: key === "pending" ? data?.pending_resolution_enabled === true : false,
             resolutionCounts: key === "pending" ? data?.pending_resolution_counts || null : current[key]?.resolutionCounts || null,
           };
         });
@@ -2840,7 +2839,7 @@ export default function MonthlyReviewConsole() {
                   onConfirmIncomingDepositMatch={handleMirrorConfirmIncomingDepositMatch}
                   onRejectIncomingDepositMatch={handleMirrorRejectIncomingDepositMatch}
                   onResolutionChange={handleMirrorResolutionChange}
-                  onResolvePending={pendingResolutionAdmin && bookkeepingFeeds.pending?.resolutionEnabled ? handlePendingResolution : undefined}
+                  onResolvePending={pendingResolutionAdmin ? handlePendingResolution : undefined}
                   onCreateAccount={createMonthlyReviewQboAccount}
                   onCreatedAccountSelect={injectSourceLedgerAccount}
                   accountTypes={qboAccountTypes}

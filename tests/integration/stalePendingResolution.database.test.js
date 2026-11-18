@@ -24,7 +24,9 @@ function asyncSql(text) {
 }
 const actor = randomUUID();
 const migration = fs.readFileSync("supabase/migrations/20261117230000_stale_pending_admin_resolution.sql", "utf8");
-function fixture({ age = 20, enabled = true } = {}) {
+const availability = fs.readFileSync("supabase/migrations/20261118220000_stale_pending_global_admin_availability.sql", "utf8");
+const permanent = fs.readFileSync("supabase/migrations/20261118230000_stale_pending_permanent_admin_capability.sql", "utf8");
+function fixture({ age = 20 } = {}) {
  const business=randomUUID(),physical=randomUUID(),id=randomUUID(),key=randomUUID();
  sql(`insert into public.business_profiles(id,business_name,industry,team_size,state,services_offered,user_id) values('${business}','Synthetic','Synthetic',1,'NC','Synthetic','${actor}');
  insert into public.plaid_physical_accounts(id,business_id) values('${physical}','${business}');
@@ -34,9 +36,7 @@ function fixture({ age = 20, enabled = true } = {}) {
  insert into public.qbo_accounts_cache(business_id,realm_id,qbo_env,qbo_account_id,name,account_type) values('${business}','realm','production','source','Source','Bank'),('${business}','realm','production','meals','Meals','Expense');
  insert into public.plaid_qbo_account_mappings(business_id,plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type) values('${business}','${key}','source','Source','Bank');
  insert into public.bank_transactions(id,business_id,plaid_item_id,plaid_account_id,physical_account_id,plaid_env,plaid_transaction_id,date,authorized_date,name,merchant_name,amount,signed_amount,direction,pending)
- values('${id}','${business}','${key}','${key}','${physical}','production','pending-${id}',current_date-${age},current_date-${age},'Synthetic Merchant','Synthetic Merchant',-10,-10,'OUTFLOW',true);
- update public.statement_pending_feature set enabled=${enabled},contained=false;
- insert into public.statement_pending_business_allowlist(business_id,enabled,clients_ready) values('${business}',${enabled},${enabled});`);
+ values('${id}','${business}','${key}','${key}','${physical}','production','pending-${id}',current_date-${age},current_date-${age},'Synthetic Merchant','Synthetic Merchant',-10,-10,'OUTFLOW',true);`);
  return {business,physical,id,key,age};
 }
 function confirmSql(f,{request=randomUUID(),attested=true,actorId=actor}={}) {
@@ -69,7 +69,7 @@ test("statement Pending compatibility, release and posting on PostgreSQL",{timeo
    assert.equal(sql("select md5(pg_get_functiondef('public.get_bookkeeping_transactions_bounded(uuid,text,text,date,date,integer,integer)'::regprocedure))"),before);
   });
   sql(migration);sql(migration);
-  await t.test('compatibility schema reruns; legacy permissions remain; default off',()=>{
+  await t.test('historical compatibility schema reruns and legacy permissions remain',()=>{
    assert.equal(sql("select enabled from public.statement_pending_feature where singleton"),'f');
    assert.equal(sql("select has_function_privilege('service_role','public.confirm_pending_transaction_settled(uuid,uuid,uuid,text,date,numeric,text,text,integer)','EXECUTE')"),'t');
    assert.equal(sql("select has_function_privilege('authenticated','public.release_statement_pending_review(uuid,uuid,jsonb,text)','EXECUTE')"),'f');
@@ -81,10 +81,39 @@ test("statement Pending compatibility, release and posting on PostgreSQL",{timeo
    sql(migration);
   });
   sql(`insert into auth.users(id) values('${actor}');insert into public.internal_staff_users(user_id,role) values('${actor}','owner_admin');`);
-  await t.test('default-off DB gate and allowlist both required',()=>{
-   const f=fixture({enabled:false});assert.throws(()=>sql(confirmSql(f)),/feature_disabled/);
-   sql('update public.statement_pending_feature set enabled=true');assert.throws(()=>sql(confirmSql(f)),/feature_disabled/);
-   sql(`update public.statement_pending_business_allowlist set enabled=true where business_id='${f.business}'`);assert.throws(()=>sql(confirmSql(f)),/feature_disabled/);
+  sql(availability);
+  await t.test('permanent migration fails atomically; preserves existing containment and RPC ACLs; reruns safely',()=>{
+   const existing=fixture();
+   sql(`insert into public.pending_transaction_resolution_events(business_id,transaction_id,action,resulting_state,actor_user_id,idempotency_key,evidence)
+    values('${existing.business}','${existing.id}','refresh_status','stale_pending_check_required','${actor}','${randomUUID()}','{"existing_audit":true}');`);
+   const history=sql(`select md5(to_jsonb(b)::text)||(select count(*) from public.pending_transaction_resolution_events) from public.bank_transactions b where id='${existing.id}'`);
+   assert.throws(()=>sql(permanent.replace("notify pgrst, 'reload schema';","select 1/0; notify pgrst, 'reload schema';")),/division by zero/);
+   assert.equal(sql("select to_regclass('public.statement_pending_feature') is not null"),'t');
+   sql('update public.statement_pending_feature set contained=true');
+   const prior=sql("select proacl::text from pg_proc where oid='public.resolve_stale_pending_admin(uuid,uuid,uuid,text,text,boolean,date,numeric,uuid,text,date)'::regprocedure");
+   sql(permanent);sql(permanent);
+   assert.equal(sql(`select md5(to_jsonb(b)::text)||(select count(*) from public.pending_transaction_resolution_events) from public.bank_transactions b where id='${existing.id}'`),history);
+   assert.equal(sql("select contained from public.statement_pending_posting_containment where singleton"),'t');
+   assert.equal(sql("select proacl::text from pg_proc where oid='public.resolve_stale_pending_admin(uuid,uuid,uuid,text,text,boolean,date,numeric,uuid,text,date)'::regprocedure"),prior);
+   assert.equal(sql("select to_regclass('public.statement_pending_feature') is null and to_regclass('public.statement_pending_business_allowlist') is null"),'t');
+   assert.equal(sql("select to_regprocedure('public.statement_pending_capability(uuid)') is null and to_regprocedure('public.statement_pending_feature_enabled(uuid)') is null"),'t');
+   // No availability/configuration records are required, even for future businesses.
+   sql('delete from public.statement_pending_posting_containment');
+  });
+  await t.test('before-use rollback revokes mutation RPCs before removing permanent guards',()=>{
+   assert.equal(sql("select to_regclass('public.statement_pending_posting_containment') is not null"),'t');
+   const rollback=fs.readFileSync('supabase/rollback/stale_pending_before_use.sql','utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+   const result=JSON.parse(sql(`begin;${rollback}
+    select jsonb_build_object('can_resolve',has_function_privilege('service_role','public.resolve_stale_pending_admin(uuid,uuid,uuid,text,text,boolean,date,numeric,uuid,text,date)','execute'),
+     'can_release',has_function_privilege('service_role','public.release_statement_pending_review(uuid,uuid,jsonb,text)','execute'),
+     'guards',(select count(*) from pg_trigger where tgname='aaa_statement_pending_fence'));rollback;`));
+   assert.deepEqual(result,{can_resolve:false,can_release:false,guards:0});
+   assert.equal(sql("select has_function_privilege('service_role','public.resolve_stale_pending_admin(uuid,uuid,uuid,text,text,boolean,date,numeric,uuid,text,date)','execute')"),'t');
+  });
+  await t.test('multiple existing and newly created businesses can confirm without configuration records',()=>{
+   const first=fixture(),second=fixture();sql(confirmSql(first));sql(confirmSql(second));
+   const createdLater=fixture();sql(confirmSql(createdLater));
+   for(const f of [first,second,createdLater]) assert.equal(state(f),'statement_review_override');
   });
   await t.test('recent, unattested and cross-business requests fail',()=>{
    assert.throws(()=>sql(confirmSql(fixture({age:2}))),/pending_too_recent/);
@@ -202,14 +231,14 @@ test("statement Pending compatibility, release and posting on PostgreSQL",{timeo
    assert.throws(()=>sql(`set role authenticated;set request.jwt.claims='{"role":"authenticated","sub":"${randomUUID()}"}';select public.acquire_posting_lock('${f.business}','${f.id}',now()::text,600,'foreign');`),/scope_forbidden/);
   });
   await t.test('old backend RPC and old feed contracts remain available while the new feature is off',()=>{
-   const f=fixture({enabled:false});
+   const f=fixture();
    const result=JSON.parse(sql(`select public.confirm_pending_transaction_settled('${f.business}','${f.id}','${actor}','synthetic',current_date-1,10,null,'${randomUUID()}',1)`));
    assert.equal(result.state,'promoted_to_settled');
    assert.equal(sql(`select public.count_bookkeeping_transactions_bounded('${f.business}','needs_review')`),'1');
   });
-  await t.test('completed confirmation/release replays precede mutable eligibility, even with feature disabled',()=>{
+  await t.test('completed confirmation/release replays precede mutable eligibility without feature configuration',()=>{
    const f=fixture(),key=randomUUID(),rkey=randomUUID();const first=sql(confirmSql(f,{request:key}));const released=sql(releaseSql(f,{request:rkey}));
-   sql('update public.statement_pending_feature set enabled=false');sql(`update public.bank_transactions set is_archived=true where id='${f.id}'`);
+   sql(`update public.bank_transactions set is_archived=true where id='${f.id}'`);
    assert.equal(sql(confirmSql(f,{request:key})),first);
    assert.equal(sql(releaseSql(f,{request:rkey})),released);
    assert.throws(()=>sql(releaseSql(f,{request:rkey}).replace('"meals"','"foreign"')),/idempotency_key_reused/);
@@ -230,11 +259,14 @@ test("statement Pending compatibility, release and posting on PostgreSQL",{timeo
    await new Promise(r=>setTimeout(r,150));assert.throws(()=>sql(`set lock_timeout='100ms';${confirmSql(f,{request:key})}`),/lock timeout|account_busy/);
    await held;sql(confirmSql(f,{request:key}));
   });
-  await t.test('disabled new actions retain released guards; containment blocks posting without deleting evidence',()=>{
-   const f=fixture();sql(confirmSql(f));sql(releaseSql(f));sql('update public.statement_pending_feature set enabled=false');
+  await t.test('financial containment preserves posting protections without becoming a confirmation availability gate',()=>{
+   const f=fixture();sql(confirmSql(f));sql(releaseSql(f));
    const c=claim(f);assert.equal(sql(checkSql(f,context(f,c.intent))),'');
+   sql('insert into public.statement_pending_posting_containment(singleton,contained) values(true,false)');
    sql(fs.readFileSync('supabase/rollback/stale_pending_containment.sql','utf8'));
    assert.equal(sql(checkSql(f,context(f,c.intent))),'statement_pending_contained');finish(f);
+   const review=fixture();sql(confirmSql(review));assert.equal(state(review),'statement_review_override');
+   assert.throws(()=>sql(releaseSql(review)),/statement_pending_contained/);
    assert.throws(()=>sql(fs.readFileSync('supabase/rollback/stale_pending_before_use.sql','utf8')),/use_containment/);
   });
  }finally{docker(['rm','-f',container]);}

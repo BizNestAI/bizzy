@@ -1,4 +1,3 @@
-/* global process */
 const CONFIRMED = new Set(["statement_review_override", "statement_review_settled", "statement_review_released"]);
 export const isStatementPendingState = value => String(value || "").startsWith("statement_review_");
 export function hasStatementPendingAuthority(row = {}, { releasedOnly = true } = {}) {
@@ -14,9 +13,6 @@ export function statementPendingWorkflowRow(row = {}, { forApproval = false } = 
   return { ...row, provider_pending: row.provider_pending ?? row.pending, pending: false,
     accounting_review_required: ["statement_confirmed_pending", "statement_pending_provider_settled"].includes(row.accounting_review_reason) ? false : row.accounting_review_required };
 }
-export function statementPendingAppEnabled(businessId, env = process.env) {
-  return Boolean(businessId) && env.STALE_PENDING_RESOLUTION_ENABLED === "true";
-}
 export const missingStatementPendingSchema = error => ["PGRST202", "42883"].includes(error?.code);
 export async function statementPendingRetry(operation, { sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   let result;
@@ -28,13 +24,4 @@ export async function statementPendingRetry(operation, { sleep = ms => new Promi
     if (attempt < 2) await sleep(25 * (attempt + 1));
   }
   return result;
-}
-
-export async function statementPendingActionAllowed(db, businessId, idempotencyKey) {
-  if (statementPendingAppEnabled(businessId)) return true;
-  // Disable new actions while still letting a completed retry reach the DB's
-  // actor/payload-bound replay branch. An absent event never authorizes work.
-  const result = await db.from("pending_transaction_resolution_events").select("id")
-    .eq("business_id", businessId).eq("idempotency_key", idempotencyKey).limit(1).maybeSingle();
-  return !result.error && Boolean(result.data);
 }

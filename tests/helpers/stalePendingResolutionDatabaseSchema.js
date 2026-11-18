@@ -21,5 +21,9 @@ export function stalePendingResolutionDatabaseSchema({ includeMigration = true }
   for (const file of ["20260921_auto_post_backlog_safety.sql", "20260922_auto_post_scope_confirmation_rpc.sql", "20260925_atomic_bookkeeping_approval.sql", "20261013170000_settled_credit_card_inflow_approval.sql", "20260517_acquire_posting_lock_rpc.sql", "20261111220000_auto_post_handled_admission.sql", "20260918_books_review_pending_rpc_authority.sql"]) schema += fs.readFileSync(`supabase/migrations/${file}`, "utf8");
   const view = fs.readFileSync("supabase/migrations/20261020_canonical_bookkeeping_primary_feed.sql", "utf8");
   schema += view.slice(view.indexOf("create or replace view"), view.indexOf("-- Keep the deployed bounded"));
-  return schema + (includeMigration ? fs.readFileSync("supabase/migrations/20261117230000_stale_pending_admin_resolution.sql", "utf8") : "");
+  return schema + (includeMigration ? [
+    "20261117230000_stale_pending_admin_resolution.sql",
+    "20261118220000_stale_pending_global_admin_availability.sql",
+    "20261118230000_stale_pending_permanent_admin_capability.sql",
+  ].map(file => fs.readFileSync(`supabase/migrations/${file}`, "utf8")).join("\n") : "");
 }

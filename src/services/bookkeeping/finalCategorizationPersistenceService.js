@@ -1,4 +1,4 @@
-import { isStatementPendingState, statementPendingRetry, statementPendingActionAllowed } from "./statementPendingAuthority.js";
+import { isStatementPendingState, statementPendingRetry } from "./statementPendingAuthority.js";
 import { prepareHandledAdmissionRow, admitNewHandledRows } from "./autoPostAdmission.js";
 import crypto from "node:crypto";
 
@@ -82,7 +82,6 @@ export async function persistAuthoritativeFinalCategorizations({
   const ordinaryRows = approvals.filter(row => !isStatementPendingState(row.meta?.pending_resolution_state));
   const released = [];
   for (const row of statementRows) {
-    if (!await statementPendingActionAllowed(db, businessId, row.approval_idempotency_key)) throw new Error("statement_pending_feature_disabled");
     if (approvalSource === FINAL_CATEGORIZATION_SOURCES.AUTOMATIC) throw new Error("statement_pending_manual_category_required");
     const result = await statementPendingRetry(() => db.rpc("release_statement_pending_review", {
       p_business_id: businessId, p_actor_id: actorId, p_approval: row, p_idempotency_key: row.approval_idempotency_key,

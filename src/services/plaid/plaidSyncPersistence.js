@@ -1,4 +1,4 @@
-import { missingStatementPendingSchema, statementPendingAppEnabled, statementPendingRetry, isStatementPendingState } from "../bookkeeping/statementPendingAuthority.js";
+import { missingStatementPendingSchema, statementPendingRetry } from "../bookkeeping/statementPendingAuthority.js";
 // Persistence only: this module never invokes a worker or a provider.
 function identifier(value) {
   return typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,100}$/.test(value) ? value : null;
@@ -30,11 +30,10 @@ export async function updatePlaidBankRows({ db, businessId, rows, operation }) {
     if (!id || !businessId || (rowBusinessId && rowBusinessId !== businessId)) {
       throw Object.assign(new Error("plaid_update_scope_invalid"), { operation });
     }
-    const serialized = statementPendingAppEnabled(businessId) || isStatementPendingState(row.pending_resolution_state);
-    let result = serialized ? await statementPendingRetry(() => db.rpc("write_plaid_bank_rows_serialized", {
+    let result = await statementPendingRetry(() => db.rpc("write_plaid_bank_rows_serialized", {
       p_business_id: businessId, p_rows: [{ ...patch, id }], p_update_existing: true,
-    })) : null;
-    if (!result || missingStatementPendingSchema(result.error)) {
+    }));
+    if (missingStatementPendingSchema(result.error)) {
       // Additive rollout: ordinary persistence works before the optional RPC.
       // Installed DB triggers still fence already-resolved identities.
       result = await statementPendingRetry(() => db.from("bank_transactions").update(patch)
