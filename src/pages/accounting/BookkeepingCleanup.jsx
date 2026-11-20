@@ -860,7 +860,7 @@ function BookkeepingCleanup() {
   );
   const accountCacheBusinessIdRef = useRef(businessId);
   const { accounts: chartAccounts, setAccounts: setChartAccounts, ready: coaReady,
-    loading: coaLoading, error: coaError, reload: reloadCoa } = useBookkeepingChartOfAccounts({
+    error: coaError, reload: reloadCoa } = useBookkeepingChartOfAccounts({
     businessId, accessScope: adminView.active ? `admin:${adminView.businessId}:${adminView.expiresAt}` : "customer",
     demo: usingDemo, demoAccounts: CHART_OF_ACCOUNTS, load: fetchQboCoa,
   });
@@ -3860,9 +3860,9 @@ function BookkeepingCleanup() {
         </div>
       )}
 
-      {!usingDemo && (coaLoading || coaError) ? <div role={coaError ? "alert" : "status"} className="mb-3 text-sm text-amber-200">
-        {coaError || "Loading QuickBooks Chart of Accounts…"}
-        {coaError ? <button type="button" onClick={reloadCoa} className="ml-3 underline">Retry Chart of Accounts</button> : null}
+      {!usingDemo && coaError ? <div role="alert" className="mb-3 text-sm text-amber-200">
+        {coaError}
+        <button type="button" onClick={reloadCoa} className="ml-3 underline">Retry Chart of Accounts</button>
       </div> : null}
 
       {!usingDemo ? <ProcessingProgressNotice key={`${businessId}:${accountFilter}`} run={runProgress.run} error={runProgress.error}
