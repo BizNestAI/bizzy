@@ -1919,7 +1919,7 @@ function BookkeepingCleanup() {
     }
   };
 
-  const handleExclude = async (id) => {
+  const handleExclude = async (id, { expectedFeed = null } = {}) => {
     if (!businessId || !canBookkeepingWrite) return;
     const exclusionKey = String(id || "");
     if (!exclusionKey || exclusionInFlightRef.current.has(exclusionKey)) return false;
@@ -1945,7 +1945,7 @@ function BookkeepingCleanup() {
       transaction: txn,
     });
     try {
-      const result = await excludeTransaction(businessId, id, null, accountFilter);
+      const result = await excludeTransaction(businessId, id, expectedFeed === "handled" ? "operator_confirmed_already_posted" : null, accountFilter, { expectedFeed });
       updateAccountScopedExclusionCaches({ businessId, accountId: accountFilter, sourceTab: activeTab, transaction: txn, serverResult: result });
       window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: {
         severity: "success",

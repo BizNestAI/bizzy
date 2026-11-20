@@ -129,7 +129,7 @@ test("repeated exclusion state patches are idempotent", () => {
 test("exclude remains isolated from QBO, matching, categorization, and rule operations", () => {
   const handler = page.slice(page.indexOf("const handleExclude"), page.indexOf("const handleRestoreExcluded"));
   assert.doesNotMatch(handler, /createQbo|ManualPost|matchTransaction|categorize|createRule|learnRule/);
-  assert.match(handler, /excludeTransaction\(businessId, id, null, accountFilter\)/);
+  assert.match(handler, /excludeTransaction\(businessId, id, expectedFeed === "handled" \? "operator_confirmed_already_posted" : null, accountFilter, \{ expectedFeed \}\)/);
   assert.match(handler, /action:\s*\{ label: "Undo"/);
   assert.equal(classifyBookkeepingLifecycle({ status: "excluded", pre_exclusion_lifecycle: "handled" }).bucket, "excluded");
   assert.equal(classifyBookkeepingLifecycle({ status: "approved" }).bucket, "handled");

@@ -168,6 +168,9 @@ test("statement Pending compatibility, release and posting on PostgreSQL",{timeo
    // No availability/configuration records are required, even for future businesses.
    sql('delete from public.statement_pending_posting_containment');
   });
+  if (process.env.TEST_HANDLED_EXCLUSION_SAFETY === "1") {
+   sql(fs.readFileSync("supabase/migrations/20261120233000_handled_exclusion_posting_safety.sql", "utf8"));
+  }
   await t.test('before-use rollback revokes mutation RPCs before removing permanent guards',()=>{
    assert.equal(sql("select to_regclass('public.statement_pending_posting_containment') is not null"),'t');
    const rollback=fs.readFileSync('supabase/rollback/stale_pending_before_use.sql','utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');

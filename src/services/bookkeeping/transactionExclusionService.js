@@ -9,6 +9,8 @@ const ERROR_DEFINITIONS = {
   TRANSACTION_ACCOUNT_MISMATCH: [403, "Transaction does not belong to the selected account."],
   TRANSACTION_ALREADY_POSTED: [409, "A posted transaction cannot be excluded."],
   TRANSACTION_ALREADY_MATCHED: [409, "A matched transaction cannot be excluded."],
+  TRANSACTION_NOT_HANDLED: [409, "The transaction is no longer in Handled. Refresh before retrying."],
+  EXCLUSION_BUSY: [409, "Bookkeeping is updating this account. Retry shortly."],
   POSTING_IN_PROGRESS: [409, "Posting is currently in progress."],
   EXCLUSION_SCHEMA_NOT_READY: [500, "Transaction exclusion is temporarily unavailable."],
   TRANSACTION_EXCLUSION_FAILED: [500, "Transaction could not be excluded."],
@@ -29,13 +31,15 @@ export function mapTransactionExclusionDatabaseError(error = {}, correlationId =
   if (raw.includes("transaction_not_found")) code = "TRANSACTION_NOT_FOUND";
   else if (raw.includes("transaction_already_posted")) code = "TRANSACTION_ALREADY_POSTED";
   else if (raw.includes("transaction_already_matched")) code = "TRANSACTION_ALREADY_MATCHED";
+  else if (raw.includes("transaction_not_handled")) code = "TRANSACTION_NOT_HANDLED";
+  else if (["40001", "55P03", "57014"].includes(error?.code)) code = "EXCLUSION_BUSY";
   else if (raw.includes("posting_in_progress")) code = "POSTING_IN_PROGRESS";
   else if (error?.code === "23514" || error?.code === "PGRST202" || raw.includes("transaction_categorizations_status_check")) code = "EXCLUSION_SCHEMA_NOT_READY";
   const [status, message] = ERROR_DEFINITIONS[code];
   return new TransactionExclusionError(code, status, { correlationId }, message);
 }
 
-export async function excludeBookkeepingTransaction({ db, businessId, transactionId, accountId = null, actorId, reason = null, source = "books_review" }) {
+export async function excludeBookkeepingTransaction({ db, businessId, transactionId, accountId = null, actorId, reason = null, source = "books_review", expectedFeed = null }) {
   const correlationId = crypto.randomUUID();
   if (!UUID_PATTERN.test(String(transactionId || ""))) {
     throw new TransactionExclusionError("MALFORMED_TRANSACTION_ID", 400, { correlationId });
@@ -54,11 +58,11 @@ export async function excludeBookkeepingTransaction({ db, businessId, transactio
   if (categoryError) throw new TransactionExclusionError("TRANSACTION_EXCLUSION_FAILED", 500, { correlationId });
   const eligibility = getBookkeepingExclusionEligibility({ ...(category || {}), pending: bank.pending });
   if (!eligibility.eligible) throw mapTransactionExclusionDatabaseError({ message: eligibility.reason }, correlationId);
-  const { data, error } = await db.rpc("exclude_bookkeeping_transaction", {
+  const { data, error } = await db.rpc(expectedFeed === "handled" ? "exclude_handled_bookkeeping_transaction" : "exclude_bookkeeping_transaction", {
     p_business_id: businessId,
     p_transaction_id: transactionId,
     p_actor: actorId || "authenticated_user",
-    p_reason: reason || null,
+    p_reason: expectedFeed === "handled" ? "operator_confirmed_already_posted" : reason || null,
     p_source: source,
     p_correlation_id: correlationId,
   });

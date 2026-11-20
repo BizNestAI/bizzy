@@ -562,11 +562,11 @@ export async function updateHandledTransaction(businessId, transactionId, payloa
   return res;
 }
 
-export async function excludeTransaction(businessId, transactionId, reason = null, accountId = null) {
+export async function excludeTransaction(businessId, transactionId, reason = null, accountId = null, { expectedFeed = null } = {}) {
   return safeFetch(apiUrl(`/api/bookkeeping/transactions/${encodeURIComponent(transactionId)}/exclude`), {
     method: "POST",
     headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
-    body: JSON.stringify({ business_id: businessId, account_id: accountId, reason }),
+    body: JSON.stringify({ business_id: businessId, account_id: accountId, reason, expected_feed: expectedFeed }),
   });
 }
 

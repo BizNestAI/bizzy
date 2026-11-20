@@ -1,5 +1,6 @@
 import React from "react";
 import StalePendingAction from "./StalePendingAction.jsx";
+import HandledExcludeAction from "./HandledExcludeAction.jsx";
 import { getBookkeepingExclusionEligibility } from "../../services/bookkeeping/exclusionEligibility.js";
 import ReactDOM from "react-dom";
 import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
@@ -1051,11 +1052,11 @@ export default function BookkeepingFeed({
 }) {
   // Column widths (px) — draggable like QuickBooks
   const initialColWidths = React.useMemo(
-    () => (showQboSchedule ? [...BASE_COL_WIDTHS.slice(0, -1), QBO_COL_WIDTH, BASE_COL_WIDTHS[BASE_COL_WIDTHS.length - 1]] : BASE_COL_WIDTHS),
+    () => (showQboSchedule ? [...BASE_COL_WIDTHS.slice(0, -1), QBO_COL_WIDTH, 240] : BASE_COL_WIDTHS),
     [showQboSchedule]
   );
   const minColWidths = React.useMemo(
-    () => (showQboSchedule ? [...BASE_MIN_COL_WIDTHS.slice(0, -1), QBO_MIN_COL_WIDTH, BASE_MIN_COL_WIDTHS[BASE_MIN_COL_WIDTHS.length - 1]] : BASE_MIN_COL_WIDTHS),
+    () => (showQboSchedule ? [...BASE_MIN_COL_WIDTHS.slice(0, -1), QBO_MIN_COL_WIDTH, 240] : BASE_MIN_COL_WIDTHS),
     [showQboSchedule]
   );
   const [colWidths, setColWidths] = React.useState(initialColWidths);
@@ -1416,6 +1417,9 @@ export default function BookkeepingFeed({
             const isApproving = isNeedsReviewFeed && approvingTransactionIds.has(String(txn.id));
             const isHandledStatus = activeFeed === "handled" && ["approved", "auto_approved", "handled", "failed"].includes(String(txn.status || "").toLowerCase());
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
+            const handledExclusionEligible = activeFeed === "handled" && allowExclude
+              && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at && !txn.reconciled_at
+              && getBookkeepingExclusionEligibility(txn).eligible;
             const isExpanded = expandedRowId === txn.id;
             const incomingMatch = incomingDepositMatchState(txn);
             const quickBooksPaymentsProtected = incomingMatch.quickBooksPaymentsProtected === true;
@@ -1782,7 +1786,7 @@ export default function BookkeepingFeed({
                   </span>
                 </div>
               ) : null}
-              <div className="flex min-w-0 justify-center px-2" onClick={(e) => e.stopPropagation()}>
+              <div className="flex min-w-0 items-center justify-center gap-1.5 px-2" onClick={(e) => e.stopPropagation()}>
                 {isApproving ? (
                   <span role="status" className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-emerald-200/90">
                     <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -1799,18 +1803,22 @@ export default function BookkeepingFeed({
                       aria-label="Undo approval"
                       onClick={() => onUndo?.(txn.id)}
                       disabled={(readOnly && !adminBookkeepingAccess) || isPosting || !customerCanUndo}
-                      className="inline-flex min-h-8 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-white/15 bg-white/[0.04] px-3 text-[10px] font-semibold leading-none text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
+                      className="inline-flex min-h-7 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full border border-white/15 bg-white/[0.04] px-2 text-[10px] font-semibold leading-none text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       <RotateCcw size={11} aria-hidden="true" />
                       Undo
                     </button>
+                    {handledExclusionEligible ? (
+                      <HandledExcludeAction transactionId={txn.transactionId || txn.id} onExclude={onExclude}
+                        disabled={readOnly || isPosting || excludingTransactionIds.has(String(txn.transactionId || txn.id))} />
+                    ) : null}
                     {customerCanPost || isPosting ? (
                       <button
                         type="button"
                         aria-label={adminBookkeepingAccess ? "Retry failed QuickBooks posting" : "Post to QuickBooks"}
                         onClick={() => onManualPost?.(txn.id, customerPostAction)}
                         disabled={(readOnly && !adminBookkeepingAccess) || isPosting || incomingMatchAction.loading === true}
-                        className="inline-flex min-h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-sky-300/35 bg-sky-400/10 px-3 text-[10px] font-semibold leading-none text-sky-100 transition hover:bg-sky-400/16 disabled:cursor-not-allowed disabled:opacity-45"
+                        className="inline-flex min-h-7 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-sky-300/35 bg-sky-400/10 px-2 text-[10px] font-semibold leading-none text-sky-100 transition hover:bg-sky-400/16 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {isPosting ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
                         {postingActionLabel}
@@ -1912,6 +1920,10 @@ export default function BookkeepingFeed({
                   ✓
                 </button>
                 )}
+                {handledExclusionEligible && (!isHandledStatus || quickBooksPaymentsProtected) ? (
+                  <HandledExcludeAction transactionId={txn.transactionId || txn.id} onExclude={onExclude}
+                    disabled={readOnly || isPosting || excludingTransactionIds.has(String(txn.transactionId || txn.id))} />
+                ) : null}
              </div>
            </div>
            <div
@@ -1954,7 +1966,7 @@ export default function BookkeepingFeed({
                          </div>
                        </div>
                      ) : null}
-                     {allowExclude && getBookkeepingExclusionEligibility(txn).eligible ? (
+                     {allowExclude && getBookkeepingExclusionEligibility(txn).eligible && activeFeed !== "handled" ? (
                        <div className="mt-2 flex items-center justify-between gap-3 border-t border-white/8 pt-2">
                          <div className="min-w-0 text-[9px] text-slate-500">
                            {isPosting ? "Available after posting finishes." : "Hide from bookkeeping; restore later from Excluded."}

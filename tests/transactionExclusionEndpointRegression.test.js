@@ -92,3 +92,25 @@ test("migration permits Excluded and endpoint returns canonical structured error
   assert.match(route, /error:\s*\{ code: err\.code, message: err\.message, correlationId:/);
   assert.match(feedService, /transactionId:\s*row\.id/);
 });
+
+test("Handled confirmation uses the versioned safety adapter with a fixed audited reason", async () => {
+  const db = dbFixture({ category: { status: "approved", meta: {} } });
+  await excludeBookkeepingTransaction({ db, businessId: "11111111-1111-4111-8111-111111111111", transactionId: TXN_ID, actorId: "staff", expectedFeed: "handled", source: "admin_bookkeeping_access" });
+  assert.equal(db.calls[0].name, "exclude_handled_bookkeeping_transaction");
+  assert.equal(db.calls[0].params.p_reason, "operator_confirmed_already_posted");
+  assert.equal(db.calls[0].params.p_source, "admin_bookkeeping_access");
+});
+test("account serialization and lock timeouts map to retryable conflicts", () => {
+  for (const code of ["40001", "55P03", "57014"]) {
+    const error = mapTransactionExclusionDatabaseError({ code, message: "lock busy" });
+    assert.equal(error.status, 409); assert.equal(error.code, "EXCLUSION_BUSY");
+  }
+});
+
+test("a backend with an older schema fails closed instead of falling back to unsafe Handled exclusion", async () => {
+  const db = dbFixture({ category: { status: "approved", meta: {} } });
+  const names = [];
+  db.rpc = async name => { names.push(name); return { error: { code: "PGRST202", message: "missing function" } }; };
+  await assert.rejects(excludeBookkeepingTransaction({ db, businessId: "11111111-1111-4111-8111-111111111111", transactionId: TXN_ID, actorId: "staff", expectedFeed: "handled" }), error => error.code === "EXCLUSION_SCHEMA_NOT_READY");
+  assert.deepEqual(names, ["exclude_handled_bookkeeping_transaction"]);
+});
