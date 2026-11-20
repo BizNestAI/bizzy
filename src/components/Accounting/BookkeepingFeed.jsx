@@ -1631,7 +1631,7 @@ export default function BookkeepingFeed({
                     type="button"
                     onClick={() => onRestoreExcluded?.(txn.id)}
                     disabled={readOnly}
-                    className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-500/10 px-3 text-[10px] font-semibold text-emerald-100 disabled:opacity-45"
+                    className="inline-flex h-6 w-auto self-start items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2 text-[10px] font-semibold text-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-200 disabled:opacity-45"
                   >
                     Restore
                   </button>
@@ -1792,6 +1792,8 @@ export default function BookkeepingFeed({
                     <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                     Approving…
                   </span>
+                ) : activeFeed === "excluded" ? (
+                  <span className="text-[10px] text-slate-400">Excluded</span>
                 ) : isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (

@@ -1984,7 +1984,7 @@ function BookkeepingCleanup() {
   };
 
   const handleRestoreExcluded = async (id) => {
-    if (!businessId || !canRunAI) return;
+    if (!businessId || !canBookkeepingWrite) return;
     try {
       await restoreExcludedTransaction(businessId, id);
       excludedTransactionIdsRef.current.delete(String(id));
@@ -4020,7 +4020,7 @@ function BookkeepingCleanup() {
               allowCreditCardPaymentUndo={isHandledTab || isMatchedTab}
               allowIncomingDepositUndo={isMatchedTab}
               allowExclude={["needs_review", "handled", "pending"].includes(activeTab)}
-              showRestoreExcluded={isExcludedTab && !adminView.active}
+              showRestoreExcluded={isExcludedTab}
               allowedResolutionIds={adminView.bookkeepingAccess ? ["categorize_new", "match_existing_qbo", "match_credit_card_payment", "merchant_refund", "credit_card_statement_credit", "credit_card_credit_other"] : null}
               adminBookkeepingAccess={adminView.bookkeepingAccess === true}
               onResolvePending={adminView.active && adminView.bookkeepingAccess && adminView.staffRole === "owner_admin" ? handlePendingResolution : undefined}

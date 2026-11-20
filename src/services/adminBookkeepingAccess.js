@@ -18,6 +18,7 @@ const WRITE_RULES = Object.freeze([
   ["POST", /^\/api\/bookkeeping\/incoming-deposit-matches\/([^/]+)\/([^/]+)\/reject$/, "reject_existing_qbo_match"],
   ["POST", /^\/api\/bookkeeping\/incoming-deposit-matches\/([^/]+)\/([^/]+)\/undo$/, "undo_existing_qbo_match"],
   ["POST", /^\/api\/bookkeeping\/transactions\/([^/]+)\/exclude$/, "exclude_transaction"],
+  ["POST", /^\/api\/bookkeeping\/transactions\/([^/]+)\/restore$/, "restore_excluded_transaction"],
   ["POST", /^\/api\/bookkeeping\/posting\/transactions\/([^/]+)$/, "request_qbo_posting"],
   ["POST", /^\/api\/bookkeeping\/vendor-rules\/from-transaction$/, "create_vendor_rule_from_approval"],
   ["POST", /^\/api\/bookkeeping\/clarifications\/submit$/, "complete_operator_request"],

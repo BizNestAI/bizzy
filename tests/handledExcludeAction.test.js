@@ -8,7 +8,7 @@ import { build } from "esbuild";
 
 process.env.SUPABASE_URL = "http://127.0.0.1:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "local-test-only";
-const { createExcludeTransactionHandler } = await import("../src/api/bookkeeping/routes/bookkeeping.exclusions.routes.js");
+const { createExcludeTransactionHandler, createRestoreTransactionHandler } = await import("../src/api/bookkeeping/routes/bookkeeping.exclusions.routes.js");
 
 function db({ staffActive = true } = {}) {
   return { from(table) { const filters = {}; return { select() { return this; }, eq(k, v) { filters[k] = v; return this; }, async maybeSingle() {
@@ -24,7 +24,9 @@ const admin = () => ({ ...customer(), auth: { userId: "staff" }, business: { id:
 async function run(req, options = {}) {
   const calls = [];
   const response = { statusCode: 200, status(n) { this.statusCode = n; return this; }, json(body) { this.body = body; return this; } };
-  await createExcludeTransactionHandler({ db: db(options), exclude: async args => { calls.push(args); return { ok: true, excluded: true }; } })(req, response);
+  const operation = async args => { calls.push(args); return { ok: true, excluded: !options.restore, restored: options.restore === true }; };
+  const handler = options.restore ? createRestoreTransactionHandler({ db: db(options), restore: operation }) : createExcludeTransactionHandler({ db: db(options), exclude: operation });
+  await handler(req, response);
   return { ...response, calls };
 }
 test("customer and verified Admin View invoke the same canonical exclusion with server-derived audit identity", async () => {
@@ -75,4 +77,34 @@ test("Handled action group reserves room for Undo, Exclude and optional Retry wi
   assert.match(group,/Undo[\s\S]*HandledExcludeAction[\s\S]*customerCanPost/);
   assert.match(source,/QBO_COL_WIDTH, 240/); assert.match(source,/QBO_MIN_COL_WIDTH, 240/);
   assert.match(source,/gap-1.5 whitespace-nowrap/);
+});
+
+test("customer and verified Admin View restore through the existing operation with the real actor", async () => {
+  for (const req of [customer(), admin()]) {
+    const result = await run(req, { restore: true });
+    assert.equal(result.statusCode, 200); assert.equal(result.body.restored, true);
+    assert.equal(result.calls[0].actorId, req.auth.userId);
+    assert.equal(result.calls[0].businessId, "11111111-1111-4111-8111-111111111111");
+  }
+  const { matchAdminBookkeepingWrite } = await import("../src/services/adminBookkeepingAccess.js");
+  assert.equal(matchAdminBookkeepingWrite({ method: "POST", originalUrl: "/api/bookkeeping/transactions/txn-a/restore" }).action, "restore_excluded_transaction");
+});
+test("restore rejects expired, inactive, spoofed, cross-business and read-only access", async () => {
+  const expired = admin(); expired.tenantContext.expiresAt = "2000-01-01";
+  const spoofed = admin(); spoofed.auth.userId = "customer";
+  const cross = admin(); cross.body.business_id = "22222222-2222-4222-8222-222222222222";
+  const readOnly = customer(); readOnly.tenantContext = { mode: "customer", readOnly: true };
+  for (const req of [expired, spoofed, cross, readOnly]) {
+    const result = await run(req, { restore: true }); assert.equal(result.statusCode, 403); assert.equal(result.calls.length, 0);
+  }
+  assert.equal((await run(admin(), { restore: true, staffActive: false })).statusCode, 403);
+});
+test("Excluded feed exposes compact Restore in both sessions and never offers approval", () => {
+  const page = fs.readFileSync("src/pages/accounting/BookkeepingCleanup.jsx", "utf8");
+  const feed = fs.readFileSync("src/components/Accounting/BookkeepingFeed.jsx", "utf8");
+  assert.match(page, /showRestoreExcluded=\{isExcludedTab\}/);
+  assert.match(page, /const handleRestoreExcluded = async \(id\) => \{\s*if \(!businessId \|\| !canBookkeepingWrite\) return/);
+  const restore = feed.slice(feed.indexOf("{showRestoreExcluded ? ("), feed.indexOf(") : isPosted ? (", feed.indexOf("{showRestoreExcluded ? (")));
+  assert.match(restore, /h-6 w-auto self-start/);
+  assert.match(feed, /activeFeed === "excluded" \? \(/);
 });
