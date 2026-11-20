@@ -1,0 +1,4 @@
+# Isolated release planning only. No local historical migration bootstrap.
+project_id = "stale-pending-release"
+[db]
+major_version = 17

@@ -1,0 +1,86 @@
+{
+  "captured_at": "2026-11-19T17:26:45.359903+00:00",
+  "provenance": {
+    "project_ref": "zwufvvrmjbymgyjntdzk",
+    "project_identity_source": "operator attribution; not encoded by query",
+    "attachment_sha256": "6e3653a4ae4d72cb011a4eb558f8b573f8ac8b5826079a9def7eeeea8f30b7cc"
+  },
+  "counts": {
+    "relations": 222,
+    "columns": 3674,
+    "functions": 329,
+    "triggers": 108,
+    "constraints": 985,
+    "indexes": 808,
+    "policies": 173,
+    "dependencies": 782,
+    "default_acls": 6
+  },
+  "scope_counts": {
+    "relations": 45,
+    "functions": 88,
+    "triggers": 37
+  },
+  "unchanged_previously_captured_functions": [
+    "acquire_posting_lock(uuid,uuid,timestamp with time zone,integer,text)",
+    "admit_handled_auto_post(uuid,boolean,numeric,integer,boolean,uuid[],text,timestamp with time zone,text,timestamp with time zone,uuid,date,text)",
+    "approve_bookkeeping_with_admission(uuid,uuid,text,jsonb,boolean)",
+    "auto_post_technical_block(transaction_categorizations,text,jsonb,date)",
+    "claim_qbo_posting_intent(uuid,uuid,text,text,text,text,text,jsonb,timestamp with time zone,integer)",
+    "classify_bookkeeping_primary_feed(boolean,text,text,text,jsonb,text,timestamp with time zone,timestamp with time zone)",
+    "confirm_pending_transaction_settled(uuid,uuid,uuid,text,date,numeric,text,text,integer)",
+    "count_bookkeeping_transactions_bounded(uuid,text,text,date,date)",
+    "get_bookkeeping_transactions_bounded(uuid,text,text,date,date,integer,integer)",
+    "link_pending_transaction_replacement(uuid,uuid,uuid,uuid,text,text)"
+  ],
+  "missing_previously_assumed_functions": [
+    "protect_plaid_processing_cohort()",
+    "record_plaid_processing_outcome()"
+  ],
+  "missing_previously_assumed_triggers": [
+    "protect_plaid_processing_cohort",
+    "record_plaid_processing_outcome"
+  ],
+  "core_column_comparison": "No proven drift; fresh export adds numeric typmod detail missing from old UDT-only capture.",
+  "unverified": [
+    "project identity operator-attributed; no project identifier in SQL output",
+    "auth.users is an id-only local seed boundary; no production auth data copied",
+    "production operational drain/lock baseline not checked in this local task",
+    "production database ownership/DDL authority is an operational preflight check; local DB owner is postgres"
+  ],
+  "assessment": "GO for scoped stale-Pending release; cohort regression is pre-existing and not a dependency",
+  "supplement_captured_at": "2026-11-19T18:26:41.365168+00:00",
+  "effective_privileges": {
+    "postgres": "NOSUPERUSER, BYPASSRLS, captured role flags/configuration and memberships",
+    "executor": "UPDATE(posting_hold_batch_id) only; no UPDATE(meta) or table-wide UPDATE",
+    "postgrest": "authenticator login; SET service_role/authenticated/anon through captured membership flags",
+    "metadata_equivalence": "column ordinals/ACLs, all 16 role records, all 21 membership edges, three schema ACLs, default ACLs and auth.uid matched locally",
+    "sequences_custom_types": "no scoped sequence, enum or vector dependency; unrelated objects retained as metadata, not installed"
+  },
+  "cohort_disposition": "out of scope, unchanged broad test remains failing; see reports/followups/plaid-processing-cohort-production-drift.md",
+  "supplement_counts": {
+    "columns": 3674,
+    "roles": 16,
+    "memberships": 21,
+    "schemas": 3,
+    "sequences": 5,
+    "enums": 5,
+    "extensions": 7,
+    "relation_kinds": 222,
+    "default_acls": 6
+  },
+  "validation": {
+    "core_database": "33 passed",
+    "focused": "45 passed",
+    "permission_regressions": "4 passed; exact narrow column grant, no widened permission",
+    "persistence": "30 passing subtests, 1 unchanged pre-existing cohort failure; parent fails accordingly",
+    "runner_plan": [
+      "20261117230000",
+      "20261118220000",
+      "20261118230000"
+    ],
+    "build": "passed; existing chunk warning",
+    "lint": "targeted passed",
+    "diff": "passed"
+  }
+}

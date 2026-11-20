@@ -1,0 +1,35 @@
+{
+  "project_ref": "zwufvvrmjbymgyjntdzk",
+  "files": [
+    {
+      "file": "20260808174146_remote_schema.sql",
+      "version": "20260808174146",
+      "sha256": "e5ad76bc52d7cd0d41126de73fe500dd972012e20f9466ce3fdf0087cf5f66f8",
+      "recorded": true
+    },
+    {
+      "file": "20261111220000_auto_post_handled_admission.sql",
+      "version": "20261111220000",
+      "sha256": "eeb894f94728fc2d5361fb2af1784312462ddf3041eb7faf4feeb65def6f5dec",
+      "recorded": true
+    },
+    {
+      "file": "20261117230000_stale_pending_admin_resolution.sql",
+      "version": "20261117230000",
+      "sha256": "9057db9cdd59f24ae585564db7a7402c628c3e7f136fbcd0fa9ff49e87b31c74",
+      "recorded": false
+    },
+    {
+      "file": "20261118220000_stale_pending_global_admin_availability.sql",
+      "version": "20261118220000",
+      "sha256": "5171d0f4a2ba5ed623b8c7eed8b29e468a721078086a51a46fe245dfc04dce8a",
+      "recorded": false
+    },
+    {
+      "file": "20261118230000_stale_pending_permanent_admin_capability.sql",
+      "version": "20261118230000",
+      "sha256": "e32db0af4dc0a3061da9a0b9fd1413c9c7d65b0616513ad0d588f0590b32f996",
+      "recorded": false
+    }
+  ]
+}

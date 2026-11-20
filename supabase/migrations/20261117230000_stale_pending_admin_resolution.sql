@@ -21,6 +21,30 @@ revoke all on public.statement_pending_feature,public.statement_pending_business
 -- Only migration/admin principals can enable this DB gate; service-role readers
 -- use the narrow capability RPC. Disablement never removes existing row guards.
 
+-- These are release prerequisites, not optional modules. Validate before
+-- altering existing schema or installing adapters.
+-- Never silently skip the installed production posting lock or scheduler.
+do $$ declare sig text; begin
+ foreach sig in array array[
+ 'public.get_bookkeeping_transactions_bounded(uuid,text,text,date,date,integer,integer)',
+ 'public.count_bookkeeping_transactions_bounded(uuid,text,text,date,date)',
+ 'public.classify_bookkeeping_primary_feed(boolean,text,text,text,jsonb,text,timestamptz,timestamptz)',
+ 'public.auto_post_technical_block(public.transaction_categorizations,text,jsonb,date)',
+ 'public.admit_handled_auto_post(uuid,boolean,numeric,integer,boolean,uuid[],text,timestamptz,text,timestamptz,uuid,date,text)',
+ 'public.claim_qbo_posting_intent(uuid,uuid,text,text,text,text,text,jsonb,timestamptz,integer)',
+ 'public.acquire_posting_lock(uuid,uuid,timestamptz,integer,text)',
+ 'public.approve_bookkeeping_with_admission(uuid,uuid,text,jsonb,boolean)'] loop
+  if to_regprocedure(sig) is null then
+   raise exception 'statement_pending_required_contract_missing: %',sig;
+  end if;
+ end loop;
+ if to_regclass('public.bookkeeping_transaction_feed_classification') is null
+ or not exists(select 1 from pg_constraint where conrelid='public.bank_transactions'::regclass
+  and conname='bank_transactions_pending_resolution_state_check') then
+  raise exception 'statement_pending_original_classification_contract_required';
+ end if;
+end $$;
+
 do $$ declare sig text; o oid; begin
  foreach sig in array array[
  'public.get_bookkeeping_transactions_bounded(uuid,text,text,date,date,integer,integer)',
@@ -29,7 +53,7 @@ do $$ declare sig text; o oid; begin
  'public.auto_post_technical_block(public.transaction_categorizations,text,jsonb,date)',
  'public.admit_handled_auto_post(uuid,boolean,numeric,integer,boolean,uuid[],text,timestamptz,text,timestamptz,uuid,date,text)',
  'public.claim_qbo_posting_intent(uuid,uuid,text,text,text,text,text,jsonb,timestamptz,integer)',
- 'public.acquire_posting_lock(uuid,uuid,text,integer,text)',
+ 'public.acquire_posting_lock(uuid,uuid,timestamptz,integer,text)',
  'public.approve_bookkeeping_with_admission(uuid,uuid,text,jsonb,boolean)'] loop
   o:=to_regprocedure(sig);
   if o is not null then insert into public.statement_pending_installation_snapshot values(sig,pg_get_functiondef(o)) on conflict do nothing; end if;
@@ -974,10 +998,11 @@ do $$ declare r record; o oid; def text; body text; rewritten text; start_at int
  for r in select * from (values
  ('public.admit_handled_auto_post(uuid,boolean,numeric,integer,boolean,uuid[],text,timestamptz,text,timestamptz,uuid,date,text)','p_ids'),
  ('public.claim_qbo_posting_intent(uuid,uuid,text,text,text,text,text,jsonb,timestamptz,integer)','array[p_transaction_id]'),
- ('public.acquire_posting_lock(uuid,uuid,text,integer,text)','array[p_transaction_id]'),
+ ('public.acquire_posting_lock(uuid,uuid,timestamptz,integer,text)','array[p_transaction_id]'),
  ('public.approve_bookkeeping_with_admission(uuid,uuid,text,jsonb,boolean)','array(select (value->>''transaction_id'')::uuid from jsonb_array_elements(p_approvals))')
  ) v(sig,ids) loop
   o:=to_regprocedure(r.sig);
+  if o is null then raise exception 'statement_pending_required_contract_missing: %',r.sig; end if;
   if o is not null then
    def:=pg_get_functiondef(o);
    if position('public.lock_statement_pending_ids' in def)=0 then
@@ -991,18 +1016,22 @@ do $$ declare r record; o oid; def text; body text; rewritten text; start_at int
    end if;
    select pg_get_userbyid(proowner) into owner_name from pg_proc where oid=o;
    execute format('grant execute on function public.lock_statement_pending_ids(uuid,uuid[]) to %I',owner_name);
-   execute format('alter function %s set lock_timeout to ''2s''',o::regprocedure);
-   execute format('alter function %s set statement_timeout to ''15s''',o::regprocedure);
+   -- Preserve the production posting lock's existing configuration verbatim.
+   -- Its added advisory fence is nonblocking; resolution/release RPCs retain
+   -- their bounded timeouts. Other adapters keep their established limits.
+   if r.sig<>'public.acquire_posting_lock(uuid,uuid,timestamptz,integer,text)' then
+    execute format('alter function %s set lock_timeout to ''2s''',o::regprocedure);
+    execute format('alter function %s set statement_timeout to ''15s''',o::regprocedure);
+   end if;
   end if;
  end loop;
 end $$;
 
--- Adapt the existing scheduling/compiler predicate only when that installed
--- contract exists. Refuse unknown drift rather than silently replacing it.
--- On a staged deployment without that module the compatibility schema is valid;
--- activation tests must verify the deployed scheduler before enabling a business.
+-- The installed scheduling/compiler predicate is mandatory. Unknown drift
+-- aborts this transaction rather than leaving a partial release path.
 do $$ declare o oid; def text; begin
  o:=to_regprocedure('public.auto_post_technical_block(public.transaction_categorizations,text,jsonb,date)');
+ if o is null then raise exception 'statement_pending_scheduler_contract_required'; end if;
  if o is not null then
   def:=pg_get_functiondef(o);
   if position('public.statement_pending_authority(b)' in def)=0 then

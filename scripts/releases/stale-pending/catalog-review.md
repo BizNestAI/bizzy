@@ -1,0 +1,186 @@
+# Fresh production catalog review
+
+Captured: 2026-11-19T17:26:45.359903+00:00
+
+Full source metadata: `tests/fixtures/stalePendingProduction/catalog.json`. Hash/provenance are retained there. The public catalog and supplement reproduce scoped effective privileges. Project identity is operator-attributed. auth.users remains an id-only seed boundary.
+
+The runner README explains verified drift, supplemented privileges, lock behavior and the scoped GO verdict.
+
+## Every incorporated function definition
+
+- `tax_user_owns_business(uuid)`
+- `refresh_billing_identity_summary_from_billing()`
+- `enforce_business_profile_onboarding_status()`
+- `claim_bookkeeping_processing_requests(text,integer,timestamp with time zone)`
+- `get_operator_request_counts_bounded(uuid)`
+- `enforce_bookkeeping_review_posting_state()`
+- `plaid_residual_reconciliation_snapshot(uuid,text,text,uuid)`
+- `assert_plaid_residual_operator_scope(uuid,text,text,uuid,uuid)`
+- `assert_plaid_recovery_operator(uuid)`
+- `touch_internal_admin_view_sessions_updated_at()`
+- `bizzi_current_user_is_business_member(uuid)`
+- `business_profile_has_active_qbo_connection(uuid)`
+- `prevent_business_profile_identity_reassignment()`
+- `business_profile_has_active_plaid_connection(uuid)`
+- `refresh_business_profile_onboarding_status_from_integration()`
+- `audit_bookkeeping_lifecycle_transition()`
+- `refresh_billing_identity_summary_from_business_profile()`
+- `refresh_billing_identity_summary_from_user_profile()`
+- `prevent_user_business_link_identity_reassignment()`
+- `set_updated_at()`
+- `set_user_profiles_full_name()`
+- `tc_sync_txn_fields_from_bank_transactions()`
+- `billing_effective_bool(boolean,boolean,boolean)`
+- `count_bookkeeping_transactions_bounded(uuid,text,text,date,date)`
+- `get_bookkeeping_transactions_bounded(uuid,text,text,date,date,integer,integer)`
+- `billing_effective_status(text,text,text)`
+- `billing_effective_text(text,text,text)`
+- `billing_effective_timestamptz(timestamp with time zone,timestamp with time zone,timestamp with time zone)`
+- `bizzi_current_user_can_manage_business(uuid)`
+- `refresh_business_profile_onboarding_status(uuid)`
+- `acquire_posting_lock(uuid,uuid,timestamp with time zone,integer,text)`
+- `enforce_active_credit_card_payment_pair_membership()`
+- `approve_bookkeeping_transactions_atomic(uuid,uuid,text,jsonb,boolean)`
+- `validate_credit_card_payment_pair_business()`
+- `refresh_operator_request_summary_after_business_scope_change()`
+- `refresh_operator_request_summary(uuid)`
+- `claim_qbo_posting_intent(uuid,uuid,text,text,text,text,text,jsonb,timestamp with time zone,integer)`
+- `set_internal_staff_users_updated_at()`
+- `claim_credit_card_payment_pair_posting(uuid,uuid,text,text,timestamp with time zone,integer)`
+- `confirm_pending_transaction_settled(uuid,uuid,uuid,text,date,numeric,text,text,integer)`
+- `confirm_auto_post_effective_date_scope(uuid,text,date,uuid,uuid[],integer,integer,integer,text,timestamp with time zone,jsonb)`
+- `touch_bookkeeping_processing_requests_updated_at()`
+- `bookkeeping_transaction_matches_status(text,text,jsonb,text)`
+- `classify_bookkeeping_posting_outcome(text,text,text,timestamp with time zone,timestamp with time zone,jsonb,text,timestamp with time zone)`
+- `exclude_bookkeeping_transaction(uuid,uuid,text,text,text,text)`
+- `prevent_stale_stripe_entitlement_update()`
+- `restore_bookkeeping_transaction(uuid,uuid,text,text,text)`
+- `classify_bookkeeping_primary_feed(boolean,text,text,text,jsonb,text,timestamp with time zone,timestamp with time zone)`
+- `prevent_uncontrolled_qbo_realm_change()`
+- `reject_immutable_financial_evidence_mutation()`
+- `refresh_billing_identity_summary(uuid)`
+- `audit_handled_posting_job_invariants(uuid)`
+- `sync_bookkeeping_posting_job()`
+- `release_plaid_sync_lease(uuid,uuid,text)`
+- `claim_plaid_sync_lease(uuid,uuid,text,integer)`
+- `confirm_plaid_replacement_account_lineage(uuid,text,text,uuid,text,uuid)`
+- `bootstrap_plaid_replacement_recovery(uuid,text,text,uuid)`
+- `select_plaid_replacement_recovery_account(uuid,text,text,text,uuid)`
+- `begin_plaid_recovery_preview_rebuild(uuid,text,text,uuid,uuid,text)`
+- `confirm_plaid_replacement_lineage_and_advance(uuid,text,text,uuid,text,uuid)`
+- `link_pending_transaction_replacement(uuid,uuid,uuid,uuid,text,text)`
+- `invalidate_reporting_config_on_qbo_realm_change()`
+- `set_plaid_account_connection_state(uuid,text,text,uuid,text,text,bigint)`
+- `tax_vehicle_serialize_evidence()`
+- `ensure_plaid_transaction_categorizations(uuid,uuid[])`
+- `complete_plaid_sync_admission(uuid,uuid,uuid,text,text,text,uuid[],timestamp with time zone,integer,integer,integer,integer)`
+- `classify_plaid_account_recovery_rows(uuid,text,text)`
+- `plaid_residual_recovery_snapshot(uuid,text,text)`
+- `get_plaid_account_recovery_facts(uuid,text,text)`
+- `preview_plaid_residual_orphan_recovery(uuid,text,text,uuid)`
+- `apply_plaid_residual_orphan_recovery(uuid,text,text,uuid,uuid)`
+- `auto_post_technical_block(transaction_categorizations,text,jsonb,date)`
+- `plaid_residual_reconciliation_rows(uuid,uuid)`
+- `protect_plaid_residual_recovery_hold()`
+- `clear_approved_plaid_residual_holds(uuid,uuid,uuid,uuid[])`
+- `preview_plaid_residual_reconciliation(uuid,text,text,uuid,uuid)`
+- `release_plaid_residual_reconciliation(uuid,text,text,uuid,uuid,uuid,uuid[],jsonb,boolean)`
+- `record_plaid_reconnect_verification(uuid,text,text,uuid,text,jsonb)`
+- `guard_plaid_reconnect_sync_lease()`
+- `finish_plaid_reconnect_checkpoint()`
+- `plaid_bounded_recovery_fingerprint(uuid)`
+- `admit_handled_auto_post(uuid,boolean,numeric,integer,boolean,uuid[],text,timestamp with time zone,text,timestamp with time zone,uuid,date,text)`
+- `validate_plaid_bounded_recovery(uuid,text,text,uuid,jsonb)`
+- `stage_plaid_bounded_recovery(uuid,text,text,uuid,jsonb,text,jsonb,jsonb)`
+- `admit_plaid_recovery_batch(uuid,uuid,text,uuid[],uuid)`
+- `approve_bookkeeping_with_admission(uuid,uuid,text,jsonb,boolean)`
+- `auto_post_admission_meta(jsonb,jsonb)`
+- `check_auto_post_technical_integrity(uuid,uuid,text,jsonb)`
+
+## Every incorporated relation
+
+- `accounting_period_closes`
+- `bank_qbo_match_history`
+- `bank_qbo_match_items`
+- `bank_qbo_matches`
+- `bank_sync_runs`
+- `bank_transactions`
+- `bizzi_vendors`
+- `bookkeeping_approval_events`
+- `bookkeeping_auto_post_backlog_releases`
+- `bookkeeping_exclusion_events`
+- `bookkeeping_lifecycle_events`
+- `bookkeeping_post_attempts`
+- `bookkeeping_posting_jobs`
+- `bookkeeping_processing_requests`
+- `bookkeeping_transaction_feed_classification`
+- `business_billing`
+- `business_financial_reporting_config`
+- `business_financial_reporting_config_audit`
+- `business_profiles`
+- `clarification_requests`
+- `credit_card_payment_pair_events`
+- `credit_card_payment_pairs`
+- `financial_monthly_review_stamps`
+- `internal_admin_view_sessions`
+- `internal_staff_users`
+- `monthly_review_qbo_pnl_snapshots`
+- `monthly_review_runs`
+- `operator_request_summaries`
+- `pending_transaction_resolution_events`
+- `plaid_account_connection_audit`
+- `plaid_account_lineage_decisions`
+- `plaid_accounts`
+- `plaid_items`
+- `plaid_physical_accounts`
+- `plaid_qbo_account_mappings`
+- `plaid_recovery_batch_rows`
+- `plaid_recovery_batches`
+- `plaid_replacement_account_candidates`
+- `qbo_accounts_cache`
+- `qbo_posted_transactions`
+- `quickbooks_tokens`
+- `subscriptions`
+- `transaction_categorizations`
+- `user_business_link`
+- `user_profiles`
+
+## Every incorporated trigger
+
+- `plaid_items.trg_plaid_items_updated_at`
+- `plaid_accounts.trg_plaid_accounts_updated_at`
+- `transaction_categorizations.trg_transaction_categorizations_updated_at`
+- `qbo_posted_transactions.trg_qbo_posted_transactions_updated_at`
+- `bank_transactions.trg_bank_transactions_updated_at`
+- `bank_sync_runs.trg_bank_sync_runs_updated_at`
+- `user_profiles.trg_user_profiles_full_name`
+- `plaid_qbo_account_mappings.trg_plaid_qbo_account_mappings_updated_at`
+- `transaction_categorizations.trg_tc_sync_txn_fields`
+- `clarification_requests.trg_clarification_requests_updated_at`
+- `business_billing.trg_business_billing_identity_summary`
+- `business_profiles.trg_business_profiles_billing_identity_summary`
+- `user_profiles.trg_user_profiles_billing_identity_summary`
+- `business_profiles.trg_business_profiles_identity_immutable`
+- `user_business_link.trg_user_business_link_identity_immutable`
+- `quickbooks_tokens.trg_quickbooks_tokens_refresh_business_onboarding_status`
+- `plaid_items.trg_plaid_items_refresh_business_onboarding_status`
+- `plaid_accounts.trg_plaid_accounts_refresh_business_onboarding_status`
+- `bookkeeping_processing_requests.trg_bookkeeping_processing_requests_updated_at`
+- `business_profiles.trg_operator_request_summary_business_scope`
+- `credit_card_payment_pairs.validate_credit_card_payment_pair_business_trg`
+- `internal_admin_view_sessions.internal_admin_view_sessions_touch_updated_at`
+- `internal_staff_users.trg_internal_staff_users_updated_at`
+- `business_profiles.trg_business_profiles_onboarding_status`
+- `transaction_categorizations.trg_enforce_bookkeeping_review_posting_state`
+- `transaction_categorizations.trg_audit_bookkeeping_lifecycle_transition`
+- `credit_card_payment_pairs.enforce_active_credit_card_payment_pair_membership_trg`
+- `business_billing.trg_business_billing_stale_stripe_event`
+- `quickbooks_tokens.trg_quickbooks_tokens_realm_immutable`
+- `transaction_categorizations.transaction_categorizations_sync_posting_job`
+- `business_financial_reporting_config_audit.business_financial_reporting_config_audit_immutable`
+- `quickbooks_tokens.quickbooks_tokens_invalidate_reporting_config`
+- `bank_transactions.tax_vehicle_serialize_evidence`
+- `transaction_categorizations.protect_residual_category_hold`
+- `plaid_recovery_batches.protect_residual_batch_hold`
+- `plaid_items.guard_plaid_reconnect_sync_lease`
+- `bank_sync_runs.finish_plaid_reconnect_checkpoint`

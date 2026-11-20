@@ -21,7 +21,7 @@ async function loadBase({ businessId, transactionId, db = supabase }) {
   if (!bank) throw fail("transaction_not_found", "The pending transaction no longer exists.", 404);
   const [{ data: cat, error: catError }, { data: account, error: accountError }, { data: syncRun, error: syncError }] = await Promise.all([
     db.from("transaction_categorizations").select("status,review_status,posting_status,suggested_qbo_account_id,suggested_qbo_account_name,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,posted_at,reconciled_at,meta,updated_at").eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle(),
-    db.from("plaid_accounts").select("plaid_account_id,name,official_name,mask,type,subtype,plaid_item_id,last_sync_at").eq("business_id", businessId).eq("plaid_account_id", bank.plaid_account_id).maybeSingle(),
+    db.from("plaid_accounts").select("id,plaid_account_id,name,official_name,mask,type,subtype,plaid_item_id,last_sync_at").eq("business_id", businessId).eq("plaid_env", bank.plaid_env).eq("plaid_item_id", bank.plaid_item_id).eq("plaid_account_id", bank.plaid_account_id).maybeSingle(),
     db.from("bank_sync_runs").select("status,started_at,finished_at,added_count,modified_count,removed_count,failure_code").eq("business_id", businessId).eq("plaid_item_id", bank.plaid_item_id).eq("status", "completed").order("finished_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
   if (catError) throw catError;
@@ -55,6 +55,7 @@ export async function getPendingResolutionContext({ businessId, transactionId, s
     transaction: {
       ...bank,
       merchant: bank.merchant_name || bank.name,
+      provider_account_record_id: account?.id || null,
       pending_age_days: ageDays,
       account_name: account?.official_name || account?.name || null,
       account_mask: account?.mask || null,

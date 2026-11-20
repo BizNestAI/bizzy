@@ -95,8 +95,6 @@ begin
   if nullif(x->>'auto_post_block_reason','') is not null and not(x->>'auto_post_block_reason'=any(stale)) then return 'retained_posting_blocker'; end if;
   return null;
 end $$;
-
-
 -- This namespace has a hard 4096-byte UTF8 budget, four recent whitelisted
 -- entries, and saturating summary counters. Unrelated transaction meta is kept.
 create or replace function public.auto_post_admission_meta(p_meta jsonb,p_entry jsonb)
@@ -121,7 +119,6 @@ begin
   if octet_length(old::text)>4096 then raise exception 'admission_evidence_budget_exceeded'; end if;
   return jsonb_set(m,'{auto_post_admission}',old,true);
 end $$;
-
 -- One transaction, one explicit policy-row lock, no predicate fences or continuation
 -- state. Explicit operations evaluate <=2000 rows, otherwise fail before writes.
 create or replace function public.admit_handled_auto_post(
@@ -208,7 +205,6 @@ begin
  return jsonb_build_object('ok',true,'enabled',true,'auto_post_to_quickbooks',true,'auto_post_effective_date',p.auto_post_effective_date,'auto_post_scope_mode',p.auto_post_scope_mode,'auto_post_enabled_at',p.auto_post_enabled_at,'state','complete','event_at',anchor,'post_after',case when eligible>0 then due end,'posting_grace_hours',p_grace_hours,
   'evaluated',n,'scheduled',eligible,'scheduled_backlog_count',eligible,'handled_backlog_count',n,'already_scheduled',existing,'technically_blocked',blocked,'reason_counts',reasons,'stale_state_corrected',corrected,'retryable_failure_count',0);
 end $$;
-
 -- Canonical new-decision adapter. Preserve an existing durable deadline under
 -- the SAME bank/categorization row locks already used by atomic approval. The
 -- old approval RPC stays unchanged and the adapter is dormant until called.
@@ -234,7 +230,6 @@ begin
  end loop;
  return query select * from public.approve_bookkeeping_transactions_atomic(p_business_id,p_actor_id,p_actor_type,approvals,p_require_needs_review);
 end $$;
-
 create or replace function public.check_auto_post_technical_integrity(p_business_id uuid,p_transaction_id uuid,p_env text default 'production',p_context jsonb default null)
 returns text language plpgsql stable security definer set search_path=pg_catalog,public as $$
 declare c public.transaction_categorizations; pair public.credit_card_payment_pairs; leg uuid; b public.bank_transactions; ctx jsonb; reason text;
@@ -269,7 +264,6 @@ begin
  if c.transaction_id is null then return 'bank_transaction_missing'; end if;
  return public.auto_post_technical_block(c,p_env,p_context,null);
 end $$;
-
 do $$ declare f regprocedure; begin
  for f in select p.oid::regprocedure from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in ('auto_post_technical_block','auto_post_admission_meta','admit_handled_auto_post','check_auto_post_technical_integrity','approve_bookkeeping_with_admission') loop
   execute format('alter function %s owner to postgres',f);

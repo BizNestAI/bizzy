@@ -18,8 +18,14 @@ function docker(args, input) {
   if (r.status !== 0) throw new Error(`docker ${args[0]} failed: ${r.stderr}`);
   return r.stdout.trim();
 }
+let fixtureLoaded=false;
 function sql(text) {
-  return docker(["exec", "-i", name, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-At"], text);
+  return docker(["exec", "-i", name, "psql", "-U", fixtureLoaded?"postgres":"supabase_admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-At"], text);
+}
+
+// Synthetic auth-user setup only; application/migration SQL stays postgres.
+function seedAuthUser(actor){
+ return docker(["exec","-i",name,"psql","-U","supabase_admin","-d","postgres","-v","ON_ERROR_STOP=1","-At"],`insert into auth.users(id) values('${actor}');`);
 }
 
 const pause = () => new Promise(r => setTimeout(r, 150));
@@ -47,7 +53,7 @@ function failRpc(database, rpcName) {
 
 async function appliedReconciliationCohort(count) {
   const f=await fixture(),actor=randomUUID(),tag=randomUUID();
-  sql(`insert into auth.users(id) values ('${actor}');`);
+  seedAuthUser(actor);
   await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
   const events=Array.from({length:count+1},(_,i)=>event(f,`review-${tag}-${i}`));
   await assert.rejects(sync(f,{added:events},failRpc(db,"complete_plaid_sync_admission")));
@@ -69,16 +75,16 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
   let proxy;
   try {
     docker(["network", "create", "--internal", network]);
-    docker(["run", "--pull=never", "--name", name, "--network", network, "-e", "POSTGRES_PASSWORD=local-only", "-d", "postgres:17"]);
+    docker(["run", "--pull=never", "--name", name, "--network", network, "-e", "POSTGRES_USER=supabase_admin", "-e", "POSTGRES_DB=postgres", "-e", "POSTGRES_PASSWORD=local-only", "-d", "postgres:17"]);
     for (let i = 0; i < 100; i++) {
-      const r = spawnSync("docker", ["exec", name, "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]);
+      const r = spawnSync("docker", ["exec", name, "pg_isready", "-h", "127.0.0.1", "-U", "supabase_admin"]);
       if (r.status === 0) break;
       await pause();
     }
     await t.test("managed non-superuser role creator rejects ADMIN regrant; temporary ownership transfer remains restricted", () => {
       sql(`create role managed_migration_fixture login createrole;
         grant create, usage on schema public to managed_migration_fixture with grant option;`);
-      const rejected = spawnSync("docker", ["exec", "-i", name, "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-At"], {
+      const rejected = spawnSync("docker", ["exec", "-i", name, "psql", "-U", fixtureLoaded?"postgres":"supabase_admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-At"], {
         input: `set session authorization managed_migration_fixture;
           create role managed_executor_fixture nologin noinherit;
           grant managed_executor_fixture to managed_migration_fixture with admin true, inherit true, set true;`, encoding: "utf8"
@@ -104,9 +110,11 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
         drop owned by managed_executor_fixture; drop role managed_executor_fixture;
         drop owned by managed_migration_fixture; drop role managed_migration_fixture;`);
     });
-    sql(schema());
+    sql(schema({includeScopeCorrection:true}));
+    sql("alter role authenticator password 'local-only';");
+    fixtureLoaded=true;
     const port = docker(["run", "--pull=never", "--name", apiName, "--network", network,
-      "-e", `PGRST_DB_URI=postgres://postgres:local-only@${name}:5432/postgres`,
+      "-e", `PGRST_DB_URI=postgres://authenticator:local-only@${name}:5432/postgres`,
       "-e", "PGRST_DB_SCHEMAS=public", "-e", "PGRST_DB_ANON_ROLE=anon", "-e", `PGRST_JWT_SECRET=${secret}`,
       "-d", "public.ecr.aws/supabase/postgrest:v16.4"]);
     assert.ok(port);
@@ -128,6 +136,21 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
       return originalFetch(input instanceof Request ? new Request(target, input) : target, ...args);
     };
     t.after(() => { globalThis.fetch = originalFetch; });
+    await t.test("isolated release PostgREST exposes timestamptz lock and private admin operation without customer EXECUTE", async()=>{
+      const lock=await db.rpc('acquire_posting_lock',{p_business_id:randomUUID(),p_transaction_id:randomUUID(),p_now_iso:new Date().toISOString(),p_lock_stale_seconds:600,p_idempotency_key:'synthetic-first-key'});
+      assert.equal(lock.error,null,JSON.stringify(lock.error));assert.equal(lock.data,false);
+      const input={p_business_id:randomUUID(),p_transaction_id:randomUUID(),p_actor_user_id:randomUUID(),p_action:'confirm-settled',p_idempotency_key:randomUUID(),p_attested:true};
+      const service=await db.rpc('resolve_stale_pending_admin',input);
+      assert.equal(service.error?.message,'internal_admin_required');
+      const customerToken=await new SignJWT({role:'authenticated',sub:randomUUID()}).setProtectedHeader({alg:'HS256'}).setExpirationTime('1h').sign(Buffer.from(secret));
+      const response=await fetch(`${url}/rpc/resolve_stale_pending_admin`,{method:'POST',headers:{Authorization:`Bearer ${customerToken}`,'Content-Type':'application/json'},body:JSON.stringify(input)});
+      assert.equal(response.status,403);assert.equal((await response.json()).code,'42501');
+      const openapi=await (await fetch(url,{headers:{Authorization:`Bearer ${token}`,Accept:'application/openapi+json'}})).json();
+      const properties=openapi.paths['/rpc/acquire_posting_lock'].post.parameters.find(x=>x.in==='body').schema.properties;
+      assert.equal(properties.p_now_iso.format,'timestamp with time zone');
+      assert.ok(openapi.paths['/rpc/resolve_stale_pending_admin']);
+      assert.equal(openapi.paths['/rpc/statement_pending_capability'],undefined);
+    });
     ({ runSyncForItem: runSync } = await import("../../src/services/plaid/plaidSyncService.js"));
     ({ updatePlaidBankRows: updateRows, safePlaidPersistenceDiagnostic: diagnostics } = await import("../../src/services/plaid/plaidSyncPersistence.js"));
     ({ getPlaidAccountRecoveryStatus: getRecoveryStatus } = await import("../../src/services/plaid/plaidAccountRecoveryStatus.js"));
@@ -138,7 +161,7 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
 
     await t.test("normal manual approval service releases statement evidence and retries through its durable approval event", async () => {
       const biz=randomUUID(),physical=randomUUID(),txn=randomUUID(),key=randomUUID(),actor=randomUUID();
-      sql(`insert into auth.users(id) values('${actor}');
+      seedAuthUser(actor);sql(`
        insert into public.internal_staff_users(user_id,role) values('${actor}','owner_admin');
        insert into public.business_profiles(id,business_name,industry,team_size,state,services_offered) values('${biz}','Synthetic','Synthetic',1,'NC','Synthetic');
        insert into public.plaid_physical_accounts(id,business_id) values('${physical}','${biz}');
@@ -248,7 +271,7 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
       assert.equal(repeat.status,"identity_review_required");
       assert.deepEqual((await ok(get("plaid_replacement_account_candidates").eq("id",candidate.id)))[0],candidate);
       await assert.rejects(confirmReplacementAccountLineage({businessId:business,plaidItemId:f.key,candidateId:candidate.id,priorPlaidAccountId:f.key,actorUserId:actor,db}));
-      sql(`insert into auth.users(id) values ('${actor}');`);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
+      seedAuthUser(actor);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
       await confirmReplacementAccountLineage({businessId:business,plaidItemId:f.key,candidateId:candidate.id,priorPlaidAccountId:f.key,actorUserId:actor,db});
       const [account]=await ok(get("plaid_accounts").eq("plaid_account_id",newId));assert.equal(account.physical_account_id,physical.id);
       assert.equal((await ok(get("plaid_qbo_account_mappings").eq("plaid_account_id",newId)))[0].qbo_account_id,"same-ledger");
@@ -270,7 +293,7 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
     await t.test("proven gap shares bounded preview, classifier, atomic admission and exact reviewed release; no cursor/posting side effects",async()=>{
       const { completePlaidReconnect }=await import("../../src/services/plaid/plaidReconnectService.js");
       const { createReplacementRecoveryPreview,admitReplacementRecoveryBatch,releaseReplacementRecoveryHold }=await import("../../src/services/plaid/plaidReplacementRecoveryService.js");
-      const f=await fixture(),actor=randomUUID();sql(`insert into auth.users(id) values ('${actor}');`);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
+      const f=await fixture(),actor=randomUUID();seedAuthUser(actor);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
       const [physical]=await ok(db.from("plaid_physical_accounts").insert({business_id:business,plaid_env:"production",confidence:"manual"}).select());
       await ok(db.from("plaid_accounts").update({physical_account_id:physical.id}).eq("business_id",business).eq("plaid_account_id",f.key));
       await ok(db.from("plaid_qbo_account_mappings").insert({business_id:business,plaid_account_id:f.key,qbo_account_id:"gap-ledger",qbo_account_name:"Synthetic card",qbo_account_type:"CreditCard",source:"manual"}));
@@ -322,7 +345,7 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
     await t.test("shared historical preview protects CSV/manual overlap, pending lifecycle and represented QBO rows",async()=>{
       const { completePlaidReconnect }=await import("../../src/services/plaid/plaidReconnectService.js");
       const { createReplacementRecoveryPreview,admitReplacementRecoveryBatch }=await import("../../src/services/plaid/plaidReplacementRecoveryService.js");
-      const f=await fixture(),actor=randomUUID();sql(`insert into auth.users(id) values ('${actor}');`);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
+      const f=await fixture(),actor=randomUUID();seedAuthUser(actor);await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
       const [physical]=await ok(db.from("plaid_physical_accounts").insert({business_id:business,plaid_env:"production",confidence:"manual"}).select());
       await ok(db.from("plaid_accounts").update({physical_account_id:physical.id}).eq("business_id",business).eq("plaid_account_id",f.key));
       await ok(db.from("plaid_qbo_account_mappings").insert({business_id:business,plaid_account_id:f.key,qbo_account_id:"overlap-ledger",qbo_account_name:"Synthetic",qbo_account_type:"CreditCard",source:"manual"}));
@@ -650,7 +673,7 @@ test("production-shaped Plaid persistence and durable admission (Postgres + Post
 
     await t.test("operator reconciliation smoke: categorization preserves hold and exact release has no posting side effects",async()=>{
       const f=await fixture(),actor=randomUUID();
-      sql(`insert into auth.users(id) values ('${actor}');`);
+      seedAuthUser(actor);
       await ok(db.from("internal_staff_users").insert({user_id:actor,role:"operator"}));
       const events=[event(f,"reconcile-replayed"),event(f,"reconcile-safe")];
       await assert.rejects(sync(f,{added:events},failRpc(db,"complete_plaid_sync_admission")));

@@ -25,8 +25,7 @@ function getStoredBusinessId() {
   );
 }
 
-async function fetchOnboardingStatus(businessId, options = {}) {
-  void options;
+async function fetchOnboardingStatus(businessId) {
   if (!businessId) {
     return { ...INITIAL_STATE, loading: false };
   }
@@ -61,6 +60,7 @@ export default function useOnboardingStatus(options = {}) {
 
   const [state, setState] = useState(INITIAL_STATE);
   const mountedRef = useRef(true);
+  const requestRef = useRef(0);
 
   useEffect(() => {
     return () => {
@@ -69,10 +69,11 @@ export default function useOnboardingStatus(options = {}) {
   }, []);
 
   const refresh = useCallback(async (opts = {}) => {
+    const request = ++requestRef.current;
     const silent = Boolean(opts?.silent);
-    if (!businessId) {
+    if (!businessId || adminView?.active || adminView?.loading) {
       if (mountedRef.current) {
-        setState({ ...INITIAL_STATE, loading: false });
+        setState({ ...INITIAL_STATE, loading: false, businessProfileComplete: null, qbConnected: null, plaidConnected: null, onboardingComplete: null });
       }
       return;
     }
@@ -80,19 +81,16 @@ export default function useOnboardingStatus(options = {}) {
       setState((prev) => ({ ...prev, loading: true, error: null }));
     }
     try {
-      const next = await fetchOnboardingStatus(businessId, {
-        adminView: adminView?.active === true,
-        contextBusiness: businessCtx?.currentBusiness || null,
-      });
-      if (mountedRef.current) {
+      const next = await fetchOnboardingStatus(businessId);
+      if (mountedRef.current && request === requestRef.current) {
         setState(next);
       }
     } catch (err) {
-      if (mountedRef.current) {
+      if (mountedRef.current && request === requestRef.current) {
         setState((prev) => ({ ...prev, loading: false, error: err }));
       }
     }
-  }, [businessId, adminView?.active, businessCtx?.currentBusiness]);
+  }, [businessId, adminView?.active, adminView?.loading]);
 
   useEffect(() => {
     refresh();

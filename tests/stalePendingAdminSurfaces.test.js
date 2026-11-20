@@ -201,3 +201,17 @@ test("success refreshes both Monthly feeds/counts and invalidates all scoped Boo
   const storage = { get length() { return data.size; }, key: i => [...data.keys()][i], removeItem: key => data.delete(key) };
   invalidatePendingResolutionCaches(BIZ, storage); assert.deepEqual([...data.keys()], [otherKey]);
 });
+
+test("both admin surfaces reload the canonical bank/provider identity using exact scoped account lookup",async()=>{
+ const bank={...row,plaid_env:'production',plaid_account_id:'provider-account',plaid_item_id:'provider-item',physical_account_id:null};
+ const db=fakeDb({bank});const original=db.from.bind(db);const scopes=[];
+ db.from=table=>{
+  if(table!=='plaid_accounts')return original(table);
+  const filters={};const q={select(){return q;},eq(key,value){filters[key]=value;return q;},async maybeSingle(){scopes.push(filters);return {data:{id:'durable-provider-record',plaid_account_id:'provider-account'}};}};return q;
+ };
+ for(const surface of ['monthly-review','open-bookkeeping-access']){
+  const context=await getPendingResolutionContext({businessId:BIZ,transactionId:TX,db});
+  assert.equal(context.transaction.id,TX,surface);assert.equal(context.transaction.provider_account_record_id,'durable-provider-record');assert.equal(context.transaction.physical_account_id,null);
+ }
+ assert.deepEqual(scopes,[0,1].map(()=>({business_id:BIZ,plaid_env:'production',plaid_item_id:'provider-item',plaid_account_id:'provider-account'})));
+});
