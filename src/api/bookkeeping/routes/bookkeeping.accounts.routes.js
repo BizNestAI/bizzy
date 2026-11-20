@@ -4,10 +4,10 @@ import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
-import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.js";
+import { readBookkeepingChartOfAccounts } from "../../../services/bookkeeping/bookkeepingChartOfAccounts.js";
+import { bookkeepingAccountReadScope } from "../../_shared/bookkeepingAccountReadScope.js";
 import { getBookkeepingStartDate } from "../../../services/bookkeeping/bookkeepingScope.js";
 import { countBookkeepingTransactions } from "../../../services/bookkeeping/bookkeepingTransactionFeedService.js";
-import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../../_shared/tenantAuth.js";
 import { projectPlaidAccountConnectionState, projectPlaidSyncAvailability } from "../../../services/plaid/plaidAccountConnectionState.js";
 
 const router = Router();
@@ -122,24 +122,23 @@ router.get("/accounts", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/qbo/coa", requireAuth, async (req, res) => {
-  const businessId = ensureBusinessId(req, res);
-  if (!businessId) return;
-  if (isAdminViewRequest(req)) {
-    return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_provider_refresh_blocked", status: 403 });
-  }
-  try {
-    const forceRefresh = req.query?.refresh === "1" || req.query?.refresh === "true";
-    const coa = await fetchChartOfAccounts(businessId, { forceRefresh });
-    return res.json({
-      ok: true,
-      accounts: coa || [],
-      meta: { source: "quickbooks_chart_of_accounts", includes_subaccounts: true, refreshed: forceRefresh },
-    });
-  } catch (err) {
-    console.error("[bookkeeping][coa] failed", err?.message || err);
-    return res.status(500).json({ ok: false, error: "coa_fetch_failed", message: err?.message || "failed" });
-  }
-});
+export function createChartOfAccountsHandler({ db = supabase, readAccounts = readBookkeepingChartOfAccounts } = {}) {
+  return async (req, res) => {
+    const businessId = ensureBusinessId(req, res);
+    if (!businessId) return;
+    res.set("Cache-Control", "no-store");
+    try {
+      const scope = await bookkeepingAccountReadScope(req, db, businessId);
+      const forceRefresh = req.query?.refresh === "1" || req.query?.refresh === "true";
+      if (scope.cacheOnly && forceRefresh) return res.status(403).json({ ok: false, error: "admin_view_provider_refresh_blocked" });
+      const result = await readAccounts({ db, ...scope, forceRefresh });
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error("[bookkeeping][coa] failed", err?.message || err);
+      return res.status(err.status || 500).json({ ok: false, error: err.code || "coa_fetch_failed", message: err?.message || "failed" });
+    }
+  };
+}
+router.get("/qbo/coa", requireAuth, createChartOfAccountsHandler());
 
 export default router;

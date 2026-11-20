@@ -353,6 +353,7 @@ export async function postReadyPostingBacklogTransactions(businessId, transactio
 export async function getQboCoa(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/qbo/coa"), {
     method: "GET",
+    cache: "no-store",
     headers: withBizHeaders(businessId),
   });
 }

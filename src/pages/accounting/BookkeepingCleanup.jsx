@@ -1,3 +1,4 @@
+import { useBookkeepingChartOfAccounts } from "../../hooks/bookkeeping/useBookkeepingChartOfAccounts.js";
 import { admissionNotice, shouldRefreshAdmission, admissionRefreshDelay, ADMISSION_REFRESH_LIMIT } from "../../utils/autoPostAdmissionView.js";
 import useProcessingRunProgress from '../../hooks/useProcessingRunProgress.js';
 import ProcessingProgressNotice from '../../components/Accounting/ProcessingProgressNotice.jsx';
@@ -491,42 +492,6 @@ function isInconsistentEmptyTransactionPage(payload = {}) {
   return rows.length === 0 && Number(total || 0) > 0;
 }
 
-function derivePersistedChartAccountsFromTransactions(rows = []) {
-  const byId = new Map();
-  const byName = new Map();
-  const addAccount = (id, name, type = null) => {
-    const cleanName = typeof name === "string" ? name.trim() : "";
-    if (!cleanName) return;
-    const cleanId = typeof id === "string" && id.trim() ? id.trim() : `persisted:${cleanName.toLowerCase()}`;
-    const account = {
-      id: cleanId,
-      name: cleanName,
-      fullyQualifiedName: cleanName,
-      type: type || "unknown",
-      account_type: type || null,
-      persisted: true,
-    };
-    if (!byId.has(cleanId)) byId.set(cleanId, account);
-    if (!byName.has(cleanName.toLowerCase())) byName.set(cleanName.toLowerCase(), account);
-  };
-
-  (Array.isArray(rows) ? rows : []).forEach((txn) => {
-    addAccount(
-      txn.glAccountId || txn.final_qbo_account_id || txn.finalQboAccountId || txn.suggestedAccountId || null,
-      txn.glAccountName ||
-        txn.final_qbo_account_name ||
-        txn.finalQboAccountName ||
-        txn.suggestedAccountName ||
-        txn.suggested_qbo_account_name ||
-        null,
-      txn.glAccountType || txn.final_qbo_account_type || txn.suggestedAccountType || null
-    );
-  });
-
-  return Array.from(new Map([...byId, ...byName].map(([, account]) => [account.id, account])).values()).sort((a, b) =>
-    String(a.name || "").localeCompare(String(b.name || ""))
-  );
-}
 
 function SummaryCard({ value, label, subtext }) {
   return (
@@ -894,14 +859,10 @@ function BookkeepingCleanup() {
     usingDemo ? DEMO_ACCOUNT_LIST : readAccountCardCache(businessId)
   );
   const accountCacheBusinessIdRef = useRef(businessId);
-  const [chartAccounts, setChartAccounts] = useState(() => {
-    if (!usingDemo) return [];
-    const byType = { income: [], expense: [], equity: [], other: [] };
-    CHART_OF_ACCOUNTS.forEach((acct) => {
-      if (byType[acct.type]) byType[acct.type].push(acct);
-      else byType.other.push(acct);
-    });
-    return [...byType.income, ...byType.expense, ...byType.equity, ...byType.other];
+  const { accounts: chartAccounts, setAccounts: setChartAccounts, ready: coaReady,
+    loading: coaLoading, error: coaError, reload: reloadCoa } = useBookkeepingChartOfAccounts({
+    businessId, accessScope: adminView.active ? `admin:${adminView.businessId}:${adminView.expiresAt}` : "customer",
+    demo: usingDemo, demoAccounts: CHART_OF_ACCOUNTS, load: fetchQboCoa,
   });
   const [qboAccountTypes, setQboAccountTypes] = useState([]);
   const rawTransactions = React.useMemo(() => (usingDemo ? TXN_DATA : []), [usingDemo]);
@@ -1580,7 +1541,7 @@ function BookkeepingCleanup() {
       const next = [...(current || []).filter((item) => String(item.id) !== String(nextAccount.id)), nextAccount];
       return next.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
     });
-  }, []);
+  }, [setChartAccounts]);
 
   function Select({ value, onChange, options, className = "" }) {
     const [open, setOpen] = useState(false);
@@ -1797,7 +1758,7 @@ function BookkeepingCleanup() {
   };
 
   const handleApprove = async (id, newAccountId = null) => {
-    if (!canBookkeepingWrite) return;
+    if (!canBookkeepingWrite || !coaReady) return;
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -1828,7 +1789,8 @@ function BookkeepingCleanup() {
       return;
     }
     const glAccountId = newAccountId || txn.glAccountId || txn.suggestedAccountId || null;
-    const glAccount = chartAccounts.find((a) => a.id === glAccountId) || null;
+    const glAccount = chartAccounts.find((a) => String(a.id) === String(glAccountId)) || null;
+    if (!glAccount) return;
     const glAccountName =
       glAccount?.name || glAccountId || null;
     setApprovalLedgerEntry(id, {
@@ -2383,7 +2345,7 @@ function BookkeepingCleanup() {
   };
 
   const handleConfirmLoanPaymentSplit = async (id, split) => {
-    if (!canRunAI || !businessId || !id || !split) return;
+    if (!canRunAI || !coaReady || !businessId || !id || !split) return;
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -2417,7 +2379,7 @@ function BookkeepingCleanup() {
   };
 
   const handleConfirmSplitTransaction = async (id, split) => {
-    if (!canRunAI || !businessId || !id || !split) return;
+    if (!canRunAI || !coaReady || !businessId || !id || !split) return;
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -2614,6 +2576,7 @@ function BookkeepingCleanup() {
   };
 
   const handleRecordIncomingDepositAsNewIncome = async (id, options = {}) => {
+    if (!canBookkeepingWrite || !coaReady || !chartAccounts.some(account => String(account.id) === String(options.selectedQboAccountId))) return;
     const idempotencyKey = `create-new-income:${businessId}:${id}`;
     await withIncomingDepositMatchAction(id, () => recordIncomingDepositAsNewIncome(businessId, id, {
       selectedQboAccountId: options.selectedQboAccountId,
@@ -2671,9 +2634,10 @@ function BookkeepingCleanup() {
   };
 
   const handleBulkApprove = async () => {
-    if (!canBookkeepingWrite || !selectedTransactions.length || !bulkAccountId) return;
+    if (!canBookkeepingWrite || !coaReady || !selectedTransactions.length || !bulkAccountId) return;
     const account = chartAccounts.find((a) => String(a.id) === String(bulkAccountId));
-    const accountName = account?.name || bulkAccountId;
+    if (!account) return;
+    const accountName = account.name;
     const selectedTxnIds = selectedTransactions
       .filter((txn) => isBulkActionEligible(txn, "needs_review") && !hasIncomingDepositMatchWorkflow(txn))
       .map((txn) => txn.id)
@@ -3095,7 +3059,7 @@ function BookkeepingCleanup() {
   }, [usingDemo]);
 
   const handleAccountChange = async (txnId, accountId) => {
-    if (!canBookkeepingWrite) return;
+    if (!canBookkeepingWrite || !coaReady || (accountId && !chartAccounts.some(account => String(account.id) === String(accountId)))) return;
     const accountName = chartAccounts.find((a) => a.id === accountId)?.name || accountId || null;
     const txn = transactions.find((t) => t.id === txnId);
     if (txn?.status === "posted") {
@@ -3223,20 +3187,6 @@ function BookkeepingCleanup() {
     window.addEventListener("bizzy:plaid-account-state-updated", handlePlaidAccountStateUpdate);
     return () => window.removeEventListener("bizzy:plaid-account-state-updated", handlePlaidAccountStateUpdate);
   }, [businessId, reloadAccounts]);
-
-  const reloadCoa = useCallback(async () => {
-    if (usingDemo || !businessId) return;
-    if (adminView.active) {
-      return;
-    }
-    try {
-      const res = await fetchQboCoa(businessId);
-      const accountsRes = res?.accounts || res?.chartOfAccounts || res || [];
-      setChartAccounts(accountsRes);
-    } catch (e) {
-      console.warn("[bookkeeping] COA load failed", e?.message || e);
-    }
-  }, [adminView.active, businessId, usingDemo]);
 
   const loadQboAccountTypes = useCallback(async () => {
     if (usingDemo || !businessId || adminView.active) return;
@@ -3559,11 +3509,7 @@ function BookkeepingCleanup() {
     loadAutoPostStatus();
   }, [usingDemo, reloadAccounts, reloadCoa, loadCreditCardPaymentAccounts, loadAutoPostStatus]);
 
-  useEffect(() => {
-    if (!adminView.active || usingDemo) return;
-    const persisted = derivePersistedChartAccountsFromTransactions(transactions);
-    if (persisted.length) setChartAccounts(persisted);
-  }, [adminView.active, transactions, usingDemo]);
+
 
   useEffect(() => {
     if (usingDemo) return;
@@ -3894,7 +3840,7 @@ function BookkeepingCleanup() {
                 }}
                 accountTypes={qboAccountTypes}
                 status="needs_review"
-                disabled={!canBookkeepingWrite}
+                disabled={!canBookkeepingWrite || !coaReady}
               />
             </div> : null}
             <div
@@ -3905,7 +3851,7 @@ function BookkeepingCleanup() {
             </div>
             <button
               onClick={bulkAction === "approve" ? handleBulkApprove : openBulkPostConfirmation}
-              disabled={(bulkAction === "approve" ? !canBookkeepingWrite : !canRunAI) || bulkPosting || (bulkAction === "approve" && !bulkAccountId)}
+              disabled={(bulkAction === "approve" ? (!canBookkeepingWrite || !coaReady) : !canRunAI) || bulkPosting || (bulkAction === "approve" && !bulkAccountId)}
               className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {bulkAction === "approve" ? "Approve Selected" : "Post Selected"}
@@ -3913,6 +3859,11 @@ function BookkeepingCleanup() {
           </div>
         </div>
       )}
+
+      {!usingDemo && (coaLoading || coaError) ? <div role={coaError ? "alert" : "status"} className="mb-3 text-sm text-amber-200">
+        {coaError || "Loading QuickBooks Chart of Accounts…"}
+        {coaError ? <button type="button" onClick={reloadCoa} className="ml-3 underline">Retry Chart of Accounts</button> : null}
+      </div> : null}
 
       {!usingDemo ? <ProcessingProgressNotice key={`${businessId}:${accountFilter}`} run={runProgress.run} error={runProgress.error}
         onRefresh={async () => {
@@ -4047,6 +3998,7 @@ function BookkeepingCleanup() {
               }}
               postingTransactionIds={new Set([...postingTransactionIds, ...undoingTransactionIds])}
               accounts={groupedChartAccounts}
+              categorizationDisabled={!coaReady}
               ccPaymentAccounts={ccPaymentAccounts}
               ccPaymentAccountsLoaded={ccPaymentAccountsLoaded}
               loadingCcPaymentAccounts={loadingCcPaymentAccounts}

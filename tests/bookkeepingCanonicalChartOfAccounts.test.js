@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -69,7 +70,8 @@ test("Books Review and Monthly Review consume the same subaccount-inclusive cano
 
   assert.match(service, /includeSubaccounts = opts\?\.includeSubaccounts !== false/);
   assert.match(service, /normalizeChartOfAccount/);
-  assert.match(booksRoute, /fetchChartOfAccounts\(businessId, \{ forceRefresh \}\)/);
+  assert.match(booksRoute, /readAccounts\(\{ db, \.\.\.scope, forceRefresh \}\)/);
+  assert.match(read("src/services/bookkeeping/bookkeepingChartOfAccounts.js"), /normalizeChartOfAccount/);
   assert.match(monthlyRoute, /fetchChartOfAccounts\(businessId, \{ includeSubaccounts: true \}\)/);
   assert.match(monthlyRoute, /fullyQualifiedName: account\.fullyQualifiedName \|\| account\.name/);
   assert.match(legacyRoute, /import \{ fetchChartOfAccounts \} from "\.\.\/\.\.\/services\/bookkeeping\/qboAccounts\.js"/);

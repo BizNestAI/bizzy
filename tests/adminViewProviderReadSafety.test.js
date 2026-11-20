@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -18,18 +19,11 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 const BUSINESS_A = "11111111-1111-4111-8111-111111111111";
 const BUSINESS_B = "22222222-2222-4222-8222-222222222222";
 
-test("Admin View QBO COA GET is blocked before live QuickBooks account fetch", () => {
-  const routeStart = bookkeepingAccountsSource.indexOf('router.get("/qbo/coa"');
-  const adminBranch = bookkeepingAccountsSource.indexOf("if (isAdminViewRequest(req))", routeStart);
-  const providerCall = bookkeepingAccountsSource.indexOf("fetchChartOfAccounts(businessId)", routeStart);
-
-  assert.ok(routeStart > 0, "QBO COA GET route must exist");
-  assert.ok(adminBranch > routeStart, "QBO COA GET must branch for Admin View");
-  assert.ok(providerCall === -1 || providerCall > adminBranch, "Admin View must branch before live QBO COA fetch");
-  assert.match(
-    bookkeepingAccountsSource.slice(adminBranch, providerCall),
-    /admin_view_provider_refresh_blocked/
-  );
+test("Admin View QBO COA uses verified cache-only scope and blocks explicit provider refresh", () => {
+  assert.match(bookkeepingAccountsSource, /bookkeepingAccountReadScope\(req, db, businessId\)/);
+  assert.match(bookkeepingAccountsSource, /scope.cacheOnly && forceRefresh/);
+  assert.match(bookkeepingAccountsSource, /admin_view_provider_refresh_blocked/);
+  assert.match(bookkeepingAccountsSource, /readAccounts\(\{ db, \.\.\.scope, forceRefresh \}\)/);
 });
 
 test("Admin View QBO payment accounts GET is blocked before live QuickBooks account fetch", () => {

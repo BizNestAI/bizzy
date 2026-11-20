@@ -704,6 +704,7 @@ export function IncomingDepositMatchPanel({
   state,
   action = {},
   readOnly = false,
+  categorizationDisabled = false,
   onInspect,
   onConfirm,
   onReject,
@@ -856,14 +857,14 @@ export function IncomingDepositMatchPanel({
             <div className="mt-3 space-y-3">
               <p className="text-[11px] leading-5 text-slate-200">Bizzi will create a new QuickBooks deposit using the connected bank account and the income account below. It will not create an invoice or invoice payment.</p>
               <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-300">Income account</label>
-              <CoaDropdown value={incomeAccountId} suggestedId={txn.glAccountId || txn.suggestedAccountId} suggestedName={txn.glAccountName || txn.suggestedAccountName} accounts={incomeAccounts} onChange={setIncomeAccountId} status={txn.status} disabled={readOnly || transitionMatching} />
+              <CoaDropdown value={incomeAccountId} suggestedId={txn.glAccountId || txn.suggestedAccountId} suggestedName={txn.glAccountName || txn.suggestedAccountName} accounts={incomeAccounts} onChange={setIncomeAccountId} status={txn.status} disabled={readOnly || categorizationDisabled || transitionMatching} />
               {state.unavailable ? (
                 <label className="flex items-start gap-2 text-[11px] text-amber-50/85">
                   <input type="checkbox" checked={duplicateOverrideConfirmed} onChange={(event) => setDuplicateOverrideConfirmed(event.target.checked)} className="mt-0.5" />
                   <span>I confirmed this income is not already recorded in QuickBooks.</span>
                 </label>
               ) : null}
-              <button type="button" disabled={readOnly || transitionMatching || !incomeAccountId || (state.unavailable && !duplicateOverrideConfirmed)} onClick={() => onRecordNewIncome?.(txn.id, { selectedQboAccountId: incomeAccountId, duplicateOverrideConfirmed })} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-3 py-1.5 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">{transitionMatching ? "Posting…" : "Post as new income"}</button>
+              <button type="button" disabled={readOnly || categorizationDisabled || transitionMatching || !incomeAccountId || (state.unavailable && !duplicateOverrideConfirmed)} onClick={() => onRecordNewIncome?.(txn.id, { selectedQboAccountId: incomeAccountId, duplicateOverrideConfirmed })} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-3 py-1.5 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">{transitionMatching ? "Posting…" : "Post as new income"}</button>
             </div>
           ) : null}
         </div>
@@ -998,6 +999,7 @@ export default function BookkeepingFeed({
   toggleRow,
   selectableIds = null,
   onApprove,
+  categorizationDisabled = false,
   activeFeed = "needs_review",
   approvingTransactionIds = new Set(),
   onUndo,
@@ -1191,7 +1193,7 @@ export default function BookkeepingFeed({
   }, [transactions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAccountSelect = (txnId, accountId) => {
-    if (readOnly) return;
+    if (readOnly || categorizationDisabled) return;
     dirtyAccountSelectionsRef.current.add(String(txnId));
     setAccountSelections((prev) => {
       const next = new Map(prev);
@@ -1732,6 +1734,7 @@ export default function BookkeepingFeed({
                     disabled={
                       isApproving ||
                       isPosted ||
+                      categorizationDisabled ||
                       coaEditingProtected ||
                       (["approved", "auto_approved"].includes(txn.status) && !txn.canEdit) ||
                       readOnly
@@ -1886,6 +1889,7 @@ export default function BookkeepingFeed({
                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"
                    disabled={
                      isApproving ||
+                     categorizationDisabled ||
                      readOnly ||
                      txn.is_check &&
                      !(accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null)
@@ -1900,7 +1904,7 @@ export default function BookkeepingFeed({
                        : "Approve"
                    }
 	                  onClick={() => {
-	                    if (readOnly) return;
+	                    if (readOnly || categorizationDisabled) return;
 	                    onApprove && onApprove(txn.id, selectedAccountValue || null);
 	                  }}
                   aria-label="Approve transaction"
@@ -2039,6 +2043,7 @@ export default function BookkeepingFeed({
                    state={incomingMatch}
                    action={incomingMatchAction}
                    readOnly={readOnly}
+                   categorizationDisabled={categorizationDisabled}
                    onInspect={onInspectIncomingDepositMatch}
                    onConfirm={onConfirmIncomingDepositMatch}
                    onReject={onRejectIncomingDepositMatch}
@@ -2099,7 +2104,7 @@ export default function BookkeepingFeed({
         txn={activeLoanSplitEntry?.txn}
         accounts={accounts}
         draft={activeLoanSplitEntry?.draft || {}}
-        disabled={readOnly}
+        disabled={readOnly || categorizationDisabled}
         onCreateAccount={onCreateAccount}
         accountTypes={accountTypes}
         onChange={(draft) => activeLoanSplitEntry && updateLoanSplitDraft(activeLoanSplitEntry.txnId, draft)}

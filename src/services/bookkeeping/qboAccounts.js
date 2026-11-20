@@ -1,6 +1,6 @@
 import { getQBOClient } from "../../utils/qboClient.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
-import { getLatestQuickBooksTokenRow } from "../quickbooksTokenService.js";
+import { getLatestQuickBooksTokenRow, getLatestQuickBooksTokenRowEncrypted } from "../quickbooksTokenService.js";
 
 export function normalizeQboPaymentAccountType(val = "") {
   const normalized = String(val || "").replace(/[\s\-_]+/g, "").toLowerCase();
@@ -28,7 +28,7 @@ export function normalizeChartOfAccount(account = {}, { syncedAt = null } = {}) 
   const parentId = parent?.value || parent?.id || account.parent_id || null;
   const parentName = parent?.name || account.parent_name || null;
   const type = account.AccountType || account.type || account.account_type || null;
-  const subType = account.AccountSubType || account.subType || account.account_sub_type || null;
+  const subType = account.AccountSubType || account.subType || account.account_sub_type || account.account_subtype || null;
   const active = account.Active !== false && account.active !== false;
   const subAccount = Boolean(account.SubAccount || account.subAccount || account.sub_account || parentId);
   const classification = account.Classification || account.classification || null;
@@ -62,7 +62,9 @@ export function isChartAccountEligible(account = {}, workflow = "categorize") {
 }
 
 export function invalidateChartOfAccountsCache(businessId) {
-  if (businessId) chartOfAccountsCache.delete(String(businessId));
+  if (businessId) {
+    for (const key of chartOfAccountsCache.keys()) if (JSON.parse(key)[0] === String(businessId)) chartOfAccountsCache.delete(key);
+  }
   else chartOfAccountsCache.clear();
 }
 
@@ -70,7 +72,9 @@ export async function fetchChartOfAccounts(businessId, opts = {}) {
   // Subaccounts are part of the canonical Chart of Accounts. The legacy opt-out is
   // retained only for non-selector callers that explicitly request it.
   const includeSubaccounts = opts?.includeSubaccounts !== false;
-  const cacheKey = String(businessId || "");
+  const connection = await getLatestQuickBooksTokenRowEncrypted(businessId);
+  if (!connection?.realm_id) return [];
+  const cacheKey = JSON.stringify([String(businessId), String(connection.realm_id), connection.qbo_env || qboEnvName, includeSubaccounts]);
   const now = Date.now();
   const ttlMs = Number.isFinite(opts?.cacheTtlMs) ? opts.cacheTtlMs : DEFAULT_COA_CACHE_TTL_MS;
   const cached = chartOfAccountsCache.get(cacheKey);
@@ -129,7 +133,7 @@ function shapeQboAccount(account = {}) {
     id: String(id),
     name: account.Name || account.name || account.FullyQualifiedName || account.fullyQualifiedName || null,
     type: account.AccountType || account.type || account.account_type || null,
-    subType: account.AccountSubType || account.subType || account.account_sub_type || null,
+    subType: account.AccountSubType || account.subType || account.account_sub_type || account.account_subtype || null,
     active: account.Active !== false && account.active !== false,
     raw: account,
   };
