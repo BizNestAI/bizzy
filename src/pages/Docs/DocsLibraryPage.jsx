@@ -359,6 +359,9 @@ export default function DocsLibraryPage(props) {
                 <p className="mt-2 text-sm text-white/60">
                   Upload bank, credit-card, loan, and other accounting documents for {selectedMonthName} {selectedYear}.
                 </p>
+                <p className="mt-1 text-sm text-white/60">
+                  Maximum file size: 10 MB per file
+                </p>
               </div>
               {!readOnly ? (
                 <button
