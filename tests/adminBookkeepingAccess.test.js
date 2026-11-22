@@ -52,6 +52,8 @@ test("capability allowlist permits only explicit Books Review workflow mutations
     ["POST", "/api/bookkeeping/approve"],
     ["POST", "/api/bookkeeping/undo"],
     ["PUT", "/api/bookkeeping/transactions/txn-1/resolution"],
+    ["POST", "/api/bookkeeping/transactions/txn-1/confirm-split"],
+    ["POST", "/api/bookkeeping/loan-payments/txn-1/confirm-split"],
     ["POST", "/api/bookkeeping/credit-card-payments/txn-1/confirm-match"],
     ["POST", "/api/bookkeeping/incoming-deposit-matches/txn-1/match-1/confirm"],
     ["POST", "/api/bookkeeping/transactions/txn-1/exclude"],
@@ -90,6 +92,32 @@ test("global Admin View guard grants allowlisted bookkeeping writes only with th
   const forbiddenRes = response();
   guard(forbidden, forbiddenRes, () => assert.fail("provider disconnect must stay blocked"));
   assert.equal(forbiddenRes.statusCode, 403);
+});
+
+test("split confirmation is limited to the two exact transaction-scoped routes and the verified capability", () => {
+  const routes = [
+    ["/api/bookkeeping/transactions/split-1/confirm-split", "confirm_transaction_split"],
+    ["/api/bookkeeping/loan-payments/loan-1/confirm-split", "confirm_loan_payment_split"],
+  ];
+  for (const [path, action] of routes) {
+    for (const capabilities of [[], ["fabricated"], [ADMIN_BOOKKEEPING_WRITE_CAPABILITY]]) {
+      const req = request("POST", path, capabilities);
+      const res = response();
+      let continued = false;
+      rejectAdminViewWrites()(req, res, () => { continued = true; });
+      assert.equal(continued, capabilities.includes(ADMIN_BOOKKEEPING_WRITE_CAPABILITY));
+      if (continued) {
+        assert.equal(req.adminBookkeepingAccess.action, action);
+        assert.equal(req.adminBookkeepingAccess.businessId, BUSINESS_ID);
+        assert.equal(req.adminBookkeepingAccess.actorId, req.tenantContext.staffUserId);
+        assert.equal(req.adminBookkeepingAccess.transactionId, path.split("/")[4]);
+      } else assert.equal(res.body.code, TENANT_AUTH_CODES.ADMIN_VIEW_READ_ONLY);
+    }
+    assert.equal(matchAdminBookkeepingWrite(request("GET", path)), null);
+    assert.equal(matchAdminBookkeepingWrite(request("DELETE", path)), null);
+    assert.equal(matchAdminBookkeepingWrite(request("POST", `${path}/anything`)), null);
+  }
+  assert.equal(matchAdminBookkeepingWrite(request("POST", "/api/bookkeeping/transactions/confirm-split")), null);
 });
 
 test("paid entitlement is still required for capability-authorized bookkeeping writes", async () => {

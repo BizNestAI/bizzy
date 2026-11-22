@@ -34,7 +34,7 @@ async function setup(t, admin) {
   });
   h.call = (name, ...args) => {
     h.calls.push({ name, args });
-    if (name === "getTransactions") { const request = { ...deferred(), args }; h.rows.push(request); return request.promise; }
+    if (name === "getTransactions") { const request = { ...deferred(), args }; h.rows.push(request); if (h.autoRows) request.resolve({ rows: h.autoRows, totalCount: h.autoRows.length }); return request.promise; }
     if (name === "approveTransactions") { const request = { ...deferred(), args }; h.approvals.push(request); return request.promise; }
     if (name === "getAccounts") return Promise.resolve({ accounts: h.accounts });
     if (name === "getTransactionCounts") return h.failCounts ? Promise.reject(new Error("counts unavailable")) : Promise.resolve(h.counts);
@@ -43,6 +43,8 @@ async function setup(t, admin) {
     if (["getAccountMappings", "getQboCoa"].includes(name)) return Promise.resolve({ accounts: [] });
     if (["getQboAccountTypes", "getClarificationRequests"].includes(name)) return Promise.resolve([]);
     if (name === "getMappingStatus") return Promise.resolve({});
+    if (["confirmSplitTransaction", "confirmLoanPaymentSplit"].includes(name)) return Promise.resolve({ ok: true });
+    if (name === "saveTransactionResolution") return Promise.resolve({ meta: { user_selected_resolution: args[2] } });
     throw new Error(`Unexpected API call ${name}`);
   };
   const stubs = new Map([
@@ -95,6 +97,29 @@ async function setup(t, admin) {
 }
 
 for (const admin of [false, true]) {
+  test(`${admin ? "Admin View" : "customer"}: the shared feed exposes split and both confirmation handlers submit in the selected business`, async t => {
+    const { h, row, resolveRows } = await setup(t, admin);
+    await resolveRows([row("loan"), row("general")]);
+    if (admin) assert.ok(h.feed.allowedResolutionIds.includes("split_transaction"));
+    else assert.equal(h.feed.allowedResolutionIds, null, "customer retains the unrestricted workflow menu");
+    await act(async () => h.feed.onResolutionChange("general", "split_transaction"));
+    const resolution = h.calls.find(call => call.name === "saveTransactionResolution");
+    assert.equal(resolution.args[0], "business-a");
+    assert.equal(resolution.args[1], "general");
+    assert.equal(resolution.args[2], "split_transaction");
+    h.autoRows = [];
+    const split = { lines: [{ qbo_account_id: "expense", amount_minor: 300 }, { qbo_account_id: "other", amount_minor: 200 }] };
+    const confirmGeneral = h.feed.onConfirmSplitTransaction;
+    const confirmLoan = h.feed.onConfirmLoanPaymentSplit;
+    await act(async () => { await confirmGeneral("general", split); await confirmLoan("loan", split); });
+    for (const name of ["confirmSplitTransaction", "confirmLoanPaymentSplit"]) {
+      const call = h.calls.find(call => call.name === name);
+      assert.ok(call, `${name} must not be gated on AI access in Admin View`);
+      assert.equal(call.args[0], "business-a");
+      assert.deepEqual(call.args[2], split);
+    }
+  });
+
   test(`${admin ? "Admin View" : "customer"}: approval keeps the feed mounted across cache invalidation and failed background refresh`, async t => {
     const { h, cache, renderer, row, resolveRows, text: content } = await setup(t, admin);
     assert.match(content(), /Loading transactions/);

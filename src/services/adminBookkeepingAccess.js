@@ -6,6 +6,8 @@ const WRITE_RULES = Object.freeze([
   ["POST", /^\/api\/bookkeeping\/posting\/auto-post\/admission-repair$/, "repair_auto_post_admission"],
   ["PUT", /^\/api\/bookkeeping\/transactions\/([^/]+)\/resolution$/, "save_resolution"],
   ["PUT", /^\/api\/bookkeeping\/transactions\/([^/]+)\/credit-card-inflow-resolution$/, "save_credit_card_resolution"],
+  ["POST", /^\/api\/bookkeeping\/transactions\/([^/]+)\/confirm-split$/, "confirm_transaction_split"],
+  ["POST", /^\/api\/bookkeeping\/loan-payments\/([^/]+)\/confirm-split$/, "confirm_loan_payment_split"],
   ["POST", /^\/api\/bookkeeping\/approve$/, "approve_categorization"],
   ["POST", /^\/api\/bookkeeping\/undo$/, "undo_bookkeeping_decision"],
   ["POST", /^\/api\/bookkeeping\/credit-card-payments\/reject$/, "reject_credit_card_payment_suggestion"],

@@ -513,7 +513,7 @@ router.post("/loan-payments/:transactionId/confirm-split", requireAuth, async (r
       split,
       accountsById,
       actorId,
-      actorType: "user",
+      actorType: req.tenantContext?.mode === "admin_view" ? "admin" : "user",
     });
     const nowIso = new Date().toISOString();
     const nextMeta = {
@@ -603,7 +603,7 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
       split: { ...split, split_type: "general" },
       accountsById,
       actorId,
-      actorType: "user",
+      actorType: req.tenantContext?.mode === "admin_view" ? "admin" : "user",
     });
     writesOccurred = result?.created === true;
     const nowIso = new Date().toISOString();

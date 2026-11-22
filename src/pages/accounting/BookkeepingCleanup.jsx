@@ -2396,7 +2396,7 @@ function BookkeepingCleanup() {
   };
 
   const handleConfirmLoanPaymentSplit = async (id, split) => {
-    if (!canRunAI || !coaReady || !businessId || !id || !split) return;
+    if (!canBookkeepingWrite || !coaReady || !businessId || !id || !split) return;
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -2430,7 +2430,7 @@ function BookkeepingCleanup() {
   };
 
   const handleConfirmSplitTransaction = async (id, split) => {
-    if (!canRunAI || !coaReady || !businessId || !id || !split) return;
+    if (!canBookkeepingWrite || !coaReady || !businessId || !id || !split) return;
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -4080,7 +4080,7 @@ function BookkeepingCleanup() {
               allowIncomingDepositUndo={isMatchedTab}
               allowExclude={["needs_review", "handled", "pending"].includes(activeTab)}
               showRestoreExcluded={isExcludedTab}
-              allowedResolutionIds={adminView.bookkeepingAccess ? ["categorize_new", "match_existing_qbo", "match_credit_card_payment", "merchant_refund", "credit_card_statement_credit", "credit_card_credit_other"] : null}
+              allowedResolutionIds={adminView.bookkeepingAccess ? ["categorize_new", "match_existing_qbo", "match_credit_card_payment", "split_transaction", "merchant_refund", "credit_card_statement_credit", "credit_card_credit_other"] : null}
               adminBookkeepingAccess={adminView.bookkeepingAccess === true}
               onResolvePending={adminView.active && adminView.bookkeepingAccess && adminView.staffRole === "owner_admin" ? handlePendingResolution : undefined}
             />
