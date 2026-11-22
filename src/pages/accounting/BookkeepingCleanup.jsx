@@ -69,6 +69,7 @@ import {
   suppressUndoneRowsFromLifecyclePage,
   buildOptimisticallyExcludedRow,
   patchFeedCacheForExclusion,
+  buildLocallyPatchedBookkeepingRow,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 import { classifyBookkeepingLifecycle } from "../../services/bookkeeping/bookkeepingLifecycleClassifier.js";
 import { bulkActionForFeed, isBulkActionEligible, summarizeBulkPost } from "../../services/bookkeeping/bookkeepingBulkActions.js";
@@ -879,6 +880,10 @@ function BookkeepingCleanup() {
   const [transactionDataKey, setTransactionDataKey] = useState([businessId || "", accountFilter || "", activeTab, dateRange, page, rowsPerPage].join("|"));
   const [transactions, setTransactions] = useState(() => initialPage?.rows || []);
   const [totalCount, setTotalCount] = useState(() => initialPage?.totalCount ?? null);
+  // Mutation invalidation expires reusable caches, not the currently mounted
+  // business/account/feed. Keep its rendered page available during revalidation.
+  const visibleTransactionPageRef = useRef(null);
+  visibleTransactionPageRef.current = { viewKey: transactionDataKey, rows: transactions, totalCount };
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingTxns, setLoadingTxns] = useState(false);
@@ -887,6 +892,7 @@ function BookkeepingCleanup() {
   const [categorizationStatus, setCategorizationStatus] = useState(null);
   const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
+  const countsRequestSeqRef = useRef(0);
   const lastSuccessfulTransactionPagesRef = useRef(new Map());
   const approvalMutationLedgerRef = useRef(new Map());
   const transactionReloadSeqRef = useRef(0);
@@ -1395,6 +1401,7 @@ function BookkeepingCleanup() {
 
   const loadTabCounts = useCallback(async () => {
     if (usingDemo) return;
+    const requestSeq = ++countsRequestSeqRef.current;
     if (!businessId || !accountFilter) {
       setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
       return;
@@ -1406,13 +1413,13 @@ function BookkeepingCleanup() {
         range_start: dateFilter.rangeStart,
         range_end: dateFilter.rangeEnd,
       });
-      if (booksProgressScopeRef.current.businessId !== businessId || booksProgressScopeRef.current.accountFilter !== accountFilter) return false;
+      if (countsRequestSeqRef.current !== requestSeq || booksProgressScopeRef.current.businessId !== businessId || booksProgressScopeRef.current.accountFilter !== accountFilter) return false;
       setTabCounts(overlayPendingApprovalCounts(counts));
       return true;
     } catch (e) {
-      if (booksProgressScopeRef.current.businessId !== businessId || booksProgressScopeRef.current.accountFilter !== accountFilter) return false;
+      if (countsRequestSeqRef.current !== requestSeq || booksProgressScopeRef.current.businessId !== businessId || booksProgressScopeRef.current.accountFilter !== accountFilter) return false;
       console.warn("[bookkeeping] transaction counts fetch failed", e?.message || e);
-      setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
+      if (unsafeModuleError(e)) setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
       return false;
     }
   }, [accountFilter, businessId, dateFilter, usingDemo, overlayPendingApprovalCounts]);
@@ -1758,6 +1765,49 @@ function BookkeepingCleanup() {
     }
   };
 
+  const applyApprovedTransactionsToVisiblePage = (entries, account, approvalViewKey) => {
+    if (transactionViewKeyRef.current !== approvalViewKey) return false;
+    const removedIds = new Set();
+    const retainedRows = new Map();
+    for (const { txn, serverRow } of entries) {
+      const afterTxn = buildLocallyPatchedBookkeepingRow(txn, {
+        targetAccount: account, categorization: serverRow || {}, status: serverRow?.status || "approved",
+      });
+      applyOptimisticCountTransition(txn, afterTxn);
+      if (matchesBooksTab(afterTxn, "needs_review")) {
+        retainedRows.set(String(txn.id), afterTxn);
+        removeApprovalLedgerEntry(txn.id);
+      } else removedIds.add(String(txn.id));
+    }
+    countsRequestSeqRef.current += 1;
+    const current = visibleTransactionPageRef.current;
+    const rows = current.rows.filter((row) => !removedIds.has(String(row.id)))
+      .map((row) => retainedRows.get(String(row.id)) || row);
+    const removed = current.rows.length - rows.length;
+    const nextTotal = typeof current.totalCount === "number" ? Math.max(0, current.totalCount - removed) : rows.length;
+    const nextPage = Math.min(page, Math.max(1, Math.ceil(nextTotal / rowsPerPage)));
+    const nextViewKey = [businessId || "", accountFilter || "", activeTab || "", dateRange || "", nextPage, rowsPerPage].join("|");
+    // A second approval/refetch can start before React commits these updates.
+    visibleTransactionPageRef.current = { viewKey: nextViewKey, rows, totalCount: nextTotal };
+    setTransactions(rows);
+    setTotalCount(nextTotal);
+    setTransactionDataKey(nextViewKey);
+    if (nextPage !== page) setPage(nextPage);
+    return nextPage !== page;
+  };
+
+  const revalidateAfterApproval = (pageChanged) => {
+    if (!mountedRef.current) return;
+    // A refresh failure cannot undo a committed approval or re-enable it.
+    void Promise.allSettled([
+      reloadAccounts(),
+      // A page change triggers the scoped fetch effect after the new render.
+      ...(!pageChanged ? [reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: true, refreshCounts: true })] : []),
+      loadMappingStatus(),
+    ]);
+    runProgress.refresh();
+  };
+
   const handleApprove = async (id, newAccountId = null) => {
     if (!canBookkeepingWrite || !coaReady) return;
     if (usingDemo) {
@@ -1794,6 +1844,7 @@ function BookkeepingCleanup() {
     if (!glAccount) return;
     const glAccountName =
       glAccount?.name || glAccountId || null;
+    const approvalViewKey = transactionViewKey;
     const expenseRefund = isExpenseRefundSelection(txn, glAccount);
     setApprovalLedgerEntry(id, {
       status: "pending",
@@ -1803,46 +1854,43 @@ function BookkeepingCleanup() {
       accountFilter,
       dateRange,
     });
+    let approvalResult;
     try {
-      const approvalResult = await approveTransactions(businessId, [
+      approvalResult = await approveTransactions(businessId, [
         { txnId: id, resolution: "categorize_new", newAccountId: glAccountId, newAccountName: glAccountName, newAccountType: glAccount?.type || null,
           ...(expenseRefund ? { expense_refund_confirmed: true, only_this_transaction: true, learn_reusable_rule: false } : {}) },
       ]);
-      const serverRow = Array.isArray(approvalResult?.rows)
-        ? approvalResult.rows.find((row) => String(row.transaction_id || row.id || "") === String(id))
-        : null;
-      const ruleFailure = (approvalResult?.vendor_rule_results || []).find((result) => result?.ok === false);
-      if (ruleFailure) {
-        window.dispatchEvent(new CustomEvent("bizzy:toast", {
-          detail: {
-            severity: "warning",
-            title: "Approved; merchant learning will retry",
-            body: ruleFailure.queued
-              ? "This transaction is approved. Bizzi queued the reusable merchant rule for retry."
-              : "This transaction is approved, but the reusable merchant rule could not be saved. Try confirming the rule again later.",
-          },
-        }));
-      }
-      setApprovalLedgerEntry(id, {
-        status: "confirmed",
-        serverRow,
-        confirmedAt: Date.now(),
-      });
-      setTransactions((prev) => prev.filter((row) => String(row.id) !== String(id)));
-      await reloadAccounts();
-      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
-      await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] approve failed", e?.message || e);
       removeApprovalLedgerEntry(id);
       window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: { severity: "error", title: "Approval failed",
+          body: e?.body?.message || e?.message || "The transaction remains in Needs Review. Please try again." },
+      }));
+      return;
+    }
+    const serverRow = Array.isArray(approvalResult?.rows)
+      ? approvalResult.rows.find((row) => String(row.transaction_id || row.id || "") === String(id))
+      : null;
+    const ruleFailure = (approvalResult?.vendor_rule_results || []).find((result) => result?.ok === false);
+    if (ruleFailure) {
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
         detail: {
-          severity: "error",
-          title: "Approval failed",
-          body: e?.body?.message || e?.message || "The transaction remains in Needs Review. Please try again.",
+          severity: "warning",
+          title: "Approved; merchant learning will retry",
+          body: ruleFailure.queued
+            ? "This transaction is approved. Bizzi queued the reusable merchant rule for retry."
+            : "This transaction is approved, but the reusable merchant rule could not be saved. Try confirming the rule again later.",
         },
       }));
     }
+    setApprovalLedgerEntry(id, {
+      status: "confirmed",
+      serverRow,
+      confirmedAt: Date.now(),
+    });
+    const pageChanged = applyApprovedTransactionsToVisiblePage([{ txn, serverRow }], glAccount, approvalViewKey);
+    revalidateAfterApproval(pageChanged);
   };
 
   const handleUndo = async (id) => {
@@ -2666,6 +2714,7 @@ function BookkeepingCleanup() {
     }
 
     if (!businessId) return;
+    const approvalViewKey = transactionViewKey;
     const selectedTxnById = new Map(selectedBulkTransactions.map((txn) => [txn.id, txn]));
     selectedTxnById.forEach((originalTxn, txnId) => {
       setApprovalLedgerEntry(txnId, {
@@ -2707,10 +2756,10 @@ function BookkeepingCleanup() {
           confirmedAt: Date.now(),
         });
       });
-      setTransactions((prev) => prev.filter((txn) => !selectedTxnIds.includes(txn.id)));
-      await reloadAccounts();
-      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
-      await loadMappingStatus();
+      const pageChanged = applyApprovedTransactionsToVisiblePage(selectedBulkTransactions.map((txn) => ({
+        txn, serverRow: serverRows.find((row) => String(row.transaction_id || row.id || "") === String(txn.id)),
+      })), account, approvalViewKey);
+      revalidateAfterApproval(pageChanged);
     } catch (e) {
       console.warn("[bookkeeping] bulk approve failed", e?.message || e);
       selectedTxnById.forEach((_originalTxn, txnId) => {
@@ -3251,6 +3300,8 @@ function BookkeepingCleanup() {
     const previous = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
     const previousPage = previous?.cacheVersion === moduleCacheVersion('financials', businessId) ? previous : null;
     const cachedPage = readTransactionPageCache(cacheKey) || previousPage;
+    const livePage = visibleTransactionPageRef.current?.viewKey === requestViewKey &&
+      typeof visibleTransactionPageRef.current.totalCount === "number" ? visibleTransactionPageRef.current : null;
     const suppressCachedMatchedTransitions = (rows = [], totalValue = null) => {
       const suppressIds = incomingDepositMatchedSuppressRef.current;
       if (activeTab === "matched" || !suppressIds?.size) return { rows, totalCount: totalValue };
@@ -3263,7 +3314,10 @@ function BookkeepingCleanup() {
     };
     const suppressCachedUndoTransitions = (rows = [], totalValue = null) =>
       suppressUndoneRowsFromLifecyclePage(rows, totalValue, undoSuppressedIdsRef.current, activeTab);
-    if (cachedPage && Array.isArray(cachedPage.rows)) {
+    if (livePage) {
+      setLoadingTxns(false);
+      setBackgroundRefreshingTxns(shouldShowBackgroundRefresh);
+    } else if (cachedPage && Array.isArray(cachedPage.rows)) {
       const cachedMatched = suppressCachedMatchedTransitions(cachedPage.rows, typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
       const cached = suppressCachedUndoTransitions(cachedMatched.rows, cachedMatched.totalCount);
       const ledgerSuppressed = suppressLedgerRowsFromNeedsReview(cached.rows, typeof cached.totalCount === "number" ? cached.totalCount : cached.rows.length);
@@ -3467,8 +3521,10 @@ function BookkeepingCleanup() {
           ? "This account took too long to load. Try again."
           : "Transactions couldn't load for this account.",
       });
-      const fallbackPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
-      if (fallbackPage?.rows?.length) {
+      const fallbackPage = visibleTransactionPageRef.current?.viewKey === requestViewKey &&
+        typeof visibleTransactionPageRef.current.totalCount === "number"
+        ? visibleTransactionPageRef.current : cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
+      if (fallbackPage && Array.isArray(fallbackPage.rows)) {
         const fallback = suppressUndoneRowsFromLifecyclePage(
           fallbackPage.rows,
           typeof fallbackPage.totalCount === "number" ? fallbackPage.totalCount : fallbackPage.rows.length,
@@ -3478,7 +3534,7 @@ function BookkeepingCleanup() {
         setTransactions(fallback.rows);
         setTotalCount(typeof fallback.totalCount === "number" ? fallback.totalCount : fallback.rows.length);
       }
-      if (fallbackPage?.rows?.length || cachedPage?.rows?.length) {
+      if (fallbackPage || cachedPage) {
         window.dispatchEvent(new CustomEvent("bizzy:toast", {
           detail: {
             severity: "error",
@@ -3881,7 +3937,7 @@ function BookkeepingCleanup() {
       </div>
       <AnimatePresence initial={false}>
         <motion.div
-          key={`${activeTab}:${dateRange}:${rowsPerPage}:${accountFilter || "all"}:${page}`}
+          key={`${activeTab}:${dateRange}:${rowsPerPage}:${accountFilter || "all"}`}
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -8 }}

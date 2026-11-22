@@ -176,12 +176,13 @@ test("Books Review keeps approval rows and counts authoritative until the server
   const approveBody = source.slice(source.indexOf("const handleApprove = async"), source.indexOf("const handleUndo = async"));
   assert.match(approveBody, /status: "pending"/);
   assert.doesNotMatch(approveBody, /const approvedTxn|applyOptimisticCountTransition/);
-  assert.match(approveBody, /setTransactions\(\(prev\) => prev\.filter/);
-  assert.match(approveBody, /refreshCounts: true/);
+  assert.match(approveBody, /applyApprovedTransactionsToVisiblePage/);
+  assert.ok(approveBody.indexOf("await approveTransactions") < approveBody.indexOf("applyApprovedTransactionsToVisiblePage"));
+  assert.match(approveBody, /revalidateAfterApproval/);
   assert.match(source, /const needsReviewTxn = \{ \.\.\.txn, status: "needs_review" \}/);
 });
 
-test("Books Review manual categorization uses a silent row-scoped refetch without feed-wide banners", () => {
+test("Books Review manual categorization revalidates the mounted view in the background", () => {
   const approveStart = source.indexOf("const handleApprove = async");
   const approveEnd = source.indexOf("const handleUndo = async", approveStart);
   const approveBody = source.slice(approveStart, approveEnd);
@@ -190,9 +191,10 @@ test("Books Review manual categorization uses a silent row-scoped refetch withou
   const bulkBody = source.slice(bulkStart, bulkEnd);
 
   assert.match(approveBody, /await approveTransactions\(businessId/);
-  assert.match(approveBody, /reloadCurrentBookkeepingView\(reloadTransactionsRef, \{ showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true \}\)/);
+  assert.match(approveBody, /revalidateAfterApproval\(pageChanged\)/);
   assert.match(bulkBody, /await approveTransactions\(/);
-  assert.match(bulkBody, /reloadCurrentBookkeepingView\(reloadTransactionsRef, \{ showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true \}\)/);
+  assert.match(bulkBody, /revalidateAfterApproval\(pageChanged\)/);
+  assert.match(source, /reloadCurrentBookkeepingView\(reloadTransactionsRef, \{ showBackgroundRefresh: true, refreshCounts: true \}\)/);
   assert.doesNotMatch(approveBody, /triggerPlaidSync|reconsiderNeedsReviewTransactions|retryBookkeepingProcessing|setCategorizationStatus|setBackgroundRefreshingTxns/);
   assert.doesNotMatch(bulkBody, /triggerPlaidSync|reconsiderNeedsReviewTransactions|retryBookkeepingProcessing|setCategorizationStatus|setBackgroundRefreshingTxns/);
 });
@@ -231,7 +233,7 @@ test("Books Review pending approvals do not fabricate tab counts", () => {
   assert.match(countsBody, /setTabCounts\(overlayPendingApprovalCounts\(counts\)\)/);
   assert.match(source, /excluded: Number\(counts\?\.excluded \|\| 0\)/);
   assert.doesNotMatch(approveBody, /applyOptimisticCountTransition/);
-  assert.match(approveBody, /refreshCounts: true/);
+  assert.match(approveBody, /revalidateAfterApproval/);
 });
 
 test("Books Review concurrent approval handling is per transaction", () => {
@@ -241,7 +243,7 @@ test("Books Review concurrent approval handling is per transaction", () => {
 
   assert.match(bulkBody, /\.filter\(\(txnId\) => !approvalMutationLedgerRef\.current\.has\(String\(txnId\)\)\)/);
   assert.match(bulkBody, /selectedTxnIds\.forEach\(\(txnId\) => \{[\s\S]*?setApprovalLedgerEntry\(txnId,\s*\{[\s\S]*?status: "confirmed"/);
-  assert.match(bulkBody, /setTransactions\(\(prev\) => prev\.filter\(\(txn\) => !selectedTxnIds\.includes\(txn\.id\)\)\)/);
+  assert.match(bulkBody, /applyApprovedTransactionsToVisiblePage\(selectedBulkTransactions\.map/);
   assert.match(bulkBody, /selectedTxnById\.forEach\(\(_originalTxn, txnId\) => \{[\s\S]*?removeApprovalLedgerEntry\(txnId\)/);
   assert.doesNotMatch(bulkBody, /approvalMutationLedgerRef\.current\.clear\(\)/);
   assert.doesNotMatch(source, /setApprovalLedgerVersion\(0\)/);

@@ -49,7 +49,7 @@ test("Needs Review remains authoritative while approval is pending", () => {
   assert.match(liveApproveBody, /status: "pending"/);
   assert.doesNotMatch(liveApproveBody, /status: "approved"/);
   assert.doesNotMatch(liveApproveBody, /applyOptimisticCountTransition/);
-  assert.match(liveApproveBody, /refreshCounts: true/);
+  assert.match(liveApproveBody, /revalidateAfterApproval/);
   assert.match(feed, /const isNeedsReviewFeed = activeFeed === "needs_review"/);
   assert.match(feed, /const isHandledStatus = activeFeed === "handled"/);
   assert.match(feed, /Approving…/);

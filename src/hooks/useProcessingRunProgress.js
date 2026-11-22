@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getBookkeepingRunProgress } from '../services/bookkeeping/bookkeepingClient.js';
 import { acceptProgress, processingProgressView, startProgressPolling } from '../utils/processingProgressView.js';
 export default function useProcessingRunProgress(businessId,accountId,enabled=true){
   const [snapshot,setSnapshot]=useState(null);
   const [error,setError]=useState(null);
+  const [refreshKey,setRefreshKey]=useState(0);
+  const refresh=useCallback(()=>setRefreshKey(value=>value+1),[]);
   useEffect(()=>{
-    setSnapshot(null);setError(null);
+    setSnapshot(previous=>previous?.businessId===businessId&&previous?.accountId===accountId?previous:null);setError(null);
     if(!enabled||!businessId||!accountId)return undefined;
     let stop,active=false;
     const discover=()=>{
@@ -23,6 +25,6 @@ export default function useProcessingRunProgress(businessId,accountId,enabled=tr
     if(typeof window!=='undefined')window.addEventListener('focus',visible);
     if(typeof document!=='undefined')document.addEventListener('visibilitychange',visible);
     return ()=>{stop?.();if(typeof window!=='undefined')window.removeEventListener('focus',visible);if(typeof document!=='undefined')document.removeEventListener('visibilitychange',visible);};
-  },[businessId,accountId,enabled]);
-  return {run:snapshot?.businessId===businessId&&snapshot?.accountId===accountId?snapshot.run:null,error};
+  },[businessId,accountId,enabled,refreshKey]);
+  return {run:snapshot?.businessId===businessId&&snapshot?.accountId===accountId?snapshot.run:null,error,refresh};
 }
