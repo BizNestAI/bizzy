@@ -1654,7 +1654,6 @@ export default function MonthlyReviewConsole() {
         if (!accountId) throw new Error("Choose a GL account before approving.");
         const selectedAccount = mirrorFeedAccounts.find((account) => String(account.id) === String(accountId));
         const expenseRefund = isExpenseRefundSelection(row, selectedAccount);
-        if (expenseRefund && !window.confirm(`Record as an expense refund?\n\nThis will reduce ${selectedAccount.name}. Use this only when the transaction is a refund or merchant credit, not business income.`)) return;
         result = await safeFetch(`${routeBase}/approve`, {
           method: "POST",
           body: {

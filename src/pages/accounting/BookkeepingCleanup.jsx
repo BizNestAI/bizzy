@@ -1795,7 +1795,6 @@ function BookkeepingCleanup() {
     const glAccountName =
       glAccount?.name || glAccountId || null;
     const expenseRefund = isExpenseRefundSelection(txn, glAccount);
-    if (expenseRefund && !window.confirm(`Record as an expense refund?\n\nThis will reduce ${glAccountName}. Use this only when the transaction is a refund or merchant credit, not business income.`)) return;
     setApprovalLedgerEntry(id, {
       status: "pending",
       originalTxn: txn,
