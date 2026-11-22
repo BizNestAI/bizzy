@@ -1,4 +1,5 @@
 import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
+import { buildExpenseRefundTreatment, isExpenseRefundSelection } from "./expenseRefundTreatment.js";
 /* global process */
 import crypto from "node:crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
@@ -14,7 +15,7 @@ import {
 import { fetchChartOfAccounts, validateBusinessQboCreditCardAccount } from "./qboAccounts.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
-import { evaluateIncomingDepositPostingGuard } from "./incomingDepositMatchService.js";
+import { evaluateIncomingDepositPostingGuard as defaultIncomingDepositPostingGuard } from "./incomingDepositMatchService.js";
 import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
 import {
   detectQuickBooksPaymentsProtectedWorkflow,
@@ -84,7 +85,9 @@ function approvalIdempotencyKey({ businessId, approval, actorType }) {
     duplicate_risk_acknowledged: approval.duplicate_risk_acknowledged === true,
     reviewed_duplicate_candidate_id: approval.reviewed_duplicate_candidate_id || null,
     decision_version: approval.decision_version || null,
-    credit_card_inflow_resolution: approval.meta?.credit_card_inflow_resolution?.resolution_type || null,
+    credit_card_inflow_resolution: approval.expense_refund_confirmed === true ? null : approval.meta?.credit_card_inflow_resolution?.resolution_type || null,
+    ...(approval.expense_refund_confirmed === true ? { expense_refund_confirmed: true,
+      expense_refund_review_epoch: approval.expense_refund_review_epoch || null } : {}),
     ...(approval.meta?.statement_pending_confirmation_request ? {
       statement_pending_confirmation_request: approval.meta.statement_pending_confirmation_request,
       statement_pending_review_epoch: approval.meta.statement_pending_review_epoch || 0,
@@ -217,6 +220,7 @@ async function validateSelectedAccounts({ businessId, items, explicitFinalByTxn 
       explicitFinalByTxn[txnId] = String(account.id);
     }
   }
+  return accountMap;
 }
 
 export async function approveBookkeepingTransactions({
@@ -233,6 +237,7 @@ export async function approveBookkeepingTransactions({
   existingMetaOverrideByTransactionId = {},
   db = defaultSupabase,
   validateSelectedAccountsFn = validateSelectedAccounts,
+  evaluateIncomingDepositPostingGuard = defaultIncomingDepositPostingGuard,
 } = {}) {
   if (!businessId) throw new BookkeepingApprovalError("missing_business_id", 400);
   if (!Array.isArray(items) || !items.length) throw new BookkeepingApprovalError("missing_items", 400);
@@ -274,7 +279,10 @@ export async function approveBookkeepingTransactions({
       duplicate_risk_acknowledged: item?.duplicate_risk_acknowledged === true,
       reviewed_duplicate_candidate_id: item?.reviewed_duplicate_candidate_id || existingMetaMap[txnIdFromItem(item)]?.qbo_duplicate_candidates?.[0]?.qbo_txn_id || null,
       decision_version: item?.duplicate_risk_acknowledged === true ? 2 : null,
+      expense_refund_confirmed: item?.expense_refund_confirmed === true,
+      expense_refund_review_epoch: existingMetaMap[txnIdFromItem(item)]?.posting_cancelled_at || existingMetaMap[txnIdFromItem(item)]?.expense_refund_treatment?.review_epoch || null,
       meta: { user_selected_resolution: item?.resolution || existingMetaMap[txnIdFromItem(item)]?.user_selected_resolution || "categorize_new",
+        credit_card_inflow_resolution: { resolution_type: normalizeSpecializedInflowResolution(item?.credit_card_inflow_resolution || item?.inflow_type) },
         statement_pending_confirmation_request: existingMetaMap[txnIdFromItem(item)]?.statement_pending_confirmation_request,
         statement_pending_review_epoch: existingMetaMap[txnIdFromItem(item)]?.statement_pending_review_epoch || 0 },
     },
@@ -364,10 +372,42 @@ export async function approveBookkeepingTransactions({
     throw new BookkeepingApprovalError("pending_transaction_not_postable", 400, { transactions: pendingIds });
   }
 
+  const explicitFinalByTxn = {};
+  for (const item of items) {
+    const id = finalIdFromItem(item) || suggestedIdMap[txnIdFromItem(item)];
+    if (id) explicitFinalByTxn[txnIdFromItem(item)] = id;
+  }
+  const selectedAccounts = await validateSelectedAccountsFn({ businessId, items, explicitFinalByTxn });
+  const refundTreatments = new Map();
+  items = items.map((item) => {
+    const txnId = txnIdFromItem(item);
+    const transaction = bankTxnMap[txnId];
+    const account = selectedAccounts?.get(String(finalIdFromItem(item) || suggestedIdMap[txnId]));
+    if (item.expense_refund_confirmed !== true && !isExpenseRefundSelection(transaction, account)) return item;
+    try {
+      if (!finalIdFromItem(item)) throw new Error("expense_refund_explicit_account_required");
+      const sourceType = sourceTypeByPlaidAccount.get(String(transaction.plaid_account_id));
+      const treatment = buildExpenseRefundTreatment({ businessId, transaction, account, actorId, actorType,
+        confirmed: item.expense_refund_confirmed === true, sourceType, source, timestamp: nowIso });
+      treatment.review_epoch = existingMetaMap[txnId]?.posting_cancelled_at || existingMetaMap[txnId]?.expense_refund_treatment?.review_epoch || null;
+      if (hasAuthoritativeQuickBooksMatch({ status: statusMap[txnId], meta: existingMetaMap[txnId] })) {
+        throw new Error("confirmed_match_requires_match_undo");
+      }
+      if (isProtectedCreditCardPaymentWorkflow({ meta: existingMetaMap[txnId] || {} })) {
+        throw new Error("credit_card_payment_requires_match");
+      }
+      refundTreatments.set(txnId, treatment);
+      return { ...item, newAccountName: account.name, learn_reusable_rule: false, only_this_transaction: true,
+        ...(sourceType === "creditcard" ? { credit_card_inflow_resolution: "merchant_refund" } : {}) };
+    } catch (error) {
+      throw new BookkeepingApprovalError(error.code || error.message, 400, { transactions: [txnId] });
+    }
+  });
+
   const unresolvedCreditCardInflowIds = (bankTxns || []).filter((row) => {
     const isInflow = String(row.direction || "").toUpperCase() === "INFLOW" || Number(row.amount || 0) > 0;
     if (!isInflow || sourceTypeByPlaidAccount.get(String(row.plaid_account_id)) !== "creditcard") return false;
-    if (hasFinalSpecializedTypeAuthority({ meta: existingMetaMap[row.id] || {} })) return false;
+    if (!existingMetaMap[row.id]?.expense_refund_treatment && hasFinalSpecializedTypeAuthority({ meta: existingMetaMap[row.id] || {} })) return false;
     const item = items.find((candidate) => String(txnIdFromItem(candidate)) === String(row.id));
     return !normalizeSpecializedInflowResolution(item?.credit_card_inflow_resolution || item?.inflow_type);
   }).map((row) => row.id);
@@ -443,14 +483,6 @@ export async function approveBookkeepingTransactions({
       transactions: preCutoffIds,
     });
   }
-
-  const explicitFinalByTxn = {};
-  for (const item of items || []) {
-    const txnId = txnIdFromItem(item);
-    const explicitFinalId = finalIdFromItem(item);
-    if (txnId && explicitFinalId) explicitFinalByTxn[txnId] = explicitFinalId;
-  }
-  await validateSelectedAccountsFn({ businessId, items, explicitFinalByTxn });
 
   const missingCheckFinals = [];
   const ccPairConfirmTxnIds = new Set();
@@ -595,6 +627,19 @@ export async function approveBookkeepingTransactions({
         decidedAt: nowIso,
         statementAuthority: bankTxn?.pending_resolution_payload || null,
       });
+      const refundTreatment = refundTreatments.get(txnId);
+      if (mergedMeta.expense_refund_treatment) {
+        mergedMeta.prior_expense_refund_treatment = mergedMeta.expense_refund_treatment;
+        delete mergedMeta.expense_refund_treatment;
+        if (mergedMeta.credit_card_inflow_resolution?.expense_refund_treatment) delete mergedMeta.credit_card_inflow_resolution;
+      }
+      if (refundTreatment) {
+        mergedMeta.expense_refund_treatment = refundTreatment;
+        if (specializedDecision) Object.assign(specializedDecision, {
+          standalone_refund_acknowledged: true,
+          expense_refund_treatment: refundTreatment,
+        });
+      }
       if (specializedDecision) {
         const authoritativeMeta = supersedeProvisionalClassification(mergedMeta, {
           finalType: specializedDecision.resolution_type,
@@ -683,6 +728,8 @@ export async function approveBookkeepingTransactions({
 
       return {
         transaction_id: txnId,
+        expense_refund_confirmed: item.expense_refund_confirmed === true,
+        expense_refund_review_epoch: refundTreatment?.review_epoch || null,
         status: isConfirmedCcPaymentPair ? "matched" : item?.status,
         final_qbo_account_id: effectiveFinalId,
         final_qbo_account_name: effectiveFinalName,
@@ -739,6 +786,14 @@ export async function approveBookkeepingTransactions({
       actor: actorId,
       actorRole: "manual_approval",
     });
+    // Refund attestation establishes accounting treatment, not proof that QBO
+    // does not already contain this transaction. Keep matching fail-closed.
+    if (refundTreatments.has(approval.transaction_id) && !guard.allowed) {
+      throw new BookkeepingApprovalError(guard.reason || "incoming_deposit_match_required", 409, {
+        transactions: [approval.transaction_id],
+        message: "Refund approval requires a complete QuickBooks match check with no unresolved match. The transaction remains in Needs Review.",
+      });
+    }
     const explicitlyCategorizedAsNew =
       String(approval.meta?.user_selected_resolution || "categorize_new") === "categorize_new" &&
       Boolean(approval.final_qbo_account_id);
@@ -815,6 +870,13 @@ export async function approveBookkeepingTransactions({
       mergedMeta.taxonomy_flags = { ...(mergedMeta.taxonomy_flags || {}), is_check: true };
     }
     const idempotencyKey = approvalIdempotencyKey({ businessId, approval: item, actorType });
+    if (mergedMeta.expense_refund_treatment) {
+      mergedMeta.expense_refund_treatment = { ...mergedMeta.expense_refund_treatment, idempotency_key: idempotencyKey };
+      if (mergedMeta.credit_card_inflow_resolution?.expense_refund_treatment) {
+        mergedMeta.credit_card_inflow_resolution = { ...mergedMeta.credit_card_inflow_resolution,
+          expense_refund_treatment: mergedMeta.expense_refund_treatment };
+      }
+    }
     return {
       business_id: businessId,
       transaction_id: item.transaction_id,

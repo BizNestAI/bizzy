@@ -60,6 +60,7 @@ import {
 } from "../../services/bookkeeping/bookkeepingClient.js";
 import { buildPaymentAccountDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
 import { hasStrongCreditCardPaymentMemo, isCreditCardPaymentWorkflow } from "../../services/bookkeeping/creditCardPaymentStatus.js";
+import { isExpenseRefundSelection } from "../../services/bookkeeping/expenseRefundTreatment.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
 import { ClarificationModal } from "../../components/Bizzy/OperatorRequestsPanel.jsx";
@@ -1793,6 +1794,8 @@ function BookkeepingCleanup() {
     if (!glAccount) return;
     const glAccountName =
       glAccount?.name || glAccountId || null;
+    const expenseRefund = isExpenseRefundSelection(txn, glAccount);
+    if (expenseRefund && !window.confirm(`Record as an expense refund?\n\nThis will reduce ${glAccountName}. Use this only when the transaction is a refund or merchant credit, not business income.`)) return;
     setApprovalLedgerEntry(id, {
       status: "pending",
       originalTxn: txn,
@@ -1803,7 +1806,8 @@ function BookkeepingCleanup() {
     });
     try {
       const approvalResult = await approveTransactions(businessId, [
-        { txnId: id, resolution: "categorize_new", newAccountId: glAccountId, newAccountName: glAccountName, newAccountType: glAccount?.type || null },
+        { txnId: id, resolution: "categorize_new", newAccountId: glAccountId, newAccountName: glAccountName, newAccountType: glAccount?.type || null,
+          ...(expenseRefund ? { expense_refund_confirmed: true, only_this_transaction: true, learn_reusable_rule: false } : {}) },
       ]);
       const serverRow = Array.isArray(approvalResult?.rows)
         ? approvalResult.rows.find((row) => String(row.transaction_id || row.id || "") === String(id))
@@ -1836,7 +1840,7 @@ function BookkeepingCleanup() {
         detail: {
           severity: "error",
           title: "Approval failed",
-          body: "The transaction remains in Needs Review. Please try again.",
+          body: e?.body?.message || e?.message || "The transaction remains in Needs Review. Please try again.",
         },
       }));
     }

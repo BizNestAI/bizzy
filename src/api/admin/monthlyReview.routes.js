@@ -2443,6 +2443,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
         only_this_transaction: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false,
         reason: req.body?.reason || "Approved from Monthly Review Needs Review feed.",
         credit_card_inflow_resolution: req.body?.credit_card_inflow_resolution || null,
+        expense_refund_confirmed: req.body?.expense_refund_confirmed === true,
       }],
       actorId: req.user?.id,
       actorType: "admin",

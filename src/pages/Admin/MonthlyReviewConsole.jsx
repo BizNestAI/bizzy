@@ -1,4 +1,5 @@
 import { pendingResolutionRequestKey } from "../../services/bookkeeping/pendingResolutionRequest.js";
+import { isExpenseRefundSelection } from "../../services/bookkeeping/expenseRefundTreatment.js";
 import { refreshPendingResolutionFeeds } from "../../services/bookkeeping/pendingResolutionFeedRefresh.js";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { derivePostingEligibilityRecheckAvailability } from "./postingEligibilityRecheckAvailability.js";
@@ -1651,6 +1652,9 @@ export default function MonthlyReviewConsole() {
       const learnReusableRule = bookkeepingRulePreferences?.[transactionId] !== false;
       if (actionKey === "approve") {
         if (!accountId) throw new Error("Choose a GL account before approving.");
+        const selectedAccount = mirrorFeedAccounts.find((account) => String(account.id) === String(accountId));
+        const expenseRefund = isExpenseRefundSelection(row, selectedAccount);
+        if (expenseRefund && !window.confirm(`Record as an expense refund?\n\nThis will reduce ${selectedAccount.name}. Use this only when the transaction is a refund or merchant credit, not business income.`)) return;
         result = await safeFetch(`${routeBase}/approve`, {
           method: "POST",
           body: {
@@ -1663,6 +1667,7 @@ export default function MonthlyReviewConsole() {
             learn_reusable_rule: learnReusableRule,
             only_this_transaction: learnReusableRule === false,
             credit_card_inflow_resolution: options?.creditCardInflowResolution || null,
+            expense_refund_confirmed: expenseRefund,
           },
         });
       } else if (actionKey === "reclassify") {
@@ -1730,7 +1735,7 @@ export default function MonthlyReviewConsole() {
       });
       setBusyFeedAction("");
     }
-  }, [bookkeepingRulePreferences, detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction, refreshAfterRecovery, selectedBusinessId]);
+  }, [bookkeepingRulePreferences, detail?.run?.id, mirrorFeedAccounts, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction, refreshAfterRecovery, selectedBusinessId]);
 
   const recoverBookkeepingFeedRow = useCallback(async (event, row) => {
     event?.preventDefault?.();
