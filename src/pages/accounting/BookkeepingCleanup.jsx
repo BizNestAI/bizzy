@@ -3,6 +3,7 @@ import { admissionNotice, shouldRefreshAdmission, admissionRefreshDelay, ADMISSI
 import useProcessingRunProgress from '../../hooks/useProcessingRunProgress.js';
 import ProcessingProgressNotice from '../../components/Accounting/ProcessingProgressNotice.jsx';
 import { refreshProcessingFeed } from '../../utils/processingProgressView.js';
+import { confirmedMatchToastDescription } from "../../services/bookkeeping/incomingDepositMatchOutcome.js";
 import { plaidStatusView, postingLabel } from '../../utils/plaidStatusView.js';
 import { pendingResolutionRequestKey } from "../../services/bookkeeping/pendingResolutionRequest.js";
 import { invalidatePendingResolutionCaches } from "../../services/bookkeeping/pendingResolutionFeedRefresh.js";
@@ -2533,7 +2534,7 @@ function BookkeepingCleanup() {
           detail: {
             severity: "success",
             title: "Match confirmed",
-            description: `${formattedMatchedAmount} fee linked to an existing QuickBooks expense`,
+            description: confirmedMatchToastDescription(matchedTransaction, patch, formattedMatchedAmount),
             transactionId: id,
             accountId: matchedTransaction.plaid_account_id || matchedTransaction.plaidAccountId || matchedTransaction.accountId || matchedTransaction.account_id || accountFilter || null,
             operationId: `incoming-qbo-match:${id}:${patch.reconciled_at || patch.updated_at || "confirmed"}`,

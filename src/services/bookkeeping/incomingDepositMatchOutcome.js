@@ -1,3 +1,21 @@
+import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
+
+export function confirmedMatchToastDescription(transaction = {}, patch = {}, formattedAmount = "") {
+  const amount = Number(transaction.signed_amount ?? transaction.signedAmount ?? transaction.amount);
+  const direction = String(transaction.direction || "").toUpperCase();
+  const inflow = direction === "INFLOW" || (!direction && amount > 0);
+  const outflow = direction === "OUTFLOW" || (!direction && amount < 0);
+  if (inflow) {
+    const candidate = (patch.incoming_deposit_candidates || patch.meta?.incoming_deposit_candidates || transaction.incoming_deposit_candidates || transaction.meta?.incoming_deposit_candidates || [])[0];
+    const hasInvoices = candidate?.invoice_refs?.length > 0 || candidate?.invoice_ids?.length > 0;
+    return `${formattedAmount} income linked to ${hasInvoices ? "existing QuickBooks invoices" : "an existing QuickBooks transaction"}`;
+  }
+  if (outflow && (detectProcessorSettlementActivity(transaction)?.kind === "fee" || transaction.processor_fee || transaction.meta?.processor_fee)) {
+    return `${formattedAmount} fee linked to an existing QuickBooks expense`;
+  }
+  return `${formattedAmount} payment linked to an existing QuickBooks transaction`;
+}
+
 const CACHE_REASONS = new Set([
   "qbo_match_cache_never_synced",
   "qbo_match_cache_stale",
