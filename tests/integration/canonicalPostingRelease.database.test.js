@@ -44,6 +44,20 @@ test('canonical release upgrades captured effective roles/schema plus explicit i
    }
    for(const [name,marker] of [['auto_post_technical_block','statement_pending_authority'],['auto_post_technical_block','canonical_posting_shape'],['admit_handled_auto_post','lock_statement_pending_ids'],['acquire_posting_lock','lock_bookkeeping_exclusion_identity'],['claim_qbo_posting_intent','lock_bookkeeping_exclusion_identity']])assert.equal(sql(`select bool_and(position('${marker}' in prosrc)>0) from pg_proc where pronamespace='public'::regnamespace and proname='${name}'`),'t',name+marker);
   });
+  await t.test('forward execution guard is atomic, idempotent and changes only one body under captured owners',()=>{
+   const forward=read('supabase/migrations/20261124000000_restore_posting_execution_taxonomy_guard.sql'),before=functions(),oldTriggers=triggers();
+   assert.throws(()=>sql(forward.replace("notify pgrst, 'reload schema';","select 1/0;\nnotify pgrst, 'reload schema';")),/division by zero/);
+   assert.deepEqual(functions(),before);assert.equal(triggers(),oldTriggers);
+   const unknown="begin; do $$ declare d text; b text; begin select pg_get_functiondef(oid),prosrc into d,b from pg_proc where oid='public.auto_post_technical_block(public.transaction_categorizations,text,jsonb,date)'::regprocedure; execute replace(d,b,replace(b,'elsif p_context is null then return','elsif p_context is null /* unknown contract */ then return')); end $$;\n"+forward.replace(/^begin;/,'');
+   assert.throws(()=>sql(unknown),/posting_execution_guard_contract_unknown/);assert.deepEqual(functions(),before);assert.equal(triggers(),oldTriggers);
+   sql(forward);const after=functions();sql(forward);assert.deepEqual(functions(),after);assert.equal(triggers(),oldTriggers);
+   for(const original of before){const installed=after.find(x=>x.signature===original.signature);
+    const changed=original.signature.startsWith('auto_post_technical_block(');
+    assert.deepEqual(changed?{...installed,definition:null}:installed,changed?{...original,definition:null}:original,original.signature);
+    if(changed)assert.notEqual(installed.definition,original.definition);
+   }
+   assert.equal(sql("select position('or b.direction is null' in prosrc)>0 from pg_proc where oid='public.auto_post_technical_block(public.transaction_categorizations,text,jsonb,date)'::regprocedure"),'t');
+  });
   await t.test('confirmed loan split compiles and schedules using the captured table and trigger contracts',()=>{
    const b=randomUUID(),id=randomUUID(),actor=randomUUID(),key=randomUUID(),physical=randomUUID(),sid=randomUUID();
    sql(`insert into auth.users(id) values('${actor}');`,'supabase_admin');
@@ -63,7 +77,8 @@ test('canonical release upgrades captured effective roles/schema plus explicit i
    assert.equal(sql(`select final_qbo_account_id is null and post_after>now() and meta->>'posting_shape_binding' is not null from public.transaction_categorizations where transaction_id='${id}'`),'t');
   });
   await t.test('verification and scheduled-preflight SQL execute read-only with all fences present',()=>{
-   sql(`create schema supabase_migrations;create table supabase_migrations.schema_migrations(version text primary key,name text);insert into supabase_migrations.schema_migrations values('20261123230000','canonical_posting_shape_authority');`);
+   sql(`create schema supabase_migrations;create table supabase_migrations.schema_migrations(version text primary key,name text);insert into supabase_migrations.schema_migrations values('20261123230000','canonical_posting_shape_authority'),('20261124000000','restore_posting_execution_taxonomy_guard');`);
+   const forwardReport=sql(read('scripts/releases/posting-execution-guard/verify.sql'));assert.ok(forwardReport.includes('20261124000000'));assert.ok(forwardReport.split('\n').some(line=>line.endsWith('|t|t|t|t|t|t|t')));
    const report=sql(read('scripts/releases/canonical-posting-shape/verify.sql'));assert.ok(report.includes('20261123230000'));
    const labels=['canonical SQL compiler','split execution binding','statement settlement authority retained','admission material fingerprint','admission statement fence retained','execution delegates to technical guard','split account validation','split balance validation','split approval snapshot','split claim serialization','atomic documented reopen','posting lock exclusion fence','posting claim exclusion fence','exclusion account fence'];
    for(const label of labels)assert.ok(report.split('\n').some(line=>line===`${label}|t|t`),label);

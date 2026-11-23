@@ -1,3 +1,4 @@
+import { postingExecutionTaxonomyGuardCases } from "../helpers/postingExecutionTaxonomyGuardCases.js";
 import { canonicalPostingShapeCases } from "../helpers/canonicalPostingShapeCases.js";
 /* global process, Buffer */
 import test from "node:test";
@@ -263,6 +264,9 @@ test('guarded Handled admission on real PostgreSQL', {timeout:180000},async t=>{
     assert.equal(sql("select 'lock_timeout=2s'=any(proconfig) from pg_proc where oid='public.auto_post_technical_block(public.transaction_categorizations,text,jsonb,date)'::regprocedure"),'t');
     fixture();row();assert.throws(()=>sql(`set test.reject_fence='yes';select public.admit_handled_auto_post('${bid}',true);`),/existing_fence_preserved/);
   });
-  await canonicalPostingShapeCases({t,sql,fixture,row,rpc,cat,concurrent,lockIdentity,container:name,network,scope:()=>({bid,account,item})});
+  sql(read('20261124000000_restore_posting_execution_taxonomy_guard.sql'));
+  const canonicalOptions={t,sql,fixture,row,rpc,cat,concurrent,lockIdentity,container:name,network,scope:()=>({bid,account,item})};
+  await postingExecutionTaxonomyGuardCases(canonicalOptions);
+  await canonicalPostingShapeCases(canonicalOptions);
  }finally {spawnSync('docker',['rm','-f',`${name}-api`,name]);spawnSync('docker',['network','rm',network]);}
 });

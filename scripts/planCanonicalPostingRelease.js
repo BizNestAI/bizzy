@@ -6,13 +6,13 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {verifyCanonicalRunner,projectRef,releaseFile,releaseCliVersion} from './prepareCanonicalPostingReleaseRunner.js';
 export const cliVersion=releaseCliVersion;
-export function assertSingleMigrationPlan(output) {
+export function assertSingleMigrationPlan(output,filename=releaseFile) {
  const files=[...new Set(output.match(/[A-Za-z0-9_]+\.sql\b/g)||[])].sort();
- assert.deepEqual(files,[releaseFile],'ABORT: dry-run plan is not exactly the authorized migration');
+ assert.deepEqual(files,[filename],'ABORT: dry-run plan is not exactly the authorized migration');
  return files;
 }
-export function planCanonicalRelease({workdir,localDbUrl=null,linkFrom=null,run=spawnSync}) {
- const root=path.resolve(workdir),manifest=verifyCanonicalRunner(root);
+export function planCanonicalRelease({workdir,localDbUrl=null,linkFrom=null,run=spawnSync,releaseVersion:targetVersion=undefined,releaseFile:filename=releaseFile}) {
+ const root=path.resolve(workdir),manifest=verifyCanonicalRunner(root,{releaseVersion:targetVersion,releaseFile:filename});
  const args=['db','push','--dry-run'];
  if(localDbUrl){
   const url=new URL(localDbUrl);assert.ok(['postgres:','postgresql:'].includes(url.protocol),'PostgreSQL URL required');assert.ok(['127.0.0.1','localhost','[::1]'].includes(url.hostname),'local test URL only');
@@ -52,7 +52,7 @@ export function planCanonicalRelease({workdir,localDbUrl=null,linkFrom=null,run=
  if(process.env.SUPABASE_DB_PASSWORD)output=output.split(process.env.SUPABASE_DB_PASSWORD).join('[redacted]');
  fs.writeFileSync(path.join(root,'dry-run.txt'),output);
  assert.equal(result.status,0,'dry run failed; inspect sanitized local dry-run.txt');
- const plan=assertSingleMigrationPlan(output);
+ const plan=assertSingleMigrationPlan(output,filename);
  fs.writeFileSync(path.join(root,'plan.json'),JSON.stringify({mode:localDbUrl?'local-fixture':'linked-read-only',cli_version:cliVersion,project_ref:projectRef,migrations:plan,executed_migrations:false},null,2)+'\n');
  return plan;
 }

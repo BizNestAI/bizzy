@@ -63,7 +63,7 @@ test("approval route validates and resolves rows before QBO-capable command proc
   assert.ok(resolveIndex > 0 && commandIndex > resolveIndex);
   assert.match(route, /transaction_ids_missing/);
   assert.match(route, /status\(422\)/);
-  const schemaIndex = route.indexOf("assertInteractivePostingCommandSchema", resolveIndex - 1000);
+  const schemaIndex = route.lastIndexOf("assertInteractivePostingCommandSchema", resolveIndex);
   assert.ok(schemaIndex > 0 && schemaIndex < resolveIndex);
   assert.doesNotMatch(route.slice(resolveIndex, commandIndex + 1000), /legacy_transaction_queue/);
   assert.match(route, /A required database update has not been applied/);

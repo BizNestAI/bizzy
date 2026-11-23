@@ -1,0 +1,43 @@
+{
+  "project_ref": "zwufvvrmjbymgyjntdzk",
+  "received_at": "2026-11-23T19:52:09.494138+00:00",
+  "captured_at": null,
+  "timestamp_basis": "Local receipt/preparation timestamp; not a SQL execution timestamp.",
+  "source": "Operator-confirmed eight-version production ledger and applied canonical migration; no production connection made.",
+  "read_only_planning": true,
+  "linked_planning_authorized": false,
+  "migration_history": [
+    {
+      "version": "20260808174146",
+      "name": "remote_schema"
+    },
+    {
+      "version": "20261111220000",
+      "name": "auto_post_handled_admission"
+    },
+    {
+      "version": "20261117230000",
+      "name": "stale_pending_admin_resolution"
+    },
+    {
+      "version": "20261118220000",
+      "name": "stale_pending_global_admin_availability"
+    },
+    {
+      "version": "20261118230000",
+      "name": "stale_pending_permanent_admin_capability"
+    },
+    {
+      "version": "20261120220000",
+      "name": "stale_pending_durable_account_scope"
+    },
+    {
+      "version": "20261120233000",
+      "name": "handled_exclusion_posting_safety"
+    },
+    {
+      "version": "20261123230000",
+      "name": "canonical_posting_shape_authority"
+    }
+  ]
+}
