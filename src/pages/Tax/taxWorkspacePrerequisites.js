@@ -10,9 +10,10 @@ export function resolveTaxWorkspacePrerequisites({
     ? adminBusinessId
     : businessId;
   const pending = Boolean(
-    authLoading
-    || adminLoading
-    || !userId
+    adminLoading
+    // Active Admin View comes from the server-verified opaque session. Its
+    // selected business does not require a separate customer Supabase login.
+    || (!adminActive && (authLoading || !userId))
     || !resolvedBusinessId
   );
   return {

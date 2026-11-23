@@ -147,8 +147,11 @@ function deferred() {
   return { promise, resolve };
 }
 
-test("browser reload restores scope and starts one v2 workspace request without remounting", async () => {
+for (const adminOnly of [false, true]) test(adminOnly
+  ? "verified Admin View loads Tax without a customer session or another browser tab"
+  : "browser reload restores scope and starts one v2 workspace request without remounting", async () => {
   const browser = installBrowser();
+  if (adminOnly) browser.window.sessionStorage.setItem("bizzi:admin_view_session", "test-admin-session");
   const React = await import("react");
   const { act } = React;
   const runAct = async (callback) => {
@@ -214,7 +217,7 @@ test("browser reload restores scope and starts one v2 workspace request without 
   const { default: ProtectedRoute } = await vite.ssrLoadModule("/src/components/UserAdmin/ProtectedRoute.jsx");
   const { default: TaxDashboard } = await vite.ssrLoadModule("/src/pages/Tax/TaxDashboard.jsx");
 
-  const session = { user: { id: "user-1", email: "owner@example.com", email_confirmed_at: "2026-01-01T00:00:00Z" } };
+  const session = adminOnly ? null : { user: { id: "user-1", email: "owner@example.com", email_confirmed_at: "2026-01-01T00:00:00Z" } };
   const restoredSession = deferred();
   let authListener;
   supabase.auth.getSession = () => restoredSession.promise;
@@ -239,11 +242,20 @@ test("browser reload restores scope and starts one v2 workspace request without 
   };
 
   const workspaceRequests = [];
+  const workspaceHeaders = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, options = {}) => {
     const url = String(input);
+    if (adminOnly && url.includes("/api/admin-view/context")) {
+      assert.equal(new Headers(options.headers).get("x-bizzi-admin-view"), "test-admin-session");
+      return new Response(JSON.stringify({ context: { admin_view: true, read_only: true,
+        business_id: "admin-business", business_name: "Selected business", staff_role: "owner_admin",
+        capabilities: ["admin_bookkeeping_write"], expires_at: "2099-01-01T00:00:00Z" } }),
+      { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     if (url.includes("/api/tax/workspace?")) {
       workspaceRequests.push(url);
+      workspaceHeaders.push(new Headers(options.headers));
       return new Promise(() => {});
     }
     throw new Error(`Unexpected fetch: ${url}`);
@@ -280,18 +292,25 @@ test("browser reload restores scope and starts one v2 workspace request without 
       userProfileLoaded: queriedTables.includes("user_profiles"),
       businessProfileLoaded: queriedTables.includes("business_profiles"),
     }, {
-      persistedBusinessId: "business-1",
+      persistedBusinessId: adminOnly ? null : "business-1",
       workspaceRequestCount: 1,
       timedOut: false,
-      userProfileLoaded: true,
-      businessProfileLoaded: true,
+      userProfileLoaded: !adminOnly,
+      businessProfileLoaded: !adminOnly,
     });
-    assert.match(workspaceRequests[0], /businessId=business-1/);
+    assert.match(workspaceRequests[0], adminOnly ? /businessId=admin-business/ : /businessId=business-1/);
+    if (adminOnly) {
+      assert.equal(workspaceHeaders[0].get("x-bizzi-admin-view"), "test-admin-session");
+      assert.equal(workspaceHeaders[0].get("x-business-id"), "admin-business");
+      assert.equal(workspaceHeaders[0].get("Authorization"), null);
+    }
     assert.match(workspaceRequests[0], /year=2026/);
     assert.match(workspaceRequests[0], /projectionVersion=tax-workspace-v2/);
   } finally {
     globalThis.fetch = originalFetch;
     await runAct(async () => root.unmount());
+    await supabase.auth.stopAutoRefresh();
+    supabase.auth.broadcastChannel?.close();
     await vite.close();
   }
 });

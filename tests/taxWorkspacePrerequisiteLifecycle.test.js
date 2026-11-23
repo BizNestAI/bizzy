@@ -115,6 +115,30 @@ test("SPA-ready scope and read-only Admin View resolve one authorized business",
   }), { pending: false, businessId: "admin-view-business" });
 });
 
+test("verified Admin View does not depend on a customer user or customer auth bootstrap", async () => {
+  const requests = [];
+  const onWorkspaceRequest = id => requests.push(id);
+  const root = createEffectRoot();
+  try {
+    const inputs = { authLoading: true, userId: null, businessId: "stale-customer-business", adminLoading: true, adminActive: false };
+    await render(root, inputs, onWorkspaceRequest);
+    assert.deepEqual(requests, []);
+    await render(root, { ...inputs, adminLoading: false, adminActive: true, adminBusinessId: "verified-admin-business" }, onWorkspaceRequest);
+    assert.deepEqual(requests, ["verified-admin-business"]);
+    await render(root, { ...inputs, authLoading: false, adminLoading: false, adminActive: true, adminBusinessId: "verified-admin-business" }, onWorkspaceRequest);
+    assert.deepEqual(requests, ["verified-admin-business"], "a customer auth event must not be needed or start another workspace request");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+test("loading, missing-scope and ended Admin View sessions cannot borrow a stale customer business", () => {
+  const base = { authLoading: false, userId: null, businessId: "stale-customer-business", adminLoading: false, adminActive: true, adminBusinessId: "admin-business" };
+  for (const overrides of [{ adminLoading: true }, { adminBusinessId: null }, { adminActive: false }]) {
+    assert.deepEqual(resolveTaxWorkspacePrerequisites({ ...base, ...overrides }), { pending: true, businessId: null });
+  }
+});
+
 test("missing session or active business remains explicitly pending for the bounded page Retry", () => {
   assert.equal(resolveTaxWorkspacePrerequisites({
     authLoading: false,
