@@ -1,4 +1,5 @@
-import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
+import { qboEnvName } from "../../utils/qboEnv.js";
+import { statementPendingWorkflowRow, isStatementPendingState } from "./statementPendingAuthority.js";
 import { buildExpenseRefundTreatment, isExpenseRefundSelection } from "./expenseRefundTreatment.js";
 /* global process */
 import crypto from "node:crypto";
@@ -74,7 +75,8 @@ function canonicalKeyFromItem(item = {}) {
   return item?.final_canonical_account_key || item?.canonical_account_key || item?.canonicalAccountKey || null;
 }
 
-function approvalIdempotencyKey({ businessId, approval, actorType }) {
+function approvalIdempotencyKey({ businessId, approval, actorType, renewalContext = null }) {
+  if (renewalContext?.key) return renewalContext.key;
   return crypto.createHash("sha256").update(JSON.stringify({
     action: "bookkeeping_approval",
     business_id: businessId,
@@ -250,7 +252,7 @@ export async function approveBookkeepingTransactions({
 
   const { data: existingMetaRows, error: catFetchErr } = await db
     .from("transaction_categorizations")
-    .select("transaction_id,status,meta,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key")
+    .select("transaction_id,status,review_reopened_at,meta,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key")
     .eq("business_id", businessId)
     .in("transaction_id", txnIds);
   if (catFetchErr) throw new BookkeepingApprovalError("categorization_fetch_failed", 500, { message: catFetchErr.message });
@@ -270,9 +272,23 @@ export async function approveBookkeepingTransactions({
     suggestedCanonicalMap[row.transaction_id] = row.suggested_canonical_account_key || row.meta?.canonical_account_key || null;
   });
 
+  const renewalContexts = new Map();
+  for (const item of items) {
+    const txnId = txnIdFromItem(item);
+    const row = (existingMetaRows || []).find(row => row.transaction_id === txnId);
+    if (!row?.review_reopened_at || isStatementPendingState(row.meta?.pending_resolution_state)) continue;
+    const { data, error } = await db.rpc("canonical_approval_renewal_context", {
+      p_business_id: businessId, p_transaction_id: txnId, p_account_id: String(finalIdFromItem(item) || ""),
+      p_actor_id: actorId, p_actor_type: actorType, p_env: qboEnvName,
+    });
+    if (error || !data?.key) throw new BookkeepingApprovalError(error?.message || "approval_renewal_context_unavailable", error?.code === "42501" ? 403 : 409);
+    renewalContexts.set(txnId, data);
+  }
+
   const requestedIdempotencyKeys = (items || []).map((item) => approvalIdempotencyKey({
     businessId,
     actorType,
+    renewalContext: renewalContexts.get(txnIdFromItem(item)),
     approval: {
       transaction_id: txnIdFromItem(item),
       final_qbo_account_id: finalIdFromItem(item),
@@ -862,6 +878,15 @@ export async function approveBookkeepingTransactions({
     const bankTxn = bankTxnMap[item.transaction_id] || null;
     const checkHit = isCheck(bankTxn || {});
     const mergedMeta = { ...(item.meta || {}) };
+    const renewalContext = renewalContexts.get(item.transaction_id);
+    delete mergedMeta.manual_renewal_key;
+    delete mergedMeta.manual_review_epoch;
+    delete mergedMeta.manual_review_identity;
+    if (renewalContext) {
+      mergedMeta.manual_renewal_key = renewalContext.key;
+      mergedMeta.manual_review_epoch = renewalContext.epoch;
+      mergedMeta.manual_review_identity = renewalContext.identity;
+    }
     if (checkHit.is_check) {
       mergedMeta.is_check = true;
       mergedMeta.check_confidence = checkHit.confidence;
@@ -869,7 +894,7 @@ export async function approveBookkeepingTransactions({
       if (checkHit.check_number) mergedMeta.check_number = checkHit.check_number;
       mergedMeta.taxonomy_flags = { ...(mergedMeta.taxonomy_flags || {}), is_check: true };
     }
-    const idempotencyKey = approvalIdempotencyKey({ businessId, approval: item, actorType });
+    const idempotencyKey = approvalIdempotencyKey({ businessId, approval: item, actorType, renewalContext });
     if (mergedMeta.expense_refund_treatment) {
       mergedMeta.expense_refund_treatment = { ...mergedMeta.expense_refund_treatment, idempotency_key: idempotencyKey };
       if (mergedMeta.credit_card_inflow_resolution?.expense_refund_treatment) {

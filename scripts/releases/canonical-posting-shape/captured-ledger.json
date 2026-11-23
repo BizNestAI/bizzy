@@ -1,0 +1,16 @@
+{
+  "project_ref": "zwufvvrmjbymgyjntdzk",
+  "captured_at": "2026-11-19T17:26:45.359903+00:00",
+  "read_only_planning": false,
+  "source": "Existing operator-supplied 2026-11-19 catalog. Stale; fixture only, not current production evidence.",
+  "migration_history": [
+    {
+      "name": "remote_schema",
+      "version": "20260808174146"
+    },
+    {
+      "name": "auto_post_handled_admission",
+      "version": "20261111220000"
+    }
+  ]
+}

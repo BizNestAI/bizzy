@@ -21,7 +21,7 @@ export function boundedAdmissionMeta(meta = {}, entry = {}) {
 // enroll old unmarked production backlog. Specialized workflows retain theirs.
 export function prepareHandledAdmissionRow(row, now = new Date().toISOString()) {
   if (!AUTHORIZED.has(row?.status) || !row.final_qbo_account_id || row.qbo_txn_id || row.posted_at || row.meta?.taxonomy_type || row.meta?.cc_payment_pair_id) return row;
-  return { ...row, post_after: null, meta: boundedAdmissionMeta(row.meta, { state: "pending", source: "handled", at: now }) };
+  return { ...row, post_after: null, meta: { ...boundedAdmissionMeta(row.meta, { state: "pending", source: "handled", at: now }), posting_shape_env: envName() } };
 }
 
 function withDeadline(query, timeoutMs) {

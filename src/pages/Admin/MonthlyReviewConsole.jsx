@@ -3108,6 +3108,9 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
     scheduleAutomaticallyEligible: scheduleAutomatic,
   });
   const labels = {
+    bind_existing_schedule: "Validate and bind · deadline unchanged",
+    bound_existing_schedule: "Bound · deadline unchanged",
+    already_valid: "Already valid · existing deadline",
     eligible_to_schedule: "Eligible to schedule",
     newly_scheduled: "Newly scheduled",
     ready_auto_post_off: "Ready · Auto-post off",

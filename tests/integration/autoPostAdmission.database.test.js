@@ -1,3 +1,4 @@
+import { canonicalPostingShapeCases } from "../helpers/canonicalPostingShapeCases.js";
 /* global process, Buffer */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -245,5 +246,23 @@ test('guarded Handled admission on real PostgreSQL', {timeout:180000},async t=>{
     fixture();const businessId=bid,transactionId=row();row({status:'failed'});fixture();const foreignBusinessId=bid,foreignId=row();
     await testAdmissionRoutes({sql,businessId,transactionId,foreignBusinessId,foreignId,container:name,network});
   });
+  sql('grant select on public.qbo_accounts_cache to service_role');
+  sql(read('20261101106000_monthly_review_posting_eligibility_rechecks.sql'));
+  sql(read('20261014_transaction_split_workflow.sql'));
+  // Model the installed later-migration wrappers and settings, rather than
+  // letting the new migration replace an older unwrapped function body.
+  sql(`create function public.canonical_test_existing_fence() returns void language plpgsql as $$ begin if current_setting('test.reject_fence',true)='yes' then raise exception 'existing_fence_preserved'; end if; end $$;
+   do $$ declare o oid; def text; body text; begin
+    o:='public.admit_handled_auto_post(uuid,boolean,numeric,integer,boolean,uuid[],text,timestamptz,text,timestamptz,uuid,date,text)'::regprocedure;
+    select pg_get_functiondef(o),prosrc into def,body from pg_proc where oid=o;
+    execute replace(def,body,replace(body,E'begin\n if p_business_id',E'begin\n perform public.canonical_test_existing_fence();\n if p_business_id'));
+   end $$;
+   alter function public.auto_post_technical_block(public.transaction_categorizations,text,jsonb,date) set lock_timeout='2s';`);
+  sql(read('20261123230000_canonical_posting_shape_authority.sql'));
+  await t.test('forward migration retains installed function fences and configuration',()=>{
+    assert.equal(sql("select 'lock_timeout=2s'=any(proconfig) from pg_proc where oid='public.auto_post_technical_block(public.transaction_categorizations,text,jsonb,date)'::regprocedure"),'t');
+    fixture();row();assert.throws(()=>sql(`set test.reject_fence='yes';select public.admit_handled_auto_post('${bid}',true);`),/existing_fence_preserved/);
+  });
+  await canonicalPostingShapeCases({t,sql,fixture,row,rpc,cat,concurrent,lockIdentity,container:name,network,scope:()=>({bid,account,item})});
  }finally {spawnSync('docker',['rm','-f',`${name}-api`,name]);spawnSync('docker',['network','rm',network]);}
 });

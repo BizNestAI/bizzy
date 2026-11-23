@@ -1,0 +1,39 @@
+{
+  "project_ref": "zwufvvrmjbymgyjntdzk",
+  "received_at": "2026-11-23T16:54:05Z",
+  "captured_at": null,
+  "timestamp_basis": "User-supplied query results received in this conversation; exact SQL execution timestamp was not supplied.",
+  "source": "Operator-supplied current production migration ledger, 2026-11-23",
+  "read_only_planning": true,
+  "linked_planning_authorized": false,
+  "migration_history": [
+    {
+      "version": "20260808174146",
+      "name": "remote_schema"
+    },
+    {
+      "version": "20261111220000",
+      "name": "auto_post_handled_admission"
+    },
+    {
+      "version": "20261117230000",
+      "name": "stale_pending_admin_resolution"
+    },
+    {
+      "version": "20261118220000",
+      "name": "stale_pending_global_admin_availability"
+    },
+    {
+      "version": "20261118230000",
+      "name": "stale_pending_permanent_admin_capability"
+    },
+    {
+      "version": "20261120220000",
+      "name": "stale_pending_durable_account_scope"
+    },
+    {
+      "version": "20261120233000",
+      "name": "handled_exclusion_posting_safety"
+    }
+  ]
+}

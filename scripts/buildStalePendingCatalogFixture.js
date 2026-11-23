@@ -1,7 +1,8 @@
+/* global process */
 // Local schema construction only. No credentials, clients or SQL execution.
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
-const directory='tests/fixtures/stalePendingProduction';
+const directory=process.argv[2]||'tests/fixtures/stalePendingProduction';
 const c=JSON.parse(fs.readFileSync(`${directory}/catalog.json`));
 const supplement=JSON.parse(fs.readFileSync(`${directory}/supplement.json`));
 const roots=JSON.parse(fs.readFileSync(`${directory}/scope-roots.json`));

@@ -83,5 +83,5 @@ test("automatic posting prefilter and item handler both consume the durable deci
   const cron = readFileSync(join(process.cwd(), "src/jobs/booksPost.cron.js"), "utf8");
   assert.match(cron, /createNewIncomeOverride = options\?\.createNewIncomeOverride === true \|\| hasFinalCategorizeAsNewResolution\(item\)/);
   assert.match(cron, /if \(isIncomingDeposit && hasFinalCategorizeAsNewResolution\(item\)\)[\s\S]*guardedEligible\.push\(item\)/);
-  assert.match(cron, /async function postBankInflowDeposit[\s\S]*DetailType: "DepositLineDetail"/);
+  assert.match(cron, /async function postBankInflowDeposit[\s\S]*compileCanonicalDepositPosting/);
 });

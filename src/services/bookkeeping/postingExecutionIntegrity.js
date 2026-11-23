@@ -12,7 +12,7 @@ export function guardQboWrites(client,check) {
       if(!/^(create|update|delete|void|send|batch|upload|attach|post)/i.test(String(key)))return value.bind(object);
       return (...args)=>{
         const callback=typeof args.at(-1)==="function"?args.at(-1):null;
-        const operation=Promise.resolve().then(check).then(()=>Reflect.apply(value,object,args));
+        const operation=Promise.resolve().then(()=>check({ method: String(key), payload: args[0] })).then(()=>Reflect.apply(value,object,args));
         if(callback){operation.catch(error=>callback(error));return undefined;}
         return operation;
       };

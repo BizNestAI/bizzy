@@ -1,3 +1,4 @@
+import { canonicalPostingEligibility } from "./canonicalPostingEligibility.js";
 import crypto from "node:crypto";
 import { computePostAfterForAutoPost, getAutoPostPolicy, reEvaluateAutoPostBacklog } from "./autoPostControl.js";
 import { hasManualAccountAuthority } from "./postingDecisionAuthority.js";
@@ -48,7 +49,7 @@ function recoveryCounts(rows = []) {
   return {
     examined: rows.length,
     eligible: outcomes(["eligible_to_schedule", "ready_auto_post_off", "newly_scheduled", "manually_approved_scheduled", "manually_approved_auto_post_off"]),
-    scheduled: outcomes(["newly_scheduled", "manually_approved_scheduled", "already_scheduled", "retry_scheduled"]),
+    scheduled: outcomes(["newly_scheduled", "manually_approved_scheduled", "already_scheduled", "already_valid", "bound_existing_schedule", "retry_scheduled"]),
     retryable: rows.filter((row) => row.outcome === "retry_scheduled" || row.reason === "retry_already_scheduled").length,
     still_blocked: outcomes(["blocked", "hard_blocked", "returned_to_review", "categorized_requires_approval"]),
     specialized: rows.filter((row) => String(row.reason || "").endsWith("_workflow_protected")).length,
@@ -71,7 +72,7 @@ function vendorRuleIdentity(bank = {}) {
   return merchant.length >= 3 ? `merchant:${merchant}` : null;
 }
 
-function rowVersion({ cat, bank, job, intent }) {
+function rowVersion({ cat, bank, job, intent, canonical }) {
   return crypto.createHash("sha256").update(JSON.stringify({
     transaction_id: cat.transaction_id,
     categorization_updated_at: cat.updated_at || null,
@@ -86,6 +87,7 @@ function rowVersion({ cat, bank, job, intent }) {
     job_updated_at: job?.updated_at || null,
     intent_status: intent?.status || null,
     intent_updated_at: intent?.updated_at || null,
+    canonical_binding: canonical?.binding || null,
   })).digest("hex");
 }
 
@@ -110,7 +112,7 @@ function durableManualAuthority(cat = {}) {
   return hasManualAccountAuthority(cat) && Boolean(cat.decided_by && cat.decided_at && cat.final_qbo_account_id);
 }
 
-function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMapping, qboAccount, accountRepair, recoveryBatch, nowMs }) {
+function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMapping, qboAccount, accountRepair, recoveryBatch, nowMs, canonical }) {
   cat = applySpecializedTypeAuthority(cat);
   const meta = cat.meta || {};
   // possible_qbo_duplicate remains an advisory signal here; only durable,
@@ -134,10 +136,11 @@ function hardBlock({ cat, bank, job, intent, sourceAccount, sourceItem, sourceMa
   const taxonomy = String(meta.taxonomy_type || "").toLowerCase();
   if (SPECIAL_TAXONOMIES.has(taxonomy)) return `${taxonomy || "special"}_workflow_protected`;
   const inflow = String(bank.direction || "").toUpperCase() === "INFLOW" || (!bank.direction && Number(bank.amount || 0) > 0);
-  if (inflow && !hasFinalCategorizeAsNewResolution(cat)) return "incoming_deposit_resolution_required";
-  if (["unresolved", "ambiguous"].includes(accountRepair?.kind)) return accountRepair.reason;
-  if (!cat.final_qbo_account_id && accountRepair?.kind !== "resolved") return "missing_final_qbo_account_unresolved";
-  if (!qboAccount || qboAccount.active === false) return "invalid_or_inactive_qbo_account";
+  if (inflow && !canonical && !hasFinalCategorizeAsNewResolution(cat)) return "incoming_deposit_resolution_required";
+  if (canonical?.reason) return canonical.reason;
+  if (!canonical?.split && ["unresolved", "ambiguous"].includes(accountRepair?.kind)) return accountRepair.reason;
+  if (!canonical?.split && !cat.final_qbo_account_id && accountRepair?.kind !== "resolved") return "missing_final_qbo_account_unresolved";
+  if (!canonical?.split && (!qboAccount || qboAccount.active === false)) return "invalid_or_inactive_qbo_account";
   if (!sourceMapping?.qbo_account_id) return "missing_source_qbo_mapping";
   // Plaid connection state controls future ingestion only. Already-imported
   // transactions remain postable through their independently validated QBO mapping.
@@ -253,7 +256,7 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
   const result = {
     ok: true, business_id: businessId, month, account_scope: accountScope || null,
     auto_post_enabled: policy.enabled === true, examined: 0, truncated: scoped.truncated,
-    counts: { eligible_to_schedule: 0, ready_auto_post_off: 0, already_scheduled: 0, processing: 0, retry_scheduled: 0, reconciling: 0, blocked: 0, returned_to_review: 0, failed: 0 },
+    counts: { bind_existing_schedule: 0, already_valid: 0, eligible_to_schedule: 0, ready_auto_post_off: 0, already_scheduled: 0, processing: 0, retry_scheduled: 0, reconciling: 0, blocked: 0, returned_to_review: 0, failed: 0 },
     reason_counts: {}, rows: [],
   };
   for (const context of scoped.rows) {
@@ -262,15 +265,28 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
     let outcome = "failed";
     let why = "posting_eligibility_row_evaluation_failed";
     try {
+      const taxonomy = String(cat.meta?.taxonomy_type || "");
+      if (["", "split_transaction"].includes(taxonomy) && (cat.final_qbo_account_id || taxonomy === "split_transaction")) {
+        context.canonical = await canonicalPostingEligibility({ db, businessId, transactionId: cat.transaction_id, env: qboEnvName });
+      }
       why = hardBlock({ ...context, nowMs });
+      if (!why && context.canonical?.split && cat.post_after) {
+        const { data, error } = await db.rpc("inspect_existing_split_schedule", {
+          p_business_id: businessId, p_transaction_id: cat.transaction_id, p_env: qboEnvName,
+        });
+        if (error || !data) throw Object.assign(new Error("existing_schedule_inspection_unavailable"), { code: "existing_schedule_inspection_unavailable" });
+        context.existingSchedule = data;
+        why = data.reason || null;
+      }
       const jobDue = Date.parse(job?.next_attempt_at || job?.scheduled_at || "");
       if (why === "already_posted") outcome = "blocked";
       else if (why === "qbo_receipt_requires_reconciliation" || why === "provider_reconciliation_required") outcome = "reconciling";
       else if (why === "active_provider_operation" || why === "active_worker_lease") outcome = "processing";
       else if (job?.state === "retry_scheduled" && jobDue > nowMs) { outcome = "retry_scheduled"; why = "retry_already_scheduled"; }
-      else if (cat.final_qbo_account_id && cat.post_after && Date.parse(cat.post_after) > nowMs && job?.state !== "failed") { outcome = "already_scheduled"; why = "valid_future_schedule"; }
+      else if (!why && context.existingSchedule) { outcome = context.existingSchedule.binding_required ? "bind_existing_schedule" : "already_valid"; why = context.existingSchedule.binding_required ? "existing_schedule_binding_required" : "existing_schedule_already_valid"; }
+      else if (!why && (cat.final_qbo_account_id || context.canonical?.split) && cat.post_after && Date.parse(cat.post_after) > nowMs && job?.state !== "failed") { outcome = "already_scheduled"; why = "valid_future_schedule"; }
       else if (!why) {
-        const manual = durableManualAuthority(cat);
+        const manual = context.canonical?.split === true || context.canonical?.authority === "manual" || durableManualAuthority(cat);
         const automatic = automaticById.get(String(cat.transaction_id));
         const automaticSafe = automatic?.category === "safe_new_post" || automatic?.category === "already_scheduled";
         const ordinaryPersistedAuthority =
@@ -291,7 +307,8 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
               : ordinaryPersistedAuthority ? "final_persisted_gl_authority" : "current_automatic_safety_gates";
         }
       } else outcome = String(why || "").startsWith("missing_final_qbo_account_") ? "returned_to_review" : "blocked";
-    } catch {
+    } catch (error) {
+      why = error.code || "posting_eligibility_row_evaluation_failed";
       // A corrupt historical row is reportable, but must not abort the bounded preview.
     }
     count(result, outcome);
@@ -319,7 +336,7 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
       vendor_rule_identity: vendorRuleIdentity(bank),
       expected_post_after: outcome === "eligible_to_schedule" ? computePostAfterForAutoPost(true, 24, nowMs) : cat.post_after || null,
       categorization_updated_at: cat.updated_at || null,
-      current_meta: cat.meta || {},
+      current_meta: { ...(cat.meta || {}), posting_shape_env: qboEnvName, ...(context.canonical?.binding ? { posting_shape_expected: context.canonical.binding } : {}) },
       deterministic_statement_credit_recovery_required: cat.deterministic_statement_credit_recovery_required === true,
     });
   }
@@ -433,6 +450,16 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
           if (row.vendor_rule_learned) result.counts.vendor_rules_learned = (result.counts.vendor_rules_learned || 0) + 1;
           if (row.vendor_rule_retry_queued) result.counts.learning_retries_queued = (result.counts.learning_retries_queued || 0) + 1;
         }
+      } else if (outcome === "bind_existing_schedule" && expectedVersion === preview.preview_version) {
+        const { data, error } = await db.rpc("bind_existing_split_schedule", {
+          p_business_id: businessId, p_transaction_id: row.transaction_id, p_actor_id: actorId,
+          p_expected_binding: row.current_meta.posting_shape_expected,
+          p_expected_updated_at: row.categorization_updated_at, p_request_id: started.id, p_env: qboEnvName,
+        });
+        if (error || !data?.ok) throw error || Object.assign(new Error("existing_schedule_binding_failed"), { code: "existing_schedule_binding_failed" });
+        outcome = data.outcome;
+      } else if (outcome === "bind_existing_schedule") {
+        outcome = "conflicted";
       } else if ((outcome === "eligible_to_schedule" || outcome === "ready_auto_post_off") && scheduleAutomaticallyEligible === true && expectedVersion === preview.preview_version) {
         const { data, error } = await db.from("transaction_categorizations").update({
           ...(row.final_account_repair ? {
@@ -461,25 +488,12 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
         if (Array.isArray(data) && data.length === 0) outcome = "conflicted";
         else outcome = preview.auto_post_enabled ? "newly_scheduled" : "ready_auto_post_off";
       } else if (outcome === "returned_to_review" && row.missing_final_repair_required && expectedVersion === preview.preview_version) {
-        const { data, error } = await db.from("transaction_categorizations").update({
-          status: "needs_review",
-          review_status: "needs_review",
-          post_after: null,
-          post_error: null,
-          decided_by: null,
-          decided_at: null,
-          meta: {
-            ...(row.current_meta || {}),
-            safe_to_auto_handle: false,
-            safe_to_auto_post: false,
-            post_block_reason: row.reason,
-            handled_final_account_invariant: "returned_to_review_unresolved_final_account",
-            posting_eligibility_recheck_execution_id: started.id,
-          },
-          updated_at: new Date(nowMs).toISOString(),
-        }).eq("business_id", businessId).eq("transaction_id", row.transaction_id).eq("updated_at", row.categorization_updated_at).in("status", HANDLED).select("transaction_id");
+        const { data, error } = await db.rpc("return_posting_to_review", {
+          p_business_id: businessId, p_transaction_id: row.transaction_id,
+          p_updated_at: row.categorization_updated_at, p_reason: row.reason,
+        });
         if (error) throw error;
-        if (Array.isArray(data) && data.length === 0) outcome = "conflicted";
+        if (data !== true) outcome = "conflicted";
       } else if ((outcome === "eligible_to_schedule" || outcome === "ready_auto_post_off") && scheduleAutomaticallyEligible === true) {
         outcome = "conflicted";
       }
@@ -492,7 +506,7 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
     const safeRow = { ...row };
     delete safeRow.current_meta;
     delete safeRow.categorization_updated_at;
-    result.rows.push({ ...safeRow, outcome, expected_post_after: ["newly_scheduled", "manually_approved_scheduled"].includes(outcome) ? postAfter : null });
+    result.rows.push({ ...safeRow, outcome, expected_post_after: ["newly_scheduled", "manually_approved_scheduled"].includes(outcome) ? postAfter : ["bound_existing_schedule", "already_valid", "already_scheduled"].includes(outcome) ? row.expected_post_after : null });
   }
   for (const transactionId of manualById.keys()) {
     result.counts.hard_blocked = (result.counts.hard_blocked || 0) + 1;

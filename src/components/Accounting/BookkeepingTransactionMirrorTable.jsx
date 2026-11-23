@@ -162,6 +162,9 @@ function BookkeepingTransactionMirrorRow({
       : row.cc_payment_cc_qbo_account_id || row.meta?.cc_payment_cc_qbo_account_id) ||
     "";
   const protectedInflowDecision = resolveProtectedCreditCardInflowDecision(row);
+  const savedSplitLines = row.split_lines || row.split_transaction?.lines || [];
+  const hasConfirmedSplit = row.meta?.taxonomy_type === "split_transaction" &&
+    row.meta?.split_transaction_status === "confirmed" && savedSplitLines.length >= 2;
   const initialAccountId = rowCcTargetId || row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || "";
   const [selectedAccountId, setSelectedAccountId] = React.useState(initialAccountId);
   const [selectedCcCandidateId, setSelectedCcCandidateId] = React.useState("");
@@ -395,7 +398,11 @@ function BookkeepingTransactionMirrorRow({
 
       <div className="min-w-0">
         {!isPosted && !isPending ? <div className="mb-2"><TransactionResolutionSelector transactionId={row.id} value={displayResolution} suggested={suggestedTransactionResolution(row)} busy={resolutionBusy} error={resolutionError} onChange={changeResolution} /></div> : null}
-        {displayResolution === "split_transaction" && loanSplitDraft ? (
+        {hasConfirmedSplit ? (
+          <div className="rounded-lg border border-emerald-300/25 bg-emerald-300/[0.08] px-2 py-1 text-xs font-semibold text-emerald-100">
+            Transaction Split · {savedSplitLines.length} lines · {formatMoney(Math.abs(Number(row.amount || 0)))}
+          </div>
+        ) : displayResolution === "split_transaction" && loanSplitDraft ? (
           <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">
             Loan Payment · Needs Split
           </div>

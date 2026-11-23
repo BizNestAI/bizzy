@@ -1,3 +1,4 @@
+import { qboEnvName } from "../../../utils/qboEnv.js";
 import { Router } from "express";
 import crypto from "crypto";
 import process from "node:process";
@@ -616,6 +617,7 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
     const nextMeta = {
       ...(existingCat?.meta || {}),
       taxonomy_type: "split_transaction",
+      posting_shape_env: qboEnvName,
       split_transaction_status: "confirmed",
       split_transaction_id: result?.split?.id || null,
       protected_workflow: "split_transaction",
@@ -625,6 +627,8 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
       posting_in_progress: false,
     };
     delete nextMeta.posting_cancelled_at;
+    delete nextMeta.posting_shape_binding;
+    delete nextMeta.posting_shape_expected;
     const { data: categorization, error: upsertErr } = await supabase
       .from("transaction_categorizations")
       .upsert(

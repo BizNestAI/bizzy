@@ -34,7 +34,7 @@ function isPostingQboAccount(account = {}) {
 export function validateSplitTransaction({ transaction = {}, split = {}, accountsById = new Map() } = {}) {
   if (transaction.pending === true) throw new SplitTransactionWorkflowError("pending_transaction_not_postable");
   const signedMinor = signedAmountMinor(transaction);
-  if (!Number.isInteger(signedMinor) || signedMinor === 0) throw new SplitTransactionWorkflowError("split_transaction_requires_nonzero_amount");
+  if (!Number.isSafeInteger(signedMinor) || signedMinor === 0) throw new SplitTransactionWorkflowError("split_transaction_requires_nonzero_amount");
   const expected = Math.abs(signedMinor);
   const rawLines = Array.isArray(split.lines) ? split.lines : [];
   const lines = rawLines
@@ -44,13 +44,12 @@ export function validateSplitTransaction({ transaction = {}, split = {}, account
       amount_minor: Number(line.amount_minor),
       qbo_account_id: line.qbo_account_id || line.qboAccountId || null,
       qbo_account_name: line.qbo_account_name || line.qboAccountName || null,
-    }))
-    .filter((line) => Number(line.amount_minor || 0) > 0);
+    }));
   if (lines.length < 2) throw new SplitTransactionWorkflowError("split_transaction_requires_two_lines");
   const total = lines.reduce((sum, line) => sum + Number(line.amount_minor || 0), 0);
   if (total !== expected) throw new SplitTransactionWorkflowError("split_transaction_total_mismatch", { expected_amount_minor: expected, actual_amount_minor: total });
   for (const line of lines) {
-    if (!Number.isInteger(line.amount_minor) || line.amount_minor <= 0) {
+    if (!Number.isSafeInteger(line.amount_minor) || line.amount_minor <= 0) {
       throw new SplitTransactionWorkflowError("split_transaction_line_amount_invalid", { line_index: line.line_index });
     }
     if (!line.qbo_account_id) throw new SplitTransactionWorkflowError("split_transaction_line_missing_account", { line_index: line.line_index });
@@ -61,6 +60,9 @@ export function validateSplitTransaction({ transaction = {}, split = {}, account
     }
     if (!isPostingQboAccount(account)) {
       throw new SplitTransactionWorkflowError("split_transaction_line_account_not_postable", { line_index: line.line_index, qbo_account_id: line.qbo_account_id });
+    }
+    if (account.active === false || account.Active === false || /uncategorized|suspense|ask my accountant/i.test(accountName(account) || "")) {
+      throw new SplitTransactionWorkflowError("split_transaction_line_account_not_postable", { line_index: line.line_index });
     }
     line.qbo_account_name = accountName(account) || line.qbo_account_name;
   }
@@ -183,6 +185,9 @@ export function splitTransactionRowToExecutableSplit(row = {}) {
 
 export function buildSplitTransactionQboPayload({ transaction = {}, split = {}, mapping = {}, requestId, lineDescription, privateNote } = {}) {
   const validation = validateSplitTransaction({ transaction, split });
+  if (signedAmountMinor(transaction) >= 0 || !["bank", "creditcard"].includes(normalizeAccountType(mapping.qbo_account_type)) || !mapping.qbo_account_id) {
+    throw new SplitTransactionWorkflowError("unsupported_split_shape");
+  }
   const paymentType = normalizeAccountType(mapping.qbo_account_type) === "creditcard" ? "CreditCard" : "Cash";
   const txnDate = transaction.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(txnDate || ""))) throw new SplitTransactionWorkflowError("missing_plaid_posted_date");

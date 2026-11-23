@@ -1706,7 +1706,7 @@ export default function BookkeepingFeed({
                     What type of credit is this?
                   </span>
                 ) : null}
-                {effectiveResolution === "split_transaction" && hasSavedSplit ? (
+                {hasSavedSplit ? (
                   <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-emerald-300/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
                     <span>Transaction Split</span>
                     <span className="text-[9px] font-medium text-emerald-100/65">{savedSplitLines.length} lines · ${(savedSplitLines.reduce((sum, line) => sum + Number(line.amount_minor || 0), 0) / 100).toFixed(2)}</span>
@@ -1720,7 +1720,7 @@ export default function BookkeepingFeed({
                     Loan Payment · Needs Split
                   </span>
                 ) : null}
-                {showCanonicalCoa && accounts.length > 0 ? (
+                {showCanonicalCoa && !hasSavedSplit && accounts.length > 0 ? (
                   <CoaDropdown
                     value={selectedAccountValue}
                     suggestedId={txn.suggestedAccountId}
@@ -1752,7 +1752,7 @@ export default function BookkeepingFeed({
                       if (id && selectedResolution !== "categorize_new") changeResolution(txn, "categorize_new");
                     }}
                   />
-                ) : showCanonicalCoa ? (
+                ) : showCanonicalCoa && !hasSavedSplit ? (
                   <button type="button" disabled className="inline-flex h-7 w-full items-center justify-between rounded-lg border border-white/10 bg-[#101312] px-3 text-[10px] font-medium text-slate-400">
                     <span>{selectedAccountValue ? readOnlyGlLabel : "Account unavailable"}</span><span>▾</span>
                   </button>

@@ -6,6 +6,7 @@ import { buildCreditCardCreditPayload } from "./creditCardMerchantRefundPayload.
 import { qboEnvName } from "../../utils/qboEnv.js";
 import crypto from "crypto";
 import { applySpecializedTypeAuthority } from "./specializedTypeAuthority.js";
+import { canonicalPostingEligibility } from "./canonicalPostingEligibility.js";
 
 function postingError(code, message, status = 409) {
   const error = new Error(message || code);
@@ -221,6 +222,20 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
   if (!item || !bankTransaction) throw postingError("transaction_not_found", "The transaction could not be loaded.", 404);
   if (item.qbo_txn_id || item.posted_at || String(item.status || "").toLowerCase() === "posted") throw postingError("transaction_already_posted", "This transaction is already posted.");
   if (statementPendingWorkflowRow(bankTransaction).pending === true) throw postingError("pending_transaction_not_postable", "Pending bank activity cannot be posted.");
+  if (item.meta?.taxonomy_type === "split_transaction") {
+    const decision = await canonicalPostingEligibility({ db, businessId, transactionId, env: qboEnvName, phase: "worker" });
+    if (decision.reason) throw postingError(decision.reason, "The confirmed split is not eligible for posting.");
+    const preview = {
+      transaction_id: transactionId, row_version: item.updated_at || null,
+      entity_type: decision.entity_type,
+      source_qbo_account: { id: decision.payload.AccountRef.value, name: decision.source_account_name || null },
+      destination_bank_account: null, line_gl_account: null,
+      line_gl_accounts: decision.payload.Line.map(line => ({ id: line.AccountBasedExpenseLineDetail.AccountRef.value, amount: line.Amount, description: line.Description })),
+      approved_final_account_id: null, amount: Math.abs(Number(bankTransaction.amount)), date: bankTransaction.date,
+    };
+    preview.preview_token = crypto.createHash("sha256").update(JSON.stringify({ ...preview, binding: decision.binding })).digest("hex");
+    return preview;
+  }
   if (!item.final_qbo_account_id) throw postingError("missing_final_qbo_account", "Choose and save a QuickBooks GL account before posting.");
 
   const { data: qboConnection, error: connectionError } = await db.from("quickbooks_tokens")
@@ -251,6 +266,10 @@ export async function buildCanonicalPostingPreview({ db, businessId, transaction
   if (approvedAccount.active === false) throw postingError("final_qbo_account_inactive", "The approved QuickBooks GL account is inactive.");
   if (String(approvedAccount.qbo_account_id) !== String(item.final_qbo_account_id)) throw postingError("final_qbo_account_inconsistent", "The approved QuickBooks account is inconsistent.");
   if (!mapping?.qbo_account_id) throw postingError("missing_qbo_account_mapping", "The connected account is not mapped to QuickBooks.");
+  if (!String(item.meta?.taxonomy_type || "")) {
+    const decision = await canonicalPostingEligibility({ db, businessId, transactionId, env: qboEnvName, phase: "worker" });
+    if (decision.reason) throw postingError(decision.reason, "The approved accounting treatment is not eligible for posting.");
+  }
   const entityType = resolveCanonicalPostingRail({ bankTransaction, categorization: item, mapping });
   const sourceAccount = { id: String(mapping.qbo_account_id), name: mapping.qbo_account_name || null };
   const lineAccount = { id: String(approvedAccount.qbo_account_id), name: approvedAccount.name || null };

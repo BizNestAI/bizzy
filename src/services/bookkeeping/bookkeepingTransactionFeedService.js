@@ -1,3 +1,5 @@
+import { canonicalPostingEligibility } from "./canonicalPostingEligibility.js";
+import { qboEnvName } from "../../utils/qboEnv.js";
 import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
 import { supabase } from "../supabaseAdmin.js";
 import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
@@ -20,7 +22,6 @@ import {
 import { normalizeTransactionResolution } from "./transactionResolutionService.js";
 import { requireCanonicalBookkeepingFeedStatus } from "./bookkeepingFeedStatusContract.js";
 import { deriveCanonicalBookkeepingWorkflow } from "./bookkeepingPostingActionEligibility.js";
-import { deriveProviderFreePostingPreflight } from "./canonicalPostingCompiler.js";
 import { isHandledReviewStatus } from "./bookkeepingLifecycleState.js";
 import { hasActualProviderWriteBoundary } from "./providerBoundaryEvidence.js";
 import { applySpecializedTypeAuthority } from "./specializedTypeAuthority.js";
@@ -450,20 +451,23 @@ export async function attachCanonicalSplitsForFeed({ db = supabase, businessId, 
 }
 
 async function attachProviderFreePostingPreflight({ db = supabase, businessId, rows = [] } = {}) {
-  const accountIds = Array.from(new Set(rows.map((row) => String(row.final_qbo_account_id || "")).filter(Boolean)));
-  if (!businessId || !accountIds.length || typeof db?.from !== "function") {
-    return rows.map((row) => ({ ...row, provider_free_preflight: deriveProviderFreePostingPreflight(row) }));
-  }
-  const { data, error } = await db.from("qbo_accounts_cache")
-    .select("qbo_account_id,name,account_type,active")
-    .eq("business_id", businessId)
-    .in("qbo_account_id", accountIds);
-  const byId = error ? new Map() : new Map((data || []).map((account) => [String(account.qbo_account_id), account]));
-  return rows.map((row) => ({
-    ...row,
-    provider_free_preflight: deriveProviderFreePostingPreflight(row, {
-      lineAccount: byId.get(String(row.final_qbo_account_id || "")) || null,
-    }),
+  return Promise.all(rows.map(async row => {
+    if (!isHandledForPosting(row) || !["", "split_transaction"].includes(String(row.meta?.taxonomy_type || ""))) {
+      return row;
+    }
+    let result;
+    try {
+      result = await canonicalPostingEligibility({ db, businessId, transactionId: row.id || row.transactionId, env: qboEnvName, phase: "worker" });
+    } catch {
+      result = { reason: "canonical_posting_eligibility_unavailable" };
+    }
+    return { ...row, provider_free_preflight: {
+      preview_ready: !result.reason,
+      qbo_entity_type: result.entity_type || null,
+      blocker_code: result.reason || null,
+      blocker_reason: result.reason ? String(result.reason).replaceAll("_", " ") : null,
+      provider_call_required: false,
+    } };
   }));
 }
 

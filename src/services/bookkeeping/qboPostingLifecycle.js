@@ -217,7 +217,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   const durableScheduleAt = toTime(postingJob.next_attempt_at || postingJob.scheduled_at);
   const durableScheduledWork = ["scheduled", "retry_scheduled"].includes(String(postingJob.state || "")) &&
     durableScheduleAt && Math.abs(durableScheduleAt - postAfterMs) < 1000;
-  if (postAfterMs && durableScheduledWork && isHandledStatus(status)) {
+  if (postAfterMs && (durableScheduledWork || (!postingJob.state && postAfterMs > nowMs)) && isHandledStatus(status)) {
     if (postAfterMs <= nowMs) {
       return {
         key: "ready_to_post",

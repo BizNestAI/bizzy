@@ -1,5 +1,6 @@
 import { statementPendingWorkflowRow } from "../services/bookkeeping/statementPendingAuthority.js";
 import { continueAutoPostAdmissions } from "../services/bookkeeping/autoPostAdmission.js";
+import { canonicalPostingEligibility, assertCompiledPostingShape } from "../services/bookkeeping/canonicalPostingEligibility.js";
 import { booksPostingStartupDecision } from "./backgroundWorkerStartup.js";
 import { guardQboWrites, assertPostingExecutionIntegrity, postingLockContext, postingAttemptEvidence } from "../services/bookkeeping/postingExecutionIntegrity.js";
 /* global process */
@@ -2575,6 +2576,16 @@ export async function handleItem(item, options = {}) {
     }
   }
 
+  let compiledFinancialPayload = null;
+  if (["", "split_transaction"].includes(String(item.meta?.taxonomy_type || ""))) {
+    const eligibility = await canonicalPostingEligibility({ db: supabase, businessId, transactionId: txnId, env: qboEnvName, phase: "worker" });
+    if (eligibility.reason) {
+      await markTransactionNonPostable(item, eligibility.reason);
+      return;
+    }
+    compiledFinancialPayload = eligibility.payload;
+  }
+
   const idempotencyKey = buildPostIdempotencyKey({
     businessId,
     transactionId: txnId,
@@ -2858,7 +2869,12 @@ export async function handleItem(item, options = {}) {
     .eq("business_id",businessId).eq("transaction_id",txnId).eq("updated_at",executionRow.updated_at).eq("meta->>post_idempotency_key",idempotencyKey);
   if(ownerError)throw ownerError;
   item.meta=executionMeta;
-  const checkExecution=()=>assertPostingExecutionIntegrity({db:supabase,businessId,transactionId:txnId,env:qboEnvName,context:executionContext});
+  const checkExecution=async (operation) => {
+    if (compiledFinancialPayload && operation?.payload?.Line) {
+      assertCompiledPostingShape(compiledFinancialPayload, operation.payload);
+    }
+    await assertPostingExecutionIntegrity({db:supabase,businessId,transactionId:txnId,env:qboEnvName,context:executionContext});
+  };
   // Check before authentication/provider workflows, then before EVERY financial
   // mutator (including vendor creation) using the same current-state guard.
   await checkExecution();
