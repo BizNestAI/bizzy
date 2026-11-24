@@ -1,4 +1,5 @@
 import { canonicalPostingEligibility } from "./canonicalPostingEligibility.js";
+import { postingLeaseAttention } from "./qboPostingLifecycle.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
 import { supabase } from "../supabaseAdmin.js";
@@ -484,6 +485,8 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   if (row.interactive_posting_lifecycle) return row.interactive_posting_lifecycle;
   const meta = row.meta || {};
   const job = row.posting_job || {};
+  const leaseAttention = postingLeaseAttention(row, nowMs);
+  if (leaseAttention) return leaseAttention;
   if (["processing", "reconciling"].includes(job.state)) {
     return { key: job.state === "reconciling" ? "reconciling" : "posting", label: job.state === "reconciling" ? "Checking QuickBooks" : "Posting", tone: "info", detail: "Bizzi is confirming this transaction with QuickBooks." };
   }

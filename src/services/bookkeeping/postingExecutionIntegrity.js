@@ -62,3 +62,23 @@ export async function assertPostingExecutionIntegrity({db,businessId,transaction
   const {data,error}=await db.rpc("check_auto_post_technical_integrity",{p_business_id:businessId,p_transaction_id:transactionId,p_env:env,p_context:context});
   if(error||data){const failure=new Error("Posting technical integrity changed");failure.code=error?"technical_recheck_unavailable":data;failure.qbo_write_may_have_occurred=false;throw failure;}
 }
+
+// Only the initial guard may conclusively reject before provider work. Later
+// guards retain the existing unknown-outcome/reconciliation behavior.
+export async function checkInitialPostingExecution({db,businessId,transactionId,env,context,check}) {
+  try { await check(); }
+  catch (error) {
+    if (error.qbo_write_may_have_occurred !== false) throw error;
+    error.pre_provider_failure_pending = true;
+    const result = await db.rpc("reject_posting_before_provider", {
+      p_business_id: businessId, p_transaction_id: transactionId, p_env: env,
+      p_context: context, p_reason: error.code,
+    });
+    if (result.error || result.data?.ok !== true) {
+      error.finalization_code = result.error?.code || "pre_provider_rejection_unavailable";
+      throw error;
+    }
+    error.posting_failure_finalized = true;
+    throw error;
+  }
+}

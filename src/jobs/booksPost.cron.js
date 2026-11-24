@@ -2,7 +2,7 @@ import { statementPendingWorkflowRow } from "../services/bookkeeping/statementPe
 import { continueAutoPostAdmissions } from "../services/bookkeeping/autoPostAdmission.js";
 import { canonicalPostingEligibility, assertCompiledPostingShape } from "../services/bookkeeping/canonicalPostingEligibility.js";
 import { booksPostingStartupDecision } from "./backgroundWorkerStartup.js";
-import { guardQboWrites, assertPostingExecutionIntegrity, postingLockContext, postingAttemptEvidence } from "../services/bookkeeping/postingExecutionIntegrity.js";
+import { guardQboWrites, assertPostingExecutionIntegrity, checkInitialPostingExecution, postingLockContext, postingAttemptEvidence } from "../services/bookkeeping/postingExecutionIntegrity.js";
 /* global process */
 import crypto from "crypto";
 import { createAdaptivePollLoop } from "./adaptiveWorkerPolling.js";
@@ -2580,6 +2580,12 @@ export async function handleItem(item, options = {}) {
   if (["", "split_transaction"].includes(String(item.meta?.taxonomy_type || ""))) {
     const eligibility = await canonicalPostingEligibility({ db: supabase, businessId, transactionId: txnId, env: qboEnvName, phase: "worker" });
     if (eligibility.reason) {
+      if (eligibility.reason === "existing_schedule_binding_required") {
+        // Preserve the exact legacy schedule for the existing authenticated
+        // validation/binding workflow; do not claim an intent or call QBO.
+        log.info("[books-post] legacy split binding required", { businessId, transactionId: txnId });
+        return { ok: false, outcome: "binding_required", reason: eligibility.reason };
+      }
       await markTransactionNonPostable(item, eligibility.reason);
       return;
     }
@@ -2877,7 +2883,7 @@ export async function handleItem(item, options = {}) {
   };
   // Check before authentication/provider workflows, then before EVERY financial
   // mutator (including vendor creation) using the same current-state guard.
-  await checkExecution();
+  await checkInitialPostingExecution({db:supabase,businessId,transactionId:txnId,env:qboEnvName,context:executionContext,check:checkExecution});
   let qbo = null;
   try {
     qbo = await timePostingStage(timing, "qbo_auth_ms", () => getQBOClient(businessId));
@@ -3312,6 +3318,9 @@ function taxYearFromDate(value) {
 }
 
 async function markFailed(item, message, { manual = false } = {}) {
+  // The initial guard owns atomic finalization. Never follow it with separate
+  // best-effort writes, including when the database finalizer was unavailable.
+  if (message?.posting_failure_finalized || message?.pre_provider_failure_pending) return;
   const normalized = message?.postingError || normalizePostingError(message instanceof Error ? message : new Error(String(message || "post_failed")), {
     qboWriteStarted: message?.qbo_write_may_have_occurred === true,
   });
@@ -3552,7 +3561,7 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
     }
     // A user-initiated failure stays visible for an explicit user retry; it
     // must not quietly enter the background scheduler.
-    await markFailed(item, err?.message || "manual_post_failed", { manual: true });
+    await markFailed(item, err, { manual: true });
     if (postingIntent?.request_id) {
       err.qbo_request_id = postingIntent.request_id;
       err.child_operation_id = postingIntent.request_id;

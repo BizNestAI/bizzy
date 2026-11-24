@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {preProviderPostingLifecycleCases} from '../helpers/preProviderPostingLifecycleCases.js';
 import {prepareCanonicalFixture} from '../../scripts/prepareCanonicalPostingReleaseFixture.js';
 import {prepareCanonicalRunner,verifyCanonicalRunner,releaseFile} from '../../scripts/prepareCanonicalPostingReleaseRunner.js';
 const container=`bizzi-canonical-release-${process.pid}`;
@@ -86,6 +87,33 @@ test('canonical release upgrades captured effective roles/schema plus explicit i
 
    sql(read('scripts/releases/canonical-posting-shape/inspect-car-loan.sql'));
    const readiness=sql(read('scripts/releases/canonical-posting-shape/scheduled-preflight.sql'));assert.ok(readiness.includes('PASS'),readiness);
+  });
+  let bid,account,actor;
+  const splitFixture=()=>{
+   bid=randomUUID();account=randomUUID();actor=randomUUID();const id=randomUUID(),physical=randomUUID(),sid=randomUUID();
+   sql(`insert into auth.users(id) values('${actor}')`,'supabase_admin');
+   sql(`insert into public.user_profiles(id,email) values('${actor}','synthetic@example.invalid');
+    insert into public.internal_staff_users(user_id,role,active) values('${actor}','operator',true);
+    insert into public.business_profiles(id,user_id,business_name,industry,team_size,state,services_offered) values('${bid}','${actor}','Synthetic','Synthetic',1,'NC','Synthetic');
+    insert into public.plaid_physical_accounts(id,business_id) values('${physical}','${bid}');
+    insert into public.plaid_items(business_id,plaid_item_id,plaid_access_token,plaid_env,status) values('${bid}','${account}','synthetic','production','connected');
+    insert into public.plaid_accounts(business_id,plaid_item_id,plaid_account_id,physical_account_id,plaid_env,name) values('${bid}','${account}','${account}','${physical}','production','Synthetic');
+    insert into public.quickbooks_tokens(business_id,access_token,refresh_token,realm_id,qbo_env) values('${bid}','synthetic','synthetic','${bid}','production');
+    insert into public.qbo_accounts_cache(business_id,realm_id,qbo_env,qbo_account_id,name,account_type) values('${bid}','${bid}','production','source','Checking','Bank'),('${bid}','${bid}','production','principal','Car Loan','Long Term Liability'),('${bid}','${bid}','production','interest','Interest','Expense');
+    insert into public.plaid_qbo_account_mappings(business_id,plaid_account_id,qbo_account_id,qbo_account_type,qbo_account_name) values('${bid}','${account}','source','Bank','Checking');
+    insert into public.bank_transactions(id,business_id,plaid_item_id,plaid_account_id,physical_account_id,plaid_env,plaid_transaction_id,date,name,amount,signed_amount,direction,pending) values('${id}','${bid}','${account}','${account}','${physical}','production','${id}','2026-11-01','Synthetic',-517.55,-517.55,'OUTFLOW',false);
+    insert into public.transaction_splits(id,business_id,transaction_id,total_amount_minor,confirmed_by,confirmed_actor_type,lines) values('${sid}','${bid}','${id}',51755,'${actor}','admin','[{"amount_minor":46755,"qbo_account_id":"principal","description":"Principal"},{"amount_minor":5000,"qbo_account_id":"interest","description":"Interest"}]');
+    insert into public.transaction_categorizations(business_id,transaction_id,status,decided_by,decided_at,meta) values('${bid}','${id}','approved','admin',now(),'{"taxonomy_type":"split_transaction","split_transaction_status":"confirmed","split_transaction_id":"${sid}"}');`);
+   return {id,sid};
+  };
+  const cat=id=>JSON.parse(sql(`select to_jsonb(c) from public.transaction_categorizations c where business_id='${bid}' and transaction_id='${id}'`));
+  const rpc=(more='')=>JSON.parse(sql(`select public.admit_handled_auto_post(p_business_id=>'${bid}'${more})`));
+  const inspect=id=>JSON.parse(sql(`select public.inspect_existing_split_schedule('${bid}','${id}')`));
+  await preProviderPostingLifecycleCases({t,sql,splitFixture,scope:()=>({bid,account,realm:bid}),rpc,cat,staff:()=>actor,
+   existingSchedule:(id,due)=>{rpc(',p_enabled=>true');sql(`update public.transaction_categorizations set post_after='${due}' where transaction_id='${id}';update public.transaction_categorizations set meta=meta-'posting_shape_binding' where transaction_id='${id}'`);},
+   decision:(id,phase)=>JSON.parse(sql(`select public.canonical_posting_eligibility('${bid}','${id}','production','${phase}')`)),
+   bind:(id,actor)=>{const expected=inspect(id);return JSON.parse(sql(`select public.bind_existing_split_schedule('${bid}','${id}','${actor}','${expected.binding}','${expected.updated_at}','${randomUUID()}')`));},
+   lockIdentity:id=>{assert.equal(sql(`select public.acquire_posting_lock('${bid}','${id}',statement_timestamp(),600,'synthetic-key')`),'t');return {generation:cat(id).meta.posting_generation,lock_started_at:cat(id).meta.posting_started_at,lock_key:cat(id).meta.post_idempotency_key};},
   });
  }finally{docker(['rm','-f',container]);}
 });

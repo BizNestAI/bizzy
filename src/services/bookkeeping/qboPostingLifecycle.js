@@ -44,6 +44,21 @@ function structuredBlockReason(row = {}) {
   return code ? { code, label: copy?.[0] || "Posting needs attention", detail: copy?.[1] || "Review the posting details before trying again." } : null;
 }
 
+export function postingLeaseAttention(row = {}, nowMs = Date.now()) {
+  const job = row.posting_job || row.bookkeeping_posting_job || {};
+  if (row.meta?.ambiguous_provider_outcome === true) return { key: "reconciling", label: "QuickBooks outcome requires reconciliation", tone: "warning", detail: "Resolve the uncertain provider outcome before any retry.", retryable: false };
+  if (job.state === "reconciling") return null;
+  if ((row.posting_status === "posting_failed" || hasProvenPostingFailure(row)) && row.meta?.posting_in_progress !== true) {
+    const failure = classifyPostingFailure(row.post_error || row.meta?.posting_failure_code || job.last_error_code);
+    return { key: "failed", label: formatPostingFailureLabel(failure.code), tone: "danger", detail: failure.detail, code: failure.code, retryable: job.state !== "processing" && failure.retryable === true };
+  }
+  const lease = toTime(job.lease_expires_at);
+  if (job.state === "processing" && lease !== null && lease <= nowMs) {
+    return { key: "posting_attention", label: "Posting needs attention", tone: "warning", detail: "The posting lease expired. Review the durable outcome before any retry.", retryable: false };
+  }
+  return null;
+}
+
 export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {}) {
   const authoritative = row.qbo_posting_lifecycle || row.posting_lifecycle || null;
   if (authoritative?.key && authoritative?.label) return authoritative;
@@ -117,6 +132,8 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
     };
   }
 
+  const leaseAttention = postingLeaseAttention(row, nowMs);
+  if (leaseAttention) return leaseAttention;
   if (["processing", "reconciling"].includes(postingJob.state)) {
     return {
       key: postingJob.state === "reconciling" ? "reconciling" : "posting",
@@ -256,7 +273,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
 
 export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) {
   const lifecycle = deriveQboPostingLifecycle(row, { nowMs });
-  if (["scheduling_pending","scheduling_retry","auto_post_paused"].includes(lifecycle.key)) return lifecycle;
+  if (["scheduling_pending","scheduling_retry","auto_post_paused","posting_attention"].includes(lifecycle.key)) return lifecycle;
   if (lifecycle.key === "posted") {
     return {
       key: "posted",
