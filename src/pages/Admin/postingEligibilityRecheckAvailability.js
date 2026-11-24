@@ -1,6 +1,7 @@
 export function derivePostingEligibilityRecheckAvailability({
   handledTotalCount,
   countLoaded,
+  countsError = "",
   loading = false,
   executing = false,
   authorized = false,
@@ -11,6 +12,7 @@ export function derivePostingEligibilityRecheckAvailability({
   if (!authorized) return { disabled: true, title: "You do not have permission to perform this action." };
   if (!contextReady) return { disabled: true, title: "Select a valid business and review month." };
   if (executing) return { disabled: true, title: "A posting-eligibility recheck is already running." };
+  if (countsError) return { disabled: true, title: "Refresh Books Review counts successfully before rechecking posting eligibility." };
   if (isLoading) return { disabled: true, title: "Loading Handled transactions…" };
   if (handledCount === 0) return { disabled: true, title: "No Handled transactions exist for the selected month." };
   return { disabled: false, title: "Preview a server-side posting eligibility recheck." };

@@ -184,6 +184,21 @@ export async function canonicalPostingShapeCases({ t, sql, fixture, row, rpc, ca
   fixture();const id=row();assert.equal(decision(id).entity_type,'Purchase');assert.equal(rpc(',p_enabled=>true').scheduled,1);
   assert.equal(sql("select has_function_privilege('authenticated','public.canonical_posting_eligibility(uuid,uuid,text,text)','EXECUTE')"),'f');
  });
+ await t.test('legitimate Undo and scoped manual approval resolve generic review and schedule idempotently',async()=>{
+  await withCanonicalDatabase({container,network},async db=>{
+   const {approveBookkeepingTransactions}=await import('../../src/services/bookkeeping/bookkeepingApprovalService.js');
+   for(const actorType of ['user','admin']){
+    fixture();const {bid}=scope(),actor=staff(),id=row({status:'approved',meta:{protected_review_required:true,protected_review_reason:'personal_or_owner_review'}});
+    sql(`update public.business_profiles set user_id='${actor}' where id='${bid}';update public.bank_transactions set amount=-28 where id='${id}';update public.transaction_categorizations set status='needs_review',post_after=null,meta=meta||'{"review_reopen_authorized":true,"review_reopen_reason":"user_undo"}' where transaction_id='${id}'`);
+    assert.ok(cat(id).review_reopened_at);assert.equal(decision(id).reason,'transaction_not_handled');rpc(',p_enabled=>true');
+    const options={db,businessId:bid,actorId:actor,actorType,requireNeedsReview:true,source:actorType==='admin'?'admin_customer_app':'books_review',items:[{txnId:id,newAccountId:'destination',newAccountName:'Synthetic destination',resolution:'categorize_new',only_this_transaction:true}],validateSelectedAccountsFn:async()=>{
+     const {data,error}=await db.from('qbo_accounts_cache').select('qbo_account_id,name,active,account_type').eq('business_id',bid).eq('qbo_account_id','destination').maybeSingle();assert.equal(error,null);return new Map([['destination',{id:data.qbo_account_id,name:data.name,active:data.active,type:data.account_type}]]);
+    },evaluateIncomingDepositPostingGuard:async()=>({allowed:true})};
+    await approveBookkeepingTransactions(options);const saved=cat(id);assert.ok(saved.post_after);assert.equal(decision(id,'worker').reason,null);assert.equal(saved.meta.protected_review_required,undefined);assert.equal(saved.meta.manual_protection_resolution.actor_id,actor);
+    const repeated=await approveBookkeepingTransactions(options);assert.equal(repeated.idempotent,true);assert.equal(cat(id).post_after,saved.post_after);assert.equal(sql(`select count(*) from public.bookkeeping_approval_events where business_id='${bid}' and transaction_id='${id}'`),'1');
+   }
+  });
+ });
  await t.test('real RPE preview/execution agrees with admission and worker; replay is idempotent',async()=>{
   await withCanonicalDatabase({container,network},async db=>{
    const {buildCanonicalPostingPreview}=await import('../../src/services/bookkeeping/canonicalPostingCompiler.js');

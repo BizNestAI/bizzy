@@ -452,7 +452,8 @@ export async function attachCanonicalSplitsForFeed({ db = supabase, businessId, 
 
 async function attachProviderFreePostingPreflight({ db = supabase, businessId, rows = [] } = {}) {
   return Promise.all(rows.map(async row => {
-    if (!isHandledForPosting(row) || !["", "split_transaction"].includes(String(row.meta?.taxonomy_type || ""))) {
+    if (!isHandledForPosting(row) || !matchesTransactionStatusFilter("handled", row) || row.qbo_txn_id || row.posted_at ||
+        !["", "split_transaction"].includes(String(row.meta?.taxonomy_type || ""))) {
       return row;
     }
     let result;

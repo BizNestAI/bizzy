@@ -4,6 +4,13 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { transformSync } from "esbuild";
 import { derivePostingEligibilityRecheckAvailability } from "../src/pages/Admin/postingEligibilityRecheckAvailability.js";
+
+test("failed counts refresh keeps RPE disabled even when an older Handled count remains", () => {
+  assert.equal(derivePostingEligibilityRecheckAvailability({
+    handledTotalCount: 9, countLoaded: true, countsError: "statement timeout",
+    authorized: true, contextReady: true,
+  }).disabled, true);
+});
 import { isBulkApprovablePostingReason } from "../src/services/bookkeeping/postingEligibilityApprovalPolicy.js";
 import { resolveCompletedPostingEligibilityExecution } from "../src/services/bookkeeping/postingEligibilityExecutionState.js";
 

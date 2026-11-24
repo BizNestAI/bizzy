@@ -25,6 +25,7 @@ import {
 } from "./quickBooksPaymentsProtectedWorkflow.js";
 import {
   resolveManualApprovalBookkeepingMeta as resolveManualApprovalPostingMeta,
+  isProtectedPostingWorkflow,
 } from "./postingDecisionAuthority.js";
 import { INCOMING_DEPOSIT_CATEGORIZE_AS_NEW } from "./incomingDepositResolution.js";
 import {
@@ -252,7 +253,7 @@ export async function approveBookkeepingTransactions({
 
   const { data: existingMetaRows, error: catFetchErr } = await db
     .from("transaction_categorizations")
-    .select("transaction_id,status,review_reopened_at,meta,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key")
+    .select("transaction_id,status,review_reopened_at,qbo_txn_id,posted_at,reconciled_at,posting_hold_batch_id,meta,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key")
     .eq("business_id", businessId)
     .in("transaction_id", txnIds);
   if (catFetchErr) throw new BookkeepingApprovalError("categorization_fetch_failed", 500, { message: catFetchErr.message });
@@ -895,6 +896,33 @@ export async function approveBookkeepingTransactions({
       mergedMeta.taxonomy_flags = { ...(mergedMeta.taxonomy_flags || {}), is_check: true };
     }
     const idempotencyKey = approvalIdempotencyKey({ businessId, approval: item, actorType, renewalContext });
+    // Only this authenticated, account-validated manual persistence path may
+    // resolve the generic classifier review. Inspect stored authority, never
+    // request/override metadata or the already-normalized taxonomy projection.
+    const stored = (existingMetaRows || []).find(row => row.transaction_id === item.transaction_id);
+    const protection = stored?.meta || {};
+    const selectedAccount = selectedAccounts?.get(String(item.final_qbo_account_id));
+    if (["user", "admin"].includes(actorType) && actorId && (item.status || "approved") === "approved" &&
+        bankTxn?.pending === false && Number(bankTxn.amount) < 0 && bankTxn.direction === "OUTFLOW" &&
+        [true, "true"].includes(protection.protected_review_required) &&
+        protection.protected_review_reason === "personal_or_owner_review" &&
+        mergedMeta.protected_review_reason === "personal_or_owner_review" &&
+        [true, "true"].includes(mergedMeta.protected_review_required) &&
+        !protection.taxonomy_type && !protection.protected_workflow && !isProtectedPostingWorkflow(protection) &&
+        !hasAuthoritativeQuickBooksMatch(stored) && !stored.qbo_txn_id && !stored.posted_at &&
+        !stored.reconciled_at && !stored.posting_hold_batch_id && !protection.posting_hold && !protection.ambiguous_provider_outcome &&
+        !protection.posting_in_progress && !protection.post_intent_id && !protection.active_operation_id &&
+        !protection.operation_lease_owner && !protection.provider_write_started_at && !protection.qbo_write_started_at &&
+        selectedAccount && selectedAccount.active !== false && String(selectedAccount.id) === String(item.final_qbo_account_id)) {
+      delete mergedMeta.protected_review_required;
+      delete mergedMeta.protected_review_reason;
+      mergedMeta.manual_protection_resolution = {
+        reason: "personal_or_owner_review", prior_required: protection.protected_review_required,
+        business_id: businessId, transaction_id: item.transaction_id,
+        actor_id: actorId, actor_type: actorType, selected_qbo_account_id: String(selectedAccount.id),
+        resolved_at: nowIso, source, approval_idempotency_key: idempotencyKey,
+      };
+    }
     if (mergedMeta.expense_refund_treatment) {
       mergedMeta.expense_refund_treatment = { ...mergedMeta.expense_refund_treatment, idempotency_key: idempotencyKey };
       if (mergedMeta.credit_card_inflow_resolution?.expense_refund_treatment) {

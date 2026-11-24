@@ -3266,6 +3266,7 @@ function BookkeepingFeedMirrorPanels({
   const recheckAvailability = derivePostingEligibilityRecheckAvailability({
     handledTotalCount: feeds?.handled?.totalCount,
     countLoaded: handledCountLoaded,
+    countsError,
     loading: loadingCounts || postingEligibilityRecheck?.loading,
     executing: postingEligibilityRecheck?.executing,
     authorized: recheckAuthorized,
