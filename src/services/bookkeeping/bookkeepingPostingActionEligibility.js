@@ -115,6 +115,8 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
   // persisted final account on an ordinary settled outflow. Probable/fuzzy
   // duplicate evidence is advisory; only a deterministic duplicate blocks.
   const ordinaryPostingEligible = ordinaryPersistedAuthority && !exactDuplicate && preflight?.preview_ready !== false;
+  const splitPostingEligible = ["approved", "auto_approved", "handled"].includes(status) &&
+    preflight?.split === true && preflight.preview_ready === true && preflight.split_line_count >= 2 && !exactDuplicate;
   const approvedDepositPostingEligible =
     hasSavedInflowType &&
     String(row.direction || "").toUpperCase() === "INFLOW" &&
@@ -174,7 +176,7 @@ export function deriveBookkeepingPostingAction(row = {}, { nowMs = Date.now() } 
       reason: preflight.blocker_reason || "Provider-free posting preview is not ready.",
     });
   }
-  if (ordinaryPostingEligible) {
+  if (ordinaryPostingEligible || splitPostingEligible) {
     const scheduledAt = Date.parse(row.post_after || row.posting_job?.scheduled_at || "");
     return result(lifecycle, "post_now", { enabled: true, confirmation: Number.isFinite(scheduledAt) && scheduledAt > nowMs });
   }
@@ -266,7 +268,7 @@ function disabledReason(code, context) {
   if (code === "edit_type" && !context.savedType) return "Confirm the credit type first.";
   if (code === "select_gl_account" && context.hasGl) return "A GL account is already selected.";
   if (code === "change_gl_account" && !context.hasGl) return "Select a GL account first.";
-  if (["preview_and_post", "retry_posting", "recheck_posting_eligibility"].includes(code) && !context.hasGl) return "Available after selecting a GL account.";
+  if (["preview_and_post", "retry_posting", "recheck_posting_eligibility"].includes(code) && !context.hasGl) return context.isSplit ? "Validate the split line accounts and posting binding." : "Available after selecting a GL account.";
   if (["preview_and_post", "retry_posting"].includes(code) && !context.previewReady) return "QuickBooks preview must compile first.";
   if (code === "retry_duplicate_check" && !context.duplicateUnavailable) return "Duplicate verification is currently available.";
   if (code === "acknowledge_duplicate_risk" && !context.possibleDuplicate) return "No unresolved duplicate risk was found.";
@@ -294,7 +296,9 @@ export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } =
   const savedResolution = meta.credit_card_inflow_resolution || null;
   const savedType = savedResolution?.resolution_type || null;
   const savedTypeLabel = savedType === "merchant_refund" ? "Merchant refund" : savedType ? "Cash back or statement credit" : null;
-  const hasGl = Boolean(row.final_qbo_account_id || savedResolution?.destination_qbo_account_id);
+  const hasSplit = row.provider_free_preflight?.split === true && row.provider_free_preflight.preview_ready === true && row.provider_free_preflight.split_line_count >= 2;
+  const isSplit = meta.taxonomy_type === "split_transaction";
+  const hasGl = hasSplit || Boolean(row.final_qbo_account_id || savedResolution?.destination_qbo_account_id);
   const previewReady = row.provider_free_preflight?.preview_ready === true && legacy.posting_eligible === true;
   const supersededDepositMatchFailure = hasFinalCategorizeAsNewResolution(row) && isPreProviderIncomingDepositMatchFailure(row);
   const rawBlocker = legacy.safe_failure_classification || row.provider_free_preflight?.blocker_code || lifecycle.code;
@@ -308,13 +312,13 @@ export function deriveBookkeepingActionMatrix(row = {}, { nowMs = Date.now() } =
   const mutable = !final && !pending && !active && !ambiguous;
   const isHandled = ["approved", "auto_approved", "handled", "failed"].includes(String(row.status || "").toLowerCase());
   const primaryCode = final ? null : next.action_code;
-  const context = { final, pending, active, ambiguous, savedType, savedTypeLabel, hasGl, previewReady, blocker, duplicateUnavailable, possibleDuplicate, mappingBlocked, matchCandidate };
+  const context = { final, pending, active, ambiguous, savedType, savedTypeLabel, hasGl, isSplit, previewReady, blocker, duplicateUnavailable, possibleDuplicate, mappingBlocked, matchCandidate };
 
   const enabledCodes = new Set();
   if (primaryCode && next.enabled) enabledCodes.add(primaryCode);
   if (mutable && savedType) enabledCodes.add("edit_type");
-  if (mutable && hasGl) enabledCodes.add("change_gl_account");
-  if (mutable && !hasGl) enabledCodes.add("select_gl_account");
+  if (mutable && hasGl && !isSplit) enabledCodes.add("change_gl_account");
+  if (mutable && !hasGl && !isSplit) enabledCodes.add("select_gl_account");
   if (mutable) enabledCodes.add("edit_resolution");
   if (mutable && isHandled) enabledCodes.add("find_qbo_match");
   if (mutable && matchCandidate) enabledCodes.add("confirm_qbo_match");

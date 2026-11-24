@@ -8,6 +8,8 @@ import {
 } from "./autoPostControl.js";
 import { deriveBookkeepingPostingAction } from "./bookkeepingPostingActionEligibility.js";
 import { hasActualProviderWriteBoundary } from "./providerBoundaryEvidence.js";
+import { canonicalPostingEligibility } from "./canonicalPostingEligibility.js";
+import { qboEnvName } from "../../utils/qboEnv.js";
 
 export const INTERACTIVE_POSTING_COMMAND_TYPE = "interactive_transaction_post";
 export const INTERACTIVE_COMMAND_STATES = Object.freeze({
@@ -276,6 +278,13 @@ async function validateDirectTransactionPost({ db, command, transactionIds = [] 
       pending: bankTransaction.pending === true || bankTransaction.is_pending === true,
       signed_amount: bankTransaction.signed_amount ?? bankTransaction.amount ?? null,
     };
+    if (command.merchant_snapshot?.accounting_authority === "confirmed_split") {
+      const split = await loadSplitCommandAuthority(db, command.business_id, transactionId);
+      if (!split || split.binding !== command.merchant_snapshot.posting_shape_binding) {
+        throw Object.assign(new Error("posting_shape_changed"), { code: "posting_shape_changed" });
+      }
+      eligibilityRow.provider_free_preflight = splitCommandPreflight(split);
+    }
     const action = deriveBookkeepingPostingAction(eligibilityRow);
     if (!forceSoftDuplicate && (!action.posting_eligible || !["post_now", "retry_posting"].includes(action.permitted_action))) {
       const error = new Error(action.disabled_reason || "posting_action_not_permitted");
@@ -285,6 +294,22 @@ async function validateDirectTransactionPost({ db, command, transactionIds = [] 
     rows.push({ transaction_id: transactionId, status: "ready_to_post" });
   }
   return { ok: true, blocked_count: 0, blocked: [], scheduled: rows };
+}
+
+function splitCommandPreflight(shape) {
+  return { preview_ready: true, split: true, split_line_count: shape.payload.Line.length };
+}
+
+async function loadSplitCommandAuthority(db, businessId, transactionId) {
+  const {data:row,error}=await db.from("transaction_categorizations").select("meta,final_qbo_account_id")
+    .eq("business_id",businessId).eq("transaction_id",transactionId).maybeSingle();
+  if (error) throw error;
+  if (row?.meta?.taxonomy_type !== "split_transaction" || row.final_qbo_account_id) return null;
+  const shape=await canonicalPostingEligibility({db,businessId,transactionId,env:qboEnvName,phase:"worker"});
+  if (shape.reason || shape.split !== true || shape.payload?.Line?.length < 2 || !shape.binding || row.meta.posting_shape_binding !== shape.binding) {
+    throw Object.assign(new Error(shape.reason || "posting_shape_changed"),{code:shape.reason || "posting_shape_changed",status:409});
+  }
+  return shape;
 }
 
 export async function createInteractivePostingCommand({
@@ -323,7 +348,9 @@ export async function createInteractivePostingCommand({
     err.code = "interactive_posting_empty_selection";
     throw err;
   }
-  if (!selectedQboAccountId) {
+  const splitAuthority = !selectedQboAccountId && rememberForFuture === false && ids.length === 1 && merchantSnapshot?.requested_action
+    ? await loadSplitCommandAuthority(db,businessId,ids[0]) : null;
+  if (!selectedQboAccountId && !splitAuthority) {
     const err = new Error("Missing selected account.");
     err.status = 400;
     err.code = "interactive_posting_missing_account";
@@ -338,13 +365,13 @@ export async function createInteractivePostingCommand({
   });
   const requestedIso = nowIso(requestedAt);
   const account = await fetchQboAccount(db, businessId, selectedQboAccountId);
-  if (!account?.qbo_account_id) {
+  if (!splitAuthority && !account?.qbo_account_id) {
     const err = new Error("The approved QuickBooks account is unavailable for this business.");
     err.code = "final_qbo_account_not_found";
     err.status = 409;
     throw err;
   }
-  if (account.active === false) {
+  if (account?.active === false) {
     const err = new Error("The approved QuickBooks account is inactive.");
     err.code = "final_qbo_account_inactive";
     err.status = 409;
@@ -352,6 +379,7 @@ export async function createInteractivePostingCommand({
   }
   const snapshot = {
     ...(merchantSnapshot || {}),
+    ...(splitAuthority ? {accounting_authority:"confirmed_split",posting_shape_binding:splitAuthority.binding} : {}),
     group_snapshot_token: groupSnapshotToken || merchantSnapshot?.group_snapshot_token || null,
     correlation_id: correlationId || merchantSnapshot?.correlation_id || null,
   };
@@ -360,8 +388,8 @@ export async function createInteractivePostingCommand({
     business_id: businessId,
     command_type: INTERACTIVE_POSTING_COMMAND_TYPE,
     transaction_ids: ids,
-    selected_qbo_account_id: String(selectedQboAccountId),
-    selected_qbo_account_name: account.name || selectedQboAccountName || null,
+    selected_qbo_account_id: selectedQboAccountId ? String(selectedQboAccountId) : null,
+    selected_qbo_account_name: account?.name || selectedQboAccountName || null,
     selected_qbo_account_type: selectedQboAccountType || account?.account_type || null,
     merchant_snapshot: snapshot,
     expected_row_versions: expectedRowVersions || {},
@@ -456,6 +484,9 @@ export async function requestInteractiveTransactionPosting({
     signed_amount: bankResult.data?.amount ?? null,
     posting_job: jobResult.data || null,
   };
+  if (row.meta?.taxonomy_type === "split_transaction" && !row.final_qbo_account_id) {
+    row.provider_free_preflight=splitCommandPreflight(await loadSplitCommandAuthority(db,businessId,transactionId));
+  }
   const action = deriveBookkeepingPostingAction(row);
   const forceDecision = row.meta?.duplicate_override_decision || row.meta?.incoming_deposit_resolution;
   const durableDuplicateOverride = forceDecision?.decision === "categorize_as_new_despite_duplicate_risk" &&

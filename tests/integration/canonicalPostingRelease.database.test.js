@@ -5,9 +5,11 @@ import fs from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {preProviderPostingLifecycleCases} from '../helpers/preProviderPostingLifecycleCases.js';
+import {splitPostingRuntimeCases} from '../helpers/splitPostingRuntimeCases.js';
 import {prepareCanonicalFixture} from '../../scripts/prepareCanonicalPostingReleaseFixture.js';
 import {prepareCanonicalRunner,verifyCanonicalRunner,releaseFile} from '../../scripts/prepareCanonicalPostingReleaseRunner.js';
 const container=`bizzi-canonical-release-${process.pid}`;
+const network=`${container}-net`;
 function docker(args,input){const r=spawnSync('docker',args,{input,encoding:'utf8',maxBuffer:32e6});if(r.status!==0)throw Error(r.stderr);return r.stdout.trim();}
 function sql(text,user='postgres'){return docker(['exec','-i',container,'psql','-h','127.0.0.1','-U',user,'-d','postgres','-X','-v','ON_ERROR_STOP=1','-Atq'],text);}
 const read=f=>fs.readFileSync(f,'utf8');
@@ -16,7 +18,8 @@ const triggers=()=>sql(`select jsonb_agg(jsonb_build_object('relation',tgrelid::
 
 test('canonical release upgrades captured effective roles/schema plus explicit installed fences atomically',{timeout:180000},async t=>{
  try{
-  docker(['run','--pull=never','--network','none','--name',container,'-e','POSTGRES_USER=supabase_admin','-e','POSTGRES_DB=postgres','-e','POSTGRES_PASSWORD=synthetic','-d','postgres:17']);
+  docker(['network','create','--internal',network]);
+  docker(['run','--pull=never','--network',network,'--name',container,'-e','POSTGRES_USER=supabase_admin','-e','POSTGRES_DB=postgres','-e','POSTGRES_PASSWORD=synthetic','-d','postgres:17']);
   for(let i=0;i<100;i++){if(spawnSync('docker',['exec',container,'pg_isready','-h','127.0.0.1','-U','supabase_admin']).status===0)break;await new Promise(r=>setTimeout(r,100));}
   const fixture=prepareCanonicalFixture();sql(read(`${fixture}/prerequisites.sql`),'supabase_admin');
   // Explicit compatibility transitions only. Never replay the remote_schema
@@ -115,5 +118,25 @@ test('canonical release upgrades captured effective roles/schema plus explicit i
    bind:(id,actor)=>{const expected=inspect(id);return JSON.parse(sql(`select public.bind_existing_split_schedule('${bid}','${id}','${actor}','${expected.binding}','${expected.updated_at}','${randomUUID()}')`));},
    lockIdentity:id=>{assert.equal(sql(`select public.acquire_posting_lock('${bid}','${id}',statement_timestamp(),600,'synthetic-key')`),'t');return {generation:cat(id).meta.posting_generation,lock_started_at:cat(id).meta.posting_started_at,lock_key:cat(id).meta.post_idempotency_key};},
   });
- }finally{docker(['rm','-f',container]);}
+  sql("alter role postgres login password 'local-only'",'supabase_admin');
+  // Explicit command-table fixture dependencies, not historical replay.
+  sql(read('supabase/migrations/20261011_interactive_posting_commands.sql'));
+  sql(read('supabase/migrations/20261016_interactive_posting_parent_child_results.sql'));
+  await t.test('nullable parent command migration is atomic and ordinary commands still require a GL',()=>{
+   const forward=read('supabase/migrations/20261124030000_split_direct_posting_command_authority.sql');
+   const security=()=>sql("select jsonb_build_object('owner',pg_get_userbyid(relowner),'acl',relacl,'rls',relrowsecurity,'force_rls',relforcerowsecurity) from pg_class where oid='public.bookkeeping_interactive_posting_commands'::regclass");
+   const beforeSecurity=security();
+   const indexes=()=>sql("select jsonb_agg(indexdef order by indexname) from pg_indexes where schemaname='public' and tablename='bookkeeping_interactive_posting_commands'");const beforeIndexes=indexes();
+   const {id}=splitFixture();sql(`insert into public.bookkeeping_interactive_posting_commands(operation_id,business_id,transaction_ids,selected_qbo_account_id) values('ordinary-before-migration','${bid}',array['${id}'::uuid],'interest')`);
+   const ordinary=sql("select to_jsonb(c) from public.bookkeeping_interactive_posting_commands c where operation_id='ordinary-before-migration'");
+   assert.throws(()=>sql(forward.replace("notify pgrst, 'reload schema';","select 1/0;notify pgrst, 'reload schema';")),/division by zero/);
+   assert.equal(sql("select attnotnull from pg_attribute where attrelid='public.bookkeeping_interactive_posting_commands'::regclass and attname='selected_qbo_account_id'"),'t');
+   assert.equal(security(),beforeSecurity);assert.equal(indexes(),beforeIndexes);
+   sql(forward);assert.equal(security(),beforeSecurity);assert.equal(indexes(),beforeIndexes);
+   assert.equal(sql("select to_jsonb(c) from public.bookkeeping_interactive_posting_commands c where operation_id='ordinary-before-migration'"),ordinary);
+   assert.throws(()=>sql(`insert into public.bookkeeping_interactive_posting_commands(operation_id,business_id,transaction_ids,selected_qbo_account_id) values('invalid-null-parent','${bid}',array['${id}'::uuid],null)`),/interactive_posting_split_authority_check/);
+   sql(`insert into public.bookkeeping_interactive_posting_commands(operation_id,business_id,transaction_ids,selected_qbo_account_id) values('ordinary-parent','${bid}',array['${id}'::uuid],'interest')`);
+  });
+  await splitPostingRuntimeCases({t,sql,container,network,fixture:splitFixture,scope:()=>({bid,account,actor})});
+ }finally{docker(['rm','-f',container]);docker(['network','rm',network]);}
 });

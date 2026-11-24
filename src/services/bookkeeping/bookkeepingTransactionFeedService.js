@@ -465,6 +465,8 @@ async function attachProviderFreePostingPreflight({ db = supabase, businessId, r
     }
     return { ...row, provider_free_preflight: {
       preview_ready: !result.reason,
+      split: result.split === true,
+      split_line_count: result.split === true ? result.payload?.Line?.length || 0 : 0,
       qbo_entity_type: result.entity_type || null,
       blocker_code: result.reason || null,
       blocker_reason: result.reason ? String(result.reason).replaceAll("_", " ") : null,
