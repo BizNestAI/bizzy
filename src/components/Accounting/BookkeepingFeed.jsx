@@ -1,4 +1,5 @@
 import React from "react";
+import { reopenedSplitReviewState } from "../../services/bookkeeping/splitUndoReviewState.js";
 import StalePendingAction from "./StalePendingAction.jsx";
 import HandledExcludeAction from "./HandledExcludeAction.jsx";
 import { getBookkeepingExclusionEligibility } from "../../services/bookkeeping/exclusionEligibility.js";
@@ -993,7 +994,7 @@ export function TransactionResolutionSelector({ transactionId, value, suggested,
 }
 
 export default function BookkeepingFeed({
-  transactions,
+  transactions: sourceTransactions,
   selectedIds,
   allSelected,
   toggleSelectAll,
@@ -1050,6 +1051,7 @@ export default function BookkeepingFeed({
   adminBookkeepingAccess = false,
   onResolvePending,
 }) {
+  const transactions = React.useMemo(() => sourceTransactions.map(reopenedSplitReviewState), [sourceTransactions]);
   // Column widths (px) — draggable like QuickBooks
   const initialColWidths = React.useMemo(
     () => (showQboSchedule ? [...BASE_COL_WIDTHS.slice(0, -1), QBO_COL_WIDTH, 240] : BASE_COL_WIDTHS),
@@ -1210,6 +1212,7 @@ export default function BookkeepingFeed({
       const epoch = txn.meta?.split_undo_audit?.at;
       if (!epoch || txn.status !== "needs_review" || splitUndoEpochs.current.get(txn.id) === epoch) return false;
       splitUndoEpochs.current.set(txn.id, epoch);
+      if (txn.meta?.user_selected_resolution) return false;
       return true;
     }).map((txn) => txn.id);
     if (!resetIds.length) return;
@@ -1241,12 +1244,12 @@ export default function BookkeepingFeed({
     });
   }, [transactions]);
 
-  const changeResolution = async (txn, resolution) => {
+  const changeResolution = async (txn, resolution, selectedAccountId = null) => {
     if (readOnly || txn.status === "posted") return;
     setResolutionSelections((state) => new Map(state).set(txn.id, resolution));
     setResolutionActionState((state) => new Map(state).set(txn.id, { busy: true, error: "" }));
     if (resolution === "categorize_new") {
-      const normalAccountId = txn.final_qbo_account_id || txn.glAccountId || txn.suggestedAccountId || txn.suggested_qbo_account_id || "";
+      const normalAccountId = selectedAccountId || txn.final_qbo_account_id || txn.glAccountId || txn.suggestedAccountId || txn.suggested_qbo_account_id || "";
       setAccountSelections((state) => new Map(state).set(txn.id, normalAccountId));
     }
     if (resolution === "match_existing_qbo") setExpandedRowId(txn.id);
@@ -1775,7 +1778,7 @@ export default function BookkeepingFeed({
                     onResolutionChange={(nextResolution) => changeResolution(txn, nextResolution)}
                     onChange={(id) => {
                       handleAccountSelect(txn.id, id);
-                      if (id && selectedResolution !== "categorize_new") changeResolution(txn, "categorize_new");
+                      if (id && (selectedResolution !== "categorize_new" || txn.requires_split_decision_reset)) changeResolution(txn, "categorize_new", id);
                     }}
                   />
                 ) : showCanonicalCoa && !hasSavedSplit ? (
@@ -1927,6 +1930,7 @@ export default function BookkeepingFeed({
                      isApproving ||
                      categorizationDisabled ||
                      readOnly ||
+                     (txn.requires_split_decision_reset && !selectedAccountValue) ||
                      txn.is_check &&
                      !(accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null)
                    }

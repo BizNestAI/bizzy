@@ -2645,9 +2645,9 @@ function BookkeepingCleanup() {
     const selectedAt = new Date().toISOString();
     const applySelection = (savedMeta = null) => setTransactions((rows) => rows.map((row) => row.id === id ? {
       ...row,
+      requires_split_decision_reset: savedMeta ? false : row.requires_split_decision_reset,
       meta: {
-        ...(row.meta || {}),
-        ...(savedMeta || {}),
+        ...(savedMeta || row.meta || {}),
         system_suggested_resolution: row.meta?.system_suggested_resolution || systemSuggestedResolution,
         user_selected_resolution: resolution,
         resolution_selected_at: selectedAt,

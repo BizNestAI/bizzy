@@ -1,7 +1,7 @@
 import test from 'node:test';
 import process from 'node:process';
 import assert from 'node:assert/strict';
-import { splitUndoReviewState } from '../src/services/bookkeeping/splitUndoReviewState.js';
+import { splitUndoReviewState, reopenedSplitReviewState } from '../src/services/bookkeeping/splitUndoReviewState.js';
 import { effectiveTransactionResolution } from '../src/services/bookkeeping/transactionResolutionService.js';
 
 test('split Undo displays fresh categorization without mutating its rollback snapshot', () => {
@@ -22,6 +22,20 @@ test('ordinary and payment Undo display behavior stays unchanged', () => {
   assert.deepEqual(splitUndoReviewState(row), { ...row, status: 'needs_review' });
 });
 
+test('already reopened legacy splits project as uncategorized without altering durable evidence', () => {
+  const legacy = { id: 'legacy', status: 'needs_review', final_qbo_account_id: null,
+    suggestedAccountId: 'uncategorized-account', split_lines: [{ amount_minor: 46755 }, { amount_minor: 5000 }],
+    meta: { taxonomy_type: 'split_transaction', split_transaction_id: 'old', user_selected_resolution: 'categorize_new' } };
+  const result = reopenedSplitReviewState(legacy);
+  assert.equal(result.requires_split_decision_reset, true);
+  assert.equal(effectiveTransactionResolution(result), 'categorize_new');
+  assert.equal(result.suggestedAccountId, null);
+  assert.deepEqual(result.split_lines, []);
+  assert.equal(legacy.meta.split_transaction_id, 'old');
+  const handled = { ...legacy, status: 'approved' };
+  assert.equal(reopenedSplitReviewState(handled), handled);
+});
+
 test('Needs Review renders the COA selector after split Undo in customer and Admin View', async () => {
   const { build } = await import('esbuild');
   const { mkdtempSync, symlinkSync, rmSync } = await import('node:fs');
@@ -29,18 +43,40 @@ test('Needs Review renders the COA selector after split Undo in customer and Adm
   const { join } = await import('node:path');
   const { pathToFileURL } = await import('node:url');
   const React = await import('react');
-  const { renderToStaticMarkup } = await import('react-dom/server');
   const directory = mkdtempSync(join(tmpdir(), 'bizzi-undo-render-'));
   try {
     symlinkSync(join(process.cwd(), 'node_modules'), join(directory, 'node_modules'), 'dir');
     const outfile = join(directory, 'feed.mjs');
     await build({ entryPoints: ['src/components/Accounting/BookkeepingFeed.jsx'], outfile, bundle: true, platform: 'node', format: 'esm', packages: 'external' });
-    const { default: Feed } = await import(pathToFileURL(outfile));
-    const row = splitUndoReviewState({ id: 'txn', status: 'approved', amount: -517.55, date: '2026-11-02', name: 'Loan payment', split_lines: [{}, {}], meta: { taxonomy_type: 'split_transaction', split_transaction_id: 'old' } });
-    for (const adminBookkeepingAccess of [false, true]) {
-      const html = renderToStaticMarkup(React.createElement(Feed, { transactions: [row], selectedIds: new Set(), postingTransactionIds: new Set(), accounts: [{ id: 'expense', name: 'Interest expense', type: 'Expense' }], adminBookkeepingAccess }));
-      assert.doesNotMatch(html, />Transaction Split</);
-      assert.match(html, /Select account/);
-    }
+    const { default: Feed, CoaDropdown } = await import(pathToFileURL(outfile));
+    const legacy = { id: 'legacy', status: 'needs_review', amount: -517.55, date: '2026-11-02', name: 'Loan payment',
+      split_lines: [{ amount_minor: 46755 }, { amount_minor: 5000 }], meta: { taxonomy_type: 'split_transaction', split_transaction_id: 'old', user_selected_resolution: 'categorize_new' } };
+    const { default: TestRenderer } = await import('react-test-renderer');
+    const priorDocument = globalThis.document, priorAct = globalThis.IS_REACT_ACT_ENVIRONMENT;
+    globalThis.document = { addEventListener() {}, removeEventListener() {}, body: { style: {} } };
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      for (const adminBookkeepingAccess of [false, true]) {
+        const choices = [], approvals = [];
+        const props = { transactions: [legacy], selectedIds: new Set(), postingTransactionIds: new Set(),
+          accounts: [{ id: 'expense', name: 'Interest expense', type: 'Expense' }], adminBookkeepingAccess,
+          onResolutionChange: (...args) => choices.push(args), onApprove: (...args) => approvals.push(args) };
+        let mounted;
+        await React.act(async () => { mounted = TestRenderer.create(React.createElement(Feed, props)); });
+        assert.doesNotMatch(JSON.stringify(mounted.toJSON()), /Transaction Split/);
+        assert.match(JSON.stringify(mounted.toJSON()), /Select account/);
+        await React.act(async () => { mounted.root.findByType(CoaDropdown).props.onChange('expense'); });
+        assert.equal(mounted.root.findByType(CoaDropdown).props.value, 'expense');
+        assert.equal(choices[0][1], 'categorize_new');
+        // The server reset acknowledgement must not erase the category just selected.
+        const acknowledged = { ...reopenedSplitReviewState(legacy), requires_split_decision_reset: false,
+          meta: { split_undo_audit: { at: 'server-reset' }, user_selected_resolution: 'categorize_new' } };
+        await React.act(async () => { mounted.update(React.createElement(Feed, { ...props, transactions: [acknowledged] })); });
+        assert.equal(mounted.root.findByType(CoaDropdown).props.value, 'expense');
+        await React.act(async () => { mounted.root.findByProps({ 'aria-label': 'Approve transaction' }).props.onClick(); });
+        assert.deepEqual(approvals[0], ['legacy', 'expense']);
+        await React.act(async () => { mounted.unmount(); });
+      }
+    } finally { globalThis.document = priorDocument; globalThis.IS_REACT_ACT_ENVIRONMENT = priorAct; }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

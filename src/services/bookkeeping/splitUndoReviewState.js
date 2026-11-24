@@ -1,4 +1,19 @@
 // Optimistic display only. The authenticated Undo operation revokes authority.
+export function isReopenedSplitDecision(row = {}) {
+  if (!row) return false;
+  return ["needs_review", "uncategorized"].includes(String(row.status || row.cat_status || "").toLowerCase()) &&
+    !row.qbo_txn_id && !row.posted_at && !row.reconciled_at &&
+    (row.meta?.taxonomy_type === "split_transaction" || Boolean(row.meta?.split_transaction_id));
+}
+
+// Projection only: reading a feed never changes an old approval or posting claim.
+export function reopenedSplitReviewState(row) {
+  if (!isReopenedSplitDecision(row)) return row;
+  return { ...splitUndoReviewState(row), requires_split_decision_reset: true,
+    suggestedAccountId: null, suggestedAccountName: null,
+    suggested_qbo_account_id: null, suggested_qbo_account_name: null };
+}
+
 export function splitUndoReviewState(row) {
   if (row.meta?.taxonomy_type !== "split_transaction" && !row.meta?.split_transaction_id) {
     return { ...row, status: "needs_review" };

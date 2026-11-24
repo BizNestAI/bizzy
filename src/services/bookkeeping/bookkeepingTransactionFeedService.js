@@ -1,4 +1,5 @@
 import { canonicalPostingEligibility } from "./canonicalPostingEligibility.js";
+import { reopenedSplitReviewState } from "./splitUndoReviewState.js";
 import { postingLeaseAttention } from "./qboPostingLifecycle.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import { statementPendingWorkflowRow } from "./statementPendingAuthority.js";
@@ -423,6 +424,7 @@ async function fetchPlaidAccountDisplayMap({ db = supabase, businessId, plaidAcc
 }
 
 export async function attachCanonicalSplitsForFeed({ db = supabase, businessId, rows = [] } = {}) {
+  rows = rows.map(reopenedSplitReviewState);
   const transactionIds = Array.from(new Set(
     rows
       .filter((row) => row?.meta?.taxonomy_type === "split_transaction" || row?.meta?.split_transaction_id)

@@ -3,6 +3,7 @@ import {
   hasProviderFinality,
   supersedeProvisionalClassification,
 } from "./specializedTypeAuthority.js";
+import { resetReopenedSplitDecision } from "./resetReopenedSplitDecision.js";
 
 export const TRANSACTION_RESOLUTIONS = Object.freeze([
   "categorize_new",
@@ -79,10 +80,11 @@ export async function persistTransactionResolution({ db, businessId, transaction
     error.status = 400;
     throw error;
   }
-  const { data: current, error: fetchError } = await db.from("transaction_categorizations")
+  const { data: stored, error: fetchError } = await db.from("transaction_categorizations")
     .select("status,posted_at,qbo_txn_id,final_qbo_account_id,meta")
     .eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle();
   if (fetchError) throw fetchError;
+  const current = await resetReopenedSplitDecision({ db, businessId, transactionId, actorId: actor, current: stored });
   if (current?.status === "posted" || current?.posted_at || current?.qbo_txn_id || current?.meta?.matched_existing_qbo === true) {
     const error = new Error("transaction_already_resolved");
     error.code = "transaction_already_resolved";

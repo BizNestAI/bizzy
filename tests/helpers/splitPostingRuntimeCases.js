@@ -43,7 +43,7 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
      return `export async function ${name}(){throw Error('Unexpected token operation in isolated split test: ${name}');}`;
     }).join('\n');
     const outfile=path.join(directory,'runtime.mjs');
-    await build({stdin:{contents:'export {default as approvals} from "./src/api/bookkeeping/routes/bookkeeping.approvals.routes.js";export {runBooksPostOnce,handleItem,postSingleBookkeepingTransactionNow} from "./src/jobs/booksPost.cron.js";export {previewPostingEligibilityRecheck} from "./src/services/bookkeeping/postingEligibilityRecheckService.js";export {createInteractivePostingCommand,requestInteractiveTransactionPosting,processInteractivePostingCommand} from "./src/services/bookkeeping/interactivePostingCommandService.js";',resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',packages:'external',outfile,
+    await build({stdin:{contents:'export {default as approvals} from "./src/api/bookkeeping/routes/bookkeeping.approvals.routes.js";export {runBooksPostOnce,handleItem,postSingleBookkeepingTransactionNow} from "./src/jobs/booksPost.cron.js";export {attachCanonicalSplitsForFeed} from "./src/services/bookkeeping/bookkeepingTransactionFeedService.js";export {previewPostingEligibilityRecheck} from "./src/services/bookkeeping/postingEligibilityRecheckService.js";export {createInteractivePostingCommand,requestInteractiveTransactionPosting,processInteractivePostingCommand} from "./src/services/bookkeeping/interactivePostingCommandService.js";',resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',packages:'external',outfile,
      banner:{js:`import {createRequire} from 'node:module';const require=createRequire(${JSON.stringify(path.join(process.cwd(),'package.json'))});`},
      plugins:[{name:'local-only-boundaries',setup(plugin){plugin.onResolve({filter:/\.js$/},args=>{const key=path.basename(args.path);if(key in stubs)return {path:key,namespace:'test-boundary'};});plugin.onLoad({filter:/.*/,namespace:'test-boundary'},args=>({contents:stubs[args.path]}));}}]});
     // External npm packages resolve from the repository, not the temporary dir.
@@ -53,15 +53,47 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
     const app=express();app.use(express.json());app.use((req,_res,next)=>{req.business={id:current.bid};req.user={id:current.actor};req.auth={userId:current.actor};req.tenantContext={businessId:current.bid,mode:current.mode};next();});app.use(runtime.approvals);
     server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
     const origin=`http://127.0.0.1:${server.address().port}`;
-    for(const scenario of ['customer','admin_view','admin_view_recovery','admin_view_undo_recovery','customer_undo_recovery','manual_command']) {
+    for(const scenario of ['customer','admin_view','admin_view_recovery','admin_view_undo_recovery','customer_undo_recovery','customer_reopened_review','admin_view_reopened_review','customer_reopened_category','customer_unsafe_reopened_review','manual_command']) {
      const mode=scenario.startsWith('customer')?'customer':'admin_view';
      const {id}=fixture();current={...scope(),mode};const {bid}=current;
-     const recovering=scenario.includes('recovery');let priorSplit=null,priorRequest=null;
+     const reopened=scenario.includes('reopened_');const recovering=scenario.includes('recovery');let priorSplit=null,priorRequest=null;
      // Disposable legacy fixture: this snapshot predates the installed trigger.
      if(recovering)sql(`alter table public.transaction_splits disable trigger a_serialize_confirmed_split_edit;update public.transaction_splits set meta=meta-'approved_material' where business_id='${bid}' and transaction_id='${id}';alter table public.transaction_splits enable trigger a_serialize_confirmed_split_edit;`);
-     if(!recovering)sql(`delete from public.transaction_categorizations where business_id='${bid}' and transaction_id='${id}';delete from public.transaction_splits where business_id='${bid}' and transaction_id='${id}';insert into public.transaction_categorizations(business_id,transaction_id,status,meta) values('${bid}','${id}','needs_review','{}');`);
+     if(!recovering&&!reopened)sql(`delete from public.transaction_categorizations where business_id='${bid}' and transaction_id='${id}';delete from public.transaction_splits where business_id='${bid}' and transaction_id='${id}';insert into public.transaction_categorizations(business_id,transaction_id,status,meta) values('${bid}','${id}','needs_review','{}');`);
      sql('grant select on public.quickbooks_tokens,public.qbo_accounts_cache,public.plaid_qbo_account_mappings,public.plaid_accounts,public.plaid_items to service_role;');
      sql(`select public.admit_handled_auto_post(p_business_id=>'${bid}',p_enabled=>true)`);
+     if(reopened){
+      priorSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}'`));
+      if(scenario.includes('unsafe')){
+       const key=`unsafe-${id}`;
+       sql(`select public.acquire_posting_lock('${bid}','${id}',statement_timestamp(),600,'${key}');select public.claim_qbo_posting_intent('${bid}','${id}','${bid}','production','Purchase','bizzi_unsafe_${id.replaceAll('-','')}','${key}');update public.qbo_posted_transactions set lease_expires_at=statement_timestamp()-interval '1 second' where transaction_id='${id}'`);
+      }
+      sql(`update public.transaction_categorizations set status='needs_review',final_qbo_account_id=null,final_qbo_account_name=null,post_after=null,meta=(meta-'posting_shape_binding')||'{"posting_in_progress":false,"review_reopen_authorized":true,"review_reopen_reason":"approval_undone_by_user","user_selected_resolution":"categorize_new"}' where transaction_id='${id}'`);
+      const old=JSON.parse(sql(`select to_jsonb(c) from public.transaction_categorizations c where transaction_id='${id}'`));
+      const [projected]=await runtime.attachCanonicalSplitsForFeed({db,businessId:bid,rows:[{...old,id}]});
+      assert.equal(projected.requires_split_decision_reset,true);assert.equal(projected.meta.taxonomy_type,undefined);assert.deepEqual(projected.split_lines,[]);assert.equal(projected.final_qbo_account_id,null);
+      assert.equal(sql(`select status from public.transaction_splits where id='${priorSplit.id}'`),'confirmed','feed reads cannot mutate approval history');
+      const missingAccount=await nativeFetch(`${origin}/approve`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({items:[{txnId:id,resolution:'categorize_new'}]})});
+      assert.equal(missingAccount.status,409);assert.equal((await missingAccount.json()).error,'split_requires_fresh_categorization');
+      if(scenario.includes('unsafe')){
+       const choice=await nativeFetch(`${origin}/transactions/${id}/resolution`,{method:'PUT',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({resolution:'categorize_new'})});
+       const denied=await choice.json();assert.equal(choice.status,409,JSON.stringify(denied));assert.equal(denied.error,'split_undo_requires_posting_reconciliation');assert.match(denied.message,/requires reconciliation/);
+       const approve=await nativeFetch(`${origin}/approve`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({items:[{txnId:id,resolution:'categorize_new',newAccountId:'interest',newAccountName:'Car Loan Interest'}]})});
+       const blocked=await approve.json();assert.equal(approve.status,409,JSON.stringify(blocked));assert.equal(blocked.error,'split_undo_requires_posting_reconciliation');
+       assert.equal(sql(`select status from public.transaction_splits where id='${priorSplit.id}'`),'confirmed');assert.equal(sql(`select status from public.transaction_categorizations where transaction_id='${id}'`),'needs_review');continue;
+      }
+      if(scenario.includes('reopened_category')){
+       const approve=await nativeFetch(`${origin}/approve`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({items:[{txnId:id,resolution:'categorize_new',newAccountId:'interest',newAccountName:'Car Loan Interest',only_this_transaction:true,learn_reusable_rule:false}]})});
+       const approved=await approve.json();assert.equal(approve.status,200,JSON.stringify(approved));
+       assert.equal(sql(`select status from public.transaction_splits where id='${priorSplit.id}'`),'voided');assert.equal(sql(`select final_qbo_account_id from public.transaction_categorizations where transaction_id='${id}'`),'interest');assert.equal(sql(`select review_status from public.transaction_categorizations where transaction_id='${id}'`),'handled');continue;
+      }
+      if(mode==='customer'){
+       const choice=await nativeFetch(`${origin}/transactions/${id}/resolution`,{method:'PUT',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({resolution:'split_transaction'})});
+       const choiceBody=await choice.json();assert.equal(choice.status,200,JSON.stringify(choiceBody));assert.equal(choiceBody.row.meta.split_transaction_id,undefined);
+       assert.equal(sql(`select status from public.transaction_splits where id='${priorSplit.id}'`),'voided');
+      }
+      // Admin case saves a newly entered split directly; the endpoint must also revoke the stale decision.
+     }
      if(recovering){
       priorSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}'`));
       const key=createHash('sha256').update(`${bid}|${id}|-517.55|2026-11-01`).digest('hex'),owner=randomUUID();priorRequest=`bizzi_${randomUUID().replaceAll('-','')}`;
@@ -92,7 +124,7 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
       }
       assert.equal(sql(`select post_after is null from public.transaction_categorizations where transaction_id='${id}'`),'t');
      }
-     const principal=scenario.includes('undo_recovery')?46000:46755,interest=51755-principal;
+     const principal=(scenario.includes('undo_recovery')||reopened)?46000:46755,interest=51755-principal;
      const lines=[{description:'Principal',amount_minor:principal,qbo_account_id:'principal'},{description:'Interest',amount_minor:interest,qbo_account_id:'interest'}];
      const response=await nativeFetch(`${origin}/transactions/${id}/confirm-split`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({resolution:'split_transaction',split:{lines}})});
      const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));
@@ -100,7 +132,7 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
      const saved=readCat();assert.equal(saved.status,'approved');assert.equal(saved.review_status,'handled');assert.equal(saved.final_qbo_account_id,null);assert.ok(saved.meta.posting_shape_binding);assert.ok(Date.parse(saved.post_after)>RealDate.now()+23*3600000);
      const savedSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}' and status='confirmed'`));
      assert.deepEqual(savedSplit.lines.map(l=>[l.amount_minor,l.qbo_account_id]),[[principal,'principal'],[interest,'interest']]);
-     if(priorSplit){if(scenario.includes('undo_recovery')){assert.notEqual(savedSplit.id,priorSplit.id);assert.notDeepEqual(savedSplit.lines.map(l=>l.id),priorSplit.lines.map(l=>l.id));}else{assert.equal(savedSplit.id,priorSplit.id);assert.deepEqual(savedSplit.lines,priorSplit.lines);}}
+     if(priorSplit){if(scenario.includes('undo_recovery')||reopened){assert.notEqual(savedSplit.id,priorSplit.id);assert.notDeepEqual(savedSplit.lines.map(l=>l.id),priorSplit.lines.map(l=>l.id));}else{assert.equal(savedSplit.id,priorSplit.id);assert.deepEqual(savedSplit.lines,priorSplit.lines);}}
      assert.equal(savedSplit.confirmed_actor_type,mode==='admin_view'?'admin':'user');
      const preview=await runtime.previewPostingEligibilityRecheck({db,businessId:bid,month:'2026-11',transactionIds:[id]});assert.match(preview.rows[0].selected_gl_account,/Split transaction.*2 line accounts/);assert.equal(preview.rows[0].missing_final_repair_required,false);
      const command=scenario==='manual_command'

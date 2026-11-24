@@ -1,4 +1,5 @@
 import { qboEnvName } from "../../../utils/qboEnv.js";
+import { resetReopenedSplitDecision } from "../../../services/bookkeeping/resetReopenedSplitDecision.js";
 import { Router } from "express";
 import crypto from "crypto";
 import process from "node:process";
@@ -609,6 +610,7 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
     const accounts = await fetchChartOfAccounts(businessId);
     const accountsById = new Map((accounts || []).map((account) => [String(account.id), account]));
     const actorId = req.user?.id || req.auth?.userId || null;
+    await resetReopenedSplitDecision({ db: supabase, businessId, transactionId, actorId, current: existingCat });
     const result = await confirmSplitTransaction({
       db: supabase,
       businessId,
@@ -674,6 +676,9 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
     return res.json({ ok: true, split_transaction: true, split: result?.split || null, categorization, correlation_id: correlationId });
   } catch (err) {
     const code = String(err?.message || "split_transaction_failed");
+    if (err?.code === "split_undo_requires_posting_reconciliation") {
+      return res.status(409).json({ ok: false, error: err.code, message: err.message });
+    }
     if (err instanceof SplitTransactionWorkflowError || code.startsWith("split_transaction_") || code === "pending_transaction_not_postable") {
       return res.status(err?.status || 400).json({ ok: false, error: code, message: code, details: err?.details || null });
     }

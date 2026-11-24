@@ -1,4 +1,6 @@
 import { qboEnvName } from "../../utils/qboEnv.js";
+import { isReopenedSplitDecision } from "./splitUndoReviewState.js";
+import { resetReopenedSplitDecision } from "./resetReopenedSplitDecision.js";
 import { statementPendingWorkflowRow, isStatementPendingState } from "./statementPendingAuthority.js";
 import { buildExpenseRefundTreatment, isExpenseRefundSelection } from "./expenseRefundTreatment.js";
 /* global process */
@@ -258,6 +260,29 @@ export async function approveBookkeepingTransactions({
     .in("transaction_id", txnIds);
   if (catFetchErr) throw new BookkeepingApprovalError("categorization_fetch_failed", 500, { message: catFetchErr.message });
 
+  let prevalidatedAccounts;
+  const reopenedSplits = (existingMetaRows || []).filter(isReopenedSplitDecision);
+  if (reopenedSplits.length) {
+    // A stale split is not an ordinary approval with an empty parent account.
+    // Require a fresh explicit choice and validate it before revoking the old decision.
+    for (const row of reopenedSplits) {
+      if (!finalIdFromItem(items.find(item => txnIdFromItem(item) === row.transaction_id))) {
+        throw new BookkeepingApprovalError("split_requires_fresh_categorization", 409, { message: "Select a category or save a new split to restart categorization." });
+      }
+    }
+    prevalidatedAccounts = await validateSelectedAccountsFn({ businessId, items,
+      explicitFinalByTxn: Object.fromEntries(items.map(item => [txnIdFromItem(item), finalIdFromItem(item)])) });
+    for (const row of reopenedSplits) {
+      let reset;
+      try {
+        reset = await resetReopenedSplitDecision({ db, businessId, transactionId: row.transaction_id, actorId, current: row });
+      } catch (error) {
+        throw new BookkeepingApprovalError(error.code || "split_decision_reset_failed", error.status || 500, { message: error.message });
+      }
+      Object.assign(row, reset);
+    }
+  }
+
   const existingMetaMap = {};
   const statusMap = {};
   const suggestedIdMap = {};
@@ -394,7 +419,7 @@ export async function approveBookkeepingTransactions({
     const id = finalIdFromItem(item) || suggestedIdMap[txnIdFromItem(item)];
     if (id) explicitFinalByTxn[txnIdFromItem(item)] = id;
   }
-  const selectedAccounts = await validateSelectedAccountsFn({ businessId, items, explicitFinalByTxn });
+  const selectedAccounts = prevalidatedAccounts || await validateSelectedAccountsFn({ businessId, items, explicitFinalByTxn });
   const refundTreatments = new Map();
   items = items.map((item) => {
     const txnId = txnIdFromItem(item);

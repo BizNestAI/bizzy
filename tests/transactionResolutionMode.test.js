@@ -44,7 +44,7 @@ test("Books Review keeps the COA available for an orphaned split and persists th
   assert.match(feed, /recoverOrphanedSplitResolution\(selectedResolution, Boolean\(loanSplitDraft \|\| hasSavedSplit\)\)/);
   assert.match(feed, /Transaction Split/);
   assert.match(feed, /savedSplitLines/);
-  assert.match(feed, /if \(id && selectedResolution !== "categorize_new"\) changeResolution\(txn, "categorize_new"\)/);
+  assert.match(feed, /if \(id && \(selectedResolution !== "categorize_new" \|\| txn.requires_split_decision_reset\)\) changeResolution\(txn, "categorize_new", id\)/);
 });
 
 test("immutable transaction override wins over a classifier rerun and persists audit identity", async () => {
