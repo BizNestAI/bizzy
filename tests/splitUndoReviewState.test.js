@@ -76,6 +76,28 @@ test('Needs Review renders the COA selector after split Undo in customer and Adm
         await React.act(async () => { mounted.root.findByProps({ 'aria-label': 'Approve transaction' }).props.onClick(); });
         assert.deepEqual(approvals[0], ['legacy', 'expense']);
         await React.act(async () => { mounted.unmount(); });
+
+        // Reproduce Undo in the same mounted feed. The source bank ID survives
+        // local feed enrichment, but must never become a COA selection.
+        const sourceBankId = 'ewpb8YaNnmsXDYa8NZL1uJnmE-source-bank';
+        const handled = { ...legacy, status: 'approved', accountId: sourceBankId, plaid_account_id: sourceBankId };
+        await React.act(async () => { mounted = TestRenderer.create(React.createElement(Feed, { ...props, activeFeed: 'handled', transactions: [handled] })); });
+        assert.match(JSON.stringify(mounted.toJSON()), /Transaction Split/);
+        const undone = { ...handled, status: 'needs_review', glAccountId: null, suggestedAccountId: null, split_lines: [],
+          meta: { split_undo_audit: { at: 'new-undo' } } };
+        await React.act(async () => { mounted.update(React.createElement(Feed, { ...props, activeFeed: 'needs_review', transactions: [undone] })); });
+        assert.equal(mounted.root.findByType(CoaDropdown).props.value, '');
+        assert.match(JSON.stringify(mounted.toJSON()), /Select account/);
+        assert.doesNotMatch(JSON.stringify(mounted.toJSON()), /ewpb8YaNnmsXDYa8NZL1uJnmE-source-bank/);
+        await React.act(async () => { mounted.unmount(); });
+
+        // Other callers must not expose a raw unmatched ID as the button label.
+        await React.act(async () => { mounted = TestRenderer.create(React.createElement(CoaDropdown, {
+          accounts: props.accounts, value: sourceBankId, onChange() {}, status: 'needs_review',
+        })); });
+        assert.match(JSON.stringify(mounted.toJSON()), /Select account/);
+        assert.doesNotMatch(JSON.stringify(mounted.toJSON()), /ewpb8YaNnmsXDYa8NZL1uJnmE-source-bank/);
+        await React.act(async () => { mounted.unmount(); });
       }
     } finally { globalThis.document = priorDocument; globalThis.IS_REACT_ACT_ENVIRONMENT = priorAct; }
   } finally { rmSync(directory, { recursive: true, force: true }); }

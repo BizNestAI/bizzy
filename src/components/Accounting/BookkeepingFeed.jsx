@@ -125,12 +125,10 @@ export function CoaDropdown({
   }, [accounts, search]);
 
   const displayValue = value || suggestedId || "";
-  const currentAccount = accounts.find((a) => a.id === displayValue);
+  const currentAccount = accounts.find((a) => String(a.id) === String(displayValue));
   const currentLabel =
     currentAccount?.name ||
-    (displayValue && displayValue === suggestedId ? suggestedName : null) ||
-    suggestedName ||
-    displayValue ||
+    (displayValue && String(displayValue) === String(suggestedId) ? suggestedName : null) ||
     "Select account";
   const isSuggested = suggestedId && (!value || value === suggestedId) && ["needs_review", "uncategorized"].includes(status);
 
@@ -1521,7 +1519,8 @@ export default function BookkeepingFeed({
                 String(account.id) !== String(txn.source_qbo_account_id || "") &&
                 String(account.connectedAccountId || account.plaidAccountId || "") !== String(txn.plaid_account_id || txn.account_id || "")
               ));
-            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (readOnly ? "" : txn.accountId) ?? "";
+            // accountId can identify the source Plaid bank account, never a GL category.
+            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? "";
             const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
             const qboSchedule = showQboSchedule ? formatQboPostingSchedule(txn) : null;
             const readOnlyGlLabel =
