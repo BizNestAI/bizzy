@@ -1204,6 +1204,32 @@ export default function BookkeepingFeed({
     if (onAccountChange) onAccountChange(txnId, accountId);
   };
 
+  const splitUndoEpochs = React.useRef(new Map());
+  React.useEffect(() => {
+    const resetIds = transactions.filter((txn) => {
+      const epoch = txn.meta?.split_undo_audit?.at;
+      if (!epoch || txn.status !== "needs_review" || splitUndoEpochs.current.get(txn.id) === epoch) return false;
+      splitUndoEpochs.current.set(txn.id, epoch);
+      return true;
+    }).map((txn) => txn.id);
+    if (!resetIds.length) return;
+    setSplitDrafts((previous) => {
+      const next = new Map(previous);
+      resetIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    setResolutionSelections((previous) => {
+      const next = new Map(previous);
+      resetIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    setAccountSelections((previous) => {
+      const next = new Map(previous);
+      resetIds.forEach((id) => { next.delete(id); dirtyAccountSelectionsRef.current.delete(String(id)); });
+      return next;
+    });
+  }, [transactions]);
+
   React.useEffect(() => {
     setResolutionSelections((previous) => {
       const next = new Map(previous);

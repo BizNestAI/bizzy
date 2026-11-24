@@ -211,6 +211,18 @@ router.post("/undo", requireAuth, async (req, res) => {
       .eq("id", txnId)
       .maybeSingle();
     if (bankTransactionErr) throw bankTransactionErr;
+    if (existingCategorization?.meta?.taxonomy_type === "split_transaction" ||
+        existingCategorization?.meta?.split_transaction_id ||
+        (existingCategorization?.status === "needs_review" && existingCategorization?.meta?.split_undo_audit)) {
+      const { data, error } = await supabase.rpc("undo_split_categorization", {
+        p_business_id: businessId,
+        p_transaction_id: txnId,
+        p_actor_id: req.user?.id || req.auth?.userId,
+      });
+      if (error) throw error;
+      await refreshOperatorRequestSummaryBestEffort({ businessId, reason: "approval_undo" });
+      return res.json(data);
+    }
     const quickBooksPayments = detectQuickBooksPaymentsProtectedWorkflow(bankTransaction || {});
     const undoMeta = quickBooksPaymentsProtectedMeta({
       ...(existingCategorization?.meta || {}),

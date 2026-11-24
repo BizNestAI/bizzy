@@ -137,6 +137,26 @@ test('canonical release upgrades captured effective roles/schema plus explicit i
    assert.throws(()=>sql(`insert into public.bookkeeping_interactive_posting_commands(operation_id,business_id,transaction_ids,selected_qbo_account_id) values('invalid-null-parent','${bid}',array['${id}'::uuid],null)`),/interactive_posting_split_authority_check/);
    sql(`insert into public.bookkeeping_interactive_posting_commands(operation_id,business_id,transaction_ids,selected_qbo_account_id) values('ordinary-parent','${bid}',array['${id}'::uuid],'interest')`);
   });
+  await t.test('split Undo is atomic, service-only, tenant-scoped and preserves history and posting fences',()=>{
+   const migration=read('supabase/migrations/20261124040000_undo_split_categorization.sql');
+   assert.throws(()=>sql(migration.replace("notify pgrst,'reload schema';","select 1/0;notify pgrst,'reload schema';")),/division by zero/);
+   assert.equal(sql("select to_regprocedure('public.undo_split_categorization(uuid,uuid,uuid)') is null"),'t');
+   sql(migration);
+   assert.equal(sql("select has_function_privilege('service_role','public.undo_split_categorization(uuid,uuid,uuid)','execute') and not has_function_privilege('authenticated','public.undo_split_categorization(uuid,uuid,uuid)','execute') and not has_function_privilege('anon','public.undo_split_categorization(uuid,uuid,uuid)','execute')"),'t');
+   const {id}=splitFixture();
+   const before=sql(`select to_jsonb(s) from public.transaction_splits s where transaction_id='${id}'`);
+   assert.throws(()=>sql(`select public.undo_split_categorization('${randomUUID()}','${id}','${actor}')`),/transaction_not_found/);
+   assert.throws(()=>sql(`select public.undo_split_categorization('${bid}','${id}',null)`),/undo_actor_required/);
+   sql(`update public.transaction_categorizations set meta=meta||'{"ambiguous_provider_outcome":true}' where transaction_id='${id}'`);
+   assert.throws(()=>sql(`select public.undo_split_categorization('${bid}','${id}','${actor}')`),/split_undo_requires_posting_reconciliation/);
+   assert.equal(sql(`select to_jsonb(s) from public.transaction_splits s where transaction_id='${id}'`),before);
+   sql(`update public.transaction_categorizations set meta=meta-'ambiguous_provider_outcome' where transaction_id='${id}'`);
+   const result=JSON.parse(sql(`select public.undo_split_categorization('${bid}','${id}','${actor}')`));assert.equal(result.ok,true);
+   const after=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where transaction_id='${id}'`));
+   assert.equal(after.status,'voided');assert.deepEqual(after.lines,JSON.parse(before).lines);assert.deepEqual(after.meta.approved_material,JSON.parse(before).meta.approved_material);
+   assert.equal(sql(`select status||'|'||review_status||'|'||posting_status from public.transaction_categorizations where transaction_id='${id}'`),'needs_review|needs_review|not_scheduled');
+   assert.equal(sql(`select state from public.bookkeeping_posting_jobs where transaction_id='${id}'`),'cancelled');
+  });
   await splitPostingRuntimeCases({t,sql,container,network,fixture:splitFixture,scope:()=>({bid,account,actor})});
  }finally{docker(['rm','-f',container]);docker(['network','rm',network]);}
 });

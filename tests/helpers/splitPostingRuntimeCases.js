@@ -53,8 +53,8 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
     const app=express();app.use(express.json());app.use((req,_res,next)=>{req.business={id:current.bid};req.user={id:current.actor};req.auth={userId:current.actor};req.tenantContext={businessId:current.bid,mode:current.mode};next();});app.use(runtime.approvals);
     server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
     const origin=`http://127.0.0.1:${server.address().port}`;
-    for(const scenario of ['customer','admin_view','admin_view_recovery','admin_view_undo_recovery','manual_command']) {
-     const mode=scenario==='customer'?'customer':'admin_view';
+    for(const scenario of ['customer','admin_view','admin_view_recovery','admin_view_undo_recovery','customer_undo_recovery','manual_command']) {
+     const mode=scenario.startsWith('customer')?'customer':'admin_view';
      const {id}=fixture();current={...scope(),mode};const {bid}=current;
      const recovering=scenario.includes('recovery');let priorSplit=null,priorRequest=null;
      // Disposable legacy fixture: this snapshot predates the installed trigger.
@@ -74,10 +74,17 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
       const meta=JSON.parse(sql(`select meta from public.transaction_categorizations where transaction_id='${id}'`));
       const blockedPreview=await runtime.previewPostingEligibilityRecheck({db,businessId:bid,month:'2026-11',transactionIds:[id]});
       assert.equal(blockedPreview.rows[0].reason,'failed_requires_existing_retry_workflow');assert.equal(blockedPreview.rows[0].outcome,'blocked');assert.match(blockedPreview.rows[0].selected_gl_account,/Split transaction.*2 line accounts/);
-      if(scenario==='admin_view_undo_recovery'){
-       const undo=await nativeFetch(`${origin}/undo`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({txnId:id})});
+      if(scenario.includes('undo_recovery')){
+       // Undo is permitted only after the old pre-provider claim is reconciled.
+       const finalized=await db.rpc('reject_posting_before_provider',{p_business_id:bid,p_transaction_id:id,p_env:'production',p_context:{business_id:bid,transaction_id:id,env:'production',owner,request_id:priorRequest,idempotency_key:key,generation:meta.posting_generation,claimed_at:intent.processing_started_at,lease_expires_at:intent.lease_expires_at},p_reason:'posting_shape_changed'});
+       assert.equal(finalized.error,null);
+       const undo=await nativeFetch(`${origin}/undo`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({txnId:id})});
        assert.equal(undo.status,200,JSON.stringify(await undo.json()));
        assert.equal(sql(`select status from public.transaction_categorizations where transaction_id='${id}'`),'needs_review');
+       assert.equal(sql(`select status from public.transaction_splits where id='${priorSplit.id}'`),'voided');
+       const reopened=JSON.parse(sql(`select meta from public.transaction_categorizations where transaction_id='${id}'`));
+       assert.equal(reopened.taxonomy_type,undefined);assert.equal(reopened.posting_shape_binding,undefined);assert.equal(reopened.split_undo_audit.actor_id,current.actor);
+       const again=await nativeFetch(`${origin}/undo`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({txnId:id})});assert.equal(again.status,200);assert.equal((await again.json()).idempotent,true);
       }else{
        const repair=await db.rpc('reject_posting_before_provider',{p_business_id:bid,p_transaction_id:id,p_env:'production',p_context:{business_id:bid,transaction_id:id,env:'production',owner,request_id:priorRequest,idempotency_key:key,generation:meta.posting_generation,claimed_at:intent.processing_started_at,lease_expires_at:intent.lease_expires_at},p_reason:'posting_shape_changed'});
        assert.equal(repair.error,null);assert.equal(repair.data.ok,true);
@@ -85,14 +92,15 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
       }
       assert.equal(sql(`select post_after is null from public.transaction_categorizations where transaction_id='${id}'`),'t');
      }
-     const lines=[{description:'Principal',amount_minor:46755,qbo_account_id:'principal'},{description:'Interest',amount_minor:5000,qbo_account_id:'interest'}];
-     const response=await nativeFetch(`${origin}/transactions/${id}/confirm-split`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({resolution:'split_transaction',split:{lines}})});
+     const principal=scenario.includes('undo_recovery')?46000:46755,interest=51755-principal;
+     const lines=[{description:'Principal',amount_minor:principal,qbo_account_id:'principal'},{description:'Interest',amount_minor:interest,qbo_account_id:'interest'}];
+     const response=await nativeFetch(`${origin}/transactions/${id}/confirm-split`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({resolution:'split_transaction',split:{lines}})});
      const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));
      const readCat=()=>JSON.parse(sql(`select to_jsonb(c) from public.transaction_categorizations c where business_id='${bid}' and transaction_id='${id}'`));
      const saved=readCat();assert.equal(saved.status,'approved');assert.equal(saved.review_status,'handled');assert.equal(saved.final_qbo_account_id,null);assert.ok(saved.meta.posting_shape_binding);assert.ok(Date.parse(saved.post_after)>RealDate.now()+23*3600000);
      const savedSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}' and status='confirmed'`));
-     assert.deepEqual(savedSplit.lines.map(l=>[l.amount_minor,l.qbo_account_id]),[[46755,'principal'],[5000,'interest']]);
-     if(priorSplit){assert.equal(savedSplit.id,priorSplit.id);assert.deepEqual(savedSplit.lines,priorSplit.lines);}
+     assert.deepEqual(savedSplit.lines.map(l=>[l.amount_minor,l.qbo_account_id]),[[principal,'principal'],[interest,'interest']]);
+     if(priorSplit){if(scenario.includes('undo_recovery')){assert.notEqual(savedSplit.id,priorSplit.id);assert.notDeepEqual(savedSplit.lines.map(l=>l.id),priorSplit.lines.map(l=>l.id));}else{assert.equal(savedSplit.id,priorSplit.id);assert.deepEqual(savedSplit.lines,priorSplit.lines);}}
      assert.equal(savedSplit.confirmed_actor_type,mode==='admin_view'?'admin':'user');
      const preview=await runtime.previewPostingEligibilityRecheck({db,businessId:bid,month:'2026-11',transactionIds:[id]});assert.match(preview.rows[0].selected_gl_account,/Split transaction.*2 line accounts/);assert.equal(preview.rows[0].missing_final_repair_required,false);
      const command=scenario==='manual_command'
@@ -107,11 +115,11 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
       : await runtime.runBooksPostOnce({businessId:bid,transactionIds:[id],skipMerchantApprovalOperations:true});
      globalThis.Date=RealDate;
      if(scenario==='manual_command')assert.equal(summary.ok,true,JSON.stringify(summary));else assert.equal(summary.failed,0,JSON.stringify(summary));assert.equal(writes.length,start+1,JSON.stringify({summary,row:readCat()}));
-     const payload=writes.at(-1);assert.equal(payload.AccountRef.value,'source');assert.deepEqual(payload.Line.map(l=>[l.Amount,l.AccountBasedExpenseLineDetail.AccountRef.value]),[[467.55,'principal'],[50,'interest']]);
+     const payload=writes.at(-1);assert.equal(payload.AccountRef.value,'source');assert.deepEqual(payload.Line.map(l=>[l.Amount,l.AccountBasedExpenseLineDetail.AccountRef.value]),[[principal/100,'principal'],[interest/100,'interest']]);
      assert.equal(readCat().qbo_txn_id,`synthetic-receipt-${writes.length}`);assert.equal(readCat().status,'posted');
      assert.equal(readCat().final_qbo_account_id,null);
      assert.equal(sql(`select state from public.bookkeeping_posting_jobs where business_id='${bid}' and transaction_id='${id}'`),'posted');
-     const postedSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}'`));
+     const postedSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}' and id='${savedSplit.id}'`));
      assert.equal(postedSplit.status,'posted');assert.equal(postedSplit.posted_qbo_txn_id,readCat().qbo_txn_id);assert.deepEqual(postedSplit.lines,savedSplit.lines);
      assert.equal(Number(sql(`select amount from public.bank_transactions where business_id='${bid}' and id='${id}'`)),-517.55);
      const intent=JSON.parse(sql(`select to_jsonb(i) from public.qbo_posted_transactions i where business_id='${bid}' and transaction_id='${id}'`));assert.equal(intent.status,'posted');assert.equal(intent.qbo_txn_id,readCat().qbo_txn_id);

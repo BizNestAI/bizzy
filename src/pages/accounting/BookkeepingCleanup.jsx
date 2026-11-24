@@ -1,4 +1,5 @@
 import { useBookkeepingChartOfAccounts } from "../../hooks/bookkeeping/useBookkeepingChartOfAccounts.js";
+import { splitUndoReviewState } from "../../services/bookkeeping/splitUndoReviewState.js";
 import { admissionNotice, shouldRefreshAdmission, admissionRefreshDelay, ADMISSION_REFRESH_LIMIT } from "../../utils/autoPostAdmissionView.js";
 import useProcessingRunProgress from '../../hooks/useProcessingRunProgress.js';
 import ProcessingProgressNotice from '../../components/Accounting/ProcessingProgressNotice.jsx';
@@ -1922,7 +1923,7 @@ function BookkeepingCleanup() {
       showPostedToast();
       return;
     }
-    const needsReviewTxn = { ...txn, status: "needs_review" };
+    const needsReviewTxn = splitUndoReviewState(txn);
     const pairId = txn.cc_payment_pair_id || txn.meta?.cc_payment_pair_id || null;
     const pairedTxnIds = pairId
       ? transactions
