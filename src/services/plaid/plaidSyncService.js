@@ -579,7 +579,9 @@ export async function runSyncForItem(plaid, businessId, item, options = {}) {
         }
 
         if (!existing && row.pending === false) {
-          existing = findPendingLifecycleCandidate(row, existingRows);
+          // Earlier settlements in this batch already consumed these pending
+          // identities. Their stale snapshot must not make a later match ambiguous.
+          existing = findPendingLifecycleCandidate(row, existingRows.filter((candidate) => !claimedExistingIds.has(candidate.id)));
         }
 
         if (!existing && row.canonical_fingerprint && row.canonical_fingerprint_confidence === "deterministic") {
