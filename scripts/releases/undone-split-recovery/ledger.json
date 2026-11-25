@@ -1,0 +1,60 @@
+{
+  "project_ref": "zwufvvrmjbymgyjntdzk",
+  "captured_at": "2026-11-25T00:35:45.477326+00:00",
+  "read_only_planning": true,
+  "linked_planning_authorized": false,
+  "migration_history": [
+    {
+      "name": "remote_schema",
+      "version": "20260808174146"
+    },
+    {
+      "name": "auto_post_handled_admission",
+      "version": "20261111220000"
+    },
+    {
+      "name": "stale_pending_admin_resolution",
+      "version": "20261117230000"
+    },
+    {
+      "name": "stale_pending_global_admin_availability",
+      "version": "20261118220000"
+    },
+    {
+      "name": "stale_pending_permanent_admin_capability",
+      "version": "20261118230000"
+    },
+    {
+      "name": "stale_pending_durable_account_scope",
+      "version": "20261120220000"
+    },
+    {
+      "name": "handled_exclusion_posting_safety",
+      "version": "20261120233000"
+    },
+    {
+      "name": "canonical_posting_shape_authority",
+      "version": "20261123230000"
+    },
+    {
+      "name": "restore_posting_execution_taxonomy_guard",
+      "version": "20261124000000"
+    },
+    {
+      "name": "bound_monthly_pending_summary_candidates",
+      "version": "20261124010000"
+    },
+    {
+      "name": "pre_provider_posting_failure_lifecycle",
+      "version": "20261124020000"
+    },
+    {
+      "name": "split_direct_posting_command_authority",
+      "version": "20261124030000"
+    },
+    {
+      "name": "undo_split_categorization",
+      "version": "20261124040000"
+    }
+  ]
+}

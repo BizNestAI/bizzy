@@ -1,0 +1,47 @@
+PREPARATION ONLY. Migration application and recovery execution require review
+and explicit approval. No provider or posting calls belong to this release.
+
+Intended project: zwufvvrmjbymgyjntdzk
+Pinned Supabase CLI: 2.122.1
+Isolated workdir: /private/tmp/bizzi-undone-split-recovery
+Only pending migration:
+20261124050000_reconcile_undone_split_pre_provider.sql
+
+1. Capture the current ledger and dependencies with preflight.sql (read only).
+   Require the exact thirteen recorded versions through 20261124040000.
+   Stop on any changed ledger, project, migration hash, or dependency contract.
+2. Prepare/verify the isolated package; historical files are ledger-only markers.
+   Never bootstrap or replay them. Never use the repository migration directory,
+   --include-all, repair, reset, pull, or modify existing ledger entries.
+3. With existing secure CLI authentication, after planning authorization:
+   node scripts/undoneSplitRecoveryRelease.js verify --workdir /private/tmp/bizzi-undone-split-recovery
+   npx --yes supabase@2.122.1 --version
+   npx --yes supabase@2.122.1 migration list --linked --workdir /private/tmp/bizzi-undone-split-recovery
+   npx --yes supabase@2.122.1 db push --dry-run --linked --workdir /private/tmp/bizzi-undone-split-recovery
+   Save stdout/stderr as dry-run.txt inside the isolated workdir, then:
+   node scripts/undoneSplitRecoveryRelease.js check-plan --workdir /private/tmp/bizzi-undone-split-recovery
+   Abort unless the parsed filename set contains exactly the migration above.
+4. After migration application is explicitly approved, reverify the hash/ledger
+   and apply from this isolated directory only:
+   npx --yes supabase@2.122.1 db push --linked --yes --workdir /private/tmp/bizzi-undone-split-recovery
+5. Verify the remote ledger and run operations/verify.sql read only using an
+   absolute --file path. Compare the complete new function body to reviewed SQL,
+   and confirm old function bodies, owners, ACLs and settings are unchanged.
+   No companion application or worker deployment is needed for this additive RPC.
+   Capture the pre-application operations/preflight.sql output as preflight.json,
+   repeat the same query after application as post-verify.json, then:
+   node scripts/undoneSplitRecoveryRelease.js check-installed --workdir /private/tmp/bizzi-undone-split-recovery
+6. Recapture the Alliant payment's state. Present the exact one-payment preview,
+   expected claim/attempt/Undo/split identities and evidence to the operator.
+   Reapprove the preview if any snapshot value changed. Do not invoke recovery
+   until that separate action is explicitly authorized.
+7. The approved service-only recovery atomically fails only the expired intent,
+   clears leases, keeps the job cancelled, preserves Needs Review and appends
+   reconciliation evidence. It never resets, approves, schedules or posts.
+8. The user then performs the existing authenticated split reset. Reload the
+   transaction and open a blank split editor. The user enters and confirms fresh
+   lines; only that fresh approval creates the normal future posting schedule.
+   Do not invoke RPE, post-now, provider calls, or worker resume/configuration.
+
+If 20261124050000 is already recorded, verify its exact installed function and
+permissions instead of applying it again. Do not infer recovery has executed.

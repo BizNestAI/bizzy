@@ -6,6 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {preProviderPostingLifecycleCases} from '../helpers/preProviderPostingLifecycleCases.js';
 import {splitPostingRuntimeCases} from '../helpers/splitPostingRuntimeCases.js';
+import {undoneSplitRecoveryCases} from '../helpers/undoneSplitRecoveryCases.js';
 import {prepareCanonicalFixture} from '../../scripts/prepareCanonicalPostingReleaseFixture.js';
 import {prepareCanonicalRunner,verifyCanonicalRunner,releaseFile} from '../../scripts/prepareCanonicalPostingReleaseRunner.js';
 const container=`bizzi-canonical-release-${process.pid}`;
@@ -157,6 +158,15 @@ test('canonical release upgrades captured effective roles/schema plus explicit i
    assert.equal(sql(`select status||'|'||review_status||'|'||posting_status from public.transaction_categorizations where transaction_id='${id}'`),'needs_review|needs_review|not_scheduled');
    assert.equal(sql(`select state from public.bookkeeping_posting_jobs where transaction_id='${id}'`),'cancelled');
   });
+  await t.test('undone split forward recovery migration is atomic and preserves installed contracts',()=>{
+   const migration=read('supabase/migrations/20261124050000_reconcile_undone_split_pre_provider.sql'),before=functions(),beforeTriggers=triggers();
+   assert.throws(()=>sql(migration.replace("notify pgrst,'reload schema';","select 1/0;notify pgrst,'reload schema';")),/division by zero/);
+   assert.deepEqual(functions(),before);assert.equal(triggers(),beforeTriggers);
+   sql(migration);for(const f of before)assert.deepEqual(functions().find(x=>x.signature===f.signature),f);assert.equal(triggers(),beforeTriggers);
+   const f=functions().find(x=>x.signature.startsWith('reconcile_undone_split_pre_provider('));assert.equal(f.owner,'postgres');assert.equal(f.definer,true);assert.deepEqual(f.config,['search_path=pg_catalog, public']);
+   assert.deepEqual(f.acl.sort(),['postgres=X/postgres','service_role=X/postgres'].sort());
+  });
+  await undoneSplitRecoveryCases({t,sql,fixture:splitFixture,scope:()=>({bid,account,actor})});
   await splitPostingRuntimeCases({t,sql,container,network,fixture:splitFixture,scope:()=>({bid,account,actor})});
  }finally{docker(['rm','-f',container]);docker(['network','rm',network]);}
 });

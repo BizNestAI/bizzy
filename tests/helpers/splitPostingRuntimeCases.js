@@ -8,6 +8,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {build} from 'esbuild';
 import express from 'express';
 import {withCanonicalDatabase} from './canonicalRecheckDatabase.js';
+import {undoneSplitRecoveryFixture} from './undoneSplitRecoveryCases.js';
 
 export async function splitPostingRuntimeCases({t,sql,container,network,fixture,scope}) {
  await t.test('actual customer and Admin split save routes schedule and auto-post exactly one two-line Purchase',async()=>{
@@ -43,7 +44,7 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
      return `export async function ${name}(){throw Error('Unexpected token operation in isolated split test: ${name}');}`;
     }).join('\n');
     const outfile=path.join(directory,'runtime.mjs');
-    await build({stdin:{contents:'export {default as approvals} from "./src/api/bookkeeping/routes/bookkeeping.approvals.routes.js";export {runBooksPostOnce,handleItem,postSingleBookkeepingTransactionNow} from "./src/jobs/booksPost.cron.js";export {attachCanonicalSplitsForFeed} from "./src/services/bookkeeping/bookkeepingTransactionFeedService.js";export {previewPostingEligibilityRecheck} from "./src/services/bookkeeping/postingEligibilityRecheckService.js";export {createInteractivePostingCommand,requestInteractiveTransactionPosting,processInteractivePostingCommand} from "./src/services/bookkeeping/interactivePostingCommandService.js";',resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',packages:'external',outfile,
+    await build({stdin:{contents:'export {buildInitialSplitTransactionDraft} from "./src/components/Accounting/SplitTransactionModal.jsx";export {default as approvals} from "./src/api/bookkeeping/routes/bookkeeping.approvals.routes.js";export {runBooksPostOnce,handleItem,postSingleBookkeepingTransactionNow} from "./src/jobs/booksPost.cron.js";export {attachCanonicalSplitsForFeed} from "./src/services/bookkeeping/bookkeepingTransactionFeedService.js";export {previewPostingEligibilityRecheck} from "./src/services/bookkeeping/postingEligibilityRecheckService.js";export {createInteractivePostingCommand,requestInteractiveTransactionPosting,processInteractivePostingCommand} from "./src/services/bookkeeping/interactivePostingCommandService.js";',resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',packages:'external',outfile,
      banner:{js:`import {createRequire} from 'node:module';const require=createRequire(${JSON.stringify(path.join(process.cwd(),'package.json'))});`},
      plugins:[{name:'local-only-boundaries',setup(plugin){plugin.onResolve({filter:/\.js$/},args=>{const key=path.basename(args.path);if(key in stubs)return {path:key,namespace:'test-boundary'};});plugin.onLoad({filter:/.*/,namespace:'test-boundary'},args=>({contents:stubs[args.path]}));}}]});
     // External npm packages resolve from the repository, not the temporary dir.
@@ -53,15 +54,32 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
     const app=express();app.use(express.json());app.use((req,_res,next)=>{req.business={id:current.bid};req.user={id:current.actor};req.auth={userId:current.actor};req.tenantContext={businessId:current.bid,mode:current.mode};next();});app.use(runtime.approvals);
     server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
     const origin=`http://127.0.0.1:${server.address().port}`;
-    for(const scenario of ['customer','admin_view','admin_view_recovery','admin_view_undo_recovery','customer_undo_recovery','customer_reopened_review','admin_view_reopened_review','customer_reopened_category','customer_unsafe_reopened_review','manual_command']) {
+    for(const scenario of ['customer','admin_view','admin_view_recovery','admin_view_undo_recovery','customer_undo_recovery','customer_reopened_review','admin_view_reopened_review','customer_reopened_category','customer_unsafe_reopened_review','customer_undone_guarded_recovery','admin_view_undone_guarded_recovery','manual_command']) {
      const mode=scenario.startsWith('customer')?'customer':'admin_view';
-     const {id}=fixture();current={...scope(),mode};const {bid}=current;
-     const reopened=scenario.includes('reopened_');const recovering=scenario.includes('recovery');let priorSplit=null,priorRequest=null;
+     const guarded=scenario.includes('undone_guarded_recovery');
+     const recovery=guarded?undoneSplitRecoveryFixture({sql,fixture,scope}):null;
+     const {id}=recovery||fixture();current={...scope(),mode};const {bid}=current;
+     const reopened=scenario.includes('reopened_');const recovering=scenario.includes('recovery')&&!guarded;let priorSplit=null,priorRequest=null;
      // Disposable legacy fixture: this snapshot predates the installed trigger.
      if(recovering)sql(`alter table public.transaction_splits disable trigger a_serialize_confirmed_split_edit;update public.transaction_splits set meta=meta-'approved_material' where business_id='${bid}' and transaction_id='${id}';alter table public.transaction_splits enable trigger a_serialize_confirmed_split_edit;`);
-     if(!recovering&&!reopened)sql(`delete from public.transaction_categorizations where business_id='${bid}' and transaction_id='${id}';delete from public.transaction_splits where business_id='${bid}' and transaction_id='${id}';insert into public.transaction_categorizations(business_id,transaction_id,status,meta) values('${bid}','${id}','needs_review','{}');`);
+     if(!recovering&&!reopened&&!guarded)sql(`delete from public.transaction_categorizations where business_id='${bid}' and transaction_id='${id}';delete from public.transaction_splits where business_id='${bid}' and transaction_id='${id}';insert into public.transaction_categorizations(business_id,transaction_id,status,meta) values('${bid}','${id}','needs_review','{}');`);
      sql('grant select on public.quickbooks_tokens,public.qbo_accounts_cache,public.plaid_qbo_account_mappings,public.plaid_accounts,public.plaid_items to service_role;');
      sql(`select public.admit_handled_auto_post(p_business_id=>'${bid}',p_enabled=>true)`);
+     if(guarded){
+      const startWrites=writes.length;
+      priorSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}'`));priorRequest=recovery.args.context.request_id;
+      const repair=await db.rpc('reconcile_undone_split_pre_provider',{p_business_id:bid,p_transaction_id:id,p_actor_id:current.actor,p_context:recovery.args.context,p_evidence:recovery.args.evidence,p_idempotency_key:recovery.args.key});
+      assert.equal(repair.error,null,JSON.stringify(repair.error));assert.equal(repair.data.idempotent,false);
+      const recovered=recovery.snapshot();assert.equal(JSON.parse(sql(recovery.command())).idempotent,true);assert.equal(recovery.snapshot(),recovered);
+      assert.equal(sql(`select status||'|'||review_status||'|'||posting_status from public.transaction_categorizations where transaction_id='${id}'`),'needs_review|needs_review|not_scheduled');
+      assert.equal(sql(`select state from public.bookkeeping_posting_jobs where transaction_id='${id}'`),'cancelled');
+      const undo=await nativeFetch(`${origin}/undo`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({txnId:id})});const undoBody=await undo.json();assert.equal(undo.status,200,JSON.stringify(undoBody));
+      const reload=JSON.parse(sql(`select to_jsonb(c) from public.transaction_categorizations c where transaction_id='${id}'`));
+      const [row]=await runtime.attachCanonicalSplitsForFeed({db,businessId:bid,rows:[{...reload,id}]});
+      assert.equal(row.meta.taxonomy_type,undefined);assert.equal(row.meta.split_transaction_id,undefined);assert.equal(row.split_transaction,undefined);assert.equal(row.final_qbo_account_id,null);
+      const draft=runtime.buildInitialSplitTransactionDraft('general',row,[{id:'principal'},{id:'interest'}]);assert.equal(draft.lines.length,2);for(const line of draft.lines){assert.equal(line.qboAccountId,'');assert.equal(line.amount,'');assert.equal(line.description,'');}
+      assert.equal(sql(`select status from public.transaction_splits where id='${priorSplit.id}'`),'voided');assert.equal(sql(`select post_after is null from public.transaction_categorizations where transaction_id='${id}'`),'t');assert.equal(writes.length,startWrites,'recovery and reset must not call a provider');
+     }
      if(reopened){
       priorSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}'`));
       if(scenario.includes('unsafe')){
@@ -124,15 +142,16 @@ export async function splitPostingRuntimeCases({t,sql,container,network,fixture,
       }
       assert.equal(sql(`select post_after is null from public.transaction_categorizations where transaction_id='${id}'`),'t');
      }
-     const principal=(scenario.includes('undo_recovery')||reopened)?46000:46755,interest=51755-principal;
+     const principal=(scenario.includes('undo_recovery')||reopened||guarded)?46000:46755,interest=51755-principal;
      const lines=[{description:'Principal',amount_minor:principal,qbo_account_id:'principal'},{description:'Interest',amount_minor:interest,qbo_account_id:'interest'}];
      const response=await nativeFetch(`${origin}/transactions/${id}/confirm-split`,{method:'POST',headers:{'content-type':'application/json',connection:'close'},body:JSON.stringify({resolution:'split_transaction',split:{lines}})});
      const body=await response.json();assert.equal(response.status,200,JSON.stringify(body));
      const readCat=()=>JSON.parse(sql(`select to_jsonb(c) from public.transaction_categorizations c where business_id='${bid}' and transaction_id='${id}'`));
      const saved=readCat();assert.equal(saved.status,'approved');assert.equal(saved.review_status,'handled');assert.equal(saved.final_qbo_account_id,null);assert.ok(saved.meta.posting_shape_binding);assert.ok(Date.parse(saved.post_after)>RealDate.now()+23*3600000);
+     if(guarded){assert.equal(sql(`select count(*) from public.bookkeeping_posting_jobs where transaction_id='${id}' and state='scheduled' and scheduled_at=(select post_after from public.transaction_categorizations where transaction_id='${id}')`),'1');const state=recovery.snapshot();assert.equal(JSON.parse(sql(recovery.command())).idempotent,true);assert.equal(recovery.snapshot(),state);}
      const savedSplit=JSON.parse(sql(`select to_jsonb(s) from public.transaction_splits s where business_id='${bid}' and transaction_id='${id}' and status='confirmed'`));
      assert.deepEqual(savedSplit.lines.map(l=>[l.amount_minor,l.qbo_account_id]),[[principal,'principal'],[interest,'interest']]);
-     if(priorSplit){if(scenario.includes('undo_recovery')||reopened){assert.notEqual(savedSplit.id,priorSplit.id);assert.notDeepEqual(savedSplit.lines.map(l=>l.id),priorSplit.lines.map(l=>l.id));}else{assert.equal(savedSplit.id,priorSplit.id);assert.deepEqual(savedSplit.lines,priorSplit.lines);}}
+     if(priorSplit){if(scenario.includes('undo_recovery')||reopened||guarded){assert.notEqual(savedSplit.id,priorSplit.id);assert.notDeepEqual(savedSplit.lines.map(l=>l.id),priorSplit.lines.map(l=>l.id));}else{assert.equal(savedSplit.id,priorSplit.id);assert.deepEqual(savedSplit.lines,priorSplit.lines);}}
      assert.equal(savedSplit.confirmed_actor_type,mode==='admin_view'?'admin':'user');
      const preview=await runtime.previewPostingEligibilityRecheck({db,businessId:bid,month:'2026-11',transactionIds:[id]});assert.match(preview.rows[0].selected_gl_account,/Split transaction.*2 line accounts/);assert.equal(preview.rows[0].missing_final_repair_required,false);
      const command=scenario==='manual_command'
