@@ -18,7 +18,7 @@ test("Monthly Review feed Needs Review approval uses the shared bookkeeping appr
   const route = read("src/api/admin/monthlyReview.routes.js");
   const approveBody = routeBody(
     route,
-    'router.post("/runs/:runId/transactions/:transactionId/approve"',
+    'router.post(["/runs/:runId/transactions/:transactionId/approve"',
     '\nrouter.post("/runs/:runId/transactions/:transactionId/post-qbo"'
   );
 
@@ -56,7 +56,7 @@ test("Monthly Review feed reclassification and retry are selected-month guarded"
   const accountBody = routeBody(
     route,
     'router.patch("/runs/:runId/transactions/:transactionId/account"',
-    '\nrouter.post("/runs/:runId/transactions/:transactionId/approve"'
+    '\nrouter.post(["/runs/:runId/transactions/:transactionId/approve"'
   );
   const retryBody = routeBody(
     route,
@@ -95,7 +95,7 @@ test("Monthly Review mirror UI requires explicit actions and does not mutate on 
 
   assert.match(page, /runBookkeepingFeedAction/);
   assert.match(page, /const routeBase = `\/api\/admin\/monthly-review\/runs\/\$\{encodeURIComponent\(detail\.run\.id\)\}\/transactions\/\$\{encodeURIComponent\(transactionId\)\}`/);
-  assert.match(page, /\$\{routeBase\}\/approve/);
+  assert.match(page, /businesses\/\$\{encodeURIComponent\(selectedBusinessId\)\}\/bookkeeping\/transactions\/\$\{encodeURIComponent\(transactionId\)\}\/approve/);
   assert.match(page, /\$\{routeBase\}\/account/);
   assert.match(page, /\$\{routeBase\}\/post-qbo/);
   assert.match(page, /\$\{routeBase\}\/retry-qbo-sync/);

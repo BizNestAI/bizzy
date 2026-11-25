@@ -941,7 +941,7 @@ test("Monthly Review QBO provider diagnostics do not include raw update payloads
 test("Monthly Review account route preserves authenticated tenant scope and truthful Tax update contract", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
   const start = route.indexOf('router.patch("/runs/:runId/transactions/:transactionId/account"');
-  const end = route.indexOf('router.post("/runs/:runId/transactions/:transactionId/approve"', start);
+  const end = route.indexOf('router.post(["/runs/:runId/transactions/:transactionId/approve"', start);
   const handler = route.slice(start, end);
 
   assert.match(route, /router\.use\(requireAuth\)/, "the Admin router must require authentication");
@@ -1094,7 +1094,7 @@ test("Monthly Review routes Categorize as new through the canonical approval aut
   assert.match(table, /actionControl\.kind === "approve_categorization"/);
   assert.match(table, /duplicateRiskAcknowledged/);
   assert.match(page, /resolution:\s*"categorize_new"/);
-  const approvalRoute = route.slice(route.indexOf('router.post("/runs/:runId/transactions/:transactionId/approve"'), route.indexOf('router.post("/runs/:runId/transactions/:transactionId/post-qbo"'));
+  const approvalRoute = route.slice(route.indexOf('router.post(["/runs/:runId/transactions/:transactionId/approve"'), route.indexOf('router.post("/runs/:runId/transactions/:transactionId/post-qbo"'));
   assert.match(approvalRoute, /approveBookkeepingTransactions\(/);
   assert.doesNotMatch(approvalRoute, /reclassifyBookkeepingTransaction\(/);
   assert.match(approvalRoute, /duplicate_risk_acknowledged/);

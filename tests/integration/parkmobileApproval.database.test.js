@@ -1,5 +1,6 @@
 /* global process */
 import test from 'node:test';
+import {verifyParkmobileWorker} from '../helpers/parkmobilePostingWorkerCase.js';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
@@ -19,12 +20,22 @@ test('Parkmobile normal import, categorization and approval with real PostgreSQL
   for(let i=0;i<100;i++){if(spawnSync('docker',['exec',container,'pg_isready','-h','127.0.0.1','-U','supabase_admin']).status===0)break;await new Promise(r=>setTimeout(r,100));}
   const directory=`/private/tmp/${container}-catalog`;fs.mkdirSync(directory,{recursive:true});
   for(const file of ['catalog.json','supplement.json','scope-roots.json'])fs.copyFileSync(`tests/fixtures/stalePendingProduction/${file}`,`${directory}/${file}`);
-  const roots=JSON.parse(fs.readFileSync(`${directory}/scope-roots.json`));roots.relations=[...new Set([...roots.relations,'vendor_rules'])];
+  const roots=JSON.parse(fs.readFileSync(`${directory}/scope-roots.json`));roots.relations=[...new Set([...roots.relations,'vendor_rules','transaction_splits','bookkeeping_posting_eligibility_rechecks'])];
   fs.writeFileSync(`${directory}/scope-roots.json`,JSON.stringify(roots));
   const build=spawnSync(process.execPath,['scripts/buildStalePendingCatalogFixture.js',directory],{encoding:'utf8'});assert.equal(build.status,0,build.stderr);
   const original=fs.readFileSync('tests/fixtures/stalePendingProduction/prerequisites.sql','utf8');
   const transitions=stalePendingResolutionDatabaseSchema({includeScopeCorrection:true}).slice(original.length);
   sql(fs.readFileSync(`${directory}/prerequisites.sql`,'utf8')+transitions);ready=true;
+  for(const file of ['20261120233000_handled_exclusion_posting_safety.sql','20261123230000_canonical_posting_shape_authority.sql','20261124000000_restore_posting_execution_taxonomy_guard.sql','20261124020000_pre_provider_posting_failure_lifecycle.sql'])sql(fs.readFileSync(`supabase/migrations/${file}`,'utf8'));
+  const identityMigration=fs.readFileSync('supabase/migrations/20261125000000_admin_plaid_identity_review_approval.sql','utf8');
+  const existingAdapter=sql("select md5(pg_get_functiondef('public.approve_bookkeeping_with_admission(uuid,uuid,text,jsonb,boolean)'::regprocedure))");
+  assert.throws(()=>sql(identityMigration.replace("notify pgrst,'reload schema';","select 1/0;notify pgrst,'reload schema';")),/division by zero/);
+  assert.equal(sql("select to_regprocedure('public.approve_bookkeeping_with_identity_review(uuid,uuid,text,jsonb,boolean)') is null"),'t');
+  sql(identityMigration);
+  assert.equal(sql("select md5(pg_get_functiondef('public.approve_bookkeeping_with_admission(uuid,uuid,text,jsonb,boolean)'::regprocedure))"),existingAdapter);
+  assert.equal(sql("select pg_get_userbyid(proowner)||'|'||prosecdef||'|'||array_to_string(proconfig,',') from pg_proc where oid='public.approve_bookkeeping_with_identity_review(uuid,uuid,text,jsonb,boolean)'::regprocedure"),'postgres|true|search_path=pg_catalog, public');
+  assert.equal(sql("select has_function_privilege('service_role','public.approve_bookkeeping_with_identity_review(uuid,uuid,text,jsonb,boolean)','execute') and not has_function_privilege('authenticated','public.approve_bookkeeping_with_identity_review(uuid,uuid,text,jsonb,boolean)','execute') and not has_function_privilege('anon','public.approve_bookkeeping_with_identity_review(uuid,uuid,text,jsonb,boolean)','execute')"),'t');
+
   sql("alter role postgres password 'local-only';");
   await withCanonicalDatabase({container,network},async db=>{
    // Only synthetic local endpoints/credentials; helper forbids all external fetches.
@@ -91,12 +102,71 @@ test('Parkmobile normal import, categorization and approval with real PostgreSQL
       assert.equal((await ok(get('transaction_categorizations').eq('transaction_id',future.id)))[0].final_qbo_account_id,'travel');
       assert.equal((await ok(get('bookkeeping_posting_jobs').eq('transaction_id',future.id))).length,1);
       // A real identity-review flag still blocks both paths, including explicit GL changes.
-      await sync(f,{added:[event(f,'park-review',{...merchant,date:'2026-11-27',authorized_date:'2026-11-27',amount:6.12})]});
+      await sync(f,{added:[event(f,'park-review',{...merchant,date:'2026-11-27',authorized_date:'2026-11-27',amount:3.12})]});
       const review=(await ok(get('bank_transactions').eq('plaid_transaction_id','park-review')))[0];
       await ok(db.from('bank_transactions').update({accounting_review_required:true,accounting_review_reason:'plaid_relink_duplicate_review_required'}).eq('id',review.id));
       const reviewed=await reconsider([review.id]);assert.equal(reviewed.promoted,0);
       await assert.rejects(approveBookkeepingTransactions({...args,items:[{...args.items[0],transaction_id:review.id}]}),error=>error.message==='plaid_accounting_review_required' && error.status===400);
       assert.equal((await ok(get('bookkeeping_posting_jobs').eq('transaction_id',review.id).eq('state','scheduled'))).length,0);
+      // Verified internal decision resolves only this settled row; pending copy is untouched.
+      sql(`insert into public.internal_staff_users(user_id,role,active) values('${actor}','owner_admin',true);`);
+      await sync(f,{added:[event(f,'park-review-pending',{...merchant,date:'2026-11-27',authorized_date:'2026-11-27',amount:3.12,pending:true})]});
+      const candidate=(await ok(get('bank_transactions').eq('plaid_transaction_id','park-review-pending')))[0];
+      // This fixture represents the already-imported, reviewed pair, not an import claim.
+      await ok(db.from('bank_transactions').update({accounting_review_required:false,accounting_review_reason:null}).eq('id',candidate.id));
+      const candidateBefore=(await ok(get('bank_transactions').eq('id',candidate.id)))[0];
+      await ok(db.from('bank_transactions').update({accounting_review_payload:{candidate_transaction_ids:[candidate.id]}}).eq('id',review.id));
+      const storedReview=(await ok(get('transaction_categorizations').eq('transaction_id',review.id)))[0];
+      await ok(db.from('transaction_categorizations').update({post_error:'plaid_accounting_review_required',accounting_review_required:true,accounting_review_reason:'plaid_relink_duplicate_review_required',
+       meta:{...storedReview.meta,plaid_duplicate_review_required:true,plaid_duplicate_review_payload:{candidate_transaction_ids:[candidate.id]},post_block_reason:'plaid_relink_duplicate_review_required'}}).eq('id',storedReview.id));
+      const approveReview=()=>approveBookkeepingTransactions({...args,actorType:'admin',verifiedDistinctPurchase:true,verifiedPurchaseSnapshot:{transaction_id:review.id,date:review.date,amount:review.amount,direction:review.direction,plaid_account_id:review.plaid_account_id},items:[{...args.items[0],transaction_id:review.id,newAccountId:'parking',newAccountName:'Parking'}],validateSelectedAccountsFn:async()=>new Map([['parking',{id:'parking',name:'Parking',type:'Expense',active:true}]])});
+      await assert.rejects(approveBookkeepingTransactions({...args,verifiedDistinctPurchase:true,items:[{...args.items[0],transaction_id:review.id}]}),error=>error.status===403);
+      const before=(await ok(get('bank_transactions').eq('id',review.id)))[0];
+      // Any existing intent, even an unconfirmed/failed one, requires reconciliation first.
+      const [intent]=await ok(db.from('qbo_posted_transactions').insert({business_id:business,transaction_id:review.id,qbo_txn_type:'Purchase',status:'unknown',qbo_env:'production',realm_id:'parkmobile-realm'}).select());
+      await assert.rejects(approveReview(),error=>error.error==='identity_review_posting_evidence_requires_reconciliation');
+      assert.deepEqual((await ok(get('bank_transactions').eq('id',review.id)))[0],before,'failure rolls back review clearing');
+      await ok(db.from('qbo_posted_transactions').delete().eq('id',intent.id));
+      const reviewCat=(await ok(get('transaction_categorizations').eq('transaction_id',review.id)))[0];
+      await ok(db.from('transaction_categorizations').update({meta:{...reviewCat.meta,ambiguous_provider_outcome:true}}).eq('id',reviewCat.id));
+      await assert.rejects(approveReview());
+      assert.equal((await ok(get('bank_transactions').eq('id',review.id)))[0].accounting_review_required,true);
+      await ok(db.from('transaction_categorizations').update({meta:reviewCat.meta}).eq('id',reviewCat.id));
+      const reviewJob=(await ok(get('bookkeeping_posting_jobs').eq('transaction_id',review.id)))[0];
+      await ok(db.from('bookkeeping_posting_jobs').update({state:'processing',lease_owner:'synthetic-active-worker',lease_expires_at:new Date(Date.now()+60000).toISOString()}).eq('id',reviewJob.id));
+      await assert.rejects(approveReview());
+      assert.equal((await ok(get('bank_transactions').eq('id',review.id)))[0].accounting_review_required,true);
+      await ok(db.from('bookkeeping_posting_jobs').update({state:reviewJob.state,lease_owner:reviewJob.lease_owner,lease_expires_at:reviewJob.lease_expires_at}).eq('id',reviewJob.id));
+
+      await ok(db.from('bank_transactions').update({pending:true}).eq('id',review.id));
+      await assert.rejects(approveReview(),error=>error.error==='pending_transaction_not_postable');
+      await ok(db.from('bank_transactions').update({pending:false}).eq('id',review.id));
+      await ok(db.from('bank_transactions').update({accounting_review_reason:'plaid_modified_after_qbo_post'}).eq('id',review.id));
+      await assert.rejects(approveReview(),error=>error.error==='identity_review_not_eligible');
+      await ok(db.from('bank_transactions').update({accounting_review_reason:'plaid_relink_duplicate_review_required'}).eq('id',review.id));
+      await ok(db.from('internal_staff_users').update({active:false}).eq('user_id',actor));
+      await assert.rejects(approveReview());
+      assert.equal((await ok(get('bank_transactions').eq('id',review.id)))[0].accounting_review_required,true);
+      await ok(db.from('internal_staff_users').update({active:true}).eq('user_id',actor));
+      await assert.rejects(approveBookkeepingTransactions({...args,businessId:randomUUID(),actorType:'admin',verifiedDistinctPurchase:true,items:[{...args.items[0],transaction_id:review.id}]}));
+      const saved=await approveReview();assert.equal(saved.updated,1);
+      const approved=(await ok(get('transaction_categorizations').eq('transaction_id',review.id)))[0];
+      assert.equal(approved.final_qbo_account_id,'parking');assert.equal(approved.status,'approved');assert.ok(approved.post_after);assert.equal(approved.review_status,'handled');
+      assert.equal(approved.meta.plaid_identity_review.actor_id,actor);assert.equal(approved.meta.plaid_identity_review.decision,'verified_distinct_purchase');
+      assert.equal((await ok(get('bank_transactions').eq('id',review.id)))[0].accounting_review_required,false);
+      assert.deepEqual((await ok(get('bank_transactions').eq('id',candidate.id)))[0],candidateBefore);
+      assert.equal((await ok(get('bookkeeping_posting_jobs').eq('transaction_id',review.id).eq('state','scheduled'))).length,1);
+      const repeated=await approveReview();assert.equal(repeated.idempotent,true);
+      const rawReplay=await db.rpc('approve_bookkeeping_with_identity_review',{p_business_id:business,p_actor_id:actor,p_actor_type:'admin',p_require_needs_review:true,
+       p_approvals:[{...approved,approval_idempotency_key:approved.meta.approval_idempotency_key,plaid_identity_review:{verified_distinct_purchase:true,expected_updated_at:before.updated_at}}]});
+      assert.equal(rawReplay.error,null,JSON.stringify(rawReplay.error));
+      const auditEvent=(await ok(get('bookkeeping_approval_events').eq('transaction_id',review.id)))[0];
+      assert.equal(auditEvent.metadata.plaid_identity_review.prior_review.reason,'plaid_relink_duplicate_review_required');
+      assert.deepEqual(auditEvent.metadata.plaid_identity_review.candidate_ids,[candidate.id]);
+
+      assert.equal((await ok(get('bookkeeping_approval_events').eq('transaction_id',review.id))).length,1);
+      assert.equal((await ok(get('bookkeeping_posting_jobs').eq('transaction_id',review.id))).length,1);
+      await verifyParkmobileWorker({db,businessId:business,transactionId:review.id,postAfter:approved.post_after});
       // Represented receipts remain authoritative on import replay; never create another job.
       await ok(db.from('transaction_categorizations').update({status:'posted',qbo_txn_id:'synthetic-receipt',posted_at:new Date().toISOString()}).eq('transaction_id',row.id));
       await sync(f,payload);await reconsider([row.id]);

@@ -237,6 +237,8 @@ export async function approveBookkeepingTransactions({
   source = "books_review",
   reason = null,
   requireNeedsReview = false,
+  verifiedDistinctPurchase = false,
+  verifiedPurchaseSnapshot = null,
   allowCcPaymentRejection = true,
   extraMetaByTransactionId = {},
   existingMetaOverrideByTransactionId = {},
@@ -373,7 +375,7 @@ export async function approveBookkeepingTransactions({
 
   const { data: bankTxns, error: bankErr } = await db
     .from("bank_transactions")
-    .select("id,date,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id,pending,pending_resolution_state,pending_resolution_payload,pending_resolved_at,pending_resolved_by,accounting_review_required,accounting_review_reason,accounting_review_payload")
+    .select("id,updated_at,date,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id,pending,pending_resolution_state,pending_resolution_payload,pending_resolved_at,pending_resolved_by,accounting_review_required,accounting_review_reason,accounting_review_payload")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .in("id", txnIds);
@@ -485,8 +487,22 @@ export async function approveBookkeepingTransactions({
       action_code: "confirm_type",
     });
   }
+  const plaidIdentityReviewByTransactionId = {};
+  if (verifiedDistinctPurchase === true) {
+    if (actorType !== "admin" || items.length !== 1) throw new BookkeepingApprovalError("internal_identity_review_required", 403);
+    const row = bankTxns[0];
+    if (row.accounting_review_required !== true || row.accounting_review_reason !== "plaid_relink_duplicate_review_required") {
+      throw new BookkeepingApprovalError("identity_review_not_eligible", 409);
+    }
+    if (!verifiedPurchaseSnapshot || verifiedPurchaseSnapshot.transaction_id !== row.id || verifiedPurchaseSnapshot.date !== row.date ||
+        Number(verifiedPurchaseSnapshot.amount) !== Number(row.amount) || verifiedPurchaseSnapshot.direction !== row.direction ||
+        verifiedPurchaseSnapshot.plaid_account_id !== row.plaid_account_id) {
+      throw new BookkeepingApprovalError("identity_review_row_changed", 409, { message: "The charge changed since review. Refresh it and verify the bank activity again." });
+    }
+    plaidIdentityReviewByTransactionId[row.id] = { verified_distinct_purchase: true, expected_updated_at: row.updated_at };
+  }
   const protectedAccountingReviewIds = accountingReviewRows
-    .filter((row) => row.accounting_review_reason !== "operator_confirmed_settlement")
+    .filter((row) => row.accounting_review_reason !== "operator_confirmed_settlement" && !plaidIdentityReviewByTransactionId[row.id])
     .map((row) => row.id);
   if (protectedAccountingReviewIds.length) {
     throw new BookkeepingApprovalError("plaid_accounting_review_required", 400, {
@@ -988,6 +1004,7 @@ export async function approveBookkeepingTransactions({
         actorType,
         provenanceForRow: () => source,
         requireNeedsReview,
+        plaidIdentityReviewByTransactionId,
       }) : [];
     let workflows = [];
     if (workflowRows.length) {
@@ -1003,6 +1020,13 @@ export async function approveBookkeepingTransactions({
     }
     data = [...finalized, ...workflows];
   } catch (error) {
+    if (Object.keys(plaidIdentityReviewByTransactionId).length && (error.code === "42501" || /^(identity_review_|internal_identity_review_required|bank_verification_attestation_required)/.test(error.message || ""))) {
+      throw new BookkeepingApprovalError(error.message, error.code === "42501" ? 403 : 409, {
+        message: error.message === "identity_review_posting_evidence_requires_reconciliation"
+          ? "Posting or matching evidence exists for this charge or its pending candidate. Reconcile that evidence before approving."
+          : "Bank identity review changed or is not eligible. Refresh this transaction before approving again.",
+      });
+    }
     throw new BookkeepingApprovalError("approve_failed", 500, { message: error.message });
   }
 

@@ -66,6 +66,7 @@ export async function persistAuthoritativeFinalCategorizations({
   ruleSourceIdForRow = () => null,
   provenanceForRow = () => null,
   requireNeedsReview = false,
+  plaidIdentityReviewByTransactionId = {},
 } = {}) {
   if (!db || !Array.isArray(rows) || !rows.length) throw new Error("final_categorization_rows_required");
   const nowIso = new Date().toISOString();
@@ -89,15 +90,19 @@ export async function persistAuthoritativeFinalCategorizations({
     if (result.error) throw result.error;
     released.push(...(result.data || []));
   }
+  const hasIdentityReview = Object.keys(plaidIdentityReviewByTransactionId).length > 0;
+  if (hasIdentityReview && (ordinaryRows.length !== 1 || statementRows.length || actorType !== "admin")) throw new Error("single_identity_review_approval_required");
+  const atomicRows = ordinaryRows.map(row => plaidIdentityReviewByTransactionId[row.transaction_id]
+    ? { ...row, plaid_identity_review: plaidIdentityReviewByTransactionId[row.transaction_id] } : row);
   let data = [], error;
   // Only known-aborted database transactions may replay this narrow adapter.
   // Transport failures and all other writers retain their existing behavior.
   for(let attempt=0;ordinaryRows.length && attempt<3;attempt++) {
-    ({data,error}=await db.rpc("approve_bookkeeping_with_admission", {
+    ({data,error}=await db.rpc(hasIdentityReview ? "approve_bookkeeping_with_identity_review" : "approve_bookkeeping_with_admission", {
       p_business_id: businessId,
       p_actor_id: actorId,
       p_actor_type: actorType,
-      p_approvals: ordinaryRows,
+      p_approvals: atomicRows,
       p_require_needs_review: requireNeedsReview === true,
     }));
     if(!error || !["40001","40P01","55P03","57014"].includes(error.code))break;

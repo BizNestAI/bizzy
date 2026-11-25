@@ -1654,13 +1654,19 @@ export default function MonthlyReviewConsole() {
         if (!accountId) throw new Error("Choose a GL account before approving.");
         const selectedAccount = mirrorFeedAccounts.find((account) => String(account.id) === String(accountId));
         const expenseRefund = isExpenseRefundSelection(row, selectedAccount);
-        result = await safeFetch(`${routeBase}/approve`, {
+        result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(transactionId)}/approve`, {
           method: "POST",
           body: {
             final_qbo_account_id: accountId,
+            month,
             reason: "Approved from Monthly Review Needs Review feed.",
             resolution: "categorize_new",
             duplicate_risk_acknowledged: options?.duplicateRiskAcknowledged === true,
+            verified_distinct_purchase: options?.verifiedDistinctPurchase === true,
+            verified_purchase_snapshot: options?.verifiedDistinctPurchase === true ? {
+              transaction_id: transactionId, date: row.date, amount: Number(row.signed_amount ?? row.amount),
+              direction: row.direction, plaid_account_id: row.plaid_account_id || row.plaidAccountId,
+            } : null,
             duplicate_override: options?.duplicateOverride === true,
             post_to_qbo_anyway: options?.postToQboAnyway === true,
             learn_reusable_rule: learnReusableRule,
@@ -1734,7 +1740,7 @@ export default function MonthlyReviewConsole() {
       });
       setBusyFeedAction("");
     }
-  }, [bookkeepingRulePreferences, detail?.run?.id, mirrorFeedAccounts, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction, refreshAfterRecovery, selectedBusinessId]);
+  }, [bookkeepingRulePreferences, detail?.run?.id, month, mirrorFeedAccounts, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction, refreshAfterRecovery, selectedBusinessId]);
 
   const recoverBookkeepingFeedRow = useCallback(async (event, row) => {
     event?.preventDefault?.();

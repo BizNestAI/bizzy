@@ -13,7 +13,7 @@ const read = (file) => readFileSync(join(root, file), "utf8");
 test("MRP and Books Review invoke the same atomic approval service for categorize as new", () => {
   const admin = read("src/api/admin/monthlyReview.routes.js");
   const customer = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
-  const adminApprove = admin.slice(admin.indexOf('router.post("/runs/:runId/transactions/:transactionId/approve"'), admin.indexOf('router.post("/runs/:runId/transactions/:transactionId/post-qbo"'));
+  const adminApprove = admin.slice(admin.indexOf('router.post(["/runs/:runId/transactions/:transactionId/approve"'), admin.indexOf('router.post("/runs/:runId/transactions/:transactionId/post-qbo"'));
   const customerApprove = customer.slice(customer.indexOf('router.post("/approve"'), customer.indexOf('router.post("/undo"'));
   assert.match(adminApprove, /approveBookkeepingTransactions\(/);
   assert.match(customerApprove, /approveBookkeepingTransactions\(/);

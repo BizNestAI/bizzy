@@ -152,6 +152,9 @@ function monthlyReviewApprovalErrorMessage(error) {
     incoming_deposit_match_required: "Review the possible QuickBooks match or confirm the duplicate-risk warning before categorizing this deposit as new.",
     credit_card_inflow_type_required: "Confirm whether this credit-card inflow is a merchant refund, statement credit, or payment before approving it.",
     plaid_accounting_review_required: "This transaction still requires accounting review before it can be approved.",
+    identity_review_posting_evidence_requires_reconciliation: "Posting or matching evidence already exists. Reconcile it before approving this charge.",
+    identity_review_row_changed: "This charge changed since review. Refresh it and verify the bank activity again.",
+    identity_review_candidate_changed: "The pending candidate changed. Refresh and review the bank activity again.",
   };
   return messages[code] || (error?.status && error?.message ? error.message : "Could not approve transaction. The transaction remains in Needs Review.");
 }
@@ -2318,13 +2321,27 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
   }
 });
 
-router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res) => {
+router.post(["/runs/:runId/transactions/:transactionId/approve", "/businesses/:businessId/bookkeeping/transactions/:transactionId/approve"], async (req, res) => {
   try {
-    const { runId, transactionId } = req.params;
+    const { transactionId } = req.params;
+    let { runId } = req.params;
+    // Feed rows are selected by business/month independently of the detail panel.
+    // Resolve that same scope server-side rather than using a stale detail run ID.
+    if (req.params.businessId) {
+      if (!UUID_RE.test(String(req.params.businessId)) || !req.body?.month) return res.status(400).json({ ok: false, error: "approval_scope_required" });
+      const { data: selectedRun, error: selectedRunError } = await supabase.from("monthly_review_runs").select("id")
+        .eq("business_id", req.params.businessId).eq("review_month", normalizeMonth(req.body.month)).maybeSingle();
+      if (selectedRunError) throw selectedRunError;
+      if (!selectedRun) return res.status(409).json({ ok: false, error: "selected_review_run_required", message: "Open the selected business and month before approving." });
+      runId = selectedRun.id;
+    }
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
     if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
 
     const run = await fetchRun(runId);
+    if (req.tenantContext?.mode === "admin_view" && req.tenantContext.businessId !== run.business_id) {
+      return res.status(403).json({ ok: false, error: "admin_view_business_mismatch" });
+    }
     await assertRunTransactionInSelectedMonth(run, transactionId);
 
     const accountId = String(req.body?.final_qbo_account_id || req.body?.account_id || "").trim();
@@ -2448,6 +2465,8 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       actorId: req.user?.id,
       actorType: "admin",
       source: postToQuickBooksAnyway ? "monthly_review_force_post" : "monthly_review",
+      verifiedDistinctPurchase: req.body?.verified_distinct_purchase === true,
+      verifiedPurchaseSnapshot: req.body?.verified_purchase_snapshot || null,
       requireNeedsReview: !isHandledDuplicateOverride,
       extraMetaByTransactionId: duplicateOverrideDecision ? { [transactionId]: { duplicate_override_decision: duplicateOverrideDecision } } : {},
       db: supabase,

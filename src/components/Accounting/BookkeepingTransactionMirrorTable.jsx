@@ -172,6 +172,8 @@ function BookkeepingTransactionMirrorRow({
   const [resolution, setResolution] = React.useState(() => effectiveTransactionResolution(row));
   const [resolutionError, setResolutionError] = React.useState("");
   const [resolutionBusy, setResolutionBusy] = React.useState(false);
+  const [verifiedDistinctPurchase, setVerifiedDistinctPurchase] = React.useState(false);
+  const requiresBankIdentityReview = row.meta?.plaid_duplicate_review_required === true && row.meta?.post_block_reason === "plaid_relink_duplicate_review_required";
   const [duplicateRiskAcknowledged, setDuplicateRiskAcknowledged] = React.useState(false);
   const [selectedInflowType, setSelectedInflowType] = React.useState(() => protectedInflowDecision?.resolution_type || "");
   const [pendingModal, setPendingModal] = React.useState({ open: false, loading: false, context: null, error: "", action: "" });
@@ -186,6 +188,7 @@ function BookkeepingTransactionMirrorRow({
     setResolution(effectiveTransactionResolution(row));
     setDuplicateRiskAcknowledged(Boolean(row.meta?.duplicate_override_decision));
     setForcePostConfirmationOpen(false);
+    setVerifiedDistinctPurchase(false);
     setSelectedInflowType(protectedInflowDecision?.resolution_type || "");
   }, [initialAccountId, row.id, row.updated_at]);
 
@@ -534,6 +537,12 @@ function BookkeepingTransactionMirrorRow({
                 />
                 Only this transaction
               </label>
+              {requiresBankIdentityReview ? (
+                <label className="inline-flex basis-full items-start gap-2 text-[11px] text-amber-100/85">
+                  <input type="checkbox" checked={verifiedDistinctPurchase} onChange={event => setVerifiedDistinctPurchase(event.target.checked)} />
+                  <span>I checked the bank activity and verified this settled charge is a separate purchase. Keep the pending entry unchanged.</span>
+                </label>
+              ) : null}
               {duplicateRisk ? (
                 <label className="flex basis-full items-start gap-2 rounded-lg border border-amber-300/20 bg-amber-300/[0.07] px-2 py-2 text-[11px] leading-4 text-amber-50/90">
                   <input type="checkbox" className="mt-0.5" checked={duplicateRiskAcknowledged} onChange={(event) => setDuplicateRiskAcknowledged(event.target.checked)} />
@@ -542,8 +551,8 @@ function BookkeepingTransactionMirrorRow({
               ) : null}
               <button
                 type="button"
-                onClick={() => onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged, creditCardInflowResolution: needsInflowType ? selectedInflowType : protectedInflowDecision.resolution_type })}
-                disabled={!actionControl.enabled || isActionBusy("approve") || (needsInflowType && !approvableInflowType)}
+                onClick={() => onApprove?.(row, selectedAccountId, { duplicateRiskAcknowledged, verifiedDistinctPurchase, creditCardInflowResolution: needsInflowType ? selectedInflowType : protectedInflowDecision.resolution_type })}
+                disabled={!actionControl.enabled || isActionBusy("approve") || (requiresBankIdentityReview && !verifiedDistinctPurchase) || (needsInflowType && !approvableInflowType)}
                 className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
               >
                 {isActionBusy("approve") ? "Approving..." : "Approve"}
