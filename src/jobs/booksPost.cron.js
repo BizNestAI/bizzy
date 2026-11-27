@@ -716,6 +716,19 @@ function summarizeQboDuplicateCandidates(candidates = []) {
 
 export function isRejectedSoftDuplicateCandidate(item = {}, candidate = {}, { manual = false } = {}) {
   const durableDecision = item?.meta?.duplicate_override_decision || {};
+  // Scheduled recovery is server-persisted and bound to this source identity.
+  // It suppresses only the reviewed other charge, never deterministic evidence
+  // or newly discovered candidates. Existing manual override semantics stay intact.
+  if (!manual && durableDecision.decision_version === 4 && durableDecision.source === "posting_eligibility_distinct_charge" &&
+      durableDecision.business_id === item.business_id && durableDecision.transaction_id === item.transaction_id &&
+      durableDecision.selected_qbo_account_id === item.final_qbo_account_id &&
+      item.meta?.distinct_charge_schedule?.fingerprint && candidate?.deterministic !== true) {
+    return (durableDecision.reviewed_candidates || []).some(reviewed =>
+      reviewed.qbo_txn_id === candidate.qbo_txn_id && reviewed.consumed_by_another_transaction === true &&
+      reviewed.qbo_txn_id === item.meta.distinct_charge_schedule.qbo_txn_id &&
+      ["purchase", "creditcardcharge"].includes(String(candidate.qbo_txn_type).toLowerCase()) &&
+      ["purchase", "creditcardcharge"].includes(String(reviewed.qbo_txn_type).toLowerCase()));
+  }
   // Candidate identity is provider-boundary data. Intuit returns PascalCase
   // objects while discovery and persisted decisions use canonical snake_case.
   // Normalize identity here so every supported entity follows one contract.
@@ -3008,7 +3021,9 @@ export async function handleItem(item, options = {}) {
       qboTxnType: intentQboTxnType,
       requestId,
     });
-    const candidatesForCheck = excludeReviewedInformationalDuplicateCandidates(item, discoveredCheck.candidates, { manual });
+    const candidatesForCheck = item.meta?.duplicate_override_decision?.decision_version === 4 && discoveredCheck.confidence === "DETERMINISTIC_EXISTING"
+      ? discoveredCheck.candidates
+      : excludeReviewedInformationalDuplicateCandidates(item, discoveredCheck.candidates, { manual });
     if (discoveredCheck.candidates.length > 0 && candidatesForCheck.length === 0) {
       structuredManualCheckCompleted = true;
       timing.context.reviewed_soft_duplicate_candidate_ignored = true;

@@ -1343,7 +1343,7 @@ export default function MonthlyReviewConsole() {
     }
   }, [detail?.run?.id]);
 
-  const executePostingEligibilityRecheckAction = useCallback(async ({ scheduleAutomaticallyEligible = true } = {}) => {
+  const executePostingEligibilityRecheckAction = useCallback(async ({ scheduleAutomaticallyEligible = true, distinctChargeConfirmations = [] } = {}) => {
     const preview = postingEligibilityRecheck.preview;
     if (!detail?.run?.id || !preview?.preview_version || postingEligibilityRecheck.executing || postingEligibilityRecheck.outcomeUnconfirmed) return;
     const idempotencyKey = globalThis.crypto?.randomUUID?.();
@@ -1355,7 +1355,7 @@ export default function MonthlyReviewConsole() {
       result = await safeFetch(executionUrl, {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
-        body: { preview_version: preview.preview_version, idempotency_key: idempotencyKey, schedule_automatically_eligible: scheduleAutomaticallyEligible },
+        body: { preview_version: preview.preview_version, idempotency_key: idempotencyKey, schedule_automatically_eligible: scheduleAutomaticallyEligible, distinct_charge_confirmations: distinctChargeConfirmations },
       });
     } catch (error) {
       const ambiguous = !error?.status && (["NETWORK_ERROR", "REQUEST_TIMEOUT"].includes(error?.code) || ["TypeError", "AbortError", "TimeoutError"].includes(error?.name));
@@ -3088,6 +3088,7 @@ async function recoverPostingEligibilityExecution(url, request = safeFetch, now 
 
 function PostingEligibilityRecheckModal({ state, businessName, month, onClose, onConfirm, onRetry }) {
   const [scheduleAutomatic, setScheduleAutomatic] = useState(true);
+  const [distinctSelections, setDistinctSelections] = useState({});
   useEffect(() => {
     if (!state?.open) return undefined;
     const previous = document.body.style.overflow;
@@ -3108,12 +3109,18 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
   const hardBlocked = rows.filter((row) => ["blocked", "returned_to_review", "hard_blocked"].includes(row.outcome));
   useEffect(() => {
     setScheduleAutomatic(true);
+    setDistinctSelections({});
   }, [preview?.preview_version]);
   if (!state?.open) return null;
   const submitRecheck = () => onConfirm?.({
     scheduleAutomaticallyEligible: scheduleAutomatic,
+    distinctChargeConfirmations: rows.filter(row => distinctSelections[row.transaction_id] && row.distinct_charge_review).map(row => ({
+      transaction_id: row.transaction_id, row_version: row.row_version, fingerprint: row.distinct_charge_review.fingerprint, confirmed: true,
+    })),
   });
   const labels = {
+    distinct_charge_confirmation_required: "Separate-charge review required",
+    distinct_charge_scheduled: "Separate charge scheduled",
     bind_existing_schedule: "Validate and bind · deadline unchanged",
     bound_existing_schedule: "Bound · deadline unchanged",
     already_valid: "Already valid · existing deadline",
@@ -3158,6 +3165,16 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
               <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-xs leading-5 text-white/65">
                 No QuickBooks or Plaid call occurs. Nothing posts immediately, selected GL accounts are unchanged, and final or posted transactions remain untouched. {preview.auto_post_enabled ? "Eligible Handled transactions will receive the normal future posting timestamp. Existing schedules and selected categories will remain unchanged." : "Eligible rows become Ready and remain unscheduled while Auto-post is off."}
               </div>
+              {!result ? rows.filter(row => row.distinct_charge_review).map(row => (
+                <section key={row.transaction_id} className="mt-4 rounded-xl border border-amber-300/25 p-4 text-sm text-white/80">
+                  <h3 className="font-semibold">Verify separate charge · {row.description} · ${Math.abs(row.amount).toFixed(2)}</h3>
+                  <p className="mt-2 text-xs">Source {row.transaction_id} · {row.date} · {row.selected_gl_account}</p>
+                  <p className="mt-2 text-xs">Conflicting QuickBooks expense {row.distinct_charge_review.qbo_txn_id} · ${row.distinct_charge_review.amount} · {row.distinct_charge_review.date} belongs to source {row.distinct_charge_review.conflict_transaction_id}.</p>
+                  <label className="mt-3 flex items-start gap-2 text-xs"><input type="checkbox" disabled={state.executing} checked={distinctSelections[row.transaction_id] === true} onChange={event => setDistinctSelections(current => ({ ...current, [row.transaction_id]: event.target.checked }))} />
+                    I verified two separate purchases. Keep the existing expense unchanged and schedule this charge separately using its saved category.
+                  </label>
+                </section>
+              )) : null}
               {hardBlocked.length ? <section className="mt-4 rounded-xl border border-rose-300/15 bg-rose-950/10 p-4"><h3 className="font-semibold text-rose-100">{hardBlocked.length} Hard-blocked · operator approval cannot override</h3><div className="mt-2 space-y-2 text-xs text-white/65">{hardBlocked.map((row) => <div key={row.transaction_id} className="flex flex-wrap justify-between gap-2 border-t border-white/5 pt-2"><span>{row.date} · {row.description} · {row.selected_gl_account || "No GL account"}</span><span>{String(row.reason || "safety_review_required").replaceAll("_", " ")} · {postingEligibilityRemediation(row.reason)}</span></div>)}</div></section> : null}
               <div className="mt-4 space-y-2">
                 {Object.entries(result?.reason_counts || preview.reason_counts || {}).map(([reason, total]) => (
@@ -3183,7 +3200,7 @@ function PostingEligibilityRecheckModal({ state, businessName, month, onClose, o
           {!result && preview ? <div className="mr-auto space-y-2 text-xs text-white/75"><label className="flex items-center gap-2"><input type="checkbox" checked={scheduleAutomatic} onChange={(event) => setScheduleAutomatic(event.target.checked)} /> Schedule automatically eligible transactions</label><p className="max-w-2xl text-white/50">Eligible Handled transactions will receive the normal future posting timestamp. Existing schedules and selected categories will remain unchanged.</p></div> : null}
           <button type="button" onClick={onClose} disabled={state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">Close</button>
           {(state.error && !preview) || state.outcomeUnconfirmed ? <button type="button" onClick={onRetry} disabled={state.loading || state.executing} className="rounded-xl border border-white/15 px-4 py-2 text-sm text-white/75 disabled:opacity-50">{state.outcomeUnconfirmed ? "Refresh preview" : "Retry"}</button> : null}
-          {!result ? <button type="button" onClick={submitRecheck} disabled={!preview || state.loading || state.executing || state.outcomeUnconfirmed || Number(preview?.examined || 0) === 0 || !scheduleAutomatic} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/30 bg-sky-950/40 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{state.executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Confirm recheck</button> : null}
+          {!result ? <button type="button" onClick={submitRecheck} disabled={!preview || state.loading || state.executing || state.outcomeUnconfirmed || Number(preview?.examined || 0) === 0 || (!scheduleAutomatic && !Object.values(distinctSelections).some(Boolean))} className="inline-flex items-center gap-2 rounded-xl border border-sky-300/30 bg-sky-950/40 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{state.executing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Confirm recheck</button> : null}
         </footer>
       </div>
     </div>

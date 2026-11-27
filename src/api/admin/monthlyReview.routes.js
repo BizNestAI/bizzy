@@ -2623,6 +2623,9 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-preview", async (req, 
       return res.status(400).json({ ok: false, error: "invalid_posting_eligibility_preview_request", message: "The posting eligibility preview request must contain an empty JSON object.", request_id: requestId });
     }
     const run = await fetchRun(runId);
+    if (req.tenantContext?.mode === "admin_view" && req.tenantContext.businessId !== run.business_id) {
+      return res.status(403).json({ ok: false, error: "admin_view_business_mismatch" });
+    }
     const handled = await fetchPostingEligibilityHandledScope(run);
     const preview = await previewPostingEligibilityRecheck({
       db: supabase,
@@ -2664,6 +2667,9 @@ router.get("/runs/:runId/bookkeeping/posting-eligibility-executions/:idempotency
   }
   try {
     const run = await fetchRun(runId);
+    if (req.tenantContext?.mode === "admin_view" && req.tenantContext.businessId !== run.business_id) {
+      return res.status(403).json({ ok: false, error: "admin_view_business_mismatch" });
+    }
     const { data: execution, error } = await supabase.from("bookkeeping_posting_eligibility_rechecks")
       .select("id,status,result")
       .eq("business_id", run.business_id)
@@ -2700,11 +2706,21 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-executions", async (re
     const { runId } = req.params;
     if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
     const run = await fetchRun(runId);
+    if (req.tenantContext?.mode === "admin_view" && req.tenantContext.businessId !== run.business_id) {
+      return res.status(403).json({ ok: false, error: "admin_view_business_mismatch" });
+    }
     const handled = await fetchPostingEligibilityHandledScope(run);
     const idempotencyKey = req.get("Idempotency-Key") || req.body?.idempotency_key || null;
     const manualApprovals = Array.isArray(req.body?.manual_approvals) ? req.body.manual_approvals : [];
     if (manualApprovals.length > MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX || manualApprovals.some((item) => !item?.transaction_id || !item?.row_version || typeof item?.learn_reusable_rule !== "boolean")) {
       return res.status(400).json({ ok: false, error: "invalid_posting_eligibility_manual_approvals", message: "Selected category approvals are malformed.", request_id: requestId });
+    }
+    const distinctChargeConfirmations = req.body?.distinct_charge_confirmations || [];
+    if (!Array.isArray(distinctChargeConfirmations) || distinctChargeConfirmations.length > MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX ||
+        new Set(distinctChargeConfirmations.map(item => item?.transaction_id)).size !== distinctChargeConfirmations.length ||
+        distinctChargeConfirmations.some(item => !UUID_RE.test(String(item?.transaction_id)) || item?.confirmed !== true ||
+          !/^[a-f0-9]{64}$/.test(String(item?.fingerprint)) || !/^[a-f0-9]{64}$/.test(String(item?.row_version)))) {
+      return res.status(400).json({ ok: false, error: "invalid_distinct_charge_confirmations" });
     }
     const result = await executePostingEligibilityRecheck({
       db: supabase,
@@ -2719,6 +2735,7 @@ router.post("/runs/:runId/bookkeeping/posting-eligibility-executions", async (re
       graceHours: Number(process.env.BOOKS_POST_GRACE_HOURS || 24),
       scheduleAutomaticallyEligible: req.body?.schedule_automatically_eligible === true,
       manualApprovals,
+      distinctChargeConfirmations,
     });
     await logAuditEvent({
       run,

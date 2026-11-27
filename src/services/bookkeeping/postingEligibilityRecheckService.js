@@ -48,10 +48,10 @@ function recoveryCounts(rows = []) {
   const outcomes = (names) => rows.filter((row) => names.includes(row.outcome)).length;
   return {
     examined: rows.length,
-    eligible: outcomes(["eligible_to_schedule", "ready_auto_post_off", "newly_scheduled", "manually_approved_scheduled", "manually_approved_auto_post_off"]),
-    scheduled: outcomes(["newly_scheduled", "manually_approved_scheduled", "already_scheduled", "already_valid", "bound_existing_schedule", "retry_scheduled"]),
+    eligible: outcomes(["eligible_to_schedule", "ready_auto_post_off", "newly_scheduled", "manually_approved_scheduled", "manually_approved_auto_post_off", "distinct_charge_scheduled"]),
+    scheduled: outcomes(["newly_scheduled", "manually_approved_scheduled", "already_scheduled", "already_valid", "bound_existing_schedule", "retry_scheduled", "distinct_charge_scheduled"]),
     retryable: rows.filter((row) => row.outcome === "retry_scheduled" || row.reason === "retry_already_scheduled").length,
-    still_blocked: outcomes(["blocked", "hard_blocked", "returned_to_review", "categorized_requires_approval"]),
+    still_blocked: outcomes(["blocked", "hard_blocked", "returned_to_review", "categorized_requires_approval", "distinct_charge_confirmation_required"]),
     specialized: rows.filter((row) => String(row.reason || "").endsWith("_workflow_protected")).length,
     already_active: outcomes(["processing", "reconciling"]),
     failed: outcomes(["failed", "conflicted"]),
@@ -262,6 +262,7 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
   for (const context of scoped.rows) {
     const { cat, bank, job } = context;
     result.examined += 1;
+    let distinctChargeReview = null;
     let outcome = "failed";
     let why = "posting_eligibility_row_evaluation_failed";
     try {
@@ -270,6 +271,14 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
         context.canonical = await canonicalPostingEligibility({ db, businessId, transactionId: cat.transaction_id, env: qboEnvName });
       }
       why = hardBlock({ ...context, nowMs });
+      if (cat.status === "failed" && cat.post_error === "possible_qbo_duplicate") {
+        const { data, error } = await db.rpc("inspect_distinct_charge_schedule", {
+          p_business_id: businessId, p_transaction_id: cat.transaction_id, p_env: qboEnvName,
+        });
+        if (error || !data) throw Object.assign(new Error("distinct_charge_inspection_unavailable"), { code: "distinct_charge_inspection_unavailable" });
+        if (!data.reason) distinctChargeReview = data;
+        else why = data.reason;
+      }
       if (!why && context.canonical?.split && cat.post_after) {
         const { data, error } = await db.rpc("inspect_existing_split_schedule", {
           p_business_id: businessId, p_transaction_id: cat.transaction_id, p_env: qboEnvName,
@@ -311,11 +320,13 @@ export async function previewPostingEligibilityRecheck({ db, businessId, month, 
       why = error.code || "posting_eligibility_row_evaluation_failed";
       // A corrupt historical row is reportable, but must not abort the bounded preview.
     }
+    if (distinctChargeReview) { outcome = "distinct_charge_confirmation_required"; why = "verified_separate_charge_required"; }
     count(result, outcome);
     reason(result, why);
     result.rows.push({
       transaction_id: cat.transaction_id,
       row_version: rowVersion(context),
+      distinct_charge_review: distinctChargeReview,
       outcome,
       reason: why,
       date: bank.date,
@@ -357,7 +368,7 @@ async function persistExecution(db, payload) {
   return { row: existing.data, created: false };
 }
 
-export async function executePostingEligibilityRecheck({ db, businessId, month, accountScope = null, transactionIds = [], previewVersion: expectedVersion, idempotencyKey, actorId, requestId = crypto.randomUUID(), graceHours = 24, nowMs = Date.now(), scheduleAutomaticallyEligible = true, manualApprovals = [] } = {}) {
+export async function executePostingEligibilityRecheck({ db, businessId, month, accountScope = null, transactionIds = [], previewVersion: expectedVersion, idempotencyKey, actorId, requestId = crypto.randomUUID(), graceHours = 24, nowMs = Date.now(), scheduleAutomaticallyEligible = true, manualApprovals = [], distinctChargeConfirmations = [] } = {}) {
   if (!/^[0-9a-f-]{36}$/i.test(String(idempotencyKey || ""))) {
     const error = new Error("valid_idempotency_key_required"); error.status = 400; error.code = "valid_idempotency_key_required"; throw error;
   }
@@ -382,6 +393,7 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
   }
   const result = { ok: true, request_id: requestId, execution_id: started.id, executed_at: new Date(nowMs).toISOString(), operator: actorId || null, examined: preview.examined, counts: {}, reason_counts: {}, rows: [] };
   const postAfter = computePostAfterForAutoPost(preview.auto_post_enabled, graceHours, nowMs);
+  const distinctById = new Map((distinctChargeConfirmations || []).map(row => [String(row.transaction_id), row]));
   const manualById = new Map((manualApprovals || []).map((approval) => [String(approval.transaction_id), approval]));
   const selectedRows = preview.rows.filter((row) => manualById.has(String(row.transaction_id)));
   const learningGroups = new Map();
@@ -404,7 +416,24 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
     try {
       const manualRequest = manualById.get(String(row.transaction_id));
       if (manualRequest) manualById.delete(String(row.transaction_id));
-      if (manualRequest) {
+      const distinctRequest = distinctById.get(String(row.transaction_id));
+      if (distinctRequest) distinctById.delete(String(row.transaction_id));
+      if (distinctRequest) {
+        if (manualRequest || distinctRequest.confirmed !== true || row.outcome !== "distinct_charge_confirmation_required" ||
+            distinctRequest.row_version !== row.row_version || distinctRequest.fingerprint !== row.distinct_charge_review?.fingerprint ||
+            expectedVersion !== preview.preview_version) {
+          outcome = "conflicted";
+        } else {
+          const { data, error } = await db.rpc("schedule_reviewed_distinct_charge", {
+            p_business_id: businessId, p_transaction_id: row.transaction_id, p_actor_id: actorId,
+            p_fingerprint: distinctRequest.fingerprint, p_idempotency_key: idempotencyKey,
+            p_grace_hours: graceHours, p_env: qboEnvName,
+          });
+          if (error || !data?.ok) throw error || new Error("distinct_charge_schedule_failed");
+          outcome = "distinct_charge_scheduled";
+          row.expected_post_after = data.post_after;
+        }
+      } else if (manualRequest) {
         if (conflictingRuleRows.has(String(row.transaction_id))) {
           outcome = "failed";
           row.reason = "conflicting_vendor_rule_categories";
@@ -508,9 +537,9 @@ export async function executePostingEligibilityRecheck({ db, businessId, month, 
     const safeRow = { ...row };
     delete safeRow.current_meta;
     delete safeRow.categorization_updated_at;
-    result.rows.push({ ...safeRow, outcome, expected_post_after: ["newly_scheduled", "manually_approved_scheduled"].includes(outcome) ? postAfter : ["bound_existing_schedule", "already_valid", "already_scheduled"].includes(outcome) ? row.expected_post_after : null });
+    result.rows.push({ ...safeRow, outcome, expected_post_after: ["newly_scheduled", "manually_approved_scheduled"].includes(outcome) ? postAfter : ["distinct_charge_scheduled", "bound_existing_schedule", "already_valid", "already_scheduled"].includes(outcome) ? row.expected_post_after : null });
   }
-  for (const transactionId of manualById.keys()) {
+  for (const transactionId of new Set([...manualById.keys(), ...distinctById.keys()])) {
     result.counts.hard_blocked = (result.counts.hard_blocked || 0) + 1;
     result.reason_counts.transaction_outside_authoritative_scope = (result.reason_counts.transaction_outside_authoritative_scope || 0) + 1;
     result.rows.push({ transaction_id: transactionId, outcome: "hard_blocked", reason: "transaction_outside_authoritative_scope", expected_post_after: null });
